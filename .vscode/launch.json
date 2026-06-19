@@ -1,0 +1,76 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "dry run: example.yaml",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.venv/bin/franken-ts",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "args": ["example.yaml", "--dry-run", "--verbose"],
+            "justMyCode": false
+        },
+        {
+            "name": "run: pick config",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.venv/bin/franken-ts",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "args": ["${input:configFile}"],
+            "justMyCode": false
+        },
+        {
+            "name": "dry run: pick config",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.venv/bin/franken-ts",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "args": ["${input:configFile}", "--dry-run", "--verbose"],
+            "justMyCode": false
+        },
+        {
+            "name": "run + verify: pick config",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.venv/bin/franken-ts",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "args": ["${input:configFile}", "--verify", "--verbose"],
+            "justMyCode": false
+        },
+        {
+            "name": "debug (keep temp files): pick config",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.venv/bin/franken-ts",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "args": ["${input:configFile}", "--debug"],
+            "justMyCode": false
+        },
+        {
+            "name": "normalize + run + verify: pick config",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.venv/bin/franken-ts",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "args": ["${input:configFile}", "--normalize", "--verify", "--verbose"],
+            "justMyCode": false
+        },
+        {
+            "name": "re-inject only (skip transcode + verify): pick config",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.venv/bin/franken-ts",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "args": ["${input:configFile}", "--skip-transcode", "--verify"],
+            "justMyCode": false
+        }
+    ],
+    "inputs": [
+        {
+            "id": "configFile",
+            "type": "promptString",
+            "description": "Path to franken-ts YAML config file",
+            "default": "example.yaml"
+        }
+    ]
+}

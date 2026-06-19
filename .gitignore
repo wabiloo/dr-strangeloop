@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environment
+.venv/
+
+# Generated media, reports and frame dumps
+*.ts
+*_report.html
+*_timeline/
+
+# OS
+.DS_Store

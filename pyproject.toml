@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "franken-ts"
+version = "0.1.0"
+description = "Build MPEG-TS files with SCTE-35 markers from a YAML asset list"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "pytimeparse>=1.1",
+    "rich>=13.0",
+]
+
+[project.scripts]
+franken-ts = "franken_ts.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["franken_ts"]
