@@ -1,11 +1,16 @@
-# Agent Brief: Live Looping HLS/DASH Stream via AWS CDK (Python)
+# Agent Brief: Live Looping HLS/DASH Stream with SCTE-35 (AWS CDK, Python)
 
 ## Objective
 
-Build a CDK Python project that:
-1. Uploads a local `.ts` file to an **existing S3 bucket**
-2. Provisions MediaLive + MediaPackage v2 to produce looping live HLS and DASH streams with SCTE-35 passthrough
+A CDK Python project that:
+1. Uploads a local `.ts` file (with SCTE-35 cues) to an **existing S3 bucket**
+2. Provisions **MediaLive + MediaPackage v1** to produce looping live HLS and DASH
+   streams with **working SCTE-35 ad markers**
 3. Can be fully torn down with `cdk destroy`
+
+> The MediaPackage **v2** design (CMAF ingest, DATERANGE, CloudFront/OAC) is kept
+> separately in [`MEDIAPACKAGE_V2.md`](./MEDIAPACKAGE_V2.md) as future work. It is
+> not currently wired up.
 
 ---
 
@@ -13,169 +18,125 @@ Build a CDK Python project that:
 
 ```
 local .ts file
-  └─► S3 bucket (existing, provided by user)
+  └─► S3 bucket (existing)
         └─► MediaLive (TS_FILE input, SINGLE_PIPELINE, sourceEndBehavior=LOOP)
-              └─► MediaPackage v2 channel
-                    ├─► HLS origin endpoint  (DATERANGE ad markers, 6s segments)
-                    └─► DASH origin endpoint (XML/EventStream ad markers, 6s segments)
+        │     • native MediaPackage output group (MediaPackageGroupSettings)
+        │     • destination = MediaPackage v1 channel by ChannelId
+        │     • pure SCTE-35 passthrough (no avail/global config)
+        └─► MediaPackage v1 channel
+              ├─► HLS endpoint  (SCTE35_ENHANCED, AdTriggers, 6s segments)
+              └─► DASH endpoint (AdTriggers, PeriodTriggers=ADS, 6s segments)
 ```
+
+This mirrors the known-good reference channel `bpkio_default_live_scte35`.
 
 ---
 
-## CDK Stack Requirements
+## The two things that make SCTE-35 actually work
 
-### Language & tooling
-- Python CDK app (`aws-cdk-lib`, `constructs`)
-- CDK CLI via Node.js (`npm install -g aws-cdk`)
-- `cdk.json` with `"app": "python3 app.py"`
-- `requirements.txt` with `aws-cdk-lib>=2.100.0` and `constructs>=10.0.0`
+1. **Use MediaPackage v1 fed by the native MediaPackage output group.** MediaLive
+   passes SCTE-35 through automatically; MediaPackage v1 turns it into ad markers
+   via the endpoint `AdTriggers`. (MediaPackage v2 needs CMAF ingest + extra wiring —
+   see the v2 doc.)
+2. **The source `.ts` must contain _timed_ cues.** `splice_immediate_flag=0` /
+   `time_specified_flag=1`, real `splice_time` PTS on an IDR boundary, ~2 s pre-roll.
+   Immediate cues only pass through as raw `EXT-OATCLS-SCTE35` with no
+   `CUE-OUT`/`CUE-IN`; `time_signal` immediate cues produce nothing. Pre-roll is what
+   lets MediaLive insert an IDR and align the segment boundary to the splice point.
+   Looping works fine with timed cues.
 
-### Runtime parameters (passed via `cdk deploy -c key=value`)
-- `ts_file` — local path to the `.ts` file to upload
-- `bucket_name` — name of the **existing** S3 bucket to upload into
+---
+
+## CDK stack requirements
+
+### Tooling
+- Python CDK app (`aws-cdk-lib`, `constructs`), `cdk.json` → `python3 app.py`.
+- Config via `config.toml` (`aws.region`, `s3.bucket_name`, `s3.folder`, `input.ts_file`),
+  with `-c ts_file=...` override.
 
 ### S3
-- Do **not** create a bucket — reference an existing one via `s3.Bucket.from_bucket_name()`
-- Upload the `.ts` file using `aws_s3_deployment.BucketDeployment` with `prune=False`
-- S3 URL format for MediaLive: `s3ssl://<bucket_name>/<filename>`
+- Reference an existing bucket via `s3.Bucket.from_bucket_name()` (do **not** create one).
+- Upload the `.ts` out-of-band via `channel.py upload`.
+- MediaLive source URL: `s3ssl://<bucket>/<key>`.
 
 ### IAM role for MediaLive
-- Trusted principal: `medialive.amazonaws.com`
-- Inline policies needed:
-  - `s3:GetObject`, `s3:ListBucket` on the existing bucket ARN
-  - `mediapackagev2:PutObject`, `mediapackagev2:ListChannels`, `mediapackagev2:DescribeChannel` on `*`
-  - CloudWatch Logs: `CreateLogGroup`, `CreateLogStream`, `PutLogEvents`, `DescribeLogStreams`
-  - `cloudwatch:PutMetricData` on `*`
-- Also attach managed policy `AmazonSSMReadOnlyAccess`
+- Trusted principal `medialive.amazonaws.com`; managed policy `AmazonSSMReadOnlyAccess`.
+- Inline: `s3:GetObject`/`s3:ListBucket` on the bucket; **`mediapackage:DescribeChannel`**
+  (MediaLive resolves the v1 channel's ingest endpoints by ChannelId); CloudWatch Logs;
+  `cloudwatch:PutMetricData`.
 
-### MediaPackage v2
-Create in order (each depends on the previous):
-
-1. **CfnChannelGroup** — `channel_group_name="loop-test-group"`
-2. **CfnChannel** — `channel_name="loop-test-channel"`, references channel group
-3. **HLS CfnOriginEndpoint**:
-   - `container_type="TS"`
-   - `manifest_window_seconds=60`
-   - `program_date_time_interval_seconds=1` (required for DATERANGE)
-   - `ad_marker_hls="DATERANGE"`
-   - `segment_duration_seconds=6`
-   - SCTE filter list (see below)
-4. **DASH CfnOriginEndpoint**:
-   - `container_type="CMAF"`
-   - `manifest_window_seconds=60`
-   - `ad_marker_dash="XML"`
-   - `segment_duration_seconds=6`
-   - SCTE filter list (see below)
-
-**SCTE filter list** (apply to both endpoints):
-```python
-[
-    "SPLICE_INSERT",
-    "TIME_SIGNAL_PLACEMENT_OPPORTUNITY",
-    "TIME_SIGNAL_PROGRAM",
-    "PROVIDER_ADVERTISEMENT",
-    "DISTRIBUTOR_ADVERTISEMENT",
-    "PROVIDER_PLACEMENT_OPPORTUNITY",
-    "DISTRIBUTOR_PLACEMENT_OPPORTUNITY",
-]
-```
+### MediaPackage v1
+- `mediapackage.CfnChannel` with a stable `id` (e.g. `loop-test-channel`).
+- HLS `CfnOriginEndpoint`: `HlsPackageProperty(ad_markers="SCTE35_ENHANCED",
+  ad_triggers=[...], ads_on_delivery_restrictions="BOTH", segment_duration_seconds=6,
+  playlist_window_seconds=60, program_date_time_interval_seconds=1)`.
+- DASH `CfnOriginEndpoint`: `DashPackageProperty(ad_triggers=[...],
+  ads_on_delivery_restrictions="BOTH", period_triggers=["ADS"],
+  segment_duration_seconds=6, manifest_window_seconds=60, ...)`.
+- `AdTriggers`: `SPLICE_INSERT`, `PROVIDER_ADVERTISEMENT`, `DISTRIBUTOR_ADVERTISEMENT`,
+  `PROVIDER_PLACEMENT_OPPORTUNITY`, `DISTRIBUTOR_PLACEMENT_OPPORTUNITY`.
+- Endpoints are **public** — no CloudFront/OAC/SigV4. Output their `attr_url` directly.
 
 ### MediaLive input
-- `type="TS_FILE"`
-- `sources=[{"url": "s3ssl://<bucket>/<filename>"}]` — single source (SINGLE_PIPELINE)
-- `role_arn` = MediaLive IAM role
-- Attach an `CfnInputSecurityGroup` with `cidr="0.0.0.0/0"`
+- `type="TS_FILE"`, single source `s3ssl://...`, role attached, input security group `0.0.0.0/0`.
 
 ### MediaLive channel
-- `channel_class="SINGLE_PIPELINE"`
-- `role_arn` = MediaLive IAM role
-- **Input attachment**:
-  - `source_end_behavior="LOOP"` — this is the key setting that loops the file
-  - `input_filter="AUTO"`
-  - `filter_strength=1`
-  - `deblock_filter="DISABLED"`, `denoise_filter="DISABLED"`
-- **Encoder settings** (as a raw dict passed to `encoder_settings`):
-  - One audio description: AAC, 128kbps, 48kHz, stereo, CBR
-  - One video description: H.264, 1920x1080, 5Mbps, 25fps, QVBR, HIGH profile, GOP=50 frames
-  - One output group: `mediaPackageGroupSettings` pointing to destination ref `"mpv2-dest"`
-  - One output within the group: `mediaPackageOutputSettings: {}`
-  - `timecodeConfig.source = "SYSTEMCLOCK"` — provides correct UTC `EXT-X-PROGRAM-DATE-TIME` without epoch locking
-  - Do **not** use epoch locking — it disables SCTE-35 passthrough to MediaPackage
-  - `globalConfiguration.inputEndAction = "SWITCH_AND_LOOP_INPUTS"` — reinforces looping behaviour
-  - `availConfiguration.availSettings.scte35SpliceInsert` with `adAvailOffset=0`, `webDeliveryAllowedFlag="FOLLOW"`, `noRegionalBlackoutFlag="FOLLOW"`
-- **Destination**: id=`"mpv2-dest"`, settings url = `mpv2_channel.attr_ingest_endpoint_urls` (index 0)
-- Channel is created in **IDLE** state — do not auto-start
+- `channel_class="SINGLE_PIPELINE"`.
+- Input attachment: `source_end_behavior="LOOP"`.
+- Encoder settings (raw dict):
+  - `timecodeConfig.source = "SYSTEMCLOCK"` (gives correct `EXT-X-PROGRAM-DATE-TIME`;
+    not epoch locking).
+  - **No** `availConfiguration`, **no** `globalConfiguration` — pure passthrough.
+  - One audio (AAC 128k) + one video (H.264 1080p, GOP 50) description.
+  - One output group: `MediaPackageGroupSettings` → destination ref; one output with
+    `MediaPackageOutputSettings: {}`.
+- Destination: `media_package_settings=[MediaPackageOutputDestinationSettingsProperty(channel_id=<v1 channel id>)]`.
+- Because the destination references the channel by **string id** (not a token), add an
+  explicit `ml_channel.node.add_dependency(mp_channel)`.
+- Channel is created **IDLE** (do not auto-start).
 
-### CloudFormation outputs
-- `S3BucketName`
-- `S3TsKey`
-- `MediaLiveChannelId`
-- `MediaPackageChannelArn`
-- `HlsPlaybackUrl` — from `hls_endpoint.attr_hls_manifest_urls`
-- `DashPlaybackUrl` — from `dash_endpoint.attr_dash_manifest_urls`
-- `MediaLiveRoleArn`
+### Outputs
+- `S3BucketName`, `S3TsKey`, `MediaLiveChannelId`, `MediaPackageChannelId`,
+  `HlsPlaybackUrl` (endpoint `attr_url`), `DashPlaybackUrl` (endpoint `attr_url`),
+  `MediaLiveRoleArn`.
 
 ---
 
 ## Helper script: `channel.py`
 
-A standalone Python script (using `boto3`) with subcommands:
-- `start` — starts the channel, waits for RUNNING, prints playback URLs
-- `stop` — stops the channel, waits for IDLE
-- `status` — prints current channel state
-- `outputs` — prints all CloudFormation stack outputs
-
-Stack name is hardcoded as `"MediaLiveLoopStack"`. Region from `boto3.session.Session().region_name`.
+`boto3` subcommands: `upload`, `start`, `stop`, `status`, `outputs`,
+`policy` (no-op for v1), `redeploy`. Stack name `MediaLiveLoopStack`; region from
+`config.toml`.
 
 ---
 
 ## Lifecycle
 
 ```bash
-# Setup
-npm install -g aws-cdk
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cdk bootstrap   # once per account/region
-
-# Deploy
-cdk deploy -c ts_file=./your_content.ts -c bucket_name=my-existing-bucket
-
-# Start stream
-python channel.py start   # prints HLS + DASH URLs when RUNNING
-
-# Stop stream (do before destroy to avoid errors)
-python channel.py stop
-
-# Destroy all resources
+uv sync
+cdk bootstrap
+uv run python channel.py upload
+cdk deploy
+uv run python channel.py start   # prints public HLS + DASH URLs
+uv run python channel.py stop
 cdk destroy
-# Note: the .ts object in the existing S3 bucket is NOT deleted on destroy
-# (we don't own the bucket)
 ```
 
 ---
 
-## Key constraints and gotchas
+## Gotchas / notes
 
-### SCTE-35 passthrough
-- MediaPackage v2 always passes SCTE-35 through — no explicit setting needed
-- Do **not** enable epoch locking (`timecodeConfig.source != "ZEROBASED"` or `"EMBEDDED"`) — AWS automatically disables SCTE-35 passthrough to MediaPackage when epoch locking is active
-- `SYSTEMCLOCK` is the correct timecode source: gives accurate `EXT-X-PROGRAM-DATE-TIME` in HLS without interfering with SCTE-35
-
-### SCTE-35 on loop boundaries
-The `.ts` file contains SCTE-35 `time_signal` messages with `pts_time` values baked in at file creation time. On each loop, MediaLive offsets the output PTS upward for continuity, but the `pts_time` inside the SCTE-35 packets still references the original file PTS — making them stale on loop 2+.
-
-The markers in this file are frame-accurate (tied to specific video frames), so they cannot be stripped and re-injected via the MediaLive schedule. Mitigation options (not implemented in the stack, but document in README):
-
-1. **Re-author with `time_specified_flag=0`**: set the `time_specified_flag` bit to 0 in `splice_time()` within each `time_signal` message. The cue fires on receipt rather than at a scheduled PTS. Since the SCTE-35 packet is muxed at the correct position in the TS, timing remains frame-accurate. Tool: `tsduck` (`tsp` with SCTE-35 table rewriter).
-2. **Single pass**: use `sourceEndBehavior="CONTINUE"` instead of `LOOP`, let MediaLive hold on last frame after file ends, restart manually per test pass.
-3. **Pre-baked long file**: repeat the content N times in a single file, with `pts_time` values pre-offset by `n × file_duration` for each repetition. No loop boundary is hit within the test window.
-
-### MediaPackage v2 CDK attribute names
-`CfnChannel.attr_ingest_endpoint_urls` returns a list token. Use index `[0]` for SINGLE_PIPELINE. If CDK version changes cause attribute name issues, verify against the CloudFormation resource docs for `AWS::MediaPackageV2::Channel`.
-
-### Removal policy
-The stack does **not** own the S3 bucket, so no `RemovalPolicy` is set on it. The uploaded `.ts` object is left in place after `cdk destroy`. Add a note in the README to delete it manually if needed.
-
-### Channel billing
-MediaLive SINGLE_PIPELINE HD costs ~$0.50–0.65/hour while RUNNING (region-dependent). Always stop the channel before destroying or leaving idle.
+- **SCTE-35 timing is the #1 source of "no markers"** — see the timed-cue rule above.
+  Generate with `franken-ts` (timed by default) and verify with
+  `tsp ... -P splicemonitor` (`immediate: no`, non-zero pre-roll).
+- **Diagnosing SCTE end-to-end:** CloudWatch `AWS/MediaLive` metrics
+  `Scte35InputMessage` (detected on input) and
+  `Scte35OutputMessageAllOutputsTotalEmitted` (emitted to outputs); the egress
+  manifest is the ground truth for markers.
+- **Markers land on segment boundaries:** with timed cues, MediaLive inserts an IDR
+  at the splice PTS and MediaPackage truncates the current segment so `CUE-OUT`/
+  `CUE-IN` sit exactly on a boundary (you'll see short `#EXTINF` segments around the
+  break).
+- **Removal policy:** the stack does not own the S3 bucket; the uploaded `.ts` is left
+  in place on `cdk destroy`.
+- **Cost:** MediaLive SINGLE_PIPELINE HD ~$0.50–0.65/hour while RUNNING; stop when idle.
