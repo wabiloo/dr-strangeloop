@@ -9,7 +9,6 @@ Usage:
   python channel.py outputs  – print all CloudFormation stack outputs
 """
 
-import json
 import os
 import sys
 import time
