@@ -20,6 +20,8 @@ def _avail_descriptor(parent: ET.Element, provider_avail_id: str) -> None:
 def _splice_insert_pair(
     root: ET.Element,
     boundary_start: AdBoundary,
+    start_pts: int,
+    end_pts: int,
 ) -> None:
     ab = boundary_start.ad_break
     break_duration_pts = round(boundary_start.break_duration * PTS_CLOCK)
@@ -34,10 +36,11 @@ def _splice_insert_pair(
                            splice_event_id=event_hex,
                            splice_event_cancel="false",
                            out_of_network="true",
-                           splice_immediate="true",
+                           splice_immediate="false",
                            unique_program_id=ab.unique_program_id,
                            avail_num=str(ab.avail_num),
-                           avails_expected=str(ab.avails_expected))
+                           avails_expected=str(ab.avails_expected),
+                           pts_time=format_pts(start_pts))
     ET.SubElement(si_out, "break_duration",
                   auto_return="false",
                   duration=format_pts(break_duration_pts))
@@ -52,16 +55,18 @@ def _splice_insert_pair(
                   splice_event_id=event_hex,
                   splice_event_cancel="false",
                   out_of_network="false",
-                  splice_immediate="true",
+                  splice_immediate="false",
                   unique_program_id=ab.unique_program_id,
                   avail_num=str(ab.avail_num),
-                  avails_expected=str(ab.avails_expected))
+                  avails_expected=str(ab.avails_expected),
+                  pts_time=format_pts(end_pts))
     _avail_descriptor(sit_in, ab.provider_avail_id)
 
 
 def _time_signal_pair(
     root: ET.Element,
     boundary_start: AdBoundary,
+    start_pts: int,
 ) -> None:
     ab = boundary_start.ad_break
     seg = ab.segmentation
@@ -79,7 +84,7 @@ def _time_signal_pair(
                               protocol_version="0",
                               pts_adjustment="0",
                               tier="0x0FFF")
-    ET.SubElement(sit_start, "time_signal")
+    ET.SubElement(sit_start, "time_signal", pts_time=format_pts(start_pts))
     _avail_descriptor(sit_start, ab.provider_avail_id)
 
     seg_desc = ET.SubElement(sit_start, "splice_segmentation_descriptor",
@@ -104,6 +109,7 @@ def _time_signal_pair(
 
 def generate_xml(
     boundaries: list[AdBoundary],
+    pts_map: dict[tuple[int, bool], int],
     xml_path: Path,
 ) -> None:
     """Generate the tsduck SCTE-35 XML file."""
@@ -118,14 +124,16 @@ def generate_xml(
             continue
         seen.add(eid)
 
+        start_pts = pts_map[(eid, True)]
+        end_pts = pts_map[(eid, False)]
         ab = boundary.ad_break
 
         root.append(ET.Comment(f" Event {eid} "))
 
         if ab.splice_type == "splice_insert":
-            _splice_insert_pair(root, boundary)
+            _splice_insert_pair(root, boundary, start_pts, end_pts)
         else:
-            _time_signal_pair(root, boundary)
+            _time_signal_pair(root, boundary, start_pts)
 
     ET.indent(root, space="    ")
     tree = ET.ElementTree(root)

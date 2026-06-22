@@ -448,7 +448,7 @@ def _run_pipeline(
 
     # ── Step 5: generate SCTE-35 XML ──────────────────────────────────────────
     with console.status("  Generating SCTE-35 XML...", spinner="dots"):
-        generate_xml(boundaries, xml_path)
+        generate_xml(boundaries, pts_map, xml_path)
     _ok(f"SCTE-35 XML → [dim]{xml_path.name}[/dim]")
 
     # ── Step 6: inject ────────────────────────────────────────────────────────
