@@ -13,6 +13,7 @@ from constructs import Construct
 # SCTE-35 ad triggers to act on (mirrors the known-good reference channel).
 AD_TRIGGERS = [
     "SPLICE_INSERT",
+    "BREAK",
     "PROVIDER_ADVERTISEMENT",
     "DISTRIBUTOR_ADVERTISEMENT",
     "PROVIDER_PLACEMENT_OPPORTUNITY",
