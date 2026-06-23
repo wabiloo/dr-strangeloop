@@ -66,7 +66,7 @@ This mirrors the known-good reference channel `bpkio_default_live_scte35`.
   `cloudwatch:PutMetricData`.
 
 ### MediaPackage v1
-- `mediapackage.CfnChannel` with a stable `id` (e.g. `loop-test-channel`).
+- `mediapackage.CfnChannel` with a stable `id` (e.g. `scte-loop-channel`).
 - HLS `CfnOriginEndpoint`: `HlsPackageProperty(ad_markers="SCTE35_ENHANCED",
   ad_triggers=[...], ads_on_delivery_restrictions="BOTH", segment_duration_seconds=6,
   playlist_window_seconds=60, program_date_time_interval_seconds=1)`.
@@ -105,7 +105,7 @@ This mirrors the known-good reference channel `bpkio_default_live_scte35`.
 ## Helper script: `channel.py`
 
 `boto3` subcommands: `upload`, `start`, `stop`, `status`, `outputs`,
-`policy` (no-op for v1), `redeploy`. Stack name `MediaLiveLoopStack`; region from
+`policy` (no-op for v1), `redeploy`. Stack name `ScteLoopStack`; region from
 `config.toml`.
 
 ---

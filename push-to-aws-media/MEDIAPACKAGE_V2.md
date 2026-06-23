@@ -72,12 +72,12 @@ Imports: `aws_mediapackagev2 as mediapackagev2`, `aws_cloudfront as cloudfront`.
 ### Channel group + channel (note `input_type`)
 ```python
 channel_group = mediapackagev2.CfnChannelGroup(
-    self, "ChannelGroup", channel_group_name="loop-test-group")
+    self, "ChannelGroup", channel_group_name="scte-loop-group")
 
 mpv2_channel = mediapackagev2.CfnChannel(
     self, "Channel",
     channel_group_name=channel_group.channel_group_name,
-    channel_name="loop-test-channel",
+    channel_name="scte-loop-channel",
     input_type="CMAF",          # <-- REQUIRED for CMAF ingest
 )
 mpv2_channel.add_dependency(channel_group)

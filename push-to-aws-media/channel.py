@@ -15,7 +15,7 @@ import time
 import tomllib
 import boto3
 
-STACK_NAME = "MediaLiveLoopStack"
+STACK_NAME = "ScteLoopStack"
 _CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.toml")
 
 

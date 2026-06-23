@@ -19,10 +19,10 @@ AD_TRIGGERS = [
     "DISTRIBUTOR_PLACEMENT_OPPORTUNITY",
 ]
 
-MP_CHANNEL_ID = "loop-test-channel"
+MP_CHANNEL_ID = "scte-loop-channel"
 
 
-class MediaLiveLoopStack(Stack):
+class ScteLoopStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, *, config: dict, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
@@ -86,23 +86,22 @@ class MediaLiveLoopStack(Stack):
         )
 
         # ── MediaPackage v1 channel ───────────────────────────────────────────
-        # The reference SCTE-35 channel uses MediaPackage v1 fed by MediaLive's
-        # native MediaPackage output group. v1 reads SCTE-35 from the ingested
-        # stream and emits ad markers per the endpoint AdTriggers — no CMAF
-        # ingest, no avail config, no CloudFront/SigV4 needed (endpoints are
-        # publicly reachable).
+        # MediaPackage v1 fed by MediaLive's native MediaPackage output group.
+        # v1 reads SCTE-35 from the ingested stream and emits ad markers per the
+        # endpoint AdTriggers — no CMAF ingest, no avail config, no
+        # CloudFront/SigV4 (endpoints are publicly reachable).
         mp_channel = mediapackage.CfnChannel(
             self,
             "MpChannel",
             id=MP_CHANNEL_ID,
-            description="Loop test SCTE-35 channel",
+            description="SCTE-35 loop test channel",
         )
 
         hls_endpoint = mediapackage.CfnOriginEndpoint(
             self,
-            "HlsEndpointV1",
+            "HlsEndpoint",
             channel_id=MP_CHANNEL_ID,
-            id="loop-test-hls",
+            id="scte-loop-hls",
             manifest_name="index",
             startover_window_seconds=0,
             hls_package=mediapackage.CfnOriginEndpoint.HlsPackageProperty(
@@ -118,9 +117,9 @@ class MediaLiveLoopStack(Stack):
 
         dash_endpoint = mediapackage.CfnOriginEndpoint(
             self,
-            "DashEndpointV1",
+            "DashEndpoint",
             channel_id=MP_CHANNEL_ID,
-            id="loop-test-dash",
+            id="scte-loop-dash",
             manifest_name="index",
             startover_window_seconds=0,
             dash_package=mediapackage.CfnOriginEndpoint.DashPackageProperty(
@@ -153,7 +152,7 @@ class MediaLiveLoopStack(Stack):
             self,
             "TsFileInput",
             type="TS_FILE",
-            name="loop-test-input",
+            name="scte-loop-input",
             role_arn=medialive_role.role_arn,
             input_security_groups=[input_sg.ref],
             sources=[
@@ -251,13 +250,13 @@ class MediaLiveLoopStack(Stack):
 
         ml_channel = medialive.CfnChannel(
             self,
-            "MediaLiveChannel",
-            name="loop-test-channel",
+            "Channel",
+            name="scte-loop-channel",
             channel_class="SINGLE_PIPELINE",
             role_arn=medialive_role.role_arn,
             input_attachments=[
                 medialive.CfnChannel.InputAttachmentProperty(
-                    input_attachment_name="ts-file-input",
+                    input_attachment_name="scte-loop-input",
                     input_id=ml_input.ref,
                     input_settings=medialive.CfnChannel.InputSettingsProperty(
                         source_end_behavior="LOOP",

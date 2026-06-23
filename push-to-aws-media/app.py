@@ -2,7 +2,7 @@
 import os
 import tomllib
 import aws_cdk as cdk
-from media_live_loop_stack import MediaLiveLoopStack
+from scte_loop_stack import ScteLoopStack
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.toml")
 
@@ -16,9 +16,9 @@ ts_file_override = app.node.try_get_context("ts_file")
 if ts_file_override:
     config.setdefault("input", {})["ts_file"] = ts_file_override
 
-MediaLiveLoopStack(
+ScteLoopStack(
     app,
-    "MediaLiveLoopStack",
+    "ScteLoopStack",
     config=config,
     env=cdk.Environment(
         account=os.environ.get("CDK_DEFAULT_ACCOUNT"),
