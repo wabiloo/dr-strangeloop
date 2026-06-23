@@ -44,7 +44,23 @@ class _ScteEntry:
 
 
 def _collect_scte_from_xml(xml_path: Path) -> dict[tuple[int, bool], _ScteEntry]:
-    """Parse splice_insert PTS values from a tsduck-produced extraction XML."""
+    """Parse SCTE-35 PTS values from a tsduck-produced extraction XML.
+
+    Handles both splice_insert and time_signal tables.  The XML is structured
+    as a flat list of <splice_information_table> elements each containing
+    exactly one command element (<splice_insert> or <time_signal>).
+
+    For time_signal tables the PTS is on the <time_signal> child, NOT on the
+    descriptor — so we must resolve it within the same table, not by scanning
+    the whole document (which was the original bug: all descriptors picked up
+    the first time_signal pts_time found anywhere).
+
+    start vs stop for time_signal is determined from segmentation_type_id:
+      even type_id  → programme/break start (splice-out)
+      odd  type_id  → programme/break end   (splice-in)
+    This follows SCTE-35 Table 23 where types are defined in start/end pairs
+    (0x34 Program Start, 0x35 Program End, 0x38 Break Start, 0x39 Break End…).
+    """
     if not xml_path.exists():
         return {}
     try:
@@ -53,46 +69,55 @@ def _collect_scte_from_xml(xml_path: Path) -> dict[tuple[int, bool], _ScteEntry]
         logger.warning("Cannot parse %s: %s", xml_path, exc)
         return {}
 
-    result: dict[tuple[int, bool], _ScteEntry] = {}
-    for si in root.iter("splice_insert"):
-        raw_id = si.get("splice_event_id", "")
-        raw_pts = si.get("pts_time", "")
-        raw_oon = si.get("out_of_network", "").lower()
-        try:
-            event_id = int(raw_id, 16) if raw_id.startswith("0x") else int(raw_id)
-            pts_ticks = int(raw_pts.replace(",", "").replace(" ", ""))
-            is_start = (raw_oon == "true")
-        except (ValueError, TypeError):
-            continue
-        key = (event_id, is_start)
-        result[key] = _ScteEntry(
-            event_id=event_id,
-            is_start=is_start,
-            pts_ticks=pts_ticks,
-            pts_seconds=pts_ticks / PTS_CLOCK,
-        )
+    def _parse_int(raw: str) -> int:
+        raw = raw.replace(",", "").replace(" ", "")
+        return int(raw, 16) if raw.startswith("0x") else int(raw)
 
-    # Also handle time_signal / segmentation_descriptor
-    for sd in root.iter("splice_segmentation_descriptor"):
-        raw_id = sd.get("segmentation_event_id", "")
-        parent = sd.getparent() if hasattr(sd, "getparent") else None
-        # find containing splice_information_table → time_signal pts_time
+    result: dict[tuple[int, bool], _ScteEntry] = {}
+
+    for sit in root.iter("splice_information_table"):
+        # ── splice_insert ─────────────────────────────────────────────────────
+        si = sit.find("splice_insert")
+        if si is not None:
+            raw_id  = si.get("splice_event_id", "")
+            raw_pts = si.get("pts_time", "")
+            raw_oon = si.get("out_of_network", "").lower()
+            try:
+                event_id  = _parse_int(raw_id)
+                pts_ticks = _parse_int(raw_pts)
+                is_start  = (raw_oon == "true")
+            except (ValueError, TypeError):
+                continue
+            key = (event_id, is_start)
+            result[key] = _ScteEntry(event_id, is_start, pts_ticks, pts_ticks / PTS_CLOCK)
+            continue
+
+        # ── time_signal ───────────────────────────────────────────────────────
+        ts = sit.find("time_signal")
+        if ts is None:
+            continue
+        raw_pts = ts.get("pts_time", "")
+        if not raw_pts:
+            continue  # time_signal with no pts (e.g. immediate splice) — skip
         try:
-            event_id = int(raw_id, 16) if raw_id.startswith("0x") else int(raw_id)
+            pts_ticks = _parse_int(raw_pts)
         except (ValueError, TypeError):
             continue
-        for ts_elem in root.iter("time_signal"):
-            raw_pts = ts_elem.get("pts_time", "")
-            if not raw_pts:
-                continue
+
+        for sd in sit.iter("splice_segmentation_descriptor"):
+            raw_id   = sd.get("segmentation_event_id", "")
+            raw_type = sd.get("segmentation_type_id", "0x00")
             try:
-                pts_ticks = int(raw_pts.replace(",", "").replace(" ", ""))
-            except ValueError:
+                event_id = _parse_int(raw_id)
+                type_id  = _parse_int(raw_type)
+            except (ValueError, TypeError):
                 continue
-            is_start = True  # time_signal start (non-empty)
+            # Even type_id = start (splice-out), odd = stop (splice-in).
+            # SCTE-35 Table 23 defines types in start/end pairs: 0x34/0x35,
+            # 0x38/0x39, etc.
+            is_start = (type_id % 2 == 0)
             key = (event_id, is_start)
-            if key not in result:
-                result[key] = _ScteEntry(event_id, is_start, pts_ticks, pts_ticks / PTS_CLOCK)
+            result[key] = _ScteEntry(event_id, is_start, pts_ticks, pts_ticks / PTS_CLOCK)
 
     return result
 

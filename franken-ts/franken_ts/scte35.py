@@ -67,6 +67,7 @@ def _time_signal_pair(
     root: ET.Element,
     boundary_start: AdBoundary,
     start_pts: int,
+    end_pts: int,
 ) -> None:
     ab = boundary_start.ad_break
     seg = ab.segmentation
@@ -79,7 +80,13 @@ def _time_signal_pair(
         else break_duration_pts
     )
 
-    # Time signal start
+    # The start and stop type_ids are defined as consecutive pairs in SCTE-35
+    # Table 23: e.g. 0x34 Program Start / 0x35 Program End, 0x38 Break Start /
+    # 0x39 Break End.  The stop is always start + 1.
+    start_type_id = int(seg.type_id, 16) if isinstance(seg.type_id, str) else seg.type_id
+    stop_type_id  = start_type_id + 1
+
+    # ── Time signal start ─────────────────────────────────────────────────────
     sit_start = ET.SubElement(root, "splice_information_table",
                               protocol_version="0",
                               pts_adjustment="0",
@@ -87,7 +94,7 @@ def _time_signal_pair(
     ET.SubElement(sit_start, "time_signal", pts_time=format_pts(start_pts))
     _avail_descriptor(sit_start, ab.provider_avail_id)
 
-    seg_desc = ET.SubElement(sit_start, "splice_segmentation_descriptor",
+    seg_desc_start = ET.SubElement(sit_start, "splice_segmentation_descriptor",
                              segmentation_event_id=event_hex,
                              web_delivery_allowed=str(seg.web_delivery_allowed).lower(),
                              no_regional_blackout=str(seg.no_regional_blackout).lower(),
@@ -99,12 +106,30 @@ def _time_signal_pair(
                              segments_expected="0",
                              sub_segment_num="0",
                              sub_segments_expected="0")
-    upid = ET.SubElement(seg_desc, "segmentation_upid", type=seg.upid_type)
-    upid.text = seg.upid_hex
+    upid_start = ET.SubElement(seg_desc_start, "segmentation_upid", type=seg.upid_type)
+    upid_start.text = seg.upid_hex
 
-    # Time signal stop (empty)
-    sit_stop = ET.SubElement(root, "splice_information_table")
-    ET.SubElement(sit_stop, "time_signal")
+    # ── Time signal stop ──────────────────────────────────────────────────────
+    sit_stop = ET.SubElement(root, "splice_information_table",
+                             protocol_version="0",
+                             pts_adjustment="0",
+                             tier="0x0FFF")
+    ET.SubElement(sit_stop, "time_signal", pts_time=format_pts(end_pts))
+    _avail_descriptor(sit_stop, ab.provider_avail_id)
+
+    seg_desc_stop = ET.SubElement(sit_stop, "splice_segmentation_descriptor",
+                             segmentation_event_id=event_hex,
+                             web_delivery_allowed=str(seg.web_delivery_allowed).lower(),
+                             no_regional_blackout=str(seg.no_regional_blackout).lower(),
+                             archive_allowed=str(seg.archive_allowed).lower(),
+                             device_restrictions=str(seg.device_restrictions),
+                             segmentation_type_id=f"0x{stop_type_id:02X}",
+                             segment_num="0",
+                             segments_expected="0",
+                             sub_segment_num="0",
+                             sub_segments_expected="0")
+    upid_stop = ET.SubElement(seg_desc_stop, "segmentation_upid", type=seg.upid_type)
+    upid_stop.text = seg.upid_hex
 
 
 def generate_xml(
@@ -133,7 +158,7 @@ def generate_xml(
         if ab.splice_type == "splice_insert":
             _splice_insert_pair(root, boundary, start_pts, end_pts)
         else:
-            _time_signal_pair(root, boundary, start_pts)
+            _time_signal_pair(root, boundary, start_pts, end_pts)
 
     ET.indent(root, space="    ")
     tree = ET.ElementTree(root)
