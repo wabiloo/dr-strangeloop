@@ -16,19 +16,15 @@ from rich.text import Text
 
 from .config import load_config
 from .diagnostics import build_diag_rows, render_terminal_table, render_html_table
-from .ffmpeg import transcode_to_ts, write_concat_playlist
+from .extract import extract_clip
+from .ffmpeg import assemble_ts, write_concat_playlist
 from .pts import find_idr_pts
 from .report import generate_report
 from .scte35 import generate_xml
 from .timeline import build_timeline, all_forced_keyframe_times
 from .tsduck import inject_markers, verify_markers
 from .utils import check_tool
-from .validate import (
-    needs_normalization,
-    normalize_asset,
-    probe_file,
-    validate_inputs,
-)
+from .validate import validate_inputs
 
 _DEFAULT_CACHE_DIR = Path.home() / ".cache" / "franken_ts"
 
@@ -168,9 +164,13 @@ def main(
     if output:
         cfg.output.file = output
 
-    normalize_flag = normalize or cfg.normalize
+    # Every clip is always extracted + normalized (see extract.py).  The cache
+    # is enabled by default and only disabled with --no-cache.  The historical
+    # --normalize flag / cfg.normalize are accepted for backwards compatibility
+    # but no longer gate anything.
+    _ = normalize or cfg.normalize
     effective_cache_dir: Optional[Path] = None
-    if normalize_flag and not no_cache:
+    if not no_cache:
         effective_cache_dir = cache_dir or _DEFAULT_CACHE_DIR
 
     own_temp = temp_dir is None
@@ -188,7 +188,6 @@ def main(
         _run_pipeline(
             cfg=cfg,
             temp_dir=temp_dir,
-            normalize=normalize_flag,
             cache_dir=effective_cache_dir,
             dry_run=dry_run,
             skip_transcode=skip_transcode,
@@ -296,7 +295,6 @@ def _build_clip_table(assets, infos, entries, framerate):
 def _run_pipeline(
     cfg,
     temp_dir: Path,
-    normalize: bool,
     cache_dir: Optional[Path],
     dry_run: bool,
     skip_transcode: bool,
@@ -304,85 +302,33 @@ def _run_pipeline(
     verify: bool,
 ) -> None:
 
-    # Keep the original asset configs for display (before paths are remapped to
-    # normalized cache files).
+    # Timeline entries keep pointing at the ORIGINAL source files so the clip
+    # table, report and diagnostics show real filenames.  The extracted segment
+    # paths are tracked separately and only used for assembly.
     original_assets = list(cfg.assets)
 
+    # Ensure the output directory exists BEFORE anything writes there.  The
+    # config's output path may be relative (e.g. "../outputs/foo.ts") and resolve
+    # to a missing directory depending on the working directory.  If it is
+    # missing, the final `tsp` injection step fails to create the file — and a
+    # TSDuck spliceinject FileListener-thread shutdown bug turns that clean error
+    # into an indefinite hang ("Injecting SCTE-35 markers..." never returns).
+    if not dry_run:
+        cfg.output.file.parent.mkdir(parents=True, exist_ok=True)
+
     # ── Step 1: validate ─────────────────────────────────────────────────────
+    # normalize=True: every clip is extracted+normalized regardless, so format
+    # mismatches (fps/resolution) are informational warnings, never errors.
     with console.status("  Validating inputs...", spinner="dots"):
-        report, infos = validate_inputs(cfg.assets, cfg.output, normalize)
+        report, infos = validate_inputs(cfg.assets, cfg.output, normalize=True)
 
     for w in report.warnings:
         _warn(w)
     if report.has_errors:
         for e in report.errors:
             _err(e)
-        raise RuntimeError(
-            f"Validation failed ({len(report.errors)} error(s)). "
-            "Pass --normalize to auto-correct format mismatches."
-        )
+        raise RuntimeError(f"Validation failed ({len(report.errors)} error(s)).")
     _ok(f"Validated [bold]{len(cfg.assets)}[/bold] asset(s)")
-
-    # ── Step 1b: normalize ────────────────────────────────────────────────────
-    if normalize:
-        to_norm = [
-            (i, a) for i, a in enumerate(cfg.assets)
-            if needs_normalization(infos[a.file], cfg.output)
-        ]
-
-        normalized_assets = list(cfg.assets)
-
-        if to_norm:
-            n_total = len(to_norm)
-            # Deduplicate within this run: same file + same start + same duration
-            # = identical clip = no need to normalise twice.
-            ClipKey = tuple  # (resolved_path, start_seconds, duration_seconds)
-            run_cache: dict[ClipKey, Path] = {}
-            norm_count = 0
-
-            with console.status("", spinner="dots") as status:
-                for n, (i, asset) in enumerate(to_norm, 1):
-                    clip_key: ClipKey = (
-                        asset.file.resolve(),
-                        asset.start_seconds(),
-                        asset.duration_seconds(),
-                    )
-                    original = asset.file
-                    if clip_key in run_cache:
-                        norm_path = run_cache[clip_key]
-                        status.update(
-                            f"  Normalizing [[bold]{n}/{n_total}[/bold]] "
-                            f"[cyan]{original.name}[/cyan]  [dim](reusing)[/dim]"
-                        )
-                    else:
-                        status.update(
-                            f"  Normalizing [[bold]{n}/{n_total}[/bold]] "
-                            f"[cyan]{original.name}[/cyan]..."
-                        )
-                        info = infos[original]
-                        norm_path = normalize_asset(
-                            asset, info, cfg.output, temp_dir, i,
-                            cache_dir=cache_dir,
-                            dry_run=dry_run,
-                        )
-                        run_cache[clip_key] = norm_path
-                        norm_count += 1
-
-                    normalized_asset = asset.model_copy(update={"file": norm_path})
-                    normalized_assets[i] = normalized_asset
-                    if norm_path not in infos:
-                        infos[norm_path] = probe_file(norm_path) if not dry_run else infos[original]
-
-            from_cache = n_total - norm_count
-            summary = f"Normalized [bold]{n_total}[/bold] asset(s)"
-            if from_cache:
-                summary += f"  [dim]({norm_count} transcoded, {from_cache} reused)[/dim]"
-            _ok(summary)
-        else:
-            _ok("All assets conform to output spec")
-
-        cfg = cfg.model_copy(update={"assets": normalized_assets})
-        infos = {a.file: infos[a.file] for a in cfg.assets}
 
     # ── Step 2: build timeline ────────────────────────────────────────────────
     entries, boundaries = build_timeline(cfg.assets, infos, cfg.output.framerate)
@@ -399,24 +345,55 @@ def _run_pipeline(
     console.print()
 
     forced_kf_times = all_forced_keyframe_times(entries)
-    playlist_path = temp_dir / "playlist.txt"
+    video_playlist = temp_dir / "video.txt"
+    audio_playlist = temp_dir / "audio.txt"
     intermediate_ts = temp_dir / "intermediate.ts"
     xml_path = temp_dir / "scte35.xml"
 
-    # ── Step 3: transcode ─────────────────────────────────────────────────────
+    # ── Step 3: extract + assemble ────────────────────────────────────────────
     if not skip_transcode:
         t0 = time.monotonic()
-        with console.status(
-            f"  Transcoding [bold]{len(entries)}[/bold] clip(s) "
-            f"([dim]~{_fmt_elapsed(total_duration)}[/dim])...",
-            spinner="dots",
-        ):
-            write_concat_playlist(entries, playlist_path)
-            transcode_to_ts(
-                playlist_path, intermediate_ts, cfg.output,
+
+        # 3a — extract every clip into keyframe-clean video/audio segments.
+        video_segs: list[Path] = []
+        audio_segs: list[Path] = []
+        # Within-run dedup: an identical (source, inpoint, outpoint) cut only
+        # needs extracting once even when it appears multiple times.
+        run_cache: dict[tuple, tuple[Path, Path]] = {}
+        n_total = len(entries)
+        with console.status("", spinner="dots") as status:
+            for idx, entry in enumerate(entries):
+                key = (entry.source_file.resolve(), entry.inpoint, entry.outpoint)
+                if key in run_cache:
+                    v, a = run_cache[key]
+                    status.update(
+                        f"  Extracting [[bold]{idx + 1}/{n_total}[/bold]] "
+                        f"[cyan]{entry.source_file.name}[/cyan]  [dim](reusing)[/dim]"
+                    )
+                else:
+                    status.update(
+                        f"  Extracting [[bold]{idx + 1}/{n_total}[/bold]] "
+                        f"[cyan]{entry.source_file.name}[/cyan]..."
+                    )
+                    result = extract_clip(
+                        entry, cfg.output, temp_dir, idx,
+                        cache_dir=cache_dir, dry_run=dry_run,
+                    )
+                    v, a = result.segments.video, result.segments.audio
+                    run_cache[key] = (v, a)
+                video_segs.append(v)
+                audio_segs.append(a)
+        _ok(f"Extracted [bold]{n_total}[/bold] clip(s)")
+
+        # 3b — assemble final TS (video re-encode + forced IDRs, audio muxed in).
+        with console.status("  Assembling final TS...", spinner="dots"):
+            write_concat_playlist(video_segs, video_playlist)
+            write_concat_playlist(audio_segs, audio_playlist)
+            assemble_ts(
+                video_playlist, audio_playlist, intermediate_ts, cfg.output,
                 forced_kf_times, dry_run=dry_run,
             )
-        _ok(f"Transcoded → [dim]{intermediate_ts.name}[/dim]  [dim]({_fmt_elapsed(time.monotonic() - t0)})[/dim]")
+        _ok(f"Assembled → [dim]{intermediate_ts.name}[/dim]  [dim]({_fmt_elapsed(time.monotonic() - t0)})[/dim]")
     else:
         _warn("Skipping transcode (--skip-transcode)")
         intermediate_ts = cfg.output.file

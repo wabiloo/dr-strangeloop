@@ -126,6 +126,23 @@ def validate_inputs(
 
         infos[asset.file] = info
 
+        # Validate that start/duration are within the file's actual duration.
+        start_s = asset.start_seconds() or 0.0
+        dur_s = asset.duration_seconds()
+
+        if start_s >= info.duration:
+            report.errors.append(
+                f"{asset.file.name}: start {start_s:.3f}s exceeds video stream duration "
+                f"{info.duration:.3f}s"
+            )
+        elif dur_s is not None:
+            end_s = start_s + dur_s
+            if end_s > info.duration:
+                report.errors.append(
+                    f"{asset.file.name}: start {start_s:.3f}s + duration {dur_s:.3f}s "
+                    f"= {end_s:.3f}s exceeds video stream duration {info.duration:.3f}s"
+                )
+
         if info.video_streams != 1:
             report.errors.append(
                 f"{asset.file}: expected 1 video stream, found {info.video_streams}"
@@ -166,68 +183,3 @@ def validate_inputs(
                     report.errors.append(msg + " (pass --normalize to re-encode)")
 
     return report, infos
-
-
-def normalize_asset(
-    asset: AssetConfig,
-    info: VideoInfo,  # noqa: ARG001 — kept for API compatibility
-    output: OutputConfig,
-    temp_dir: Path,
-    index: int,
-    cache_dir: Optional[Path] = None,
-    dry_run: bool = False,
-) -> Path:
-    """Pre-transcode a non-conforming asset to match output spec.
-
-    Checks the normalization cache first (if cache_dir is set). On a cache miss,
-    transcodes the whole file and stores the result in the cache.
-    Returns the path to use (either cached or freshly-transcoded).
-    """
-    if cache_dir is not None and not dry_run:
-        from . import cache as _cache
-        cached = _cache.lookup(asset.file, output, cache_dir, asset.start_seconds(), asset.duration_seconds())
-        if cached is not None:
-            return cached
-
-    out_path = temp_dir / f"normalize_{index:03d}.mp4"
-    logger.info("Normalizing %s → %s", asset.file.name, out_path.name)
-
-    run_cmd(
-        [
-            "ffmpeg", "-y",
-            "-i", str(asset.file),
-            "-c:v", "libx264",
-            "-bf", "0",          # no B-frames → no encoder delay → output PTS starts at 0
-            "-vf", f"fps=fps={output.framerate},scale={output.width}:{output.height},setpts=PTS-STARTPTS",
-            "-c:a", "aac",
-            "-ar", "48000",
-            "-af", "asetpts=PTS-STARTPTS",
-            "-map", "0:v:0",
-            "-map", "0:a:0",
-            # -shortest: stop muxing when the video stream ends.  Without this
-            # the AAC encoder delay can leave the audio duration longer than
-            # the video, making format.duration disagree with the actual video
-            # frame count and producing a spurious encoder-flush packet at the
-            # end of the video stream that confuses the ffconcat demuxer.
-            "-shortest",
-            str(out_path),
-        ],
-        dry_run=dry_run,
-    )
-
-    if cache_dir is not None and not dry_run:
-        from . import cache as _cache
-        return _cache.store(out_path, asset.file, output, cache_dir, asset.start_seconds(), asset.duration_seconds())
-
-    return out_path
-
-
-def needs_normalization(info: VideoInfo, output: OutputConfig) -> bool:
-    if info.is_vfr:
-        return True
-    if info.fps is not None and abs(info.fps - output.framerate) > 0.01:
-        return True
-    if info.width and info.height:
-        if info.width != output.width or info.height != output.height:
-            return True
-    return False

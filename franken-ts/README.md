@@ -1,61 +1,46 @@
-# 🧟 franken-ts
+# franken-ts
 
 Stitch video assets together, bolt in ad breaks, and inject SCTE-35 markers — all from a single YAML file.
 
 `franken-ts` automates the full pipeline from a list of source MP4s to a broadcast-ready MPEG-TS file with splice markers at every ad boundary. It uses **ffmpeg** for transcoding and **tsduck** for SCTE-35 injection.
 
----
-
 ## Prerequisites
 
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/)
-- [ffmpeg](https://ffmpeg.org/) (with `ffprobe`)
-- [tsduck](https://tsduck.io/) (provides the `tsp` command)
-
-All three external tools must be on your `PATH`.
-
-## Installation
-
-```bash
-git clone <repo>
-cd ts-scte-maker
-uv sync
-```
-
-The `franken-ts` command is then available via `uv run franken-ts`.
-
----
+- `ffmpeg` + `ffprobe` on your `PATH`
+- `tsp` (tsduck) on your `PATH`
+- Python environment set up from the repo root (`uv sync --all-packages`)
 
 ## Quick start
 
+From the repo root:
+
 ```bash
-uv run franken-ts example.yaml
+uv run franken-ts franken-ts/configs/example.yaml
 ```
 
-With verification:
+With verification (extracts markers after injection and generates an HTML report):
 
 ```bash
-uv run franken-ts example.yaml --verify
+uv run franken-ts franken-ts/configs/example.yaml --verify
 ```
 
 Dry run (prints all commands, executes nothing):
 
 ```bash
-uv run franken-ts example.yaml --dry-run
+uv run franken-ts franken-ts/configs/example.yaml --dry-run
 ```
 
----
+Output is written to `outputs/`.
 
 ## Configuration
 
-All inputs and options are declared in a YAML file.
+All inputs and options are declared in a YAML file. Put configs in `franken-ts/configs/`.
 
 ### Minimal example
 
 ```yaml
 output:
-  file: output_with_markers.ts
+  file: ../outputs/output.ts
 
 assets:
   - file: movie.mp4
@@ -75,26 +60,26 @@ assets:
 
 ```yaml
 output:
-  file: output_with_markers.ts   # required — final output path
-  resolution: "1920x1080"        # default: 1920x1080
-  framerate: 25                  # default: 25
-  bitrate_kbps: 10000            # default: 10000 (CBR)
-  gop: 50                        # default: framerate × 2
-  service_provider: "broadpeak"  # TS metadata
-  service_name: "broadpeak.io"   # TS metadata
+  file: ../outputs/output.ts   # required — path relative to franken-ts/
+  resolution: "1920x1080"      # default: 1920x1080
+  framerate: 25                # default: 25
+  bitrate_kbps: 10000          # default: 10000 (CBR)
+  gop: 50                      # default: framerate × 2
+  service_provider: "broadpeak"
+  service_name: "broadpeak.io"
 
-normalize: false                 # set true to auto-fix mismatched inputs
+normalize: false               # set true to auto-fix mismatched inputs
 
 assets:
   - file: content.mp4
-    start: "00:00:00"            # optional — start offset within the file
-    duration: "10 min"           # optional — how much of the file to use
+    start: "00:00:00"          # optional — start offset within the file
+    duration: "10 min"         # optional — how much of the file to use
 
   - file: ad.mp4
     duration: "2 min"
     ad_break:
-      event_id: 1                # unique integer per break
-      splice_type: splice_insert # splice_insert | time_signal
+      event_id: 1              # unique integer per break
+      splice_type: splice_insert  # splice_insert | time_signal
 
   - file: ad2.mp4
     duration: "3 min"
@@ -124,7 +109,7 @@ assets:
 
 #### Asset rules
 
-- Any asset without `ad_break` is treated as content (transition jingles included — just add them as regular assets).
+- Any asset without `ad_break` is treated as content.
 - The same file can appear multiple times with different `start`/`duration` ranges.
 - `start` only → from that offset to end of file.
 - `duration` only → from the beginning of the file.
@@ -135,8 +120,6 @@ assets:
 **`splice_insert`** — classic two-point splice: a splice-out at the start of the ad asset and a splice-in at the end.
 
 **`time_signal`** — time signal with a segmentation descriptor. Requires a `segmentation` block. The `segmentation_duration` is derived from the asset duration unless overridden in the config.
-
----
 
 ## CLI reference
 
@@ -151,7 +134,7 @@ Options:
   --dry-run             Print commands without executing them.
   --skip-transcode      Skip ffmpeg step (use existing TS at output path).
   --skip-inject         Stop after ffmpeg transcode, before tsduck injection.
-  --verify              Run tsduck extraction after injection to confirm markers.
+  --verify              Run tsduck extraction after injection and generate an HTML report.
   -v, --verbose         Increase log verbosity (-v INFO, -vv DEBUG).
   -h, --help            Show this message and exit.
 ```
@@ -165,25 +148,29 @@ Options:
 | Just transcode, no injection | `franken-ts config.yaml --skip-inject` |
 | Check what would run | `franken-ts config.yaml --dry-run` |
 
----
-
 ## How it works
 
-1. **Validate** — ffprobe checks every input for track count, frame rate, and resolution. Track count mismatches are hard errors; format mismatches require `--normalize`.
-2. **Normalize** *(optional)* — non-conforming inputs are pre-transcoded to match the output spec so durations are accurate.
-3. **Transcode** — a single ffmpeg pass concatenates all assets (content and ads) and transcodes to MPEG-TS with CBR H.264. IDR frames are forced at every asset boundary, making splice points exact.
+1. **Validate** — ffprobe checks every input for track count, frame rate, and resolution. Track-count mismatches are hard errors; frame-rate/resolution mismatches are warnings (they are normalized away in the next step).
+2. **Extract + normalize** — *every* clip (content and ads) is cut into its own keyframe-clean segment that starts on an IDR, conformed to the output fps/resolution and locked to an exact frame count. Video and audio are extracted into **separate** segment files. Results are cached (keyed on source + output spec + exact cut range).
+3. **Assemble** — the video-only segments are concatenated and re-encoded in a single CBR H.264 pass with IDR frames forced at every clip boundary; the audio segments are concatenated and muxed back in. The result is strictly CFR with frame-exact splice points.
 4. **PTS detection** — ffprobe identifies the actual IDR frame PTS at each ad boundary in the output TS.
 5. **XML generation** — a tsduck-compatible SCTE-35 XML file is built from the detected PTS values and the per-marker config.
 6. **Inject** — `tsp` injects the SCTE-35 tables into PID 600 of the TS.
-7. **Verify** *(optional)* — `tsp` extracts the splice tables back out and confirms all expected event IDs are present.
+7. **Verify** *(optional)* — `tsp` extracts the splice tables back out and confirms all expected event IDs are present. An HTML report is written alongside the output TS.
 
----
+> **Why extract per clip instead of trimming inside one big concat?**
+> The concat demuxer cannot start a segment mid-GOP, so any clip whose in-point
+> is not on a source keyframe gets pre-roll frames with overlapping timestamps,
+> which causes mass frame drops and missing boundary IDRs. Cutting each clip
+> into its own IDR-aligned segment first avoids this. Audio is kept on a
+> separate track because AAC's frame granularity never matches the video frame
+> grid, and muxing them per-segment punches one-frame holes at the joins
+> (breaking strict CFR). See the module docstring in `franken_ts/extract.py`
+> for the full findings.
 
 ## Input requirements
 
-For best results, all source files should have:
-- Exactly one video track
-- Exactly one audio track
-- Matching aspect ratio
+Source files should have exactly one video track and one audio track (track-count
+mismatches are hard errors). Frame rate, resolution, and aspect ratio are
+normalized automatically during extraction — no flags required.
 
-If they don't, pass `--normalize` and franken-ts will handle it.
