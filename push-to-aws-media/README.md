@@ -72,41 +72,69 @@ cdk bootstrap   # once per account/region
 
 ## Configure
 
-Edit `config.toml`:
+Each deployment has its own config file. A config file specifies the deployment
+`name` (which becomes the CloudFormation stack ID and all resource names), the
+source `.ts` file, and the S3 bucket to upload it to.
 
 ```toml
+# configs/my-campaign.toml
+[deploy]
+name = "my-campaign"       # stack becomes ScteLoopStack-my-campaign
+
 [aws]
 region = "eu-west-1"
 
 [s3]
 bucket_name = "my-existing-bucket"
-folder = ""              # prefix inside the bucket, empty = root
+folder = "path/in/bucket"  # leave empty for root
 
 [input]
-ts_file = "../output_with_markers_test.ts"
+ts_file = "../my_content.ts"
 ```
 
-## Workflow
+The `name` field drives every AWS resource name:
+`scte-loop-<name>-channel`, `scte-loop-<name>-hls`, `scte-loop-<name>-dash`, etc.
+
+## Single deployment (default config.toml)
 
 ```bash
-# 1. Upload the .ts to S3
 uv run python channel.py upload
-
-# 2. Provision the infrastructure
 cdk deploy
-
-# 3. Start the channel (prints public HLS + DASH URLs when RUNNING)
 uv run python channel.py start
-
-# 4. Stop when done (always stop before destroy)
 uv run python channel.py stop
-
-# 5. Tear down
 cdk destroy
 ```
 
-If you change the source `.ts`, re-run `upload` then **restart** the channel
-(`stop` + `start`) so MediaLive re-pulls the file.
+## Multiple deployments
+
+Each config file is an independent, parallel deployment — its own MediaLive
+channel, MediaPackage channel, and endpoints.
+
+```bash
+# Deploy two independent stacks
+cdk deploy -c config=./configs/campaign_a.toml
+cdk deploy -c config=./configs/campaign_b.toml
+
+# Upload source files for each
+uv run python channel.py --config ./configs/campaign_a.toml upload
+uv run python channel.py --config ./configs/campaign_b.toml upload
+
+# Start / stop independently
+uv run python channel.py --config ./configs/campaign_a.toml start
+uv run python channel.py --config ./configs/campaign_b.toml start
+
+uv run python channel.py --config ./configs/campaign_a.toml stop
+
+# Tear down one without touching the other
+cdk destroy ScteLoopStack-campaign_a
+```
+
+You can also override the name at deploy time without creating a separate config:
+
+```bash
+cdk deploy -c name=quick-test
+uv run python channel.py -c config.toml start   # reads [deploy].name from config.toml
+```
 
 ## Playback
 
@@ -126,9 +154,17 @@ curl -s "<child .m3u8>" | grep -E "CUE-OUT|CUE-OUT-CONT|CUE-IN"
 
 ## channel.py reference
 
+```
+python channel.py [--config path/to/config.toml] <command>
+```
+
+`--config` (short: `-c`) selects the config file; defaults to `config.toml` in
+the same directory. All commands target the stack derived from that config's
+`[deploy].name`.
+
 | Command | Description |
 |---|---|
-| `upload` | Upload the `.ts` from `config.toml` to S3 |
+| `upload` | Upload the `.ts` from the config to S3 |
 | `start` | Start the channel, wait for RUNNING, print playback URLs |
 | `stop` | Stop the channel, wait for IDLE |
 | `status` | Print current channel state |
@@ -142,8 +178,8 @@ curl -s "<child .m3u8>" | grep -E "CUE-OUT|CUE-OUT-CONT|CUE-IN"
 ## Destroy
 
 ```bash
-uv run python channel.py stop
-cdk destroy
+uv run python channel.py [--config path/to/config.toml] stop
+cdk destroy ScteLoopStack-<name>
 ```
 
 The uploaded `.ts` object is **not** deleted (we don't own the bucket). Remove it

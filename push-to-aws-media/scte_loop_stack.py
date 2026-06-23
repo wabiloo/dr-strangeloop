@@ -19,16 +19,15 @@ AD_TRIGGERS = [
     "DISTRIBUTOR_PLACEMENT_OPPORTUNITY",
 ]
 
-MP_CHANNEL_ID = "scte-loop-channel"
-
 
 class ScteLoopStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, *, config: dict, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        ts_file    = config.get("input", {}).get("ts_file", "")
+        name        = config.get("deploy", {}).get("name", "default")
+        ts_file     = config.get("input", {}).get("ts_file", "")
         bucket_name = config.get("s3", {}).get("bucket_name", "")
-        s3_folder  = config.get("s3", {}).get("folder", "").strip("/")
+        s3_folder   = config.get("s3", {}).get("folder", "").strip("/")
 
         if not ts_file or not bucket_name:
             # During cdk bootstrap no config values are required — return empty stack.
@@ -36,6 +35,14 @@ class ScteLoopStack(Stack):
 
         ts_filename = os.path.basename(ts_file)
         s3_key      = f"{s3_folder}/{ts_filename}" if s3_folder else ts_filename
+
+        # Resource names are all scoped to `name` so multiple deployments
+        # (different config files / names) can coexist in the same account.
+        mp_channel_id  = f"scte-loop-{name}-channel"
+        hls_ep_id      = f"scte-loop-{name}-hls"
+        dash_ep_id     = f"scte-loop-{name}-dash"
+        ml_input_name  = f"scte-loop-{name}-input"
+        ml_channel_name = f"scte-loop-{name}-channel"
 
         # ── S3 (existing bucket, referenced only — upload via channel.py upload) ──
         bucket = s3.Bucket.from_bucket_name(self, "ExistingBucket", bucket_name)
@@ -93,15 +100,15 @@ class ScteLoopStack(Stack):
         mp_channel = mediapackage.CfnChannel(
             self,
             "MpChannel",
-            id=MP_CHANNEL_ID,
-            description="SCTE-35 loop test channel",
+            id=mp_channel_id,
+            description=f"SCTE-35 loop channel — {name}",
         )
 
         hls_endpoint = mediapackage.CfnOriginEndpoint(
             self,
             "HlsEndpoint",
-            channel_id=MP_CHANNEL_ID,
-            id="scte-loop-hls",
+            channel_id=mp_channel_id,
+            id=hls_ep_id,
             manifest_name="index",
             startover_window_seconds=0,
             hls_package=mediapackage.CfnOriginEndpoint.HlsPackageProperty(
@@ -118,8 +125,8 @@ class ScteLoopStack(Stack):
         dash_endpoint = mediapackage.CfnOriginEndpoint(
             self,
             "DashEndpoint",
-            channel_id=MP_CHANNEL_ID,
-            id="scte-loop-dash",
+            channel_id=mp_channel_id,
+            id=dash_ep_id,
             manifest_name="index",
             startover_window_seconds=0,
             dash_package=mediapackage.CfnOriginEndpoint.DashPackageProperty(
@@ -152,7 +159,7 @@ class ScteLoopStack(Stack):
             self,
             "TsFileInput",
             type="TS_FILE",
-            name="scte-loop-input",
+            name=ml_input_name,
             role_arn=medialive_role.role_arn,
             input_security_groups=[input_sg.ref],
             sources=[
@@ -251,12 +258,12 @@ class ScteLoopStack(Stack):
         ml_channel = medialive.CfnChannel(
             self,
             "Channel",
-            name="scte-loop-channel",
+            name=ml_channel_name,
             channel_class="SINGLE_PIPELINE",
             role_arn=medialive_role.role_arn,
             input_attachments=[
                 medialive.CfnChannel.InputAttachmentProperty(
-                    input_attachment_name="scte-loop-input",
+                    input_attachment_name=ml_input_name,
                     input_id=ml_input.ref,
                     input_settings=medialive.CfnChannel.InputSettingsProperty(
                         source_end_behavior="LOOP",
@@ -272,7 +279,7 @@ class ScteLoopStack(Stack):
                     id="mp-dest",
                     media_package_settings=[
                         medialive.CfnChannel.MediaPackageOutputDestinationSettingsProperty(
-                            channel_id=MP_CHANNEL_ID
+                            channel_id=mp_channel_id
                         )
                     ],
                 ),
@@ -285,7 +292,7 @@ class ScteLoopStack(Stack):
         cdk.CfnOutput(self, "S3BucketName", value=bucket_name)
         cdk.CfnOutput(self, "S3TsKey", value=s3_key)
         cdk.CfnOutput(self, "MediaLiveChannelId", value=ml_channel.ref)
-        cdk.CfnOutput(self, "MediaPackageChannelId", value=MP_CHANNEL_ID)
+        cdk.CfnOutput(self, "MediaPackageChannelId", value=mp_channel_id)
         cdk.CfnOutput(self, "HlsPlaybackUrl", value=hls_endpoint.attr_url)
         cdk.CfnOutput(self, "DashPlaybackUrl", value=dash_endpoint.attr_url)
         cdk.CfnOutput(self, "MediaLiveRoleArn", value=medialive_role.role_arn)
