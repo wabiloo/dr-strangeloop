@@ -8,10 +8,10 @@ dist/
 # Virtual environment
 .venv/
 
-# Generated media, reports and frame dumps
-*.ts
-*_report.html
-*_timeline/
+# Generated outputs
+outputs/*.ts
+outputs/*_report.html
+outputs/*_timeline/
 
 # OS
 .DS_Store

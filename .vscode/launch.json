@@ -7,7 +7,8 @@
             "request": "launch",
             "program": "${workspaceFolder}/.venv/bin/franken-ts",
             "python": "${workspaceFolder}/.venv/bin/python",
-            "args": ["example.yaml", "--dry-run", "--verbose"],
+            "args": ["configs/example.yaml", "--dry-run", "--verbose"],
+            "cwd": "${workspaceFolder}/franken-ts",
             "justMyCode": false
         },
         {
@@ -17,6 +18,7 @@
             "program": "${workspaceFolder}/.venv/bin/franken-ts",
             "python": "${workspaceFolder}/.venv/bin/python",
             "args": ["${input:configFile}"],
+            "cwd": "${workspaceFolder}/franken-ts",
             "justMyCode": false
         },
         {
@@ -26,6 +28,7 @@
             "program": "${workspaceFolder}/.venv/bin/franken-ts",
             "python": "${workspaceFolder}/.venv/bin/python",
             "args": ["${input:configFile}", "--dry-run", "--verbose"],
+            "cwd": "${workspaceFolder}/franken-ts",
             "justMyCode": false
         },
         {
@@ -35,6 +38,7 @@
             "program": "${workspaceFolder}/.venv/bin/franken-ts",
             "python": "${workspaceFolder}/.venv/bin/python",
             "args": ["${input:configFile}", "--verify", "--verbose"],
+            "cwd": "${workspaceFolder}/franken-ts",
             "justMyCode": false
         },
         {
@@ -44,6 +48,7 @@
             "program": "${workspaceFolder}/.venv/bin/franken-ts",
             "python": "${workspaceFolder}/.venv/bin/python",
             "args": ["${input:configFile}", "--debug"],
+            "cwd": "${workspaceFolder}/franken-ts",
             "justMyCode": false
         },
         {
@@ -53,6 +58,7 @@
             "program": "${workspaceFolder}/.venv/bin/franken-ts",
             "python": "${workspaceFolder}/.venv/bin/python",
             "args": ["${input:configFile}", "--normalize", "--verify", "--verbose"],
+            "cwd": "${workspaceFolder}/franken-ts",
             "justMyCode": false
         },
         {
@@ -62,6 +68,7 @@
             "program": "${workspaceFolder}/.venv/bin/franken-ts",
             "python": "${workspaceFolder}/.venv/bin/python",
             "args": ["${input:configFile}", "--skip-transcode", "--verify"],
+            "cwd": "${workspaceFolder}/franken-ts",
             "justMyCode": false
         }
     ],
@@ -69,8 +76,8 @@
         {
             "id": "configFile",
             "type": "promptString",
-            "description": "Path to franken-ts YAML config file",
-            "default": "example.yaml"
+            "description": "Path to franken-ts YAML config file (relative to franken-ts/)",
+            "default": "configs/example.yaml"
         }
     ]
 }

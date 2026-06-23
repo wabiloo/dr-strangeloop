@@ -1,5 +1,5 @@
 output:
-  file: output_with_markers.ts
+  file: ../outputs/output_with_markers.ts
   resolution: "1920x1080"
   framerate: 25
   bitrate_kbps: 10000

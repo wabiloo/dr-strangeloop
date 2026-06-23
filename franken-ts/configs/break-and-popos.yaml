@@ -1,0 +1,53 @@
+output:
+  file: ../outputs/break-and-popos.ts
+  resolution: "1920x1080"
+  framerate: 25
+  bitrate_kbps: 10000
+  gop: 50
+  service_provider: "broadpeak"
+  service_name: "broadpeak.io"
+
+normalize: true
+
+assets:
+  - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+    duration: "1 min"
+
+  - file: '/Users/fabrelambeau/Downloads/Lambrini Advert.mp4'
+    duration: "30s"
+    ad_break:
+      event_id: 1
+      splice_type: time_signal
+      segmentation:
+        type_id: "0x34"
+        upid_type: "0x0C"
+        upid_hex: "5349474E414C3A4C494E454152"
+        web_delivery_allowed: true
+        no_regional_blackout: false
+        archive_allowed: false
+        device_restrictions: 1
+
+  - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+    start: "1 min"
+    duration: "30s"
+
+  - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+    start: "1 min 30s"
+    duration: "30s"
+    ad_break:
+      event_id: 20
+      splice_type: time_signal
+      segmentation:
+        type_id: "0x38"
+        upid_type: "0x0C"
+        upid_hex: "5349474E414C3A4E4F4E4C494E454152"
+        web_delivery_allowed: true
+        no_regional_blackout: false
+        archive_allowed: false
+        device_restrictions: 1
+
+  - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+    start: "2 min"
+    duration: "30s"
+
+  

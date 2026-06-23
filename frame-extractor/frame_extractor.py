@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["Pillow", "rich"]
-# ///
 """
 frame_extractor.py
 
@@ -12,33 +8,15 @@ timestamp, then generates a self-contained HTML timeline viewer.
 Requirements
 ------------
   ffmpeg + ffprobe  (must be on PATH)
-  uv                (https://github.com/astral-sh/uv) — auto-installs deps on first run
 
 Usage
 -----
-  python3 frame_extractor.py video.mp4          ← auto-relaunches via uv
-  uv run  frame_extractor.py video.mp4          ← explicit uv invocation
-  uv run  frame_extractor.py video.mp4 --width 480 --workers 8
-  uv run  frame_extractor.py video.mp4 --no-overlay --output ./out/
+  uv run frame-extractor video.mp4
+  uv run frame-extractor video.mp4 --width 480 --workers 8
+  uv run frame-extractor video.mp4 --no-overlay --output ./out/
 """
 
-import os
 import sys
-
-# When invoked as "python3 frame_extractor.py", dependencies (rich, Pillow) may
-# not be installed.  Re-exec via "uv run" which reads the inline metadata above
-# and sets up an isolated environment automatically.
-try:
-    import rich  # noqa: F401
-except ImportError:
-    try:
-        os.execvp("uv", ["uv", "run", __file__] + sys.argv[1:])
-    except FileNotFoundError:
-        sys.exit(
-            "Dependencies missing and 'uv' not found on PATH.\n"
-            "Install uv:  https://github.com/astral-sh/uv\n"
-            "Or manually: pip install rich Pillow"
-        )
 
 import argparse
 import json

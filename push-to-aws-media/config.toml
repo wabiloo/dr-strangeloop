@@ -9,4 +9,4 @@ bucket_name = "bpkio-cs-demos"
 folder = "fabre/ts-files-with-scte"          # prefix inside the bucket, e.g. "media/ts" — leave empty for root
 
 [input]
-ts_file = "../output_with_markers_test.ts"
+ts_file = "../outputs/output_with_markers_test.ts"
