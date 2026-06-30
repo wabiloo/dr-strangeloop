@@ -69,6 +69,7 @@ output:
   service_name: "broadpeak.io"
 
 normalize: false               # set true to auto-fix mismatched inputs
+slate_image: /path/to/slate.png  # optional — global cross-dissolve image for all fades
 
 assets:
   - file: content.mp4
@@ -155,15 +156,27 @@ fades from/to silence in sync.
   fade_out: 2       # 2-second fade out to black
 ```
 
-To cross-dissolve from/to a static image (slate) instead of black, add a
-`slate_image` field pointing to any image file (PNG, JPEG, etc.):
+To cross-dissolve from/to a static image (slate) instead of black, set
+`slate_image` — either globally at the top level (applies to all assets) or
+per-asset (overrides the global value for that clip):
 
 ```yaml
-- file: content.mp4
-  duration: "10 min"
-  fade_in: 1.5
-  fade_out: 2
-  slate_image: /path/to/slate.png   # cross-dissolve from/to this image
+slate_image: /path/to/slate.png   # global default for all assets
+
+assets:
+  - file: content.mp4
+    duration: "10 min"
+    fade_in: 1.5
+    fade_out: 2
+    # uses the global slate_image above
+
+  - file: ad.mp4
+    duration: "30s"
+    fade_out: 1
+    slate_image: /path/to/other_slate.png   # overrides the global for this asset
+    ad_break:
+      event_id: 1
+      splice_type: splice_insert
 ```
 
 - `slate_image` only takes effect when at least one of `fade_in` / `fade_out` is also set.

@@ -131,6 +131,12 @@ class Config(BaseModel):
     output: OutputConfig
     assets: list[AssetConfig] = Field(min_length=1)
     normalize: bool = False
+    slate_image: Optional[Path] = None
+
+    @field_validator("slate_image", mode="before")
+    @classmethod
+    def resolve_global_slate_path(cls, v: object) -> Optional[Path]:
+        return Path(str(v)) if v is not None else None
 
     @model_validator(mode="after")
     def validate_event_ids_unique(self) -> "Config":

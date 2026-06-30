@@ -64,6 +64,7 @@ def build_timeline(
     assets: list[AssetConfig],
     infos: dict[Path, VideoInfo],
     framerate: int = 25,
+    global_slate_image: Optional[Path] = None,
 ) -> tuple[list[TimelineEntry], list[AdBoundary]]:
     """Build the ordered clip list and collect ad break boundary timestamps.
 
@@ -71,9 +72,11 @@ def build_timeline(
     framerate to guarantee frame-accurate cuts in the concat demuxer.
 
     Args:
-        assets:     Asset configs (file may have been remapped to normalized path).
-        infos:      VideoInfo keyed by the (possibly normalized) asset path.
-        framerate:  Target output frame rate (used for frame-boundary snapping).
+        assets:             Asset configs (file may have been remapped to normalized path).
+        infos:              VideoInfo keyed by the (possibly normalized) asset path.
+        framerate:          Target output frame rate (used for frame-boundary snapping).
+        global_slate_image: Fallback slate image used when an asset has no per-asset
+                            slate_image set.  Per-asset slate_image takes precedence.
 
     Returns:
         entries:    Ordered list of TimelineEntry objects.
@@ -190,7 +193,8 @@ def build_timeline(
 
         entry.fade_in = fi
         entry.fade_out = fo
-        entry.slate_image = asset.slate_image
+        # Per-asset slate_image takes precedence over the global fallback.
+        entry.slate_image = asset.slate_image if asset.slate_image is not None else global_slate_image
 
     return entries, boundaries
 
