@@ -113,12 +113,62 @@ def _probe_video_frame_count(path: Path) -> int:
 def _extract_video(
     src: Path, out: Path, inpoint: float, n_frames: int, output: OutputConfig,
     dry_run: bool,
+    countdown_seconds: Optional[float] = None,
+    next_label: Optional[str] = None,
 ) -> None:
     """Extract a VIDEO-ONLY, frame-exact, normalized MPEG-TS segment.
 
     Starts at PTS 0 (→ first frame is an IDR), runs at the target fps/resolution,
     and contains exactly `n_frames` frames.  No audio (see module docstring).
+
+    When `countdown_seconds` and `next_label` are both provided, a drawtext
+    overlay is burned into the last `countdown_seconds` of the segment showing
+    a whole-second ceiling countdown and the next-element label in the top-right
+    corner, e.g. "5s | AD".
     """
+    clip_dur = n_frames / output.framerate
+
+    # Build the video filter chain.
+    vf_parts = [
+        f"fps=fps={output.framerate}",
+        f"scale={output.width}:{output.height}",
+        "setpts=PTS-STARTPTS",
+    ]
+
+    if countdown_seconds is not None and next_label is not None:
+        # `t` is the current frame PTS in seconds (starts at 0 after STARTPTS).
+        # ceil(max(0, clip_dur - t)) gives a whole-second ceiling countdown.
+        # The pipe in the label must be escaped as \| inside drawtext text.
+        # The colon in the eif expression must be escaped as \: inside drawtext.
+        start_t = clip_dur - countdown_seconds
+        label_escaped = next_label.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
+        # Two drawtext filters: label on top, countdown below it.
+        # fontsize=48 → line height ≈ 48px; y=20+48+8=76 for the second line.
+        label_expr = (
+            f"drawtext="
+            f"text='next\\: {label_escaped}':"
+            f"fontsize=48:"
+            f"fontcolor=white:"
+            f"borderw=3:"
+            f"bordercolor=black:"
+            f"x=w-tw-20:"
+            f"y=20:"
+            f"enable='gte(t,{start_t:.6f})'"
+        )
+        countdown_expr = (
+            f"drawtext="
+            f"text='%{{eif\\:ceil(max(0\\,({clip_dur:.6f}-t)))\\:d}}':"
+            f"fontsize=48:"
+            f"fontcolor=white:"
+            f"borderw=3:"
+            f"bordercolor=black:"
+            f"x=w-tw-20:"
+            f"y=76:"
+            f"enable='gte(t,{start_t:.6f})'"
+        )
+        vf_parts.append(label_expr)
+        vf_parts.append(countdown_expr)
+
     run_cmd(
         [
             "ffmpeg", "-y",
@@ -128,7 +178,7 @@ def _extract_video(
             # fps re-grid + scale, then zero the timestamps so the segment
             # begins on a frame-0 IDR.  All rate conversion happens here, never
             # over the concatenated stream.
-            "-vf", f"fps=fps={output.framerate},scale={output.width}:{output.height},setpts=PTS-STARTPTS",
+            "-vf", ",".join(vf_parts),
             "-frames:v", str(n_frames),     # lock to an exact frame count
             "-c:v", "libx264",
             "-preset", "fast",
@@ -192,7 +242,8 @@ def extract_clip(
 
     if cache_dir is not None and not dry_run:
         from . import cache as _cache
-        cached = _cache.lookup(src, output, cache_dir, inpoint, outpoint)
+        cached = _cache.lookup(src, output, cache_dir, inpoint, outpoint,
+                               entry.countdown, entry.next_label)
         if cached is not None:
             return ExtractResult(cached, _probe_video_frame_count(cached.video))
 
@@ -203,7 +254,11 @@ def extract_clip(
         "Extracting %s [%.3f–%.3f] (%d frames) → %s + %s",
         src.name, inpoint, outpoint, n_frames, video_tmp.name, audio_tmp.name,
     )
-    _extract_video(src, video_tmp, inpoint, n_frames, output, dry_run)
+    _extract_video(
+        src, video_tmp, inpoint, n_frames, output, dry_run,
+        countdown_seconds=entry.countdown,
+        next_label=entry.next_label,
+    )
     _extract_audio(src, audio_tmp, inpoint, duration, output, dry_run)
 
     if dry_run:
@@ -221,6 +276,7 @@ def extract_clip(
     segments = ClipSegments(video_tmp, audio_tmp)
     if cache_dir is not None:
         from . import cache as _cache
-        segments = _cache.store(video_tmp, audio_tmp, src, output, cache_dir, inpoint, outpoint)
+        segments = _cache.store(video_tmp, audio_tmp, src, output, cache_dir, inpoint, outpoint,
+                                entry.countdown, entry.next_label)
 
     return ExtractResult(segments, actual)

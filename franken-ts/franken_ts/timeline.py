@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +22,9 @@ class TimelineEntry:
     ad_break: Optional[AdBreakConfig]
     inpoint_raw: float     # as computed before frame-snapping
     outpoint_raw: float    # as computed before frame-snapping
+    # Countdown overlay fields — resolved in build_timeline().
+    countdown: Optional[float] = field(default=None)  # window in seconds (already clamped)
+    next_label: Optional[str] = field(default=None)   # "ASSET", "AD", or "END"
 
     @property
     def clip_duration(self) -> float:
@@ -139,6 +142,32 @@ def build_timeline(
             ))
 
         cursor += clip_dur
+
+    # ── Countdown overlay resolution ──────────────────────────────────────────
+    # Done in a second pass so every entry's clip_duration is already known.
+    for i, (asset, entry) in enumerate(zip(assets, entries)):
+        raw = asset.countdown_seconds()
+        if raw is None:
+            # No countdown configured — leave defaults (None, None).
+            continue
+
+        # Determine next-element label by looking ahead in the asset list.
+        if i + 1 >= len(assets):
+            label = "END"
+        elif assets[i + 1].is_ad_break:
+            label = "AD"
+        else:
+            label = "ASSET"
+
+        # Resolve and clamp the window duration.
+        clip_dur = entry.clip_duration
+        if raw < 0:
+            resolved = clip_dur          # -1 sentinel → full clip
+        else:
+            resolved = min(raw, clip_dur)
+
+        entry.countdown = resolved
+        entry.next_label = label
 
     return entries, boundaries
 

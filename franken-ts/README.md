@@ -74,12 +74,14 @@ assets:
   - file: content.mp4
     start: "00:00:00"          # optional — start offset within the file
     duration: "10 min"         # optional — how much of the file to use
+    countdown: 5               # optional — countdown overlay in the last 5s
 
   - file: ad.mp4
     duration: "2 min"
     ad_break:
       event_id: 1              # unique integer per break
       splice_type: splice_insert  # splice_insert | time_signal
+    countdown: 3               # optional — countdown in the last 3s of this ad
 
   - file: ad2.mp4
     duration: "3 min"
@@ -114,6 +116,29 @@ assets:
 - `start` only → from that offset to end of file.
 - `duration` only → from the beginning of the file.
 - Neither → use the full file.
+
+#### Countdown overlay
+
+Any asset can have a `countdown` field. When set, a corner bug is burned into
+the top-right of the video in the last N seconds of that clip, showing a
+whole-second ceiling countdown and a label for the next element in the sequence:
+
+```
+5s | AD      ← last 5s of content before an ad break
+3s | ASSET   ← last 3s of an ad break before content
+2s | END     ← last 2s of the final asset in the list
+```
+
+| Value | Behaviour |
+|---|---|
+| `5` (positive number) | Overlay in the last 5 seconds; clamped to clip duration if the clip is shorter |
+| `-1` | Overlay for the entire clip duration |
+| absent / `null` | No overlay |
+
+`countdown` accepts the same time formats as `start` and `duration` (see table above).
+
+The overlay requires ffmpeg to be built with `--enable-libfreetype` (the default
+on macOS via Homebrew and on standard Linux builds).
 
 #### SCTE-35 marker types
 

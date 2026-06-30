@@ -72,6 +72,7 @@ class AssetConfig(BaseModel):
     start: Optional[TimeValue] = None
     duration: Optional[TimeValue] = None
     ad_break: Optional[AdBreakConfig] = None
+    countdown: Optional[TimeValue] = None
 
     @field_validator("file", mode="before")
     @classmethod
@@ -87,6 +88,21 @@ class AssetConfig(BaseModel):
         if self.duration is None:
             return None
         return parse_time(self.duration)
+
+    def countdown_seconds(self) -> Optional[float]:
+        """Return the countdown window in seconds, or None if not set.
+
+        Returns -1.0 as a sentinel meaning "full clip duration" when the
+        configured value is negative.  Callers must clamp this to the actual
+        clip duration themselves.
+        """
+        if self.countdown is None:
+            return None
+        v = self.countdown
+        # Allow -1 (integer or float) as a sentinel for "full clip duration".
+        if isinstance(v, (int, float)) and float(v) < 0:
+            return -1.0
+        return parse_time(v)
 
     @property
     def is_ad_break(self) -> bool:
