@@ -194,8 +194,13 @@ def _extract_video(
 
     # ── Prepare slate image ────────────────────────────────────────────────────
     if has_slate:
+        # fps= is required: xfade demands both inputs share the same frame rate,
+        # but a still-image input reports an unknown rate (1/0) even with
+        # -framerate on the command line.  Forcing it inside the graph fixes the
+        # "frame rate do not match" error.
         graph.append(
-            f"[1:v] scale={output.width}:{output.height},setsar=1 [slate]"
+            f"[1:v] fps=fps={output.framerate},"
+            f"scale={output.width}:{output.height},setsar=1 [slate]"
         )
 
     # ── Fade in ────────────────────────────────────────────────────────────────
