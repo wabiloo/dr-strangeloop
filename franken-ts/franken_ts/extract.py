@@ -224,17 +224,29 @@ def _extract_video(
         # Same rule: fps= last so xfade sees a declared r_frame_rate.
         # -loop 1 on the input keeps the single PNG frame alive indefinitely;
         # the graph is bounded by -frames:v on the output.
-        graph.append(
-            f"[1:v] scale={output.width}:{output.height},"
-            f"setsar=1,"
-            f"fps=fps={output.framerate} [slate]"
-        )
+        #
+        # IMPORTANT: a filter output label can only be consumed ONCE in a
+        # filter_complex graph.  If both fade_in and fade_out are set, [slate]
+        # would be used by two xfade nodes, causing ffmpeg to silently fall back
+        # to the raw [1:v] stream for the second use (wrong resolution/rate).
+        # We create two independent slate labels — [slate_fi] and [slate_fo] —
+        # so each xfade node gets its own dedicated, properly prepared input.
+        n_slate_uses = (1 if fade_in is not None else 0) + (1 if fade_out is not None else 0)
+        for idx in range(n_slate_uses):
+            label = f"slate_{idx}"
+            graph.append(
+                f"[1:v] scale={output.width}:{output.height},"
+                f"setsar=1,"
+                f"fps=fps={output.framerate} [{label}]"
+            )
+        slate_labels = iter([f"slate_{i}" for i in range(n_slate_uses)])
 
     # ── Fade in ────────────────────────────────────────────────────────────────
     if fade_in is not None:
         if has_slate:
+            sl = next(slate_labels)
             graph.append(
-                f"[slate] {current} "
+                f"[{sl}] {current} "
                 f"xfade=transition=fade:duration={fade_in:.6f}:offset=0 [fi]"
             )
         else:
@@ -245,8 +257,9 @@ def _extract_video(
     if fade_out is not None:
         fo_offset = clip_dur - fade_out
         if has_slate:
+            sl = next(slate_labels)
             graph.append(
-                f"{current} [slate] "
+                f"{current} [{sl}] "
                 f"xfade=transition=fade:duration={fade_out:.6f}:offset={fo_offset:.6f} [fo]"
             )
         else:
