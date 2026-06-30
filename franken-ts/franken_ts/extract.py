@@ -184,16 +184,38 @@ def _extract_video(
     graph: list[str] = []
 
     # ── Normalise the clip stream ──────────────────────────────────────────────
-    # fps= MUST be last before any xfade node: it is the only filter that sets
-    # r_frame_rate on the output link, and xfade checks r_frame_rate at graph
-    # configuration time.  Any filter applied after fps= (scale, setpts, …)
-    # strips r_frame_rate back to 1/0 and xfade fails with "not a constant
-    # frame rate" even though the frames are correctly timed.
-    graph.append(
-        f"[0:v] scale={output.width}:{output.height},"
-        f"setpts=PTS-STARTPTS,"
-        f"fps=fps={output.framerate} [norm]"
-    )
+    # The filter order matters for two competing requirements:
+    #
+    # 1. Frame-accurate boundaries (no-slate path):
+    #    fps= must come FIRST, before scale and setpts=PTS-STARTPTS.  Putting
+    #    fps= last re-timestamps frames via its own counter, which can cause
+    #    sub-frame PTS drift that shifts clip boundaries in the assembly pass
+    #    (confirmed in the original pipeline work — see ffmpeg.py docstring).
+    #    The safe order is: fps= → scale → setpts=PTS-STARTPTS.
+    #
+    # 2. xfade frame rate declaration (slate path):
+    #    xfade checks r_frame_rate on both input links at graph configuration
+    #    time.  fps= is the only filter that sets r_frame_rate, but only when
+    #    it is the LAST filter before xfade — any filter after fps= (scale,
+    #    setpts) strips r_frame_rate back to 1/0.  On the slate path we
+    #    therefore put fps= last, accepting the minor PTS re-timestamping
+    #    because -frames:v N still enforces the exact frame count and the
+    #    assembly pass re-encodes everything with -force_key_frames anyway.
+    if has_slate:
+        # fps= last: satisfies xfade's r_frame_rate check.
+        graph.append(
+            f"[0:v] scale={output.width}:{output.height},"
+            f"setpts=PTS-STARTPTS,"
+            f"fps=fps={output.framerate} [norm]"
+        )
+    else:
+        # fps= first: preserves clean PTS-STARTPTS zeroing for frame-accurate
+        # boundaries in the no-xfade path.
+        graph.append(
+            f"[0:v] fps=fps={output.framerate},"
+            f"scale={output.width}:{output.height},"
+            f"setpts=PTS-STARTPTS [norm]"
+        )
 
     current = "[norm]"
 
