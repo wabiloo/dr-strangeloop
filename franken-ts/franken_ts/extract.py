@@ -194,12 +194,26 @@ def _extract_video(
 
     # ── Prepare slate image ────────────────────────────────────────────────────
     if has_slate:
-        # fps= is required: xfade demands both inputs share the same frame rate,
-        # but a still-image input reports an unknown rate (1/0) even with
-        # -framerate on the command line.  Forcing it inside the graph fixes the
-        # "frame rate do not match" error.
+        # xfade requires both inputs to have an identical, declared frame rate.
+        # A still-image decoded from png_pipe always has r_frame_rate = 1/0
+        # (unknown), and fps= alone only re-timestamps frames without changing
+        # the link's declared rate that xfade checks at init time.
+        #
+        # The reliable fix is to loop the single decoded frame with the `loop`
+        # filter, then force the timebase and presentation timestamps to match
+        # the target frame rate:
+        #   loop=-1   → loop indefinitely (stopped by -frames:v on the output)
+        #   size=1    → ring buffer of 1 frame (the single decoded PNG frame)
+        #   settb     → set timebase to 1/framerate so pts increments by 1/frame
+        #   setpts    → generate monotonically increasing PTS from frame index
+        #   fps       → declare the output frame rate to the filter graph
+        #   scale     → normalise resolution and SAR
+        fr = output.framerate
         graph.append(
-            f"[1:v] fps=fps={output.framerate},"
+            f"[1:v] loop=loop=-1:size=1,"
+            f"settb=1/{fr},"
+            f"setpts=N/{fr}/TB,"
+            f"fps=fps={fr},"
             f"scale={output.width}:{output.height},setsar=1 [slate]"
         )
 
@@ -247,7 +261,7 @@ def _extract_video(
         "-i", str(src),                     # input 0: the clip
     ]
     if has_slate:
-        cmd += ["-loop", "1", "-framerate", str(output.framerate), "-i", str(slate_image)]
+        cmd += ["-loop", "1", "-i", str(slate_image)]
     cmd += [
         "-an",                              # NO AUDIO — handled separately
         "-filter_complex", filter_complex,
