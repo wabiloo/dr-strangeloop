@@ -115,6 +115,8 @@ def _extract_video(
     dry_run: bool,
     countdown_seconds: Optional[float] = None,
     next_label: Optional[str] = None,
+    fade_in: Optional[float] = None,
+    fade_out: Optional[float] = None,
 ) -> None:
     """Extract a VIDEO-ONLY, frame-exact, normalized MPEG-TS segment.
 
@@ -124,7 +126,11 @@ def _extract_video(
     When `countdown_seconds` and `next_label` are both provided, a drawtext
     overlay is burned into the last `countdown_seconds` of the segment showing
     a whole-second ceiling countdown and the next-element label in the top-right
-    corner, e.g. "5s | AD".
+    corner, e.g. "next: AD / 5".
+
+    When `fade_in` or `fade_out` are provided, a fade from/to black is applied
+    at the start/end of the segment for the given duration.  Fade filters are
+    inserted before drawtext so the countdown text rides on top of the fade.
     """
     clip_dur = n_frames / output.framerate
 
@@ -134,6 +140,15 @@ def _extract_video(
         f"scale={output.width}:{output.height}",
         "setpts=PTS-STARTPTS",
     ]
+
+    # Fade filters come before drawtext so the overlay renders on top of the
+    # faded (potentially black) pixels.
+    if fade_in is not None:
+        vf_parts.append(f"fade=t=in:st=0:d={fade_in:.6f}")
+
+    if fade_out is not None:
+        fade_out_start = clip_dur - fade_out
+        vf_parts.append(f"fade=t=out:st={fade_out_start:.6f}:d={fade_out:.6f}")
 
     if countdown_seconds is not None and next_label is not None:
         # `t` is the current frame PTS in seconds (starts at 0 after STARTPTS).
@@ -201,8 +216,19 @@ def _extract_video(
 def _extract_audio(
     src: Path, out: Path, inpoint: float, duration: float, output: OutputConfig,
     dry_run: bool,
+    fade_in: Optional[float] = None,
+    fade_out: Optional[float] = None,
 ) -> None:
     """Extract an AUDIO-ONLY segment covering the same clip range."""
+    af_parts = ["aresample=48000", "asetpts=PTS-STARTPTS"]
+
+    if fade_in is not None:
+        af_parts.append(f"afade=t=in:st=0:d={fade_in:.6f}")
+
+    if fade_out is not None:
+        fade_out_start = duration - fade_out
+        af_parts.append(f"afade=t=out:st={fade_out_start:.6f}:d={fade_out:.6f}")
+
     run_cmd(
         [
             "ffmpeg", "-y",
@@ -210,7 +236,7 @@ def _extract_audio(
             "-i", str(src),
             "-vn",                          # NO VIDEO
             "-t", f"{duration:.6f}",
-            "-af", "aresample=48000,asetpts=PTS-STARTPTS",
+            "-af", ",".join(af_parts),
             "-c:a", "aac",
             "-ar", "48000",
             str(out),
@@ -243,7 +269,8 @@ def extract_clip(
     if cache_dir is not None and not dry_run:
         from . import cache as _cache
         cached = _cache.lookup(src, output, cache_dir, inpoint, outpoint,
-                               entry.countdown, entry.next_label)
+                               entry.countdown, entry.next_label,
+                               entry.fade_in, entry.fade_out)
         if cached is not None:
             return ExtractResult(cached, _probe_video_frame_count(cached.video))
 
@@ -258,8 +285,14 @@ def extract_clip(
         src, video_tmp, inpoint, n_frames, output, dry_run,
         countdown_seconds=entry.countdown,
         next_label=entry.next_label,
+        fade_in=entry.fade_in,
+        fade_out=entry.fade_out,
     )
-    _extract_audio(src, audio_tmp, inpoint, duration, output, dry_run)
+    _extract_audio(
+        src, audio_tmp, inpoint, duration, output, dry_run,
+        fade_in=entry.fade_in,
+        fade_out=entry.fade_out,
+    )
 
     if dry_run:
         return ExtractResult(ClipSegments(video_tmp, audio_tmp), n_frames)
@@ -277,6 +310,7 @@ def extract_clip(
     if cache_dir is not None:
         from . import cache as _cache
         segments = _cache.store(video_tmp, audio_tmp, src, output, cache_dir, inpoint, outpoint,
-                                entry.countdown, entry.next_label)
+                                entry.countdown, entry.next_label,
+                                entry.fade_in, entry.fade_out)
 
     return ExtractResult(segments, actual)

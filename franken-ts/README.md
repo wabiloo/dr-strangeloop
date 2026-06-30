@@ -75,13 +75,15 @@ assets:
     start: "00:00:00"          # optional — start offset within the file
     duration: "10 min"         # optional — how much of the file to use
     countdown: 5               # optional — countdown overlay in the last 5s
+    fade_in: 1.5               # optional — fade in from black for 1.5s
+    fade_out: 2                # optional — fade out to black for 2s
 
   - file: ad.mp4
     duration: "2 min"
+    countdown: 3               # optional — countdown in the last 3s of this ad
     ad_break:
       event_id: 1              # unique integer per break
       splice_type: splice_insert  # splice_insert | time_signal
-    countdown: 3               # optional — countdown in the last 3s of this ad
 
   - file: ad2.mp4
     duration: "3 min"
@@ -124,9 +126,8 @@ the top-right of the video in the last N seconds of that clip, showing a
 whole-second ceiling countdown and a label for the next element in the sequence:
 
 ```
-5s | AD      ← last 5s of content before an ad break
-3s | ASSET   ← last 3s of an ad break before content
-2s | END     ← last 2s of the final asset in the list
+next: AD        ← label line (ASSET | AD | END)
+5               ← ticking countdown below
 ```
 
 | Value | Behaviour |
@@ -139,6 +140,26 @@ whole-second ceiling countdown and a label for the next element in the sequence:
 
 The overlay requires ffmpeg to be built with `--enable-libfreetype` (the default
 on macOS via Homebrew and on standard Linux builds).
+
+#### Fade in / fade out
+
+Any asset can have `fade_in` and/or `fade_out` fields. When set, the video fades
+from black at the start and/or to black at the end for the given duration. Audio
+fades from/to silence in sync.
+
+```yaml
+- file: content.mp4
+  duration: "10 min"
+  fade_in: 1.5      # 1.5-second fade in from black
+  fade_out: 2       # 2-second fade out to black
+```
+
+- Values are clamped to the clip duration.
+- If `fade_in + fade_out` would exceed the clip duration, both are scaled
+  proportionally so they share the available time without overlapping.
+- When combined with `countdown`, the countdown text renders on top of the
+  fading video (the text fades out along with the picture during a fade-out).
+- `fade_in` / `fade_out` accept the same time formats as `start` and `duration`.
 
 #### SCTE-35 marker types
 

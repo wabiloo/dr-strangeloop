@@ -25,6 +25,9 @@ class TimelineEntry:
     # Countdown overlay fields — resolved in build_timeline().
     countdown: Optional[float] = field(default=None)  # window in seconds (already clamped)
     next_label: Optional[str] = field(default=None)   # "ASSET", "AD", or "END"
+    # Fade fields — resolved and clamped in build_timeline().
+    fade_in: Optional[float] = field(default=None)    # seconds, or None
+    fade_out: Optional[float] = field(default=None)   # seconds, or None
 
     @property
     def clip_duration(self) -> float:
@@ -146,28 +149,45 @@ def build_timeline(
     # ── Countdown overlay resolution ──────────────────────────────────────────
     # Done in a second pass so every entry's clip_duration is already known.
     for i, (asset, entry) in enumerate(zip(assets, entries)):
-        raw = asset.countdown_seconds()
-        if raw is None:
-            # No countdown configured — leave defaults (None, None).
-            continue
-
-        # Determine next-element label by looking ahead in the asset list.
-        if i + 1 >= len(assets):
-            label = "END"
-        elif assets[i + 1].is_ad_break:
-            label = "AD"
-        else:
-            label = "ASSET"
-
-        # Resolve and clamp the window duration.
         clip_dur = entry.clip_duration
-        if raw < 0:
-            resolved = clip_dur          # -1 sentinel → full clip
-        else:
-            resolved = min(raw, clip_dur)
 
-        entry.countdown = resolved
-        entry.next_label = label
+        # ── Countdown ──────────────────────────────────────────────────────────
+        raw = asset.countdown_seconds()
+        if raw is not None:
+            # Determine next-element label by looking ahead in the asset list.
+            if i + 1 >= len(assets):
+                label = "END"
+            elif assets[i + 1].is_ad_break:
+                label = "AD"
+            else:
+                label = "ASSET"
+
+            if raw < 0:
+                resolved = clip_dur          # -1 sentinel → full clip
+            else:
+                resolved = min(raw, clip_dur)
+
+            entry.countdown = resolved
+            entry.next_label = label
+
+        # ── Fade in / out ──────────────────────────────────────────────────────
+        fi = asset.fade_in_seconds()
+        fo = asset.fade_out_seconds()
+
+        if fi is not None:
+            fi = min(fi, clip_dur)
+        if fo is not None:
+            fo = min(fo, clip_dur)
+
+        # If both fades together exceed the clip duration, scale them
+        # proportionally so they share the available time without overlapping.
+        if fi is not None and fo is not None and fi + fo > clip_dur:
+            scale = clip_dur / (fi + fo)
+            fi *= scale
+            fo *= scale
+
+        entry.fade_in = fi
+        entry.fade_out = fo
 
     return entries, boundaries
 

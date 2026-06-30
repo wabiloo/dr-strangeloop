@@ -73,6 +73,8 @@ class AssetConfig(BaseModel):
     duration: Optional[TimeValue] = None
     ad_break: Optional[AdBreakConfig] = None
     countdown: Optional[TimeValue] = None
+    fade_in: Optional[TimeValue] = None
+    fade_out: Optional[TimeValue] = None
 
     @field_validator("file", mode="before")
     @classmethod
@@ -103,6 +105,16 @@ class AssetConfig(BaseModel):
         if isinstance(v, (int, float)) and float(v) < 0:
             return -1.0
         return parse_time(v)
+
+    def fade_in_seconds(self) -> Optional[float]:
+        if self.fade_in is None:
+            return None
+        return parse_time(self.fade_in)
+
+    def fade_out_seconds(self) -> Optional[float]:
+        if self.fade_out is None:
+            return None
+        return parse_time(self.fade_out)
 
     @property
     def is_ad_break(self) -> bool:
