@@ -28,6 +28,8 @@ class TimelineEntry:
     # Fade fields — resolved and clamped in build_timeline().
     fade_in: Optional[float] = field(default=None)    # seconds, or None
     fade_out: Optional[float] = field(default=None)   # seconds, or None
+    # Slate image for cross-dissolve fades (None → fade to/from black).
+    slate_image: Optional[Path] = field(default=None)
 
     @property
     def clip_duration(self) -> float:
@@ -188,6 +190,7 @@ def build_timeline(
 
         entry.fade_in = fi
         entry.fade_out = fo
+        entry.slate_image = asset.slate_image
 
     return entries, boundaries
 

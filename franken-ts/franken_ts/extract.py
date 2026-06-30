@@ -110,6 +110,44 @@ def _probe_video_frame_count(path: Path) -> int:
     return int(text[0]) if text and text[0].isdigit() else 0
 
 
+def _build_drawtext_filters(
+    clip_dur: float,
+    countdown_seconds: float,
+    next_label: str,
+) -> list[str]:
+    """Return the two drawtext filter strings for the countdown overlay.
+
+    Returns a list of two strings: the label filter and the countdown filter.
+    These can be appended to a -vf chain (joined with commas) or embedded into
+    a -filter_complex graph (each applied as a separate node).
+    """
+    start_t = clip_dur - countdown_seconds
+    label_escaped = next_label.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
+    label_expr = (
+        f"drawtext="
+        f"text='next\\: {label_escaped}':"
+        f"fontsize=48:"
+        f"fontcolor=white:"
+        f"borderw=3:"
+        f"bordercolor=black:"
+        f"x=w-tw-20:"
+        f"y=20:"
+        f"enable='gte(t,{start_t:.6f})'"
+    )
+    countdown_expr = (
+        f"drawtext="
+        f"text='%{{eif\\:ceil(max(0\\,({clip_dur:.6f}-t)))\\:d}}':"
+        f"fontsize=48:"
+        f"fontcolor=white:"
+        f"borderw=3:"
+        f"bordercolor=black:"
+        f"x=w-tw-20:"
+        f"y=76:"
+        f"enable='gte(t,{start_t:.6f})'"
+    )
+    return [label_expr, countdown_expr]
+
+
 def _extract_video(
     src: Path, out: Path, inpoint: float, n_frames: int, output: OutputConfig,
     dry_run: bool,
@@ -117,100 +155,113 @@ def _extract_video(
     next_label: Optional[str] = None,
     fade_in: Optional[float] = None,
     fade_out: Optional[float] = None,
+    slate_image: Optional[Path] = None,
 ) -> None:
     """Extract a VIDEO-ONLY, frame-exact, normalized MPEG-TS segment.
 
     Starts at PTS 0 (→ first frame is an IDR), runs at the target fps/resolution,
     and contains exactly `n_frames` frames.  No audio (see module docstring).
 
-    When `countdown_seconds` and `next_label` are both provided, a drawtext
-    overlay is burned into the last `countdown_seconds` of the segment showing
-    a whole-second ceiling countdown and the next-element label in the top-right
-    corner, e.g. "next: AD / 5".
+    Always uses -filter_complex regardless of whether a slate image or overlays
+    are present.  filter_complex is a strict superset of -vf, so the simple case
+    is just a trivial one-node graph.  This removes conditional branching and
+    keeps a single code path.
 
-    When `fade_in` or `fade_out` are provided, a fade from/to black is applied
-    at the start/end of the segment for the given duration.  Fade filters are
-    inserted before drawtext so the countdown text rides on top of the fade.
+    Filter graph (nodes added only when the corresponding feature is active):
+      [0:v] fps/scale/setpts          → [norm]
+      [1:v] scale+setsar              → [slate]   (if slate_image)
+      [slate] [norm] xfade(fade-in)   → [fi]      (if fade_in + slate_image)
+      [norm/fi] fade=in               → [fi]      (if fade_in, no slate)
+      [current] [slate] xfade(fo)     → [fo]      (if fade_out + slate_image)
+      [current] fade=out              → [fo]      (if fade_out, no slate)
+      [current] drawtext(label)       → [dt1]     (if countdown)
+      [dt1]     drawtext(digits)      → [out]     (if countdown)
     """
     clip_dur = n_frames / output.framerate
+    has_countdown = countdown_seconds is not None and next_label is not None
+    has_slate = slate_image is not None
 
-    # Build the video filter chain.
-    vf_parts = [
-        f"fps=fps={output.framerate}",
-        f"scale={output.width}:{output.height}",
-        "setpts=PTS-STARTPTS",
+    graph: list[str] = []
+
+    # ── Normalise the clip stream ──────────────────────────────────────────────
+    graph.append(
+        f"[0:v] fps=fps={output.framerate},"
+        f"scale={output.width}:{output.height},"
+        f"setpts=PTS-STARTPTS [norm]"
+    )
+
+    current = "[norm]"
+
+    # ── Prepare slate image ────────────────────────────────────────────────────
+    if has_slate:
+        graph.append(
+            f"[1:v] scale={output.width}:{output.height},setsar=1 [slate]"
+        )
+
+    # ── Fade in ────────────────────────────────────────────────────────────────
+    if fade_in is not None:
+        if has_slate:
+            graph.append(
+                f"[slate] {current} "
+                f"xfade=transition=fade:duration={fade_in:.6f}:offset=0 [fi]"
+            )
+        else:
+            graph.append(f"{current} fade=t=in:st=0:d={fade_in:.6f} [fi]")
+        current = "[fi]"
+
+    # ── Fade out ───────────────────────────────────────────────────────────────
+    if fade_out is not None:
+        fo_offset = clip_dur - fade_out
+        if has_slate:
+            graph.append(
+                f"{current} [slate] "
+                f"xfade=transition=fade:duration={fade_out:.6f}:offset={fo_offset:.6f} [fo]"
+            )
+        else:
+            graph.append(
+                f"{current} fade=t=out:st={fo_offset:.6f}:d={fade_out:.6f} [fo]"
+            )
+        current = "[fo]"
+
+    # ── Countdown overlay ──────────────────────────────────────────────────────
+    if has_countdown:
+        dt = _build_drawtext_filters(clip_dur, countdown_seconds, next_label)
+        graph.append(f"{current} {dt[0]} [dt1]")
+        graph.append(f"[dt1] {dt[1]} [out]")
+    else:
+        # Rename the last stream to [out] for the -map argument.
+        last = graph[-1]
+        bracket = last.rfind("[")
+        graph[-1] = last[:bracket] + "[out]"
+
+    filter_complex = "; ".join(graph)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", f"{inpoint:.6f}",            # fast input seek
+        "-i", str(src),                     # input 0: the clip
+    ]
+    if has_slate:
+        cmd += ["-loop", "1", "-framerate", str(output.framerate), "-i", str(slate_image)]
+    cmd += [
+        "-an",                              # NO AUDIO — handled separately
+        "-filter_complex", filter_complex,
+        "-map", "[out]",
+        "-frames:v", str(n_frames),         # lock to an exact frame count
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", _MEZZANINE_CRF,
+        "-pix_fmt", "yuv420p",
+        "-bf", "0",                         # no B-frames → DTS==PTS, no reorder delay
+        # Closed GOP of IDR frames so the segment starts on a true IDR.
+        "-x264opts",
+        f"keyint={output.gop}:min-keyint={output.gop}:no-scenecut:no-open-gop",
+        "-muxdelay", "0", "-muxpreload", "0",
+        "-f", "mpegts",
+        str(out),
     ]
 
-    # Fade filters come before drawtext so the overlay renders on top of the
-    # faded (potentially black) pixels.
-    if fade_in is not None:
-        vf_parts.append(f"fade=t=in:st=0:d={fade_in:.6f}")
-
-    if fade_out is not None:
-        fade_out_start = clip_dur - fade_out
-        vf_parts.append(f"fade=t=out:st={fade_out_start:.6f}:d={fade_out:.6f}")
-
-    if countdown_seconds is not None and next_label is not None:
-        # `t` is the current frame PTS in seconds (starts at 0 after STARTPTS).
-        # ceil(max(0, clip_dur - t)) gives a whole-second ceiling countdown.
-        # The pipe in the label must be escaped as \| inside drawtext text.
-        # The colon in the eif expression must be escaped as \: inside drawtext.
-        start_t = clip_dur - countdown_seconds
-        label_escaped = next_label.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
-        # Two drawtext filters: label on top, countdown below it.
-        # fontsize=48 → line height ≈ 48px; y=20+48+8=76 for the second line.
-        label_expr = (
-            f"drawtext="
-            f"text='next\\: {label_escaped}':"
-            f"fontsize=48:"
-            f"fontcolor=white:"
-            f"borderw=3:"
-            f"bordercolor=black:"
-            f"x=w-tw-20:"
-            f"y=20:"
-            f"enable='gte(t,{start_t:.6f})'"
-        )
-        countdown_expr = (
-            f"drawtext="
-            f"text='%{{eif\\:ceil(max(0\\,({clip_dur:.6f}-t)))\\:d}}':"
-            f"fontsize=48:"
-            f"fontcolor=white:"
-            f"borderw=3:"
-            f"bordercolor=black:"
-            f"x=w-tw-20:"
-            f"y=76:"
-            f"enable='gte(t,{start_t:.6f})'"
-        )
-        vf_parts.append(label_expr)
-        vf_parts.append(countdown_expr)
-
-    run_cmd(
-        [
-            "ffmpeg", "-y",
-            "-ss", f"{inpoint:.6f}",        # fast input seek (frame-accurate when re-encoding)
-            "-i", str(src),
-            "-an",                          # NO AUDIO — handled separately
-            # fps re-grid + scale, then zero the timestamps so the segment
-            # begins on a frame-0 IDR.  All rate conversion happens here, never
-            # over the concatenated stream.
-            "-vf", ",".join(vf_parts),
-            "-frames:v", str(n_frames),     # lock to an exact frame count
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", _MEZZANINE_CRF,
-            "-pix_fmt", "yuv420p",
-            "-bf", "0",                     # no B-frames → DTS==PTS, no reorder delay
-            # Closed GOP of IDR frames so the segment (and every internal GOP)
-            # starts on a true IDR.  no-open-gop forces real IDRs, not bare
-            # I-frames that would not reset the reference buffer for a clean cut.
-            "-x264opts",
-            f"keyint={output.gop}:min-keyint={output.gop}:no-scenecut:no-open-gop",
-            "-muxdelay", "0", "-muxpreload", "0",
-            "-f", "mpegts",
-            str(out),
-        ],
-        dry_run=dry_run,
-    )
+    run_cmd(cmd, dry_run=dry_run)
 
 
 def _extract_audio(
@@ -270,7 +321,8 @@ def extract_clip(
         from . import cache as _cache
         cached = _cache.lookup(src, output, cache_dir, inpoint, outpoint,
                                entry.countdown, entry.next_label,
-                               entry.fade_in, entry.fade_out)
+                               entry.fade_in, entry.fade_out,
+                               entry.slate_image)
         if cached is not None:
             return ExtractResult(cached, _probe_video_frame_count(cached.video))
 
@@ -287,6 +339,7 @@ def extract_clip(
         next_label=entry.next_label,
         fade_in=entry.fade_in,
         fade_out=entry.fade_out,
+        slate_image=entry.slate_image,
     )
     _extract_audio(
         src, audio_tmp, inpoint, duration, output, dry_run,
@@ -311,6 +364,7 @@ def extract_clip(
         from . import cache as _cache
         segments = _cache.store(video_tmp, audio_tmp, src, output, cache_dir, inpoint, outpoint,
                                 entry.countdown, entry.next_label,
-                                entry.fade_in, entry.fade_out)
+                                entry.fade_in, entry.fade_out,
+                                entry.slate_image)
 
     return ExtractResult(segments, actual)

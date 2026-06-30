@@ -75,8 +75,9 @@ assets:
     start: "00:00:00"          # optional — start offset within the file
     duration: "10 min"         # optional — how much of the file to use
     countdown: 5               # optional — countdown overlay in the last 5s
-    fade_in: 1.5               # optional — fade in from black for 1.5s
-    fade_out: 2                # optional — fade out to black for 2s
+    fade_in: 1.5               # optional — fade in from black (or slate) for 1.5s
+    fade_out: 2                # optional — fade out to black (or slate) for 2s
+    slate_image: /path/to/slate.png  # optional — cross-dissolve image for fades
 
   - file: ad.mp4
     duration: "2 min"
@@ -154,6 +155,20 @@ fades from/to silence in sync.
   fade_out: 2       # 2-second fade out to black
 ```
 
+To cross-dissolve from/to a static image (slate) instead of black, add a
+`slate_image` field pointing to any image file (PNG, JPEG, etc.):
+
+```yaml
+- file: content.mp4
+  duration: "10 min"
+  fade_in: 1.5
+  fade_out: 2
+  slate_image: /path/to/slate.png   # cross-dissolve from/to this image
+```
+
+- `slate_image` only takes effect when at least one of `fade_in` / `fade_out` is also set.
+- Without `slate_image`, fades go to/from black (solid colour).
+- With `slate_image`, an `xfade` cross-dissolve is used; the image is looped for the full clip duration.
 - Values are clamped to the clip duration.
 - If `fade_in + fade_out` would exceed the clip duration, both are scaled
   proportionally so they share the available time without overlapping.

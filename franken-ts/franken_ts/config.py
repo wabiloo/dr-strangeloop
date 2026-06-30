@@ -75,11 +75,17 @@ class AssetConfig(BaseModel):
     countdown: Optional[TimeValue] = None
     fade_in: Optional[TimeValue] = None
     fade_out: Optional[TimeValue] = None
+    slate_image: Optional[Path] = None
 
     @field_validator("file", mode="before")
     @classmethod
     def resolve_path(cls, v: object) -> Path:
         return Path(str(v))
+
+    @field_validator("slate_image", mode="before")
+    @classmethod
+    def resolve_slate_path(cls, v: object) -> Optional[Path]:
+        return Path(str(v)) if v is not None else None
 
     def start_seconds(self) -> Optional[float]:
         if self.start is None:
