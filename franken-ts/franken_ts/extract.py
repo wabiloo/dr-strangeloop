@@ -184,37 +184,28 @@ def _extract_video(
     graph: list[str] = []
 
     # ── Normalise the clip stream ──────────────────────────────────────────────
+    # fps= MUST be last before any xfade node: it is the only filter that sets
+    # r_frame_rate on the output link, and xfade checks r_frame_rate at graph
+    # configuration time.  Any filter applied after fps= (scale, setpts, …)
+    # strips r_frame_rate back to 1/0 and xfade fails with "not a constant
+    # frame rate" even though the frames are correctly timed.
     graph.append(
-        f"[0:v] fps=fps={output.framerate},"
-        f"scale={output.width}:{output.height},"
-        f"setpts=PTS-STARTPTS [norm]"
+        f"[0:v] scale={output.width}:{output.height},"
+        f"setpts=PTS-STARTPTS,"
+        f"fps=fps={output.framerate} [norm]"
     )
 
     current = "[norm]"
 
     # ── Prepare slate image ────────────────────────────────────────────────────
     if has_slate:
-        # xfade requires both inputs to have an identical, declared frame rate.
-        # A still-image decoded from png_pipe always has r_frame_rate = 1/0
-        # (unknown), and fps= alone only re-timestamps frames without changing
-        # the link's declared rate that xfade checks at init time.
-        #
-        # The reliable fix is to loop the single decoded frame with the `loop`
-        # filter, then force the timebase and presentation timestamps to match
-        # the target frame rate:
-        #   loop=-1   → loop indefinitely (stopped by -frames:v on the output)
-        #   size=1    → ring buffer of 1 frame (the single decoded PNG frame)
-        #   settb     → set timebase to 1/framerate so pts increments by 1/frame
-        #   setpts    → generate monotonically increasing PTS from frame index
-        #   fps       → declare the output frame rate to the filter graph
-        #   scale     → normalise resolution and SAR
-        fr = output.framerate
+        # Same rule: fps= last so xfade sees a declared r_frame_rate.
+        # -loop 1 on the input keeps the single PNG frame alive indefinitely;
+        # the graph is bounded by -frames:v on the output.
         graph.append(
-            f"[1:v] loop=loop=-1:size=1,"
-            f"settb=1/{fr},"
-            f"setpts=N/{fr}/TB,"
-            f"fps=fps={fr},"
-            f"scale={output.width}:{output.height},setsar=1 [slate]"
+            f"[1:v] scale={output.width}:{output.height},"
+            f"setsar=1,"
+            f"fps=fps={output.framerate} [slate]"
         )
 
     # ── Fade in ────────────────────────────────────────────────────────────────
