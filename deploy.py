@@ -21,9 +21,9 @@ repo root using the generated TOML in configs/.
 """
 
 import os
+import shutil
 import sys
 import subprocess
-import textwrap
 
 # PyYAML is available via franken-ts; load lazily so the import error is clear.
 try:
@@ -106,17 +106,19 @@ def _generate_toml(name: str, ts_file_abs: str) -> str:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        prog = os.path.basename(sys.argv[0])
-        print(textwrap.dedent(f"""\
-            Usage: uv run python {prog} <config.yaml>
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="deploy.py",
+        description="Full pipeline runner for live-scte-loop-generator.",
+    )
+    parser.add_argument("config_yaml", metavar="config.yaml",
+                        help="franken-ts YAML config file.")
+    parser.add_argument("--clear-cache", action="store_true",
+                        help="Delete the franken-ts clip cache (~/.cache/franken_ts) "
+                             "before running Step 1.")
+    args = parser.parse_args()
 
-            Example:
-              uv run python {prog} franken-ts/configs/break-and-popos.yaml
-        """))
-        sys.exit(1)
-
-    config_yaml = os.path.abspath(sys.argv[1])
+    config_yaml = os.path.abspath(args.config_yaml)
     if not os.path.isfile(config_yaml):
         sys.exit(f"Config file not found: {config_yaml}")
 
@@ -154,6 +156,18 @@ def main() -> None:
     print(f"  Basename    : {basename}")
     print(f"  Output .ts  : {ts_file_abs}")
     print(f"  TOML config : {toml_path}")
+
+    # ------------------------------------------------------------------
+    # Optional: clear franken-ts clip cache
+    # ------------------------------------------------------------------
+    if args.clear_cache:
+        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "franken_ts")
+        if os.path.isdir(cache_dir):
+            print(f"\n{BOLD}{YELLOW}Clearing cache: {cache_dir}{RESET}")
+            shutil.rmtree(cache_dir)
+            print(f"{GREEN}Cache cleared.{RESET}")
+        else:
+            print(f"\n{YELLOW}Cache directory not found (nothing to clear): {cache_dir}{RESET}")
 
     # ------------------------------------------------------------------
     # Step 1 — franken-ts
