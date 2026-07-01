@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import AssetConfig, OutputConfig
-from .utils import run_cmd
+from .utils import is_image, run_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,14 @@ class ValidationReport:
 
 
 def probe_file(path: Path) -> VideoInfo:
-    """Run ffprobe on a file and return structured info."""
+    """Run ffprobe on a file and return structured info.
+
+    For still images (JPEG/PNG) the file has no meaningful duration or frame
+    rate — those come from the asset config.  We still call ffprobe to get the
+    pixel dimensions and verify the file is readable, but we synthesise sane
+    defaults for the other fields so the rest of the pipeline can treat image
+    assets uniformly.
+    """
     result = run_cmd(
         [
             "ffprobe", "-v", "error",
@@ -60,6 +67,24 @@ def probe_file(path: Path) -> VideoInfo:
     audio = [s for s in streams if s.get("codec_type") == "audio"]
 
     vs = video[0] if video else {}
+
+    if is_image(path):
+        # Still images: synthesise a VideoInfo that satisfies the rest of the
+        # pipeline.  Duration is set to 0.0 here; validate_inputs() will patch
+        # it with the value from the asset config.  Audio stream count is
+        # reported as 1 so the audio-stream validation doesn't fire — the image
+        # extraction path generates a silent audio track automatically.
+        return VideoInfo(
+            path=path,
+            duration=0.0,           # overridden from asset.duration in validate_inputs
+            video_streams=1,        # the single image frame counts as one video stream
+            audio_streams=1,        # synthesised — extraction will produce silence
+            fps=None,               # not applicable
+            is_vfr=False,
+            width=int(vs.get("width", 0)),
+            height=int(vs.get("height", 0)),
+            codec=vs.get("codec_name", ""),
+        )
 
     fps: Optional[float] = None
     is_vfr = False
@@ -122,6 +147,38 @@ def validate_inputs(
             info = probe_file(asset.file)
         except Exception as exc:
             report.errors.append(f"Cannot probe {asset.file}: {exc}")
+            continue
+
+        # ── Still image: special handling ─────────────────────────────────────
+        if is_image(asset.file):
+            dur_s = asset.duration_seconds()
+            if dur_s is None or dur_s <= 0:
+                report.errors.append(
+                    f"{asset.file.name}: is a still image — 'duration' must be set "
+                    "to a positive value (e.g. duration: \"5s\")"
+                )
+                continue
+            # Patch the synthesised VideoInfo with the config-supplied duration so
+            # timeline.py sees a meaningful file_duration and doesn't reject it.
+            infos[asset.file] = VideoInfo(
+                path=info.path,
+                duration=dur_s,
+                video_streams=info.video_streams,
+                audio_streams=info.audio_streams,
+                fps=info.fps,
+                is_vfr=info.is_vfr,
+                width=info.width,
+                height=info.height,
+                codec=info.codec,
+            )
+            # Resolution check only (images never need fps/audio-stream checks).
+            if info.width and info.height:
+                if info.width != output.width or info.height != output.height:
+                    msg = (
+                        f"{asset.file.name}: resolution {info.width}x{info.height} differs from "
+                        f"target {output.resolution}"
+                    )
+                    report.warnings.append(msg + " (will scale)")
             continue
 
         infos[asset.file] = info

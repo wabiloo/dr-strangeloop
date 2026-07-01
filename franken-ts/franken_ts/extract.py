@@ -77,7 +77,7 @@ from typing import Optional
 from .cache import ClipSegments
 from .config import OutputConfig
 from .timeline import TimelineEntry
-from .utils import run_cmd
+from .utils import is_image, run_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,10 @@ def _extract_video(
     Starts at PTS 0 (→ first frame is an IDR), runs at the target fps/resolution,
     and contains exactly `n_frames` frames.  No audio (see module docstring).
 
+    Still images (JPEG/PNG) are handled transparently: ``-loop 1`` keeps the
+    single image frame alive for the entire duration, and ``-frames:v N`` cuts
+    it to the exact requested length.  No ``-ss`` seek is needed for images.
+
     Always uses -filter_complex regardless of whether a slate image or overlays
     are present.  filter_complex is a strict superset of -vf, so the simple case
     is just a trivial one-node graph.  This removes conditional branching and
@@ -197,6 +201,7 @@ def _extract_video(
       [current] drawtext(label)       → [dt1]     (if countdown)
       [dt1]     drawtext(digits)      → [out]     (if countdown)
     """
+    src_is_image = is_image(src)
     clip_dur = n_frames / output.framerate
     has_countdown = countdown_seconds is not None and next_label is not None
     has_slate = slate_image is not None
@@ -251,6 +256,10 @@ def _extract_video(
         # to the raw [1:v] stream for the second use (wrong resolution/rate).
         # We create two independent slate labels — [slate_fi] and [slate_fo] —
         # so each xfade node gets its own dedicated, properly prepared input.
+        #
+        # When the source itself is a still image it is already supplied as
+        # input 0 with -loop 1.  The slate then becomes input 1, which is the
+        # same index as the normal slate case, so no index adjustment is needed.
         n_slate_uses = (1 if fade_in is not None else 0) + (1 if fade_out is not None else 0)
         for idx in range(n_slate_uses):
             label = f"slate_{idx}"
@@ -304,13 +313,18 @@ def _extract_video(
 
     filter_complex = "; ".join(graph)
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-ss", f"{inpoint:.6f}",            # fast input seek
-        "-i", str(src),                     # input 0: the clip
-    ]
+    cmd = ["ffmpeg", "-y"]
+
+    if src_is_image:
+        # Still image: loop the single frame indefinitely; -frames:v N cuts it.
+        # No -ss seek — images have no timeline to seek within.
+        cmd += ["-loop", "1", "-i", str(src)]
+    else:
+        cmd += ["-ss", f"{inpoint:.6f}", "-i", str(src)]
+
     if has_slate:
         cmd += ["-loop", "1", "-i", str(slate_image)]
+
     cmd += [
         "-an",                              # NO AUDIO — handled separately
         "-filter_complex", filter_complex,
@@ -338,7 +352,28 @@ def _extract_audio(
     fade_in: Optional[float] = None,
     fade_out: Optional[float] = None,
 ) -> None:
-    """Extract an AUDIO-ONLY segment covering the same clip range."""
+    """Extract an AUDIO-ONLY segment covering the same clip range.
+
+    For still images there is no audio track, so a silent AAC segment of the
+    exact duration is generated instead.  Fade-in/out are intentionally not
+    applied to the silent track (nothing to fade).
+    """
+    if is_image(src):
+        # Generate silence for the image duration.  anullsrc produces infinite
+        # PCM silence; -t limits it to the exact clip duration.
+        run_cmd(
+            [
+                "ffmpeg", "-y",
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                "-t", f"{duration:.6f}",
+                "-c:a", "aac",
+                "-ar", "48000",
+                str(out),
+            ],
+            dry_run=dry_run,
+        )
+        return
+
     af_parts = ["aresample=48000", "asetpts=PTS-STARTPTS"]
 
     if fade_in is not None:

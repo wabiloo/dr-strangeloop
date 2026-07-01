@@ -81,3 +81,11 @@ def run_cmd(
 def format_pts(pts: int) -> str:
     """Format a PTS value with commas for tsduck XML readability (e.g. 16,200,000)."""
     return f"{pts:,}"
+
+
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
+
+
+def is_image(path: Path) -> bool:
+    """Return True if *path* is a still image (JPEG or PNG) rather than a video."""
+    return path.suffix.lower() in _IMAGE_SUFFIXES

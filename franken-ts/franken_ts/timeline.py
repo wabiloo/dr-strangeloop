@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import AdBreakConfig, AssetConfig
+from .utils import is_image
 from .validate import VideoInfo
 
 logger = logging.getLogger(__name__)
@@ -159,13 +160,15 @@ def build_timeline(
         # ── Countdown ──────────────────────────────────────────────────────────
         raw = asset.countdown_seconds()
         if raw is not None:
-            # Determine next-element label by looking ahead in the asset list.
-            if i + 1 >= len(assets):
-                label = "END"
-            elif assets[i + 1].is_ad_break:
-                label = "AD"
-            else:
-                label = "ASSET"
+            # Determine next-element label by looking ahead in the asset list,
+            # skipping over any still-image assets (they are invisible to the
+            # viewer as a distinct "next" item — we want the first non-image
+            # successor instead).
+            label = "END"
+            for j in range(i + 1, len(assets)):
+                if not is_image(assets[j].file):
+                    label = "AD" if assets[j].is_ad_break else "ASSET"
+                    break
 
             if raw < 0:
                 resolved = clip_dur          # -1 sentinel → full clip
