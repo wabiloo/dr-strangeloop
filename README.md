@@ -43,13 +43,33 @@ This creates a single `.venv` at the root with all dependencies for all three to
 
 ## Quick start
 
-### Build a TS file
+### Full pipeline (recommended)
+
+[`deploy.py`](./deploy.py) runs the entire pipeline from a single franken-ts YAML config,
+prompting for confirmation at each step:
+
+```bash
+uv run python deploy.py franken-ts/configs/my-stream.yaml
+```
+
+Steps performed:
+1. Build the `.ts` file with SCTE-35 markers (`franken-ts`)
+2. Generate `configs/my-stream.toml` (push-to-aws settings)
+3. Deploy the AWS stack (`cdk deploy`)
+4. Upload the `.ts` to S3
+5. Start the MediaLive channel
+
+At the end it prints the exact commands to stop the channel and destroy the stack.
+
+### Step by step
+
+#### Build a TS file
 
 ```bash
 uv run franken-ts franken-ts/configs/example.yaml
 ```
 
-### Inspect a TS file
+#### Inspect a TS file
 
 ```bash
 uv run frame-extractor outputs/my_stream.ts
@@ -57,13 +77,25 @@ uv run frame-extractor outputs/my_stream.ts
 
 Frame timeline is written to `outputs/my_stream_timeline/`.
 
-### Deploy to AWS
+#### Deploy to AWS manually
+
+TOML configs for push-to-aws live in `configs/`. Generate one or copy an existing example, then:
 
 ```bash
+# Deploy the stack
 cd push-to-aws-media
-uv run python channel.py upload
-cdk deploy
-uv run python channel.py start
+cdk deploy --require-approval never -c config=../configs/my-stream.toml
+
+# All subsequent commands can be run from the repo root
+uv run python push-to-aws-media/channel.py -c configs/my-stream.toml upload
+uv run python push-to-aws-media/channel.py -c configs/my-stream.toml start
+
+# When done
+uv run python push-to-aws-media/channel.py -c configs/my-stream.toml stop
+
+# Tear down (stops billing)
+cd push-to-aws-media
+cdk destroy ScteLoopStack-my-stream -c config=../configs/my-stream.toml
 ```
 
 See each tool's README for full details.
