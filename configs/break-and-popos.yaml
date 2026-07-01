@@ -8,20 +8,21 @@ output:
   service_name: "broadpeak.io"
 
 normalize: true
-slate_image: /path/to/your/slate.png   # replace with actual slate image path
+slate_image: /Users/fabrelambeau/Broadpeak/Resources/Backgrounds/testing-slate.png
 
 assets:
+  # First asset
+  
   - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
     duration: "1 min"
     countdown: 10
-    fade_in: 2
-    fade_out: 2
+    fade_out: 1.5
 
+  # Linear ad (0x0C)
+  
   - file: '/Users/fabrelambeau/Downloads/Lambrini Advert.mp4'
     duration: "30s"
     countdown: 10
-    fade_in: 2
-    fade_out: 2
     ad_break:
       event_id: 1
       splice_type: time_signal
@@ -38,15 +39,20 @@ assets:
     start: "60s"
     duration: "30s"
     countdown: 10
-    fade_in: 2
-    fade_out: 2
+    fade_in: 1.5
+    fade_out: 1.5
 
+  # Second asset, containing a 0x38 marker
+  
+  - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
+    fade_in: 1
+    duration: "30s"
+    countdown: 10    
+  
   - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
     start: "30s"
     duration: "20s"
     countdown: 10
-    fade_in: 2
-    fade_out: 2
     ad_break:
       event_id: 20
       splice_type: time_signal
@@ -63,5 +69,4 @@ assets:
     start: "50s"
     duration: "30s"
     countdown: 10
-    fade_in: 2
     fade_out: 2
