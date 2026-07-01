@@ -374,7 +374,7 @@ def _run_pipeline(
 
             if key in run_cache:
                 v, a = run_cache[key]
-                _info(f"{prefix}  [dim green]run-cache hit[/dim green]")
+                console.print(f"{prefix}  [dim green]run-cache hit[/dim green]")
                 n_run_hit += 1
             else:
                 # Check persistent disk cache first.
@@ -386,16 +386,16 @@ def _run_pipeline(
                         v, a = cached.video, cached.audio
                         disk_hit = True
                         n_disk_hit += 1
-                        _info(f"{prefix}  [dim green]disk-cache hit[/dim green]")
+                        console.print(f"{prefix}  [dim green]disk-cache hit[/dim green]")
 
                 if not disk_hit:
-                    _info(f"{prefix}  [dim]extracting...[/dim]")
-                    result = extract_clip(
-                        entry, cfg.output, temp_dir, idx,
-                        cache_dir=cache_dir, dry_run=dry_run,
-                    )
+                    with console.status(f"{prefix}  [dim]extracting...[/dim]", spinner="dots"):
+                        result = extract_clip(
+                            entry, cfg.output, temp_dir, idx,
+                            cache_dir=cache_dir, dry_run=dry_run,
+                        )
                     v, a = result.segments.video, result.segments.audio
-                    _info(f"{prefix}  [dim]done[/dim]")
+                    console.print(f"{prefix}  [dim]done[/dim]")
 
                 run_cache[key] = (v, a)
             video_segs.append(v)
