@@ -117,35 +117,62 @@ def _build_drawtext_filters(
 ) -> list[str]:
     """Return the two drawtext filter strings for the countdown overlay.
 
-    Returns a list of two strings: the label filter and the countdown filter.
-    These can be appended to a -vf chain (joined with commas) or embedded into
-    a -filter_complex graph (each applied as a separate node).
+    Renders a styled bug in the top-right corner: a semi-transparent dark box
+    with a white border, containing two lines of white text — the next-element
+    label on top and the ticking countdown below.
+
+    The box is drawn via drawtext's built-in box=1 / boxcolor / boxborderw
+    options (padding around the text).  A white border is simulated by drawing
+    each text twice: first in white at a 2px offset (the "border" pass) then
+    again in the normal colour on top.  True rounded corners are not possible
+    with standard drawtext/drawbox filters.
+
+    Returns a list of four filter strings (border_label, label, border_digits,
+    digits) to be chained in order.
     """
     start_t = clip_dur - countdown_seconds
     label_escaped = next_label.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
-    label_expr = (
-        f"drawtext="
-        f"text='next\\: {label_escaped}':"
-        f"fontsize=48:"
-        f"fontcolor=white:"
-        f"borderw=3:"
-        f"bordercolor=black:"
-        f"x=w-tw-20:"
-        f"y=20:"
-        f"enable='gte(t,{start_t:.6f})'"
-    )
-    countdown_expr = (
-        f"drawtext="
-        f"text='%{{eif\\:ceil(max(0\\,({clip_dur:.6f}-t)))\\:d}}':"
-        f"fontsize=48:"
-        f"fontcolor=white:"
-        f"borderw=3:"
-        f"bordercolor=black:"
-        f"x=w-tw-20:"
-        f"y=76:"
-        f"enable='gte(t,{start_t:.6f})'"
-    )
-    return [label_expr, countdown_expr]
+
+    # Shared geometry — 20px margin from the right/top edge, 12px box padding.
+    pad = 12
+    margin = 20
+    fontsize = 48
+    # y positions: label at top, countdown below (fontsize + 2*pad gap)
+    y_label = margin
+    y_digits = margin + fontsize + pad * 2 + 6  # 6px gap between the two lines
+
+    # Box background: semi-transparent dark grey, white border via boxcolor on
+    # a slightly larger "border" pass drawn first.
+    box_bg    = "0x222222@0.75"
+    box_border = "0xFFFFFF@0.85"
+
+    enable = f"enable='gte(t,{start_t:.6f})'"
+
+    def _text_filter(text: str, y: int, boxcolor: str, fontcolor: str, extra_pad: int = 0) -> str:
+        return (
+            f"drawtext="
+            f"text='{text}':"
+            f"fontsize={fontsize}:"
+            f"fontcolor={fontcolor}:"
+            f"box=1:"
+            f"boxcolor={boxcolor}:"
+            f"boxborderw={pad + extra_pad}:"
+            f"x=w-tw-{margin + pad + extra_pad}:"
+            f"y={y - extra_pad}:"
+            f"{enable}"
+        )
+
+    # Draw order: border pass (larger box, white) then foreground pass (smaller
+    # box, dark bg + white text) on top.  This creates the illusion of a white
+    # border around the dark background box.
+    border_label  = _text_filter(f"next\\: {label_escaped}", y_label,  box_border, "0x22222200", extra_pad=3)
+    label         = _text_filter(f"next\\: {label_escaped}", y_label,  box_bg,     "white")
+
+    digits_text   = f"%{{eif\\:ceil(max(0\\,({clip_dur:.6f}-t)))\\:d}}"
+    border_digits = _text_filter(digits_text, y_digits, box_border, "0x22222200", extra_pad=3)
+    digits        = _text_filter(digits_text, y_digits, box_bg,     "white")
+
+    return [border_label, label, border_digits, digits]
 
 
 def _extract_video(
@@ -271,8 +298,11 @@ def _extract_video(
     # ── Countdown overlay ──────────────────────────────────────────────────────
     if has_countdown:
         dt = _build_drawtext_filters(clip_dur, countdown_seconds, next_label)
-        graph.append(f"{current} {dt[0]} [dt1]")
-        graph.append(f"[dt1] {dt[1]} [out]")
+        # dt = [border_label, label, border_digits, digits] — 4 chained nodes.
+        graph.append(f"{current} {dt[0]} [dt0]")
+        graph.append(f"[dt0] {dt[1]} [dt1]")
+        graph.append(f"[dt1] {dt[2]} [dt2]")
+        graph.append(f"[dt2] {dt[3]} [out]")
     else:
         # Rename the last stream to [out] for the -map argument.
         last = graph[-1]
