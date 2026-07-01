@@ -375,21 +375,16 @@ def extract_clip(
 ) -> ExtractResult:
     """Extract+normalize one timeline clip into separate video/audio segments.
 
-    Checks the cache first (keyed on source + output spec + exact cut range).
-    On a miss it extracts both segments and stores them.  Returns the segment
-    paths plus the actual video frame count (for boundary verification).
+    Does NOT check the cache — the caller (cli.py) handles lookup before
+    calling this function.  If cache_dir is provided, the result is stored
+    after extraction so future runs can find it.  Returns the segment paths
+    plus the actual video frame count (for boundary verification).
     """
     src = entry.source_file
     inpoint = entry.inpoint
     outpoint = entry.outpoint
     duration = entry.clip_duration
     n_frames = round(duration * output.framerate)
-
-    if cache_dir is not None and not dry_run:
-        from . import cache as _cache
-        cached = _cache.lookup(entry, output, cache_dir)
-        if cached is not None:
-            return ExtractResult(cached, _probe_video_frame_count(cached.video))
 
     video_tmp = temp_dir / f"clip_{index:03d}.v.ts"
     audio_tmp = temp_dir / f"clip_{index:03d}.a.m4a"

@@ -359,36 +359,54 @@ def _run_pipeline(
         # 3a — extract every clip into keyframe-clean video/audio segments.
         video_segs: list[Path] = []
         audio_segs: list[Path] = []
-        # Within-run dedup: an identical (source, inpoint, outpoint) cut only
-        # needs extracting once even when it appears multiple times.
+        # Within-run dedup: entries with an identical cache key only need
+        # extracting once even when they appear multiple times in a schedule.
         run_cache: dict[str, tuple[Path, Path]] = {}
         n_total = len(entries)
-        with console.status("", spinner="dots") as status:
-            for idx, entry in enumerate(entries):
-                # Use the same key as the persistent cache so both caches are
-                # always consistent — two entries are identical iff they produce
-                # the same extracted segments (same source, cut, overlays, etc).
-                key = entry_cache_key(entry, cfg.output)
-                if key in run_cache:
-                    v, a = run_cache[key]
-                    status.update(
-                        f"  Extracting [[bold]{idx + 1}/{n_total}[/bold]] "
-                        f"[cyan]{entry.source_file.name}[/cyan]  [dim](reusing)[/dim]"
-                    )
-                else:
-                    status.update(
-                        f"  Extracting [[bold]{idx + 1}/{n_total}[/bold]] "
-                        f"[cyan]{entry.source_file.name}[/cyan]..."
-                    )
+        n_disk_hit = 0
+        n_run_hit = 0
+        for idx, entry in enumerate(entries):
+            # Use the same key as the persistent cache so both caches are
+            # always consistent — two entries are identical iff they produce
+            # the same extracted segments (same source, cut, overlays, etc).
+            key = entry_cache_key(entry, cfg.output)
+            prefix = f"  [[bold]{idx + 1}/{n_total}[/bold]] [cyan]{entry.source_file.name}[/cyan]"
+
+            if key in run_cache:
+                v, a = run_cache[key]
+                _info(f"{prefix}  [dim green]run-cache hit[/dim green]")
+                n_run_hit += 1
+            else:
+                # Check persistent disk cache first.
+                disk_hit = False
+                if cache_dir is not None and not dry_run:
+                    from . import cache as _cache
+                    cached = _cache.lookup(entry, cfg.output, cache_dir)
+                    if cached is not None:
+                        v, a = cached.video, cached.audio
+                        disk_hit = True
+                        n_disk_hit += 1
+                        _info(f"{prefix}  [dim green]disk-cache hit[/dim green]")
+
+                if not disk_hit:
+                    _info(f"{prefix}  [dim]extracting...[/dim]")
                     result = extract_clip(
                         entry, cfg.output, temp_dir, idx,
                         cache_dir=cache_dir, dry_run=dry_run,
                     )
                     v, a = result.segments.video, result.segments.audio
-                    run_cache[key] = (v, a)
-                video_segs.append(v)
-                audio_segs.append(a)
-        _ok(f"Extracted [bold]{n_total}[/bold] clip(s)")
+                    _info(f"{prefix}  [dim]done[/dim]")
+
+                run_cache[key] = (v, a)
+            video_segs.append(v)
+            audio_segs.append(a)
+
+        summary_parts = [f"[bold]{n_total}[/bold] clip(s)"]
+        if n_disk_hit:
+            summary_parts.append(f"[green]{n_disk_hit} disk-cache hit(s)[/green]")
+        if n_run_hit:
+            summary_parts.append(f"[green]{n_run_hit} run-cache hit(s)[/green]")
+        _ok(f"Extracted {', '.join(summary_parts)}")
 
         # 3b — assemble final TS (video re-encode + forced IDRs, audio muxed in).
         with console.status("  Assembling final TS...", spinner="dots"):
