@@ -387,10 +387,7 @@ def extract_clip(
 
     if cache_dir is not None and not dry_run:
         from . import cache as _cache
-        cached = _cache.lookup(src, output, cache_dir, inpoint, outpoint,
-                               entry.countdown, entry.next_label,
-                               entry.fade_in, entry.fade_out,
-                               entry.slate_image)
+        cached = _cache.lookup(entry, output, cache_dir)
         if cached is not None:
             return ExtractResult(cached, _probe_video_frame_count(cached.video))
 
@@ -430,9 +427,6 @@ def extract_clip(
     segments = ClipSegments(video_tmp, audio_tmp)
     if cache_dir is not None:
         from . import cache as _cache
-        segments = _cache.store(video_tmp, audio_tmp, src, output, cache_dir, inpoint, outpoint,
-                                entry.countdown, entry.next_label,
-                                entry.fade_in, entry.fade_out,
-                                entry.slate_image)
+        segments = _cache.store(video_tmp, audio_tmp, entry, output, cache_dir)
 
     return ExtractResult(segments, actual)

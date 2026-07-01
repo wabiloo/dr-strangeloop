@@ -25,6 +25,7 @@ from .timeline import build_timeline, all_forced_keyframe_times
 from .tsduck import inject_markers, verify_markers
 from .utils import check_tool
 from .validate import validate_inputs
+from .cache import entry_cache_key
 
 _DEFAULT_CACHE_DIR = Path.home() / ".cache" / "franken_ts"
 
@@ -360,11 +361,14 @@ def _run_pipeline(
         audio_segs: list[Path] = []
         # Within-run dedup: an identical (source, inpoint, outpoint) cut only
         # needs extracting once even when it appears multiple times.
-        run_cache: dict[tuple, tuple[Path, Path]] = {}
+        run_cache: dict[str, tuple[Path, Path]] = {}
         n_total = len(entries)
         with console.status("", spinner="dots") as status:
             for idx, entry in enumerate(entries):
-                key = (entry.source_file.resolve(), entry.inpoint, entry.outpoint)
+                # Use the same key as the persistent cache so both caches are
+                # always consistent — two entries are identical iff they produce
+                # the same extracted segments (same source, cut, overlays, etc).
+                key = entry_cache_key(entry, cfg.output)
                 if key in run_cache:
                     v, a = run_cache[key]
                     status.update(

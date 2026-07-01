@@ -5,16 +5,19 @@ import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from .config import OutputConfig
+
+if TYPE_CHECKING:
+    from .timeline import TimelineEntry
 
 logger = logging.getLogger(__name__)
 
 # Bump this whenever the extraction recipe changes in a way that makes old
 # cache artifacts incompatible (filters, codec params, stream layout, …) so
 # stale entries are not silently reused.
-_RECIPE_VERSION = "extract_v4_vonly+aonly+countdown+fade+slate"
+_RECIPE_VERSION = "extract_v5_vonly+aonly+countdown+fade+slate"
 
 
 @dataclass(frozen=True)
@@ -29,37 +32,37 @@ class ClipSegments:
     audio: Path   # audio-only file covering the same clip range
 
 
-def _key(
-    source: Path,
-    output: OutputConfig,
-    inpoint: float,
-    outpoint: float,
-    countdown_seconds: Optional[float] = None,
-    next_label: Optional[str] = None,
-    fade_in: Optional[float] = None,
-    fade_out: Optional[float] = None,
-    slate_image: Optional[Path] = None,
-) -> str:
-    """Content-addressed cache key for one extracted clip.
+def entry_cache_key(entry: TimelineEntry, output: OutputConfig) -> str:
+    """Compute the cache key for a TimelineEntry + OutputConfig pair.
 
-    Keyed on the source file identity (path + mtime + size), the output spec
-    that governs normalization (resolution / framerate / gop / bitrate), the
-    exact frame-snapped cut range, and the overlay/fade/slate parameters.
+    This is the single source of truth for cache identity.  It is also used
+    by the within-run dedup dict in cli.py so that both caches are consistent:
+    two entries are identical iff they would produce the same extracted segments.
+
+    Keyed on:
+    - Source file identity: resolved path + mtime + size
+    - Output spec: resolution, framerate, gop, bitrate
+    - Cut range: frame-snapped inpoint + outpoint
+    - Overlay params: countdown window, next_label, fade_in, fade_out
+    - Slate image identity: resolved path + mtime + size (if set)
+    - Recipe version: invalidates stale cache entries after pipeline changes
     """
+    source = entry.source_file
     stat = source.stat()
-    countdown_part = f"{countdown_seconds}:{next_label}"
-    fade_part = f"{fade_in}:{fade_out}"
-    # Include slate identity (path + mtime + size) so a changed slate image
-    # produces a different key, just like a changed source file would.
-    if slate_image is not None:
-        ss = slate_image.stat()
-        slate_part = f"{slate_image.resolve()}|{ss.st_mtime}|{ss.st_size}"
+
+    fade_part = f"{entry.fade_in}:{entry.fade_out}"
+    countdown_part = f"{entry.countdown}:{entry.next_label}"
+
+    if entry.slate_image is not None:
+        ss = entry.slate_image.stat()
+        slate_part = f"{entry.slate_image.resolve()}|{ss.st_mtime}|{ss.st_size}"
     else:
         slate_part = "none"
+
     parts = (
         f"{source.resolve()}|{stat.st_mtime}|{stat.st_size}"
         f"|{output.resolution}|{output.framerate}|{output.gop}|{output.bitrate_kbps}|48000"
-        f"|in={inpoint:.6f}|out={outpoint:.6f}"
+        f"|in={entry.inpoint:.6f}|out={entry.outpoint:.6f}"
         f"|countdown={countdown_part}"
         f"|fade={fade_part}"
         f"|slate={slate_part}"
@@ -76,23 +79,16 @@ def _paths(cache_dir: Path, key: str) -> ClipSegments:
 
 
 def lookup(
-    source: Path,
+    entry: TimelineEntry,
     output: OutputConfig,
     cache_dir: Path,
-    inpoint: float,
-    outpoint: float,
-    countdown_seconds: Optional[float] = None,
-    next_label: Optional[str] = None,
-    fade_in: Optional[float] = None,
-    fade_out: Optional[float] = None,
-    slate_image: Optional[Path] = None,
 ) -> Optional[ClipSegments]:
     """Return cached clip segments if BOTH artifacts exist, otherwise None."""
-    key = _key(source, output, inpoint, outpoint, countdown_seconds, next_label,
-               fade_in, fade_out, slate_image)
+    key = entry_cache_key(entry, output)
     segs = _paths(cache_dir, key)
     if segs.video.exists() and segs.audio.exists():
-        logger.info("Cache hit for %s [%.3f–%.3f] → %s", source.name, inpoint, outpoint, key)
+        logger.info("Cache hit for %s [%.3f–%.3f] → %s",
+                    entry.source_file.name, entry.inpoint, entry.outpoint, key)
         return segs
     return None
 
@@ -100,23 +96,16 @@ def lookup(
 def store(
     video_src: Path,
     audio_src: Path,
-    source: Path,
+    entry: TimelineEntry,
     output: OutputConfig,
     cache_dir: Path,
-    inpoint: float,
-    outpoint: float,
-    countdown_seconds: Optional[float] = None,
-    next_label: Optional[str] = None,
-    fade_in: Optional[float] = None,
-    fade_out: Optional[float] = None,
-    slate_image: Optional[Path] = None,
 ) -> ClipSegments:
     """Copy freshly-extracted clip segments into the cache. Returns cache paths."""
     cache_dir.mkdir(parents=True, exist_ok=True)
-    key = _key(source, output, inpoint, outpoint, countdown_seconds, next_label,
-               fade_in, fade_out, slate_image)
+    key = entry_cache_key(entry, output)
     segs = _paths(cache_dir, key)
     shutil.copy2(video_src, segs.video)
     shutil.copy2(audio_src, segs.audio)
-    logger.info("Cached %s [%.3f–%.3f] → %s", source.name, inpoint, outpoint, key)
+    logger.info("Cached %s [%.3f–%.3f] → %s",
+                entry.source_file.name, entry.inpoint, entry.outpoint, key)
     return segs
