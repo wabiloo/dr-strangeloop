@@ -115,64 +115,57 @@ def _build_drawtext_filters(
     countdown_seconds: float,
     next_label: str,
 ) -> list[str]:
-    """Return the two drawtext filter strings for the countdown overlay.
+    """Return filters for the countdown overlay bug.
 
-    Renders a styled bug in the top-right corner: a semi-transparent dark box
-    with a white border, containing two lines of white text — the next-element
-    label on top and the ticking countdown below.
+    Layout: a semi-transparent dark box that bleeds off the right edge of the
+    frame (giving a "coming from the side" look), containing a single line:
+      - left: "next: LABEL" in white at fontsize 40
+      - right: countdown digit in smaller grey (fontsize 28)
 
-    The box is drawn via drawtext's built-in box=1 / boxcolor / boxborderw
-    options (padding around the text).  A white border is simulated by drawing
-    each text twice: first in white at a 2px offset (the "border" pass) then
-    again in the normal colour on top.  True rounded corners are not possible
-    with standard drawtext/drawbox filters.
-
-    Returns a list of four filter strings (border_label, label, border_digits,
-    digits) to be chained in order.
+    Returns 4 filter strings in draw order:
+      [0] drawbox fill  — dark semi-transparent background
+      [1] drawbox border — white border on the visible (left) side only
+      [2] drawtext label — "next: LABEL"
+      [3] drawtext digits — ticking countdown
+    All four carry an enable= gate so they only appear during the countdown
+    window.
     """
     start_t = clip_dur - countdown_seconds
     label_escaped = next_label.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
-
-    # Shared geometry — 20px margin from the right/top edge, 12px box padding.
-    pad = 12
-    margin = 20
-    fontsize = 48
-    # y positions: label at top, countdown below (fontsize + 2*pad gap)
-    y_label = margin
-    y_digits = margin + fontsize + pad * 2 + 6  # 6px gap between the two lines
-
-    # Box background: semi-transparent dark grey, white border via boxcolor on
-    # a slightly larger "border" pass drawn first.
-    box_bg    = "0x222222@0.75"
-    box_border = "0xFFFFFF@0.85"
-
     enable = f"enable='gte(t,{start_t:.6f})'"
 
-    def _text_filter(text: str, y: int, boxcolor: str, fontcolor: str, extra_pad: int = 0) -> str:
-        return (
-            f"drawtext="
-            f"text='{text}':"
-            f"fontsize={fontsize}:"
-            f"fontcolor={fontcolor}:"
-            f"box=1:"
-            f"boxcolor={boxcolor}:"
-            f"boxborderw={pad + extra_pad}:"
-            f"x=w-tw-{margin + pad + extra_pad}:"
-            f"y={y - extra_pad}:"
-            f"{enable}"
-        )
+    # Box geometry: left edge 360px from right, width 400px (40px off-screen).
+    # Sized for "next: ASSET" (widest label) at fontsize 40 with padding.
+    bx = "iw-360"
+    by = 14
+    bw = 400
+    bh = 62
 
-    # Draw order: border pass (larger box, white) then foreground pass (smaller
-    # box, dark bg + white text) on top.  This creates the illusion of a white
-    # border around the dark background box.
-    border_label  = _text_filter(f"next\\: {label_escaped}", y_label,  box_border, "0x22222200", extra_pad=3)
-    label         = _text_filter(f"next\\: {label_escaped}", y_label,  box_bg,     "white")
+    box_fill   = f"drawbox=x={bx}:y={by}:w={bw}:h={bh}:color=0x222222@0.80:t=fill:{enable}"
+    box_border = f"drawbox=x={bx}:y={by}:w={bw}:h={bh}:color=0xFFFFFF@0.90:t=2:{enable}"
 
-    digits_text   = f"%{{eif\\:ceil(max(0\\,({clip_dur:.6f}-t)))\\:d}}"
-    border_digits = _text_filter(digits_text, y_digits, box_border, "0x22222200", extra_pad=3)
-    digits        = _text_filter(digits_text, y_digits, box_bg,     "white")
+    label_filter = (
+        f"drawtext="
+        f"text='next\\: {label_escaped}':"
+        f"fontsize=40:"
+        f"fontcolor=white:"
+        f"x=w-348:"
+        f"y=28:"
+        f"{enable}"
+    )
 
-    return [border_label, label, border_digits, digits]
+    digits_text = f"%{{eif\\:ceil(max(0\\,({clip_dur:.6f}-t)))\\:d}}"
+    digits_filter = (
+        f"drawtext="
+        f"text='{digits_text}':"
+        f"fontsize=28:"
+        f"fontcolor=0xAAAAAA:"
+        f"x=w-tw-16:"
+        f"y=35:"
+        f"{enable}"
+    )
+
+    return [box_fill, box_border, label_filter, digits_filter]
 
 
 def _extract_video(
@@ -298,11 +291,11 @@ def _extract_video(
     # ── Countdown overlay ──────────────────────────────────────────────────────
     if has_countdown:
         dt = _build_drawtext_filters(clip_dur, countdown_seconds, next_label)
-        # dt = [border_label, label, border_digits, digits] — 4 chained nodes.
-        graph.append(f"{current} {dt[0]} [dt0]")
-        graph.append(f"[dt0] {dt[1]} [dt1]")
-        graph.append(f"[dt1] {dt[2]} [dt2]")
-        graph.append(f"[dt2] {dt[3]} [out]")
+        # dt = [box_fill, box_border, label, digits] — 4 chained nodes.
+        graph.append(f"{current} {dt[0]} [ov0]")
+        graph.append(f"[ov0] {dt[1]} [ov1]")
+        graph.append(f"[ov1] {dt[2]} [ov2]")
+        graph.append(f"[ov2] {dt[3]} [out]")
     else:
         # Rename the last stream to [out] for the -map argument.
         last = graph[-1]
