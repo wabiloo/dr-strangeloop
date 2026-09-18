@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from bake import DecodedMarker, ValidationError, validate_markers_against_ts  # noqa: E402
+from bake import DecodedMarker, ValidationError, discover_renditions, validate_markers_against_ts  # noqa: E402
 
 
 def _marker(event_id: str, pts_time_ticks: int) -> dict:
@@ -65,3 +65,63 @@ def test_validation_fails_on_one_tick_pts_mismatch():
 
     with pytest.raises(ValidationError, match="off by 1 tick"):
         validate_markers_against_ts(markers, decoded)
+
+
+# ── discover_renditions (directory-based rendition auto-discovery) ──────────
+
+
+def test_discover_renditions_single_file_mode(tmp_path):
+    ts_file = tmp_path / "myoutput.ts"
+    ts_file.write_bytes(b"fake")
+    markers_file = tmp_path / "myoutput.markers.json"
+    markers_file.write_text("[]")
+
+    renditions, markers_json = discover_renditions(ts_file)
+
+    assert renditions == [("myoutput", ts_file)]
+    assert markers_json == markers_file
+
+
+def test_discover_renditions_directory_mode_multiple_ts(tmp_path):
+    (tmp_path / "markers.json").write_text("[]")
+    (tmp_path / "1080p.ts").write_bytes(b"fake")
+    (tmp_path / "720p.ts").write_bytes(b"fake")
+    (tmp_path / "360p.ts").write_bytes(b"fake")
+
+    renditions, markers_json = discover_renditions(tmp_path)
+
+    assert [name for name, _ in renditions] == ["1080p", "360p", "720p"]  # sorted
+    assert markers_json == tmp_path / "markers.json"
+
+
+def test_discover_renditions_directory_mode_single_ts_degenerates_to_one_rendition(tmp_path):
+    (tmp_path / "markers.json").write_text("[]")
+    (tmp_path / "only.ts").write_bytes(b"fake")
+
+    renditions, markers_json = discover_renditions(tmp_path)
+
+    assert renditions == [("only", tmp_path / "only.ts")]
+
+
+def test_discover_renditions_fails_on_missing_markers_json(tmp_path):
+    (tmp_path / "1080p.ts").write_bytes(b"fake")
+
+    with pytest.raises(ValidationError, match="does not exist"):
+        discover_renditions(tmp_path)
+
+
+def test_discover_renditions_fails_on_empty_directory(tmp_path):
+    (tmp_path / "markers.json").write_text("[]")
+
+    with pytest.raises(ValidationError, match="No .ts files found"):
+        discover_renditions(tmp_path)
+
+
+def test_discover_renditions_respects_markers_override(tmp_path):
+    (tmp_path / "1080p.ts").write_bytes(b"fake")
+    custom_markers = tmp_path / "custom.markers.json"
+    custom_markers.write_text("[]")
+
+    renditions, markers_json = discover_renditions(tmp_path, markers_override=custom_markers)
+
+    assert markers_json == custom_markers

@@ -102,6 +102,48 @@ assets:
         device_restrictions: 1
 ```
 
+### Multi-rendition (ABR ladder) output
+
+For a self-hosted ABR channel via `loop-dee-loop`, replace the single
+`output.file` with `output.dir` + `output.renditions` — the same asset
+timeline/ad-break schedule is encoded once per rendition, all sharing the
+same forced-keyframe schedule (so segment boundaries and SCTE-35 marker
+PTS come out byte-identical across renditions):
+
+```yaml
+output:
+  dir: ../outputs/mychannel     # required in multi-rendition mode
+  framerate: 25
+  gop: 50
+  service_provider: "broadpeak"
+  service_name: "broadpeak.io"
+  renditions:
+    - name: "1080p"              # becomes <dir>/1080p.ts
+      resolution: "1920x1080"
+      bitrate_kbps: 10000
+    - name: "720p"
+      resolution: "1280x720"
+      bitrate_kbps: 4500
+    - name: "360p"
+      resolution: "640x360"
+      bitrate_kbps: 800
+
+assets:
+  - file: content.mp4
+    duration: "10 min"
+  # ...same as single-rendition mode
+```
+
+This writes `<dir>/<rendition.name>.ts` per rendition plus one shared
+`<dir>/markers.json` (SCTE-35 timing is identical across renditions by
+construction, so there's no need for — and it would be a hard failure if
+there ever were — a different markers.json per rendition). `loop-dee-loop`
+auto-discovers the whole ladder from this directory — no need to list
+renditions again on its command line (see `loop-dee-loop/README.md`).
+
+`output.file` and `output.dir`+`output.renditions` are mutually exclusive;
+use exactly one.
+
 #### Asset time formats
 
 `start` and `duration` accept any of:

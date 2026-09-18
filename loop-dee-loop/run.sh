@@ -3,11 +3,21 @@
 # one command. Convenience wrapper around bake.py + serve.py (SCOPE.md §4).
 #
 # Usage:
-#   ./run.sh <ts_file> [options]
+#   ./run.sh <input_path> [options]
+#
+# <input_path> is either:
+#   - a single .ts file (single-rendition, legacy/quick-test mode --
+#     markers.json defaults to <input_path> with .ts -> .markers.json), or
+#   - a directory containing a rendition ladder auto-discovered from disk
+#     (no need to list renditions on the command line -- see README.md):
+#       outputs/mychannel/
+#         markers.json      <- exactly one, shared
+#         1080p.ts
+#         720p.ts
+#         360p.ts
 #
 # Options:
-#   --markers PATH         Path to .markers.json sidecar
-#                          (default: <ts_file> with .ts -> .markers.json)
+#   --markers PATH         Override the auto-discovered markers.json path.
 #   --output DIR           Loop package output directory
 #                          (default: ./loop-package next to this script)
 #   --segment-duration N   Nominal segment duration in seconds passed to
@@ -34,7 +44,7 @@
 #
 # Examples:
 #   ./run.sh ../outputs/break-and-popos.ts
-#   ./run.sh ../outputs/break-and-popos.ts --output /var/loop-packages/ch1 \
+#   ./run.sh ../outputs/mychannel/ --output /var/loop-packages/ch1 \
 #            --epoch-utc 2026-01-01T00:00:00Z --port 9000
 #   ./run.sh --skip-bake --output /var/loop-packages/ch1
 #
@@ -47,7 +57,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-TS_FILE=""
+INPUT_PATH=""
 MARKERS=""
 OUTPUT="${SCRIPT_DIR}/loop-package"
 SEGMENT_DURATION="4.0"
@@ -61,7 +71,7 @@ VERBOSE="0"
 PYTHON=""
 
 usage() {
-    sed -n '2,44p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,54p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -79,8 +89,8 @@ while [[ $# -gt 0 ]]; do
         -v|--verbose) VERBOSE="1"; shift ;;
         -h|--help) usage; exit 0 ;;
         *)
-            if [[ -z "$TS_FILE" ]]; then
-                TS_FILE="$1"
+            if [[ -z "$INPUT_PATH" ]]; then
+                INPUT_PATH="$1"
                 shift
             else
                 echo "Unknown argument: $1" >&2
@@ -91,8 +101,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ "$SKIP_BAKE" != "1" && -z "$TS_FILE" ]]; then
-    echo "Error: <ts_file> is required unless --skip-bake is given." >&2
+if [[ "$SKIP_BAKE" != "1" && -z "$INPUT_PATH" ]]; then
+    echo "Error: <input_path> is required unless --skip-bake is given." >&2
     usage
     exit 1
 fi
@@ -122,11 +132,11 @@ if [[ -d "${HOME}/gpac-local/lib" ]]; then
 fi
 
 if [[ "$SKIP_BAKE" != "1" ]]; then
-    BAKE_ARGS=("$TS_FILE" --output "$OUTPUT" --segment-duration "$SEGMENT_DURATION")
+    BAKE_ARGS=("$INPUT_PATH" --output "$OUTPUT" --segment-duration "$SEGMENT_DURATION")
     [[ -n "$MARKERS" ]] && BAKE_ARGS+=(--markers "$MARKERS")
     [[ "$VERBOSE" == "1" ]] && BAKE_ARGS+=(-v)
 
-    echo "==> Baking loop package: ${TS_FILE} -> ${OUTPUT}"
+    echo "==> Baking loop package: ${INPUT_PATH} -> ${OUTPUT}"
     "$PYTHON" "${SCRIPT_DIR}/bake.py" "${BAKE_ARGS[@]}"
 else
     echo "==> --skip-bake given, reusing existing package at ${OUTPUT}"

@@ -164,6 +164,11 @@ def main(
         sys.exit(1)
 
     if output:
+        if cfg.output.is_multi_rendition:
+            _err("--output/-o cannot be used with a multi-rendition config "
+                 "(output.dir + output.renditions) -- override output.dir "
+                 "in the YAML instead.")
+            sys.exit(1)
         cfg.output.file = output
 
     # Every clip is always extracted + normalized (see extract.py).  The cache
@@ -303,6 +308,120 @@ def _run_pipeline(
     skip_inject: bool,
     verify: bool,
 ) -> None:
+    """Dispatch to the single-rendition or multi-rendition pipeline based on
+    which mode `cfg.output` was validated into (see config.py's
+    OutputConfig.validate_single_vs_multi_rendition)."""
+    if cfg.output.is_multi_rendition:
+        _run_pipeline_multi_rendition(
+            cfg, temp_dir, cache_dir, dry_run, skip_transcode, skip_inject, verify,
+        )
+    else:
+        _run_pipeline_single(
+            cfg, temp_dir, cache_dir, dry_run, skip_transcode, skip_inject, verify,
+        )
+
+
+def _run_pipeline_multi_rendition(
+    cfg,
+    temp_dir: Path,
+    cache_dir: Optional[Path],
+    dry_run: bool,
+    skip_transcode: bool,
+    skip_inject: bool,
+    verify: bool,
+) -> None:
+    """Multi-rendition ABR ladder: run the full single-rendition pipeline
+    once per `cfg.output.renditions` entry (each with its own effective
+    OutputConfig via `for_rendition`, writing `<dir>/<name>.ts`), then write
+    ONE shared `<dir>/markers.json` -- hard-failing if any rendition's
+    detected PTS values disagree with the first (reference) rendition's,
+    since every downstream consumer (loop-dee-loop) trusts that markers.json
+    applies identically to every rendition in the directory.
+    """
+    output_dir = cfg.output.dir
+    assert output_dir is not None
+    if not dry_run:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print(Rule(
+        f"[bold cyan]{len(cfg.output.renditions)} rendition(s)[/bold cyan]",
+        style="cyan dim",
+    ))
+
+    reference_name: Optional[str] = None
+    reference_pts_map: Optional[dict] = None
+    reference_boundaries = None
+
+    for i, rendition in enumerate(cfg.output.renditions):
+        console.print()
+        console.print(Rule(
+            f"[bold]Rendition {i + 1}/{len(cfg.output.renditions)}: "
+            f"{rendition.name}[/bold] ({rendition.resolution} @ {rendition.bitrate_kbps}kbps)",
+            style="dim",
+        ))
+
+        rendition_cfg = cfg.model_copy(update={"output": cfg.output.for_rendition(rendition)})
+        # Each rendition gets its own temp subdir so concurrent-safe (and so
+        # debug artifacts from different renditions never collide).
+        rendition_temp_dir = temp_dir / rendition.name
+        rendition_temp_dir.mkdir(parents=True, exist_ok=True)
+
+        pts_map, boundaries = _run_pipeline_single(
+            rendition_cfg, rendition_temp_dir, cache_dir, dry_run,
+            skip_transcode, skip_inject, verify,
+            write_markers_json=False,  # shared markers.json written once, below
+        )
+
+        if skip_inject or dry_run:
+            continue
+
+        if reference_pts_map is None:
+            reference_name = rendition.name
+            reference_pts_map = pts_map
+            reference_boundaries = boundaries
+        elif pts_map != reference_pts_map:
+            mismatches = {
+                k: (reference_pts_map[k], pts_map[k])
+                for k in pts_map
+                if pts_map[k] != reference_pts_map.get(k)
+            }
+            raise RuntimeError(
+                f"Rendition '{rendition.name}' detected different SCTE-35 "
+                f"PTS values than reference rendition '{reference_name}': "
+                f"{mismatches}. All renditions must share byte-identical "
+                f"keyframe/marker timing for loop-dee-loop's cross-rendition "
+                f"validation to succeed -- this is a hard failure, not "
+                f"something to silently reconcile."
+            )
+
+    if skip_inject or dry_run:
+        _warn("Skipping shared markers.json (--skip-inject or --dry-run)")
+        return
+
+    markers_path = output_dir / "markers.json"
+    write_markers_sidecar(reference_boundaries, reference_pts_map, markers_path, dry_run=dry_run)
+    console.print()
+    _ok(
+        f"Markers JSON → [bold]{markers_path}[/bold]  "
+        f"[dim](shared across all {len(cfg.output.renditions)} rendition(s), "
+        f"verified byte-identical PTS)[/dim]"
+    )
+
+
+def _run_pipeline_single(
+    cfg,
+    temp_dir: Path,
+    cache_dir: Optional[Path],
+    dry_run: bool,
+    skip_transcode: bool,
+    skip_inject: bool,
+    verify: bool,
+    write_markers_json: bool = True,
+):
+    """Run the single-output pipeline. Returns (pts_map, boundaries) so
+    multi-rendition callers can cross-validate PTS consistency across
+    renditions -- (None, None) if injection was skipped or this was a
+    dry run (nothing to validate)."""
 
     # Timeline entries keep pointing at the ORIGINAL source files so the clip
     # table, report and diagnostics show real filenames.  The extracted segment
@@ -427,7 +546,7 @@ def _run_pipeline(
             shutil.copy2(intermediate_ts, cfg.output.file)
             _ok(f"Saved TS (no markers) → {cfg.output.file}")
         _warn("Stopping before injection (--skip-inject)")
-        return
+        return None, None
 
     # ── Step 4: PTS detection ─────────────────────────────────────────────────
     with console.status("  Detecting IDR frame PTS values...", spinner="dots"):
@@ -462,9 +581,10 @@ def _run_pipeline(
     )
 
     # ── Markers sidecar (always written, not gated behind --debug/--verify) ──
-    markers_path = cfg.output.file.with_suffix(".markers.json")
-    write_markers_sidecar(boundaries, pts_map, markers_path, dry_run=dry_run)
-    _ok(f"Markers JSON → [dim]{markers_path.name}[/dim]")
+    if write_markers_json:
+        markers_path = cfg.output.file.with_suffix(".markers.json")
+        write_markers_sidecar(boundaries, pts_map, markers_path, dry_run=dry_run)
+        _ok(f"Markers JSON → [dim]{markers_path.name}[/dim]")
 
     # ── Step 7: verify + diagnostics + report ────────────────────────────────
     if verify:
@@ -504,6 +624,8 @@ def _run_pipeline(
                 dry_run=dry_run,
             )
         _ok(f"Report → [bold]{report_path}[/bold]")
+
+    return pts_map, boundaries
 
 
 if __name__ == "__main__":

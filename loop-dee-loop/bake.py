@@ -501,38 +501,91 @@ def read_variant_metadata(gpac_mpd_path: Path) -> dict:
     return {"video": video, "audio": audio}
 
 
-def bake(
+def discover_renditions(
+    input_path: Path, markers_override: Path | None = None
+) -> tuple[list[tuple[str, Path]], Path]:
+    """Discover the rendition ladder + shared markers.json from a single CLI
+    argument, per the loop-dee-loop <-> franken-ts directory contract:
+
+        outputs/mychannel/
+          markers.json      <- exactly one, shared
+          1080p.ts
+          720p.ts
+          360p.ts
+
+    `input_path` may be:
+      - a directory: every `*.ts` file in it is a rendition (name = filename
+        stem, e.g. "1080p.ts" -> "1080p"), sorted alphabetically (first
+        becomes the reference rendition -- see bake()). `markers.json` must
+        exist directly inside it (fixed name, not pattern-matched).
+      - a single `.ts` file (legacy/quick-test escape hatch): one rendition
+        named after the file's own stem, markers.json defaults to the same
+        franken-ts `.with_suffix(".markers.json")` convention as before.
+
+    No CLI flag is needed to enumerate renditions -- that's the whole point
+    (SCOPE.md discussion): the file set on disk *is* the ladder.
+    """
+    if input_path.is_dir():
+        markers_json = markers_override or (input_path / "markers.json")
+        ts_files = sorted(input_path.glob("*.ts"))
+        if not ts_files:
+            raise ValidationError(f"No .ts files found in directory {input_path}")
+        renditions = [(f.stem, f) for f in ts_files]
+    else:
+        markers_json = markers_override or input_path.with_suffix(".markers.json")
+        renditions = [(input_path.stem, input_path)]
+
+    if not markers_json.exists():
+        raise ValidationError(
+            f"{markers_json} does not exist. franken-ts must emit a "
+            f"markers.json sidecar (SCOPE.md §2); loop-dee-loop never "
+            f"re-derives marker timing by re-probing the .ts."
+        )
+
+    logger.info(
+        "Discovered %d rendition(s) in %s: %s",
+        len(renditions), input_path, [name for name, _ in renditions],
+    )
+    return renditions, markers_json
+
+
+def bake_one_rendition(
+    name: str,
     ts_file: Path,
-    markers_json: Path,
+    raw_markers: list[dict],
     output_package_dir: Path,
     *,
-    segment_duration_seconds: float = 4.0,
-    dry_run: bool = False,
-) -> None:
-    logger.info("Bake starting: %s + %s -> %s", ts_file, markers_json, output_package_dir)
+    segment_duration_seconds: float,
+    dry_run: bool,
+    include_audio: bool,
+) -> dict | None:
+    """Bake a single rendition's .ts into its own segment set under
+    `<output_package_dir>/segments/<name>/`. Returns a rendition result
+    dict for loop_descriptor.json's `video_renditions` list, or None if
+    dry_run (nothing real was produced to describe).
 
-    # Step 1: validate.
-    markers = load_markers(markers_json)
+    `include_audio`: every rendition's audio track is baked regardless
+    (GPAC's dasher errors if asked to process a PID present in the input
+    with no cues for it -- there's no clean way to tell it to just ignore
+    a track), but only the reference rendition's audio is *recorded* in
+    the returned result / loop_descriptor.json. Audio content is identical
+    across renditions in practice (franken-ts extracts audio independently
+    of the video resolution/bitrate ladder), so non-reference renditions'
+    baked audio segments are harmless, unreferenced disk usage -- a known
+    storage-deduplication opportunity to revisit later, not a correctness
+    issue.
+    """
+    logger.info("── Rendition '%s' (%s) ──", name, ts_file)
+
     decoded = decode_embedded_scte35(ts_file)
-    validated_markers = validate_markers_against_ts(markers, decoded)
+    validated_markers = validate_markers_against_ts(raw_markers, decoded)
 
     video_track_id, audio_track_id, audio_params = read_actual_track_params(ts_file)
 
-    output_package_dir.mkdir(parents=True, exist_ok=True)
-    cues_xml_path = output_package_dir / "cues.xml"
-    segments_dir = output_package_dir / "segments"
+    rendition_dir = output_package_dir / "segments" / name
+    cues_xml_path = output_package_dir / "cues" / f"{name}.xml"
+    cues_xml_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Step 2: build the DASHCues XML.
-    #
-    # GPAC's dasher docs are explicit: once any `cues=` are given, ONLY
-    # those cues are used to derive segment boundaries -- `segdur`/`cdur`
-    # are otherwise ignored entirely. Feeding it just the marker ticks (as
-    # an earlier version of this function did) therefore produces one giant
-    # segment per ad break instead of a real short-segment ABR ladder. The
-    # fix: build the full desired boundary set ourselves -- a regular
-    # nominal grid at `segment_duration_seconds` (real ABR-sized segments)
-    # UNIONED with the exact marker ticks (forced boundaries) -- exactly
-    # how live ad-insertion packagers behave.
     nominal_segment_ticks = round(segment_duration_seconds * TIMESCALE)
     total_content_ticks = probe_source_duration_ticks(ts_file)
     marker_ticks = [m["pts_time_ticks"] for m in validated_markers]
@@ -540,20 +593,12 @@ def bake(
         total_content_ticks,
         nominal_segment_ticks,
         marker_ticks,
-        # ffprobe's container-level duration probe can slightly overestimate
-        # the true usable content length; excluding grid points within 1s of
-        # that estimate avoids requesting an ambiguous tail boundary that
-        # different tracks (video vs audio) could snap differently, breaking
-        # their 1:1 segment-count correspondence (see
-        # compute_segment_boundary_ticks's end_guard_ticks docstring).
         end_guard_ticks=TIMESCALE,
     )
     logger.info(
-        "Requesting %d segment boundaries (nominal ~%.1fs grid + %d marker "
-        "tick(s) forced in)",
-        len(requested_boundary_ticks),
-        segment_duration_seconds,
-        len(marker_ticks),
+        "Rendition '%s': requesting %d segment boundaries (nominal ~%.1fs "
+        "grid + %d marker tick(s) forced in)",
+        name, len(requested_boundary_ticks), segment_duration_seconds, len(marker_ticks),
     )
 
     build_cues_xml(
@@ -564,104 +609,138 @@ def bake(
         audio_params=audio_params,
     )
 
-    # Step 3: run GPAC.
     run_gpac_dasher(
         ts_file,
         cues_xml_path,
-        segments_dir,
+        rendition_dir,
         segment_duration_seconds=segment_duration_seconds,
         dry_run=dry_run,
     )
 
     if dry_run:
-        logger.warning("dry-run: skipping steps 4-6 (no real segments produced)")
-        return
+        return None
 
-    # Step 4: compute total_loop_duration_ticks from actual produced output.
-    total_loop_duration_ticks = compute_total_loop_duration_ticks(
-        segments_dir, video_track_id
-    )
-
-    # Segment boundaries: read back the REAL start tick of every produced
-    # segment (ground truth) -- never trust the requested grid blindly,
-    # since GPAC's cues=...:cts mode can silently snap a *nominal* grid
-    # point to the nearest available keyframe (SCOPE.md §6). That's
-    # harmless/expected for nominal grid points (ordinary keyframe-aligned
-    # segmentation), but every MARKER tick must land exactly with zero
-    # snap -- hard-fail otherwise, since that's the whole safety guarantee
-    # this tool provides for ad signaling.
-    segment_boundary_ticks = read_segment_boundary_ticks(segments_dir, video_track_id)
+    total_loop_duration_ticks = compute_total_loop_duration_ticks(rendition_dir, video_track_id)
+    segment_boundary_ticks = read_segment_boundary_ticks(rendition_dir, video_track_id)
 
     unmatched_markers = [t for t in marker_ticks if t not in segment_boundary_ticks]
     if unmatched_markers:
         raise RuntimeError(
-            f"Marker tick(s) {unmatched_markers} did not land exactly on a "
-            f"produced segment boundary -- GPAC silently snapped a marker "
-            f"cue to a different frame (SCOPE.md §6). This is a hard "
-            f"failure: ad signaling must be frame-accurate, never "
+            f"Rendition '{name}': marker tick(s) {unmatched_markers} did not "
+            f"land exactly on a produced segment boundary -- GPAC silently "
+            f"snapped a marker cue to a different frame (SCOPE.md §6). This "
+            f"is a hard failure: ad signaling must be frame-accurate, never "
             f"approximate. Real boundaries produced: {segment_boundary_ticks}"
         )
 
-    logger.info(
-        "Produced %d real segment(s); all %d marker tick(s) landed exactly "
-        "on a segment boundary",
-        len(segment_boundary_ticks),
-        len(marker_ticks),
-    )
-
-    # Audio segment boundaries: read back the real per-segment start ticks
-    # for the audio track too (if present). These are NOT expected to
-    # exactly equal the video boundary ticks -- each audio boundary was
-    # independently snapped to the nearest exact audio-frame tick at bake
-    # time (gpac_pipeline.snap_audio_tick), which is normal/required (audio
-    # frames have their own fixed grid, e.g. 1920 ticks for 48kHz/1024-
-    # sample AAC) -- only the segment COUNT must match the video track's,
-    # since serve.py pairs up video segment i with audio segment i.
     audio_segment_boundary_ticks: list[int] | None = None
     if audio_track_id is not None:
-        audio_segment_boundary_ticks = read_segment_boundary_ticks(
-            segments_dir, audio_track_id
-        )
+        audio_segment_boundary_ticks = read_segment_boundary_ticks(rendition_dir, audio_track_id)
         if len(audio_segment_boundary_ticks) != len(segment_boundary_ticks):
             raise RuntimeError(
-                f"Audio track produced {len(audio_segment_boundary_ticks)} "
-                f"segment(s) but video track produced "
-                f"{len(segment_boundary_ticks)} -- they must match 1:1 for "
-                f"serve.py to pair them up. Real audio boundaries: "
-                f"{audio_segment_boundary_ticks}"
+                f"Rendition '{name}': audio track produced "
+                f"{len(audio_segment_boundary_ticks)} segment(s) but video "
+                f"track produced {len(segment_boundary_ticks)} -- they must "
+                f"match 1:1. Real audio boundaries: {audio_segment_boundary_ticks}"
             )
 
-    # Read back the codec/resolution/bandwidth GPAC itself computed while
-    # producing the real segments (needed for the HLS multivariant
-    # playlist's #EXT-X-STREAM-INF attributes -- see read_variant_metadata).
-    variant_metadata = read_variant_metadata(segments_dir / "manifest.mpd")
+    variant_metadata = read_variant_metadata(rendition_dir / "manifest.mpd")
 
-    # Step 5: author SCTE-35 signaling ourselves from markers.json.
-    #
-    # NOTE: signaling (HLS EXT-X-DATERANGE / DASH <EventStream>) is
-    # deliberately NOT pre-rendered here. Both carry absolute wall-clock
-    # timestamps (START-DATE / presentationTime) that depend on which loop
-    # iteration is currently playing -- a value only known at request time,
-    # not at bake time (bake.py has no channel epoch). serve.py builds both
-    # fresh, per request, from `validated_markers` below (which already
-    # carries each marker's original splice_command_b64, attached during
-    # validation) via scte35_signaling.py.
+    logger.info(
+        "Rendition '%s': produced %d real segment(s); all %d marker "
+        "tick(s) landed exactly on a segment boundary",
+        name, len(segment_boundary_ticks), len(marker_ticks),
+    )
+
+    return {
+        "name": name,
+        "video_track_id": video_track_id,
+        "audio_track_id": audio_track_id if include_audio else None,
+        "total_loop_duration_ticks": total_loop_duration_ticks,
+        "segment_boundary_ticks": segment_boundary_ticks,
+        "audio_segment_boundary_ticks": audio_segment_boundary_ticks if include_audio else None,
+        "video_variant": variant_metadata["video"],
+        "audio_variant": variant_metadata["audio"] if include_audio else None,
+        "markers": validated_markers,
+    }
+
+
+def bake(
+    input_path: Path,
+    output_package_dir: Path,
+    *,
+    segment_duration_seconds: float = 4.0,
+    dry_run: bool = False,
+    markers_override: Path | None = None,
+) -> None:
+    """Bake phase entrypoint (SCOPE.md §4.1), generalized to a rendition
+    ladder auto-discovered from disk (see discover_renditions()).
+
+    A single-rendition input degenerates naturally into a ladder of one --
+    no special-casing needed anywhere below this point.
+    """
+    logger.info("Bake starting: %s -> %s", input_path, output_package_dir)
+
+    renditions, markers_json = discover_renditions(input_path, markers_override)
+    raw_markers = load_markers(markers_json)
+
+    output_package_dir.mkdir(parents=True, exist_ok=True)
+
+    rendition_results: list[dict] = []
+    reference: dict | None = None
+
+    for i, (name, ts_file) in enumerate(renditions):
+        result = bake_one_rendition(
+            name,
+            ts_file,
+            raw_markers,
+            output_package_dir,
+            segment_duration_seconds=segment_duration_seconds,
+            dry_run=dry_run,
+            include_audio=(i == 0),
+        )
+        if dry_run:
+            continue
+
+        if reference is None:
+            reference = result
+        elif result["total_loop_duration_ticks"] != reference["total_loop_duration_ticks"]:
+            raise RuntimeError(
+                f"Rendition '{name}' total_loop_duration_ticks="
+                f"{result['total_loop_duration_ticks']} does not match "
+                f"reference rendition '{reference['name']}'="
+                f"{reference['total_loop_duration_ticks']}. All renditions "
+                f"in a ladder must share exactly the same loop duration -- "
+                f"hard failure, not reconciled."
+            )
+        elif result["markers"] != reference["markers"]:
+            raise RuntimeError(
+                f"Rendition '{name}' decoded SCTE-35 markers do not match "
+                f"reference rendition '{reference['name']}''s markers "
+                f"byte-for-byte. All renditions must carry identical "
+                f"marker timing/content -- hard failure, not reconciled."
+            )
+
+        rendition_results.append(result)
+
+    if dry_run:
+        logger.warning("dry-run: skipping loop_descriptor.json (no real segments produced)")
+        return
+
+    assert reference is not None
 
     # Step 6: write the immutable loop package.
     loop_descriptor = {
-        "version": 1,
+        "version": 2,
         "created_at": time.time(),
         "timescale": TIMESCALE,
-        "total_loop_duration_ticks": total_loop_duration_ticks,
+        "total_loop_duration_ticks": reference["total_loop_duration_ticks"],
         "segment_duration_seconds": segment_duration_seconds,
-        "segment_boundary_ticks": segment_boundary_ticks,
-        "audio_segment_boundary_ticks": audio_segment_boundary_ticks,
-        "video_track_id": video_track_id,
-        "audio_track_id": audio_track_id,
-        "video_variant": variant_metadata["video"],
-        "audio_variant": variant_metadata["audio"],
-        "markers": validated_markers,
-        "source_ts": str(ts_file),
+        "markers": reference["markers"],
+        "video_renditions": [
+            {k: v for k, v in r.items() if k != "markers"} for r in rendition_results
+        ],
+        "source_input": str(input_path),
         "source_markers_json": str(markers_json),
     }
     descriptor_path = output_package_dir / "loop_descriptor.json"
@@ -669,17 +748,29 @@ def bake(
         json.dump(loop_descriptor, f, indent=2)
         f.write("\n")
 
-    logger.info("Bake complete. Loop package written to %s", output_package_dir)
+    logger.info(
+        "Bake complete. %d rendition(s) written to %s",
+        len(rendition_results), output_package_dir,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Bake a franken-ts output into a loop package")
-    parser.add_argument("ts_file", type=Path, help="Path to franken-ts .ts output")
+    parser = argparse.ArgumentParser(
+        description="Bake franken-ts output (single .ts, or a rendition-ladder "
+        "directory) into a loop package"
+    )
+    parser.add_argument(
+        "input_path",
+        type=Path,
+        help="Path to a franken-ts .ts file, OR a directory containing a "
+        "rendition ladder (markers.json + one *.ts per rendition -- see "
+        "README.md)",
+    )
     parser.add_argument(
         "--markers",
         type=Path,
         default=None,
-        help="Path to .markers.json sidecar (default: <ts_file>.markers.json)",
+        help="Override the auto-discovered markers.json path",
     )
     parser.add_argument("--output", type=Path, required=True, help="Output loop package directory")
     parser.add_argument("--segment-duration", type=float, default=4.0)
@@ -692,15 +783,13 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    markers_json = args.markers or args.ts_file.with_suffix(".markers.json")
-
     try:
         bake(
-            args.ts_file,
-            markers_json,
+            args.input_path,
             args.output,
             segment_duration_seconds=args.segment_duration,
             dry_run=args.dry_run,
+            markers_override=args.markers,
         )
     except ValidationError as exc:
         logger.error("VALIDATION FAILED: %s", exc)

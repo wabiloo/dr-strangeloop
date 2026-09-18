@@ -36,16 +36,18 @@ franken-ts output (.ts + .markers.json)
 ## Usage
 
 ```bash
-# Bake + serve in one command (convenience wrapper, see run.sh --help)
+# Single rendition (legacy/quick-test mode)
 ./run.sh path/to/output.ts --output /var/loop-packages/2026-01-01 \
          --epoch-utc 2026-01-01T00:00:00Z --port 8080
 
+# Multi-rendition ABR ladder: point at a directory instead of a .ts file.
+# The rendition ladder is auto-discovered from disk -- no need to list
+# renditions on the command line (see "Multi-rendition" below).
+./run.sh path/to/mychannel/ --output /var/loop-packages/2026-01-01 \
+         --epoch-utc 2026-01-01T00:00:00Z --port 8080
+
 # Or run the two phases separately:
-
-# One-off bake, given a franken-ts output + its markers.json sidecar
 python3 bake.py path/to/output.ts --output /var/loop-packages/2026-01-01
-
-# Long-running serve, stateless per request
 python3 serve.py /var/loop-packages/2026-01-01 --epoch-utc 2026-01-01T00:00:00Z
 ```
 
@@ -54,16 +56,44 @@ package without re-baking, and auto-adds a locally-built `~/gpac-local/bin`
 to `PATH` if present (see `Dockerfile`/`SCOPE.md` §6 for why a packaged GPAC
 release isn't enough).
 
+### Multi-rendition (ABR ladder)
+
+`bake.py`/`run.sh` accept either a single `.ts` file (one rendition) or a
+**directory** containing a whole rendition ladder, produced by
+`franken-ts`'s `output.dir` + `output.renditions` config (see
+`franken-ts/README.md`):
+
+```
+outputs/mychannel/
+  markers.json      <- exactly one, shared across every rendition
+  1080p.ts
+  720p.ts
+  360p.ts
+```
+
+Every `*.ts` file in the directory becomes a rendition (name = filename
+stem); `markers.json` is a fixed name, not pattern-matched. No CLI flag
+enumerates renditions — the file set on disk *is* the ladder. Each
+rendition is baked and cross-validated independently (same
+`total_loop_duration_ticks`, same decoded SCTE-35 markers, hard failure on
+any mismatch), and `serve.py` exposes one `#EXT-X-STREAM-INF`/DASH
+`Representation` per rendition, ordered by real encoded bandwidth. Audio
+is shared (baked once, from the highest-bandwidth rendition) rather than
+duplicated per video rendition.
+
+A single loose `.ts` file remains supported as a lightweight escape hatch
+for quick one-off testing — it degenerates naturally into a ladder of one.
+
 ### Endpoints
 
 | Path | What it is |
 |---|---|
-| `/master.m3u8` | HLS **multivariant** playlist — give players this URL, not `/live.m3u8` directly. |
-| `/live.m3u8` | HLS media playlist (video). |
-| `/audio.m3u8` | HLS media playlist (audio) — only present if the source has an audio track. |
-| `/manifest.mpd` | DASH MPD (video + audio `AdaptationSet`s). |
-| `/init.mp4` | CMAF init segment (video track). |
-| `/seg/<n>.m4s` | CMAF media segments (video track). |
+| `/master.m3u8` | HLS **multivariant** playlist — give players this URL, not a rendition's `live.m3u8` directly. |
+| `/<rendition>/live.m3u8` | HLS media playlist for one rendition (e.g. `/1080p/live.m3u8`). |
+| `/audio.m3u8` | HLS media playlist (audio, shared across renditions) — only present if the source has an audio track. |
+| `/manifest.mpd` | DASH MPD (one video `AdaptationSet` with one `Representation` per rendition, + one audio `AdaptationSet`). |
+| `/<rendition>/init.mp4` | CMAF init segment for one rendition. |
+| `/<rendition>/seg/<n>.m4s` | CMAF media segments for one rendition. |
 | `/audio/init.mp4` | CMAF init segment (audio track). |
 | `/audio/seg/<n>.m4s` | CMAF media segments (audio track). |
 
@@ -202,3 +232,13 @@ which is fine for nominal grid points but never acceptable for a marker).
 - GPAC was built locally from `master` (no pinned commit yet) to validate
   this implementation — `Dockerfile` still needs a specific commit pinned
   once a version is chosen for production (`SCOPE.md` §7).
+- Non-reference renditions in a ladder still have their audio track baked
+  by GPAC as an unavoidable byproduct (it errors if asked to process a PID
+  present in the input with no cues for it), even though only the
+  reference rendition's audio is actually served — some redundant disk
+  usage per non-reference rendition, not a correctness issue. Worth
+  revisiting if storage becomes a concern (e.g. stripping the audio PID
+  from non-reference renditions before they reach GPAC).
+- `loop_descriptor.json` is versioned (`"version": 2` for multi-rendition
+  support) but there is no migration path from `version: 1` packages —
+  rebake with the current `bake.py` if you have an old package.

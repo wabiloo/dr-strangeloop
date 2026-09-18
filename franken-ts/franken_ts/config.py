@@ -11,8 +11,34 @@ from .utils import parse_time
 TimeValue = Union[str, int, float]
 
 
+class RenditionConfig(BaseModel):
+    """One entry in a multi-rendition ABR ladder (see OutputConfig.renditions).
+
+    Each rendition shares the same timeline/ad-break schedule and produces
+    its own <output.dir>/<name>.ts, all sharing a single markers.json (PTS
+    values are identical across renditions by construction -- see
+    loop-dee-loop's SCOPE.md discussion on cross-rendition keyframe
+    alignment). `name` becomes both the output filename stem and the
+    rendition's identity downstream (loop-dee-loop URLs/manifest labels).
+    """
+
+    name: str
+    resolution: str
+    bitrate_kbps: int
+
+    @property
+    def width(self) -> int:
+        return int(self.resolution.split("x")[0])
+
+    @property
+    def height(self) -> int:
+        return int(self.resolution.split("x")[1])
+
+
 class OutputConfig(BaseModel):
-    file: Path
+    file: Optional[Path] = None
+    dir: Optional[Path] = None
+    renditions: Optional[list[RenditionConfig]] = None
     resolution: str = "1920x1080"
     framerate: int = 25
     bitrate_kbps: int = 10000
@@ -25,6 +51,63 @@ class OutputConfig(BaseModel):
         if self.gop is None:
             self.gop = self.framerate * 2
         return self
+
+    @model_validator(mode="after")
+    def validate_single_vs_multi_rendition(self) -> "OutputConfig":
+        """Exactly one of two mutually exclusive modes:
+
+        - single-rendition (legacy): `file` set, `dir`/`renditions` unset.
+          Writes `<file>` + `<file-with-.markers.json-suffix>`, unchanged
+          from before this feature existed.
+        - multi-rendition: `dir` + `renditions` (non-empty) set, `file`
+          unset. Writes `<dir>/<rendition.name>.ts` per rendition +
+          `<dir>/markers.json` (shared, written once).
+        """
+        has_file = self.file is not None
+        has_ladder = self.dir is not None or self.renditions is not None
+
+        if has_file and has_ladder:
+            raise ValueError(
+                "output: specify either 'file' (single-rendition) or "
+                "'dir' + 'renditions' (multi-rendition), not both"
+            )
+        if not has_file and not has_ladder:
+            raise ValueError("output: must specify either 'file' or 'dir' + 'renditions'")
+        if has_ladder:
+            if self.dir is None or self.renditions is None or len(self.renditions) == 0:
+                raise ValueError(
+                    "output: multi-rendition mode requires both 'dir' and a "
+                    "non-empty 'renditions' list"
+                )
+            names = [r.name for r in self.renditions]
+            if len(names) != len(set(names)):
+                raise ValueError(f"output.renditions: duplicate rendition name(s) in {names}")
+        return self
+
+    @property
+    def is_multi_rendition(self) -> bool:
+        return self.renditions is not None
+
+    def for_rendition(self, rendition: "RenditionConfig") -> "OutputConfig":
+        """Return an effective single-output OutputConfig for one rendition
+        of a multi-rendition ladder: same framerate/gop/service metadata,
+        resolution/bitrate_kbps/file overridden from the rendition, dir/
+        renditions cleared. This lets extract.py/validate.py/cache.py --
+        all of which only ever look at a single OutputConfig -- work
+        completely unchanged, whether we're in single- or multi-rendition
+        mode; only cli.py's orchestration loop needs to know renditions
+        exist at all.
+        """
+        assert self.dir is not None
+        return self.model_copy(
+            update={
+                "file": self.dir / f"{rendition.name}.ts",
+                "resolution": rendition.resolution,
+                "bitrate_kbps": rendition.bitrate_kbps,
+                "dir": None,
+                "renditions": None,
+            }
+        )
 
     @property
     def width(self) -> int:
