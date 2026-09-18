@@ -1,0 +1,8 @@
+# Baked loop packages (generated output, never source) -- see SCOPE.md §4.1.
+# The default output dir used by run.sh's --output default.
+/loop-package/
+loop-package*/
+
+.venv/
+__pycache__/
+*.pyc

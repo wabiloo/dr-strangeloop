@@ -10,6 +10,7 @@ dist/
 
 # Generated outputs
 outputs/*.ts
+outputs/*.markers.json
 outputs/*_report.html
 outputs/*_timeline/
 

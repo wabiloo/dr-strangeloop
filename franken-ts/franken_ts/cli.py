@@ -18,6 +18,7 @@ from .config import load_config
 from .diagnostics import build_diag_rows, render_terminal_table, render_html_table
 from .extract import extract_clip
 from .ffmpeg import assemble_ts, write_concat_playlist
+from .markers import write_markers_sidecar
 from .pts import find_idr_pts
 from .report import generate_report
 from .scte35 import generate_xml
@@ -459,6 +460,11 @@ def _run_pipeline(
         f"Output → [bold]{cfg.output.file}[/bold]  "
         f"[dim]({_fmt_elapsed(time.monotonic() - t0)})[/dim]"
     )
+
+    # ── Markers sidecar (always written, not gated behind --debug/--verify) ──
+    markers_path = cfg.output.file.with_suffix(".markers.json")
+    write_markers_sidecar(boundaries, pts_map, markers_path, dry_run=dry_run)
+    _ok(f"Markers JSON → [dim]{markers_path.name}[/dim]")
 
     # ── Step 7: verify + diagnostics + report ────────────────────────────────
     if verify:
