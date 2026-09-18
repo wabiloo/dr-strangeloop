@@ -77,10 +77,10 @@ def write_markers_sidecar(
     *,
     dry_run: bool = False,
 ) -> None:
-    """Write the `<output>.markers.json` sidecar (see SCOPE.md §2 of loop-packager).
+    """Write the `<output>.markers.json` sidecar (see SCOPE.md §2 of loop-dee-loop).
 
     Always written (not gated behind --debug/--verify) so downstream tools
-    (loop-packager) have a single source of truth for marker timing.
+    (loop-dee-loop) have a single source of truth for marker timing.
     """
     markers = build_markers(boundaries, pts_map)
 

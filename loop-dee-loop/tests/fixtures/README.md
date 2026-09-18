@@ -1,4 +1,4 @@
-Fixtures for loop-packager tests.
+Fixtures for loop-dee-loop tests.
 
 For unit-level tests (test_loop_math.py, test_bake_validation.py) no real
 media files are needed -- they exercise pure-Python arithmetic and

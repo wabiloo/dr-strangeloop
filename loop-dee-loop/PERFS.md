@@ -1,6 +1,6 @@
 # Performance & sizing notes
 
-Empirical resource-usage measurements for `loop-packager`, gathered by
+Empirical resource-usage measurements for `loop-dee-loop`, gathered by
 actually running `bake.py` + `serve.py` against a real `franken-ts` output
 and generating realistic concurrent viewer load. See `SCOPE.md` §8 for the
 original (informational, not measured) sizing expectations this confirms.

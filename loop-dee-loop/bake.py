@@ -181,7 +181,7 @@ def load_markers(markers_path: Path) -> list[dict]:
         raise ValidationError(
             f"{markers_path} does not exist. franken-ts must emit a "
             f".markers.json sidecar alongside its .ts output (SCOPE.md §2); "
-            f"loop-packager never re-derives marker timing by re-probing "
+            f"loop-dee-loop never re-derives marker timing by re-probing "
             f"the .ts."
         )
     with markers_path.open("r", encoding="utf-8") as f:

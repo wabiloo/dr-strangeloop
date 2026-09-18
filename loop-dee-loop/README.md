@@ -1,4 +1,4 @@
-# loop-packager
+# loop-dee-loop
 
 Self-hosted, non-commercial, cheap alternative to AWS MediaLive + MediaPackage
 for looping a `franken-ts`-produced MPEG-TS file (content + real SCTE-35

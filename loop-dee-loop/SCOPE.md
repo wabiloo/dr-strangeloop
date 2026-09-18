@@ -1,4 +1,4 @@
-# loop-packager — scope for implementation
+# loop-dee-loop — scope for implementation
 
 Status: ready for implementation. This document is self-contained; the implementer
 should not need the chat history that produced it, but should ask before deviating
@@ -14,7 +14,7 @@ this tool. Real SCTE-35 signaling (`EXT-X-DATERANGE` for HLS, `<EventStream>` fo
 DASH) must appear at the exact, frame-accurate segment boundaries corresponding to
 the markers `franken-ts` already authored — not a generic ad-marker workaround.
 
-This tool is **new** and lives in its own sibling directory, `loop-packager/`,
+This tool is **new** and lives in its own sibling directory, `loop-dee-loop/`,
 next to `franken-ts/`, `frame-extractor/`, `push-to-aws-media/`. It does not
 modify `franken-ts` except for one small, optional addition described in §2.
 It is a self-hosted replacement for what `push-to-aws-media` does today
@@ -55,7 +55,7 @@ write a `<output>.markers.json` sidecar (not gated behind `--debug` or
 
 `pts_time_ticks` is in the 90kHz clock, matching the `.ts`'s own timescale — this
 is the single source of truth for every downstream timing decision in this tool.
-Do **not** re-derive marker timing by re-probing the `.ts` in `loop-packager`;
+Do **not** re-derive marker timing by re-probing the `.ts` in `loop-dee-loop`;
 always consume this sidecar. If it's missing or its PTS values don't match what's
 actually embedded in PID 600 of the `.ts` (see §4, step 1 validation), that's a
 hard error, not something to silently reconcile.
@@ -329,7 +329,7 @@ full audience.
 ## 9. Suggested repo layout
 
 ```
-loop-packager/
+loop-dee-loop/
   README.md              # usage, mirrors franken-ts/README.md style
   SCOPE.md                # this file
   bake.py
