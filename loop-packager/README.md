@@ -59,10 +59,13 @@ release isn't enough).
 | Path | What it is |
 |---|---|
 | `/master.m3u8` | HLS **multivariant** playlist — give players this URL, not `/live.m3u8` directly. |
-| `/live.m3u8` | HLS media playlist (single video rendition). |
-| `/manifest.mpd` | DASH MPD. |
+| `/live.m3u8` | HLS media playlist (video). |
+| `/audio.m3u8` | HLS media playlist (audio) — only present if the source has an audio track. |
+| `/manifest.mpd` | DASH MPD (video + audio `AdaptationSet`s). |
 | `/init.mp4` | CMAF init segment (video track). |
 | `/seg/<n>.m4s` | CMAF media segments (video track). |
+| `/audio/init.mp4` | CMAF init segment (audio track). |
+| `/audio/seg/<n>.m4s` | CMAF media segments (audio track). |
 
 `#EXT-X-STREAM-INF`'s `BANDWIDTH`/`CODECS`/`RESOLUTION`/`FRAME-RATE`
 attributes in `/master.m3u8` come from the exact values GPAC itself
@@ -188,10 +191,6 @@ which is fine for nominal grid points but never acceptable for a marker).
 
 ## Known limitations in this initial implementation
 
-- `serve.py` currently serves only the video track's segments end-to-end;
-  audio segments are produced by `bake.py` but not yet wired into the HLS
-  manifest (would need a second, audio-only rendition/media-group). The
-  `loop_math.py` / `scte35_signaling.py` primitives needed are all present.
 - `bake.py` runs two full GPAC passes (one for DASH, one for HLS) rather
   than one dual-output invocation — acceptable per `SCOPE.md` §4.1 step 3
   ("either is fine, correctness matters more than invocation count") but

@@ -537,7 +537,16 @@ def bake(
     total_content_ticks = probe_source_duration_ticks(ts_file)
     marker_ticks = [m["pts_time_ticks"] for m in validated_markers]
     requested_boundary_ticks = compute_segment_boundary_ticks(
-        total_content_ticks, nominal_segment_ticks, marker_ticks
+        total_content_ticks,
+        nominal_segment_ticks,
+        marker_ticks,
+        # ffprobe's container-level duration probe can slightly overestimate
+        # the true usable content length; excluding grid points within 1s of
+        # that estimate avoids requesting an ambiguous tail boundary that
+        # different tracks (video vs audio) could snap differently, breaking
+        # their 1:1 segment-count correspondence (see
+        # compute_segment_boundary_ticks's end_guard_ticks docstring).
+        end_guard_ticks=TIMESCALE,
     )
     logger.info(
         "Requesting %d segment boundaries (nominal ~%.1fs grid + %d marker "
@@ -600,6 +609,28 @@ def bake(
         len(marker_ticks),
     )
 
+    # Audio segment boundaries: read back the real per-segment start ticks
+    # for the audio track too (if present). These are NOT expected to
+    # exactly equal the video boundary ticks -- each audio boundary was
+    # independently snapped to the nearest exact audio-frame tick at bake
+    # time (gpac_pipeline.snap_audio_tick), which is normal/required (audio
+    # frames have their own fixed grid, e.g. 1920 ticks for 48kHz/1024-
+    # sample AAC) -- only the segment COUNT must match the video track's,
+    # since serve.py pairs up video segment i with audio segment i.
+    audio_segment_boundary_ticks: list[int] | None = None
+    if audio_track_id is not None:
+        audio_segment_boundary_ticks = read_segment_boundary_ticks(
+            segments_dir, audio_track_id
+        )
+        if len(audio_segment_boundary_ticks) != len(segment_boundary_ticks):
+            raise RuntimeError(
+                f"Audio track produced {len(audio_segment_boundary_ticks)} "
+                f"segment(s) but video track produced "
+                f"{len(segment_boundary_ticks)} -- they must match 1:1 for "
+                f"serve.py to pair them up. Real audio boundaries: "
+                f"{audio_segment_boundary_ticks}"
+            )
+
     # Read back the codec/resolution/bandwidth GPAC itself computed while
     # producing the real segments (needed for the HLS multivariant
     # playlist's #EXT-X-STREAM-INF attributes -- see read_variant_metadata).
@@ -624,6 +655,7 @@ def bake(
         "total_loop_duration_ticks": total_loop_duration_ticks,
         "segment_duration_seconds": segment_duration_seconds,
         "segment_boundary_ticks": segment_boundary_ticks,
+        "audio_segment_boundary_ticks": audio_segment_boundary_ticks,
         "video_track_id": video_track_id,
         "audio_track_id": audio_track_id,
         "video_variant": variant_metadata["video"],

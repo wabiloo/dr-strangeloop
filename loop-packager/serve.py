@@ -64,14 +64,17 @@ class LoopPackage:
         # for backward compatibility with packages baked before this field
         # existed (master.m3u8 will 404 with a clear error in that case).
         self.video_variant: dict | None = self.descriptor.get("video_variant")
-        self.video_variant: dict = self.descriptor["video_variant"]
+
+        # Audio track, if the source had one. All-or-nothing: a package
+        # either has no audio_track_id (silent output) or has
+        # audio_track_id + audio_variant + audio_segment_boundary_ticks +
+        # real audio segment files on disk, all agreeing with each other.
+        self.audio_track_id: int | None = self.descriptor.get("audio_track_id")
+        self.audio_variant: dict | None = self.descriptor.get("audio_variant")
 
         # Physical segment files on disk, sorted -- segment identity repeats
         # every loop, so URL scheme maps a physical segment file to every
-        # loop_number that uses it (SCOPE.md §4.2). Only the video track's
-        # segments are enumerated here (mirrors bake.py's own numbering);
-        # audio segments live alongside them but aren't served by this
-        # minimal implementation yet (see README known limitations).
+        # loop_number that uses it (SCOPE.md §4.2).
         self.segments_dir = package_dir / "segments"
         self.segment_files: list[Path] = sorted(
             self.segments_dir.glob(f"*track{self.video_track_id}_*.m4s"),
@@ -79,6 +82,33 @@ class LoopPackage:
         )
         if not self.segment_files:
             raise RuntimeError(f"No segment files found in {self.segments_dir}")
+
+        self.audio_segment_files: list[Path] = []
+        self.audio_segment_boundary_ticks: list[int] = []
+        if self.audio_track_id is not None:
+            self.audio_segment_files = sorted(
+                self.segments_dir.glob(f"*track{self.audio_track_id}_*.m4s"),
+                key=lambda p: int(p.stem.rsplit("_", 1)[-1]),
+            )
+            self.audio_segment_boundary_ticks = [
+                int(t) for t in self.descriptor.get("audio_segment_boundary_ticks") or []
+            ]
+            if len(self.audio_segment_files) != len(self.segment_files):
+                raise RuntimeError(
+                    f"Audio track has {len(self.audio_segment_files)} segment "
+                    f"file(s) on disk but video track has "
+                    f"{len(self.segment_files)} -- they must match 1:1 for "
+                    f"serve.py to pair them up per request. Package is "
+                    f"inconsistent, refusing to serve."
+                )
+            if len(self.audio_segment_boundary_ticks) != len(self.audio_segment_files):
+                raise RuntimeError(
+                    f"loop_descriptor.json declares "
+                    f"{len(self.audio_segment_boundary_ticks)} audio segment "
+                    f"boundary tick(s) but {len(self.audio_segment_files)} "
+                    f"physical audio segment file(s) were found on disk -- "
+                    f"package is inconsistent, refusing to serve."
+                )
 
         # Exact cue-derived segment boundaries (ground truth from bake.py),
         # NOT a uniform nominal-duration approximation -- real baked
@@ -109,6 +139,13 @@ class LoopPackage:
 
     def segment_path_for_index(self, index: int) -> Path:
         return self.segment_files[index % len(self.segment_files)]
+
+    def audio_segment_path_for_index(self, index: int) -> Path:
+        return self.audio_segment_files[index % len(self.audio_segment_files)]
+
+    @property
+    def has_audio(self) -> bool:
+        return self.audio_track_id is not None
 
 
 class Channel:
@@ -141,7 +178,11 @@ class Channel:
             self.now_ticks(), self.epoch_ticks, self.package.total_loop_duration_ticks
         )
 
-    def build_hls_master_playlist(self, media_playlist_path: str = "live.m3u8") -> str:
+    def build_hls_master_playlist(
+        self,
+        media_playlist_path: str = "live.m3u8",
+        audio_playlist_path: str = "audio.m3u8",
+    ) -> str:
         """Build the HLS multivariant (master) playlist -- required by the
         HLS spec and by most real players (Safari/hls.js, etc. generally
         expect the entry-point URL to be a multivariant playlist, even for
@@ -152,6 +193,12 @@ class Channel:
         codec/resolution/bandwidth GPAC itself computed while producing
         the real segments at bake time (bake.py's read_variant_metadata) --
         not re-derived or guessed here.
+
+        If the package has an audio track, an #EXT-X-MEDIA audio group is
+        declared and referenced from #EXT-X-STREAM-INF via AUDIO="audio",
+        and CODECS includes both the video and audio codec strings (per
+        HLS spec: a comma-separated list of every codec actually used by
+        the variant, audio included).
         """
         pkg = self.package
         if pkg.video_variant is None:
@@ -162,22 +209,77 @@ class Channel:
             )
 
         v = pkg.video_variant
+        codecs = [v["codecs"]]
+        bandwidth = v["bandwidth"]
+
+        lines = ["#EXTM3U", "#EXT-X-VERSION:7"]
+
+        if pkg.has_audio and pkg.audio_variant is not None:
+            a = pkg.audio_variant
+            codecs.append(a["codecs"])
+            bandwidth += a["bandwidth"]
+            lines.append(
+                '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Default",'
+                f'DEFAULT=YES,AUTOSELECT=YES,URI="{audio_playlist_path}"'
+            )
+
         stream_inf_attrs = [
-            f'BANDWIDTH={v["bandwidth"]}',
-            f'CODECS="{v["codecs"]}"',
+            f"BANDWIDTH={bandwidth}",
+            f'CODECS="{",".join(codecs)}"',
             f'RESOLUTION={v["width"]}x{v["height"]}',
             f'FRAME-RATE={v["frame_rate"]:.3f}',
         ]
+        if pkg.has_audio and pkg.audio_variant is not None:
+            stream_inf_attrs.append('AUDIO="audio"')
 
-        lines = [
-            "#EXTM3U",
-            "#EXT-X-VERSION:7",
-            "#EXT-X-STREAM-INF:" + ",".join(stream_inf_attrs),
-            media_playlist_path,
-        ]
+        lines.append("#EXT-X-STREAM-INF:" + ",".join(stream_inf_attrs))
+        lines.append(media_playlist_path)
         return "\n".join(lines) + "\n"
 
     def build_hls_manifest(self, window_segments: int | None = None) -> str:
+        return self._build_hls_media_playlist(
+            boundary_ticks=self.package.segment_boundary_ticks,
+            init_uri="init.mp4",
+            seg_uri_template="/seg/{index}.m4s",
+            window_segments=window_segments,
+        )
+
+    def build_hls_audio_manifest(self, window_segments: int | None = None) -> str:
+        pkg = self.package
+        if not pkg.has_audio:
+            raise RuntimeError("This loop package has no audio track to serve.")
+        return self._build_hls_media_playlist(
+            boundary_ticks=pkg.audio_segment_boundary_ticks,
+            init_uri="audio/init.mp4",
+            seg_uri_template="/audio/seg/{index}.m4s",
+            window_segments=window_segments,
+        )
+
+    def _build_hls_media_playlist(
+        self,
+        *,
+        boundary_ticks: list[int],
+        init_uri: str,
+        seg_uri_template: str,
+        window_segments: int | None = None,
+    ) -> str:
+        """Shared builder for both the video and audio HLS media playlists.
+
+        Segment *indexing*/loop-number sequencing (media_sequence,
+        local_index, local_loop_number) is always driven by the video
+        track's `segments_per_loop` -- by construction (bake.py) every
+        track has exactly the same segment count per loop, with segment i
+        on every track corresponding to the same conceptual time window,
+        even though each track's own boundary tick VALUES were snapped
+        independently (see bake.py's compute_segment_boundary_ticks). Only
+        `boundary_ticks` (used for this playlist's own PROGRAM-DATE-TIME/
+        EXTINF durations) and the URIs differ between video and audio.
+
+        Marker (DATERANGE) placement is always decided using the VIDEO
+        track's segment_boundary_ticks (the ad-decision timeline), applied
+        to the shared segment index -- so the same marker appears at the
+        same segment index in both the video and audio playlists.
+        """
         window_segments = window_segments or self.window_segments
         pos = self.current_position()
         pkg = self.package
@@ -193,19 +295,30 @@ class Channel:
             "#EXT-X-VERSION:7",
             f"#EXT-X-TARGETDURATION:{pkg.max_segment_duration_seconds_rounded_up}",
             f"#EXT-X-MEDIA-SEQUENCE:{media_sequence}",
-            '#EXT-X-MAP:URI="init.mp4"',
+            f'#EXT-X-MAP:URI="{init_uri}"',
         ]
 
         for i in range(window_segments):
             global_index = media_sequence + i
             local_index = global_index % pkg.segments_per_loop
             local_loop_number = global_index // pkg.segments_per_loop
-            segment_start_ticks = pkg.segment_boundary_ticks[local_index]
 
-            if local_index + 1 < len(pkg.segment_boundary_ticks):
-                seg_end_ticks_local = pkg.segment_boundary_ticks[local_index + 1]
+            # This playlist's own segment start/end (for PDT/EXTINF).
+            segment_start_ticks = boundary_ticks[local_index]
+            if local_index + 1 < len(boundary_ticks):
+                seg_end_ticks_local = boundary_ticks[local_index + 1]
             else:
                 seg_end_ticks_local = pkg.total_loop_duration_ticks
+
+            # Marker placement always decided from the VIDEO timeline (the
+            # ad-decision authority), applied to this same segment index,
+            # so both playlists advertise the same marker at the same index
+            # even though their own boundary tick VALUES differ slightly.
+            video_seg_start_ticks = pkg.segment_boundary_ticks[local_index]
+            if local_index + 1 < len(pkg.segment_boundary_ticks):
+                video_seg_end_ticks = pkg.segment_boundary_ticks[local_index + 1]
+            else:
+                video_seg_end_ticks = pkg.total_loop_duration_ticks
 
             # Markers whose loop-relative tick falls inside this segment's
             # loop-relative window get their DATERANGE built here, fresh,
@@ -223,7 +336,7 @@ class Channel:
             # time -- never a fixed placeholder epoch.
             matching_markers = [
                 m for m in pkg.markers
-                if segment_start_ticks <= m["pts_time_ticks"] < seg_end_ticks_local
+                if video_seg_start_ticks <= m["pts_time_ticks"] < video_seg_end_ticks
             ]
             if matching_markers:
                 loop_start_ticks = program_date_time_ticks(
@@ -261,7 +374,7 @@ class Channel:
 
             lines.append(f"#EXT-X-PROGRAM-DATE-TIME:{program_date_str}")
             lines.append(f"#EXTINF:{segment_duration_seconds:.3f},")
-            lines.append(f"/seg/{local_index}.m4s")
+            lines.append(seg_uri_template.format(index=local_index))
 
         return "\n".join(lines) + "\n"
 
@@ -318,9 +431,32 @@ class Channel:
             duration_ticks = seg_end_ticks_local - segment_start_ticks
             segment_entries.append((period_relative_start, duration_ticks, local_index))
 
+        # Same shared (local_index, local_loop_number) sequence as the video
+        # track, but using the audio track's own (independently-snapped)
+        # boundary tick VALUES for its own SegmentTimeline -- see
+        # _build_hls_media_playlist's docstring for why this is correct.
+        audio_segment_entries = []
+        if pkg.has_audio:
+            for i in range(window_segments):
+                global_index = media_sequence + i
+                local_index = global_index % pkg.segments_per_loop
+                local_loop_number = global_index // pkg.segments_per_loop
+                segment_start_ticks = pkg.audio_segment_boundary_ticks[local_index]
+                if local_index + 1 < len(pkg.audio_segment_boundary_ticks):
+                    seg_end_ticks_local = pkg.audio_segment_boundary_ticks[local_index + 1]
+                else:
+                    seg_end_ticks_local = pkg.total_loop_duration_ticks
+                period_relative_start = (
+                    local_loop_number * pkg.total_loop_duration_ticks + segment_start_ticks
+                )
+                duration_ticks = seg_end_ticks_local - segment_start_ticks
+                audio_segment_entries.append((period_relative_start, duration_ticks, local_index))
+
         # For each windowed segment, find markers whose loop-relative tick
         # falls in [segment_start, segment_end) and place them at that
-        # segment's own loop's period-relative tick.
+        # segment's own loop's period-relative tick. Always decided from
+        # the VIDEO timeline (the ad-decision authority) -- shared as-is
+        # between the video and audio AdaptationSets below.
         event_xml_parts = []
         for period_relative_start, duration_ticks, local_index in segment_entries:
             seg_start_local = pkg.segment_boundary_ticks[local_index]
@@ -352,7 +488,30 @@ class Channel:
                 f'      <S t="{period_relative_start}" d="{duration_ticks}" />'
             )
 
+        audio_segment_timeline_lines = []
+        for period_relative_start, duration_ticks, _ in audio_segment_entries:
+            audio_segment_timeline_lines.append(
+                f'      <S t="{period_relative_start}" d="{duration_ticks}" />'
+            )
+
         first_number = media_sequence
+        v = pkg.video_variant or {}
+        video_bandwidth = v.get("bandwidth", 0)
+        video_codecs = v.get("codecs", "")
+
+        audio_adaptation_set = ""
+        if pkg.has_audio and pkg.audio_variant is not None:
+            a = pkg.audio_variant
+            audio_adaptation_set = f'''
+    <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
+      <SegmentTemplate media="audio/seg/$Number$.m4s" initialization="audio/init.mp4"
+                       timescale="{pkg.timescale}" startNumber="{first_number}">
+        <SegmentTimeline>
+{chr(10).join(audio_segment_timeline_lines)}
+        </SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="2" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}" />
+    </AdaptationSet>'''
 
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
@@ -374,8 +533,8 @@ class Channel:
 {chr(10).join(segment_timeline_lines)}
         </SegmentTimeline>
       </SegmentTemplate>
-      <Representation id="1" bandwidth="9300000" codecs="avc1.640028" />
-    </AdaptationSet>
+      <Representation id="1" bandwidth="{video_bandwidth}" codecs="{video_codecs}" />
+    </AdaptationSet>{audio_adaptation_set}
   </Period>
 </MPD>
 '''
@@ -383,6 +542,9 @@ class Channel:
 
     def segment_bytes_path(self, physical_index: int) -> Path:
         return self.package.segment_path_for_index(physical_index)
+
+    def audio_segment_bytes_path(self, physical_index: int) -> Path:
+        return self.package.audio_segment_path_for_index(physical_index)
 
 
 def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) -> Flask:
@@ -422,6 +584,29 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
         except IndexError:
             abort(404)
         return send_file(path, mimetype="video/iso.segment")
+
+    if package.has_audio:
+        @app.get("/audio.m3u8")
+        def hls_audio_manifest():
+            body = channel.build_hls_audio_manifest()
+            return Response(body, mimetype="application/vnd.apple.mpegurl")
+
+        @app.get("/audio/init.mp4")
+        def audio_init_segment():
+            init_files = list(
+                package.segments_dir.glob(f"*track{package.audio_track_id}_init.mp4")
+            )
+            if not init_files:
+                abort(404)
+            return send_file(init_files[0])
+
+        @app.get("/audio/seg/<int:physical_index>.m4s")
+        def audio_segment(physical_index: int):
+            try:
+                path = channel.audio_segment_bytes_path(physical_index)
+            except IndexError:
+                abort(404)
+            return send_file(path, mimetype="audio/iso.segment")
 
     return app
 

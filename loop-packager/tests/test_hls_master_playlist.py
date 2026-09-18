@@ -17,8 +17,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from serve import Channel  # noqa: E402
 
 
-def _fake_package(video_variant=None):
-    return SimpleNamespace(video_variant=video_variant)
+def _fake_package(video_variant=None, has_audio=False, audio_variant=None):
+    return SimpleNamespace(
+        video_variant=video_variant, has_audio=has_audio, audio_variant=audio_variant
+    )
 
 
 def test_master_playlist_contains_stream_inf_with_correct_attributes():
@@ -71,3 +73,49 @@ def test_master_playlist_raises_without_video_variant_metadata():
 
     with pytest.raises(RuntimeError, match="video_variant"):
         channel.build_hls_master_playlist()
+
+
+def test_master_playlist_includes_audio_group_when_audio_present():
+    package = _fake_package(
+        video_variant={
+            "codecs": "avc1.640028",
+            "width": 1920,
+            "height": 1080,
+            "frame_rate": 25.0,
+            "bandwidth": 9_300_000,
+        },
+        has_audio=True,
+        audio_variant={"codecs": "mp4a.40.2", "bandwidth": 120_000},
+    )
+    channel = Channel.__new__(Channel)
+    channel.package = package
+
+    body = channel.build_hls_master_playlist()
+
+    assert '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio"' in body
+    assert 'URI="audio.m3u8"' in body
+    assert 'AUDIO="audio"' in body
+    # BANDWIDTH should be video + audio combined, CODECS should list both.
+    assert "BANDWIDTH=9420000" in body
+    assert 'CODECS="avc1.640028,mp4a.40.2"' in body
+
+
+def test_master_playlist_omits_audio_group_when_no_audio():
+    package = _fake_package(
+        video_variant={
+            "codecs": "avc1.640028",
+            "width": 1920,
+            "height": 1080,
+            "frame_rate": 25.0,
+            "bandwidth": 9_300_000,
+        },
+        has_audio=False,
+    )
+    channel = Channel.__new__(Channel)
+    channel.package = package
+
+    body = channel.build_hls_master_playlist()
+
+    assert "EXT-X-MEDIA" not in body
+    assert "AUDIO=" not in body
+    assert 'CODECS="avc1.640028"' in body

@@ -95,6 +95,8 @@ def compute_segment_boundary_ticks(
     total_content_ticks: int,
     nominal_segment_ticks: int,
     marker_ticks: list[int],
+    *,
+    end_guard_ticks: int = 0,
 ) -> list[int]:
     """Compute the full set of desired segment boundary ticks: a regular
     nominal grid (every `nominal_segment_ticks`, for real ABR-sized
@@ -116,10 +118,26 @@ def compute_segment_boundary_ticks(
     like any keyframe-aligned segmenter). Only marker ticks must match
     exactly with zero snap; bake.py is responsible for verifying that
     separately against the real produced output.
+
+    `end_guard_ticks`: `total_content_ticks` is typically an approximate
+    probe of the source container's duration (e.g. ffprobe's
+    `format=duration`), which can slightly OVERESTIMATE the true usable
+    content length. A nominal grid point that lands in that small
+    overestimated tail has no real content after it: on a track with fine
+    keyframe-snapping (video) GPAC silently drops it (no real segment
+    created there), but on a track with coarser, independent snapping
+    (audio, snapped to its own frame-duration grid) that same requested
+    tick can land on a genuinely different, real tick -- producing an
+    extra, spurious tail segment on one track but not the other, breaking
+    serve.py's 1:1 video/audio segment pairing. Excluding any nominal grid
+    point within `end_guard_ticks` of the estimated end avoids requesting
+    that ambiguous tail point in the first place. Marker ticks are never
+    excluded by this guard -- a real ad marker must never be dropped.
     """
     if nominal_segment_ticks <= 0:
         raise ValueError("nominal_segment_ticks must be strictly positive")
-    grid = list(range(0, total_content_ticks, nominal_segment_ticks))
+    grid_end = max(0, total_content_ticks - end_guard_ticks)
+    grid = [t for t in range(0, total_content_ticks, nominal_segment_ticks) if t < grid_end]
     return sorted(set(grid) | {0} | set(marker_ticks))
 
 
