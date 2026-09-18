@@ -58,6 +58,13 @@ class LoopPackage:
         )
         self.markers: list[dict] = self.descriptor["markers"]
         self.video_track_id: int = int(self.descriptor["video_track_id"])
+        # Codec/resolution/bandwidth GPAC itself computed at bake time (see
+        # bake.py's read_variant_metadata) -- needed for the HLS
+        # multivariant playlist's #EXT-X-STREAM-INF attributes. Optional
+        # for backward compatibility with packages baked before this field
+        # existed (master.m3u8 will 404 with a clear error in that case).
+        self.video_variant: dict | None = self.descriptor.get("video_variant")
+        self.video_variant: dict = self.descriptor["video_variant"]
 
         # Physical segment files on disk, sorted -- segment identity repeats
         # every loop, so URL scheme maps a physical segment file to every
@@ -133,6 +140,42 @@ class Channel:
         return compute_loop_position(
             self.now_ticks(), self.epoch_ticks, self.package.total_loop_duration_ticks
         )
+
+    def build_hls_master_playlist(self, media_playlist_path: str = "live.m3u8") -> str:
+        """Build the HLS multivariant (master) playlist -- required by the
+        HLS spec and by most real players (Safari/hls.js, etc. generally
+        expect the entry-point URL to be a multivariant playlist, even for
+        a single-rendition/bitrate stream, not a bare media playlist).
+
+        #EXT-X-STREAM-INF attributes (BANDWIDTH/CODECS/RESOLUTION/
+        FRAME-RATE) come from `video_variant`, which is the exact
+        codec/resolution/bandwidth GPAC itself computed while producing
+        the real segments at bake time (bake.py's read_variant_metadata) --
+        not re-derived or guessed here.
+        """
+        pkg = self.package
+        if pkg.video_variant is None:
+            raise RuntimeError(
+                "This loop package has no 'video_variant' metadata (it was "
+                "baked before this field existed) -- rebake with the "
+                "current bake.py to serve a multivariant playlist."
+            )
+
+        v = pkg.video_variant
+        stream_inf_attrs = [
+            f'BANDWIDTH={v["bandwidth"]}',
+            f'CODECS="{v["codecs"]}"',
+            f'RESOLUTION={v["width"]}x{v["height"]}',
+            f'FRAME-RATE={v["frame_rate"]:.3f}',
+        ]
+
+        lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:7",
+            "#EXT-X-STREAM-INF:" + ",".join(stream_inf_attrs),
+            media_playlist_path,
+        ]
+        return "\n".join(lines) + "\n"
 
     def build_hls_manifest(self, window_segments: int | None = None) -> str:
         window_segments = window_segments or self.window_segments
@@ -347,6 +390,11 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
     channel = Channel(package, epoch_ticks, window_segments=window_segments)
 
     app = Flask(__name__)
+
+    @app.get("/master.m3u8")
+    def hls_master_playlist():
+        body = channel.build_hls_master_playlist()
+        return Response(body, mimetype="application/vnd.apple.mpegurl")
 
     @app.get("/live.m3u8")
     def hls_manifest():

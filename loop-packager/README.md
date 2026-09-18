@@ -54,6 +54,22 @@ package without re-baking, and auto-adds a locally-built `~/gpac-local/bin`
 to `PATH` if present (see `Dockerfile`/`SCOPE.md` §6 for why a packaged GPAC
 release isn't enough).
 
+### Endpoints
+
+| Path | What it is |
+|---|---|
+| `/master.m3u8` | HLS **multivariant** playlist — give players this URL, not `/live.m3u8` directly. |
+| `/live.m3u8` | HLS media playlist (single video rendition). |
+| `/manifest.mpd` | DASH MPD. |
+| `/init.mp4` | CMAF init segment (video track). |
+| `/seg/<n>.m4s` | CMAF media segments (video track). |
+
+`#EXT-X-STREAM-INF`'s `BANDWIDTH`/`CODECS`/`RESOLUTION`/`FRAME-RATE`
+attributes in `/master.m3u8` come from the exact values GPAC itself
+computed while producing the real segments at bake time (read back from
+its own generated `manifest.mpd` — see `bake.py`'s `read_variant_metadata`
+— never re-derived/guessed).
+
 ### Controlling the DVR window / manifest size
 
 Both `run.sh` and `serve.py` accept `--dvr-window-seconds` (default 30) to

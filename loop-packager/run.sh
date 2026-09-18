@@ -145,7 +145,7 @@ if [[ "$DISPLAY_HOST" == "0.0.0.0" || "$DISPLAY_HOST" == "::" ]]; then
     DISPLAY_HOST="localhost"
 fi
 echo ""
-echo "    HLS:  http://${DISPLAY_HOST}:${PORT}/live.m3u8"
+echo "    HLS:  http://${DISPLAY_HOST}:${PORT}/master.m3u8"
 echo "    DASH: http://${DISPLAY_HOST}:${PORT}/manifest.mpd"
 echo ""
 

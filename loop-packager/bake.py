@@ -445,6 +445,62 @@ def read_segment_boundary_ticks(segments_dir: Path, video_track_id: int) -> list
     return boundaries
 
 
+def read_variant_metadata(gpac_mpd_path: Path) -> dict:
+    """Extract the RFC 6381 codec string, resolution, frame rate, and
+    bandwidth GPAC itself computed for the video (and audio, if present)
+    Representation in its own generated manifest.mpd.
+
+    This is the only thing GPAC's own generated DASH manifest is used for
+    in this tool -- never its EventStream/marker signaling (SCOPE.md §6) --
+    because deriving an exact RFC 6381 codec string (e.g. "avc1.640028"
+    from profile_idc/constraint_flags/level_idc) independently via ffprobe
+    would just be re-deriving what GPAC already computed correctly while
+    building the real segments; this reads that computed value back rather
+    than duplicating that logic.
+
+    Needed for the HLS multivariant playlist (#EXT-X-STREAM-INF), which
+    requires BANDWIDTH/CODECS/RESOLUTION/FRAME-RATE attributes that a plain
+    media playlist doesn't carry.
+    """
+    from xml.etree import ElementTree as ET
+
+    ns = {"m": "urn:mpeg:dash:schema:mpd:2011"}
+    tree = ET.parse(gpac_mpd_path)
+    root = tree.getroot()
+
+    video: dict | None = None
+    audio: dict | None = None
+
+    for adaptation_set in root.findall(".//m:AdaptationSet", ns):
+        mime = adaptation_set.get("mimeType", "")
+        representation = adaptation_set.find("m:Representation", ns)
+        if representation is None:
+            continue
+
+        if mime.startswith("video/"):
+            video = {
+                "codecs": representation.get("codecs"),
+                "width": int(representation.get("width")),
+                "height": int(representation.get("height")),
+                "frame_rate": float(representation.get("frameRate")),
+                "bandwidth": int(representation.get("bandwidth")),
+            }
+        elif mime.startswith("audio/"):
+            audio = {
+                "codecs": representation.get("codecs"),
+                "bandwidth": int(representation.get("bandwidth")),
+            }
+
+    if video is None:
+        raise RuntimeError(
+            f"Could not find a video Representation in {gpac_mpd_path} -- "
+            f"needed for the HLS multivariant playlist's #EXT-X-STREAM-INF "
+            f"attributes."
+        )
+
+    return {"video": video, "audio": audio}
+
+
 def bake(
     ts_file: Path,
     markers_json: Path,
@@ -544,6 +600,11 @@ def bake(
         len(marker_ticks),
     )
 
+    # Read back the codec/resolution/bandwidth GPAC itself computed while
+    # producing the real segments (needed for the HLS multivariant
+    # playlist's #EXT-X-STREAM-INF attributes -- see read_variant_metadata).
+    variant_metadata = read_variant_metadata(segments_dir / "manifest.mpd")
+
     # Step 5: author SCTE-35 signaling ourselves from markers.json.
     #
     # NOTE: signaling (HLS EXT-X-DATERANGE / DASH <EventStream>) is
@@ -565,6 +626,8 @@ def bake(
         "segment_boundary_ticks": segment_boundary_ticks,
         "video_track_id": video_track_id,
         "audio_track_id": audio_track_id,
+        "video_variant": variant_metadata["video"],
+        "audio_variant": variant_metadata["audio"],
         "markers": validated_markers,
         "source_ts": str(ts_file),
         "source_markers_json": str(markers_json),
