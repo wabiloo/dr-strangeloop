@@ -104,6 +104,10 @@ not something to work around; see `SCOPE.md` §2 and §4.1 step 1.
 | `scte35_signaling.py` | Author `EXT-X-DATERANGE` / DASH `<EventStream>` directly from `.markers.json` (never trust GPAC's own aggregation — see `SCOPE.md` §6). |
 | `loop_math.py` | The epoch/loop_number/position_in_loop **integer** arithmetic that makes drift structurally impossible (`SCOPE.md` §4.2, §5). |
 | `serve.py` | Serve-phase entrypoint: stateless HTTP serving of manifests + segments. |
+| `load_test.py` | Concurrent-viewer load generator used for the measurements in `PERFS.md`. |
+
+See `PERFS.md` for measured CPU/memory usage under realistic concurrent
+load, and Fargate/EC2 sizing recommendations derived from it.
 
 ## Testing
 
