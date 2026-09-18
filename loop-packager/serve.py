@@ -20,6 +20,7 @@ import argparse
 import datetime as _dt
 import json
 import logging
+import math
 import time
 from pathlib import Path
 
@@ -108,11 +109,20 @@ class Channel:
     this class's stateless methods -- no attribute here is ever mutated
     after construction."""
 
-    def __init__(self, package: LoopPackage, epoch_ticks: int):
+    def __init__(self, package: LoopPackage, epoch_ticks: int, window_segments: int = 6):
         if not isinstance(epoch_ticks, int):
             raise ValueError("epoch_ticks must be int")
+        if window_segments < 1:
+            raise ValueError("window_segments must be >= 1")
         self.package = package
         self.epoch_ticks = epoch_ticks
+        # Controls the DVR window / manifest size: how many segments ahead
+        # of the live edge are advertised in each manifest response (HLS
+        # sliding window, DASH SegmentTimeline + timeShiftBufferDepth).
+        # Larger = more seekable-back history for players, larger manifest
+        # responses. See --dvr-window-seconds / --window-segments in
+        # serve.py's CLI.
+        self.window_segments = window_segments
 
     def now_ticks(self) -> int:
         """The only place wall-clock time is sampled. Converted to an
@@ -124,7 +134,8 @@ class Channel:
             self.now_ticks(), self.epoch_ticks, self.package.total_loop_duration_ticks
         )
 
-    def build_hls_manifest(self, window_segments: int = 6) -> str:
+    def build_hls_manifest(self, window_segments: int | None = None) -> str:
+        window_segments = window_segments or self.window_segments
         pos = self.current_position()
         pkg = self.package
         seg_index = segment_index_for_position(
@@ -211,7 +222,7 @@ class Channel:
 
         return "\n".join(lines) + "\n"
 
-    def build_dash_manifest(self, window_segments: int = 6) -> str:
+    def build_dash_manifest(self, window_segments: int | None = None) -> str:
         """Build a DASH MPD (@type=dynamic) covering the same sliding window
         of segments as build_hls_manifest, using a SegmentTimeline (segments
         are non-uniform duration, cue-driven -- see LoopPackage docstring)
@@ -227,6 +238,7 @@ class Channel:
         unambiguously at the correct absolute time on loop 5 just as
         correctly as on loop 0, with no special-casing.
         """
+        window_segments = window_segments or self.window_segments
         pos = self.current_position()
         pkg = self.package
         seg_index = segment_index_for_position(
@@ -330,9 +342,9 @@ class Channel:
         return self.package.segment_path_for_index(physical_index)
 
 
-def create_app(package_dir: Path, epoch_ticks: int) -> Flask:
+def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) -> Flask:
     package = LoopPackage(package_dir)
-    channel = Channel(package, epoch_ticks)
+    channel = Channel(package, epoch_ticks, window_segments=window_segments)
 
     app = Flask(__name__)
 
@@ -377,6 +389,23 @@ def main() -> int:
     )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument(
+        "--dvr-window-seconds",
+        type=float,
+        default=30.0,
+        help="Approximate size of the DVR window / sliding manifest, in "
+        "seconds (default: 30). Converted to a segment count using the "
+        "package's nominal --segment-duration from bake time. Ignored if "
+        "--window-segments is also given.",
+    )
+    parser.add_argument(
+        "--window-segments",
+        type=int,
+        default=None,
+        help="Exact number of segments to advertise per manifest response "
+        "(HLS sliding window / DASH SegmentTimeline). Overrides "
+        "--dvr-window-seconds if given.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -395,7 +424,22 @@ def main() -> int:
     # request's arithmetic, never recomputed via accumulation.
     epoch_ticks = round(epoch_dt.timestamp() * timescale)
 
-    app = create_app(args.package_dir, epoch_ticks)
+    if args.window_segments is not None:
+        window_segments = args.window_segments
+    else:
+        nominal_segment_duration_seconds = float(package_descriptor["segment_duration_seconds"])
+        window_segments = max(
+            1, math.ceil(args.dvr_window_seconds / nominal_segment_duration_seconds)
+        )
+
+    logger.info(
+        "DVR window: %d segment(s) (~%.1fs nominal, requested %.1fs)",
+        window_segments,
+        window_segments * float(package_descriptor["segment_duration_seconds"]),
+        args.dvr_window_seconds,
+    )
+
+    app = create_app(args.package_dir, epoch_ticks, window_segments=window_segments)
     app.run(host=args.host, port=args.port)
     return 0
 

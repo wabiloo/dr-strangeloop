@@ -54,6 +54,24 @@ package without re-baking, and auto-adds a locally-built `~/gpac-local/bin`
 to `PATH` if present (see `Dockerfile`/`SCOPE.md` §6 for why a packaged GPAC
 release isn't enough).
 
+### Controlling the DVR window / manifest size
+
+Both `run.sh` and `serve.py` accept `--dvr-window-seconds` (default 30) to
+control how much sliding-window history is advertised per manifest response
+(HLS `#EXTINF` list / DASH `SegmentTimeline` + `timeShiftBufferDepth`).
+This is converted to a segment count using the package's nominal
+`--segment-duration` (from bake time), rounded up. For exact control over
+the segment count instead, use `--window-segments N` (overrides
+`--dvr-window-seconds`):
+
+```bash
+./run.sh path/to/output.ts --output /var/loop-packages/ch1 \
+         --dvr-window-seconds 60   # ~60s of DVR window
+
+# or, for exact segment-count control:
+python3 serve.py /var/loop-packages/ch1 --epoch-utc ... --window-segments 10
+```
+
 `bake` hard-fails (exit code 2) on any mismatch between `.markers.json` and
 the SCTE-35 actually embedded in the `.ts` — this is a deliberate safety net,
 not something to work around; see `SCOPE.md` §2 and §4.1 step 1.

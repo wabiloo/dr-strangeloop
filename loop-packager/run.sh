@@ -18,6 +18,12 @@
 #                          channel's loop 0 starts the moment serve starts).
 #   --host HOST             serve.py bind host (default: 0.0.0.0)
 #   --port PORT              serve.py bind port (default: 8080)
+#   --dvr-window-seconds N  Approximate DVR window / manifest size in
+#                          seconds (default: 30). Converted to a segment
+#                          count using the package's nominal segment
+#                          duration. Ignored if --window-segments is given.
+#   --window-segments N     Exact number of segments to advertise per
+#                          manifest response. Overrides --dvr-window-seconds.
 #   --skip-bake            Skip the bake step and serve an existing
 #                          --output package directory as-is.
 #   --python PATH           Python interpreter to use (default: python3, or
@@ -48,12 +54,14 @@ SEGMENT_DURATION="4.0"
 EPOCH_UTC=""
 HOST="0.0.0.0"
 PORT="8080"
+DVR_WINDOW_SECONDS="30"
+WINDOW_SEGMENTS=""
 SKIP_BAKE="0"
 VERBOSE="0"
 PYTHON=""
 
 usage() {
-    sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,44p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -64,6 +72,8 @@ while [[ $# -gt 0 ]]; do
         --epoch-utc) EPOCH_UTC="$2"; shift 2 ;;
         --host) HOST="$2"; shift 2 ;;
         --port) PORT="$2"; shift 2 ;;
+        --dvr-window-seconds) DVR_WINDOW_SECONDS="$2"; shift 2 ;;
+        --window-segments) WINDOW_SEGMENTS="$2"; shift 2 ;;
         --skip-bake) SKIP_BAKE="1"; shift ;;
         --python) PYTHON="$2"; shift 2 ;;
         -v|--verbose) VERBOSE="1"; shift ;;
@@ -139,4 +149,6 @@ echo "    HLS:  http://${DISPLAY_HOST}:${PORT}/live.m3u8"
 echo "    DASH: http://${DISPLAY_HOST}:${PORT}/manifest.mpd"
 echo ""
 
-exec "$PYTHON" "${SCRIPT_DIR}/serve.py" "$OUTPUT" --epoch-utc "$EPOCH_UTC" --host "$HOST" --port "$PORT"
+exec "$PYTHON" "${SCRIPT_DIR}/serve.py" "$OUTPUT" --epoch-utc "$EPOCH_UTC" --host "$HOST" --port "$PORT" \
+    --dvr-window-seconds "$DVR_WINDOW_SECONDS" \
+    ${WINDOW_SEGMENTS:+--window-segments "$WINDOW_SEGMENTS"}
