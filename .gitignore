@@ -13,6 +13,9 @@ outputs/*.ts
 outputs/*.markers.json
 outputs/*_report.html
 outputs/*_timeline/
+# Multi-rendition franken-ts output directories (output.dir + renditions)
+outputs/**/*.ts
+outputs/**/markers.json
 
 # OS
 .DS_Store
