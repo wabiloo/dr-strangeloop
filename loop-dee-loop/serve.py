@@ -364,11 +364,34 @@ class Channel:
             pos.loop_number, seg_index, pkg.segments_per_loop
         )
 
+        # Every physical segment file is reused, byte-for-byte, on every
+        # loop iteration (SCOPE.md §4.1 step 6): its internal fMP4
+        # timestamps (baseMediaDecodeTime/tfdt) therefore always restart
+        # from the same loop-relative values, regardless of which real-world
+        # loop iteration is being served. A playlist that presents segment
+        # index `segments_per_loop - 1` immediately followed by segment
+        # index 0 *without* signaling a discontinuity lies to the player:
+        # it claims the two segments are timestamp-continuous when they are
+        # not. Browsers' MSE demuxers (observed: Chrome's ChunkDemuxer)
+        # detect this as a "RunSegmentParserLoop: stream parsing failed"
+        # append failure, which cascades into MediaSource.readyState
+        # "ended" and a fatal `mediaSourceRequiresReset` -- i.e. playback
+        # dies exactly once per loop, after the first iteration completes.
+        # #EXT-X-DISCONTINUITY-SEQUENCE (RFC 8216 §4.3.3.3) identifies the
+        # discontinuity sequence of the *first* segment in this window --
+        # here, simply its loop number, since every loop boundary is
+        # exactly one discontinuity. An #EXT-X-DISCONTINUITY tag (§4.3.2.3)
+        # is then emitted immediately before every subsequent segment that
+        # starts a new loop iteration (local_index == 0), so the player
+        # resets its timestamp-continuity expectations there.
+        first_loop_number = media_sequence // pkg.segments_per_loop
+
         lines = [
             "#EXTM3U",
             "#EXT-X-VERSION:7",
             f"#EXT-X-TARGETDURATION:{pkg.max_segment_duration_seconds_rounded_up}",
             f"#EXT-X-MEDIA-SEQUENCE:{media_sequence}",
+            f"#EXT-X-DISCONTINUITY-SEQUENCE:{first_loop_number}",
             f'#EXT-X-MAP:URI="{init_uri}"',
         ]
 
@@ -376,6 +399,13 @@ class Channel:
             global_index = media_sequence + i
             local_index = global_index % pkg.segments_per_loop
             local_loop_number = global_index // pkg.segments_per_loop
+
+            if i > 0 and local_index == 0:
+                # This segment is the first of a new loop iteration and
+                # isn't the very first entry in the window (whose implicit
+                # discontinuity sequence is already covered by the header
+                # above) -- signal the timestamp discontinuity here.
+                lines.append("#EXT-X-DISCONTINUITY")
 
             # This playlist's own segment start/end (for PDT/EXTINF).
             segment_start_ticks = boundary_ticks[local_index]
