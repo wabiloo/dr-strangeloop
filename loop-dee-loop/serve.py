@@ -452,7 +452,12 @@ class Channel:
                 loop_start_datetime = _dt.datetime.utcfromtimestamp(loop_start_seconds)
                 signaling_markers = markers_to_signaling(matching_markers)
                 lines.extend(
-                    build_daterange_tags(signaling_markers, pkg.timescale, loop_start_datetime)
+                    build_daterange_tags(
+                        signaling_markers,
+                        pkg.timescale,
+                        loop_start_datetime,
+                        loop_number=local_loop_number,
+                    )
                 )
 
             program_date_ticks = program_date_time_ticks(

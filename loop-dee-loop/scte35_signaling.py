@@ -105,6 +105,7 @@ def build_daterange_tags(
     markers: list[SignalingMarker],
     timescale: int,
     program_start_datetime: _dt.datetime,
+    loop_number: int = 0,
 ) -> list[str]:
     """Return a list of `#EXT-X-DATERANGE:...` tag lines, one per marker.
 
@@ -117,6 +118,18 @@ def build_daterange_tags(
     Follows the standard SCTE-35-in-HLS mapping: CUE-OUT markers get
     SCTE35-OUT + PLANNED-DURATION, CUE-IN markers get SCTE35-IN, both also
     carry SCTE35-CMD with the raw splice command.
+
+    `loop_number` is folded into the emitted DATERANGE `ID` (e.g.
+    "0x00000001" -> "0x00000001-loop3"). Per RFC 8216 §4.4.5.1, an `ID`
+    that reappears across playlist reloads must carry byte-for-byte
+    identical attributes every time -- but a looping channel legitimately
+    re-signals the *same* underlying `event_id` every iteration with a new
+    START-DATE (real wall-clock time), which would otherwise violate that
+    rule. hls.js/most compliant clients detect the mismatch and silently
+    drop the tag (observed: "DATERANGE tag attribute: START-DATE does not
+    match for tags with ID..."), so downstream ad-signaling silently stops
+    working after the first loop. Scoping the ID to the loop number gives
+    each occurrence a genuinely unique, internally-consistent ID.
     """
     tags: list[str] = []
     for marker in markers:
@@ -125,7 +138,7 @@ def build_daterange_tags(
         start_date_str = start_date.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
         attrs = [
-            f'ID="{marker.event_id}"',
+            f'ID="{marker.event_id}-loop{loop_number}"',
             f'START-DATE="{start_date_str}"',
             'CLASS="com.scte35"',
         ]
