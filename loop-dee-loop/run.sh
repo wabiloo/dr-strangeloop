@@ -85,7 +85,7 @@ while [[ $# -gt 0 ]]; do
         --dvr-window-seconds) DVR_WINDOW_SECONDS="$2"; shift 2 ;;
         --window-segments) WINDOW_SEGMENTS="$2"; shift 2 ;;
         --skip-bake) SKIP_BAKE="1"; shift ;;
-        --python) PYTHON="$2"; shift 2 ;;
+        --python) PYTHON="$2"; PYTHON_CMD=("$2"); shift 2 ;;
         -v|--verbose) VERBOSE="1"; shift ;;
         -h|--help) usage; exit 0 ;;
         *)
@@ -109,9 +109,14 @@ fi
 
 if [[ -z "$PYTHON" ]]; then
     if [[ -x "${SCRIPT_DIR}/.venv/bin/python" ]]; then
-        PYTHON="${SCRIPT_DIR}/.venv/bin/python"
+        PYTHON_CMD=("${SCRIPT_DIR}/.venv/bin/python")
+    elif command -v uv >/dev/null 2>&1; then
+        # This package is part of the repo-root uv workspace (see
+        # ../pyproject.toml); `uv run` resolves its deps (threefive, flask)
+        # without needing a manually-created venv.
+        PYTHON_CMD=(uv run --project "${SCRIPT_DIR}" python)
     else
-        PYTHON="python3"
+        PYTHON_CMD=(python3)
     fi
 fi
 
@@ -137,7 +142,7 @@ if [[ "$SKIP_BAKE" != "1" ]]; then
     [[ "$VERBOSE" == "1" ]] && BAKE_ARGS+=(-v)
 
     echo "==> Baking loop package: ${INPUT_PATH} -> ${OUTPUT}"
-    "$PYTHON" "${SCRIPT_DIR}/bake.py" "${BAKE_ARGS[@]}"
+    "${PYTHON_CMD[@]}" "${SCRIPT_DIR}/bake.py" "${BAKE_ARGS[@]}"
 else
     echo "==> --skip-bake given, reusing existing package at ${OUTPUT}"
     if [[ ! -f "${OUTPUT}/loop_descriptor.json" ]]; then
@@ -159,6 +164,6 @@ echo "    HLS:  http://${DISPLAY_HOST}:${PORT}/master.m3u8"
 echo "    DASH: http://${DISPLAY_HOST}:${PORT}/manifest.mpd"
 echo ""
 
-exec "$PYTHON" "${SCRIPT_DIR}/serve.py" "$OUTPUT" --epoch-utc "$EPOCH_UTC" --host "$HOST" --port "$PORT" \
+exec "${PYTHON_CMD[@]}" "${SCRIPT_DIR}/serve.py" "$OUTPUT" --epoch-utc "$EPOCH_UTC" --host "$HOST" --port "$PORT" \
     --dvr-window-seconds "$DVR_WINDOW_SECONDS" \
     ${WINDOW_SEGMENTS:+--window-segments "$WINDOW_SEGMENTS"}

@@ -1,0 +1,12 @@
+[project]
+name = "loop-dee-loop"
+version = "0.1.0"
+description = "Bake franken-ts outputs into loopable HLS packages and serve them"
+requires-python = ">=3.11"
+dependencies = [
+    "threefive>=2.4",
+    "flask>=3.0",
+]
+
+[tool.uv]
+package = false
