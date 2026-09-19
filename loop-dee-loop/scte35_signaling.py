@@ -61,6 +61,30 @@ def _splice_command_base64_from_marker(marker: dict) -> str:
     )
 
 
+def is_out_marker(m: dict) -> bool:
+    """Whether a raw `.markers.json` entry is a CUE-OUT (ad-break start) as
+    opposed to a CUE-IN (ad-break end). Shared between `markers_to_signaling`
+    (HLS/DASH tag authoring) and serve.py's marker/segment-overlap placement
+    logic, so both agree on which markers carry a real, forward-looking
+    active interval (see serve.py's `_marker_covers_segment`) versus which
+    are a single point-in-time signal.
+
+    Even `segmentation_type_id` -> "start" (e.g. 0x34 Program Start, 0x30
+    Distributor placement opportunity start), odd -> "end" pair, matching
+    franken-ts's own start/start+1 convention (scte35.py).
+    """
+    splice_type = m.get("splice_type")
+    seg_type_id = m.get("segmentation_type_id")
+    if seg_type_id is not None:
+        type_id_int = int(seg_type_id, 16) if isinstance(seg_type_id, str) else seg_type_id
+        return (type_id_int % 2) == 0
+    if splice_type == "splice_insert":
+        # splice_insert markers don't carry a segmentation_type_id in
+        # markers.json; caller must set an explicit "is_out" flag instead.
+        return bool(m.get("is_out", True))
+    return True
+
+
 def markers_to_signaling(
     markers: list[dict],
     timescale: int = DEFAULT_TIMESCALE,
@@ -70,19 +94,8 @@ def markers_to_signaling(
     by both the HLS and DASH authoring functions below."""
     result = []
     for m in markers:
-        splice_type = m.get("splice_type")
         seg_type_id = m.get("segmentation_type_id")
-        # Even segmentation_type_id -> "start" (e.g. 0x34 Program Start,
-        # 0x30 Distributor placement opportunity start), odd -> "end" pair,
-        # matching franken-ts's own start/start+1 convention (scte35.py).
-        is_out = True
-        if seg_type_id is not None:
-            type_id_int = int(seg_type_id, 16) if isinstance(seg_type_id, str) else seg_type_id
-            is_out = (type_id_int % 2) == 0
-        elif splice_type == "splice_insert":
-            # splice_insert markers don't carry a segmentation_type_id in
-            # markers.json; caller must set an explicit "is_out" flag instead.
-            is_out = bool(m.get("is_out", True))
+        is_out = is_out_marker(m)
 
         result.append(
             SignalingMarker(

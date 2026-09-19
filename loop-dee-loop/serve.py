@@ -39,9 +39,38 @@ from loop_math import (
     segment_index_for_position,
     ticks_to_wall_clock_seconds,
 )
-from scte35_signaling import build_daterange_tags, markers_to_signaling
+from scte35_signaling import build_daterange_tags, is_out_marker, markers_to_signaling
 
 logger = logging.getLogger(__name__)
+
+
+def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: int) -> bool:
+    """Whether `marker` should be signaled (EXT-X-DATERANGE / DASH <Event>)
+    on a segment spanning [seg_start_ticks, seg_end_ticks).
+
+    A CUE-OUT marker with a `segmentation_duration_ticks` represents an
+    active *interval* -- [pts_time_ticks, pts_time_ticks + duration) -- not
+    just its own single starting instant. It must keep being signaled on
+    every segment that interval overlaps, for as long as any such segment
+    remains in the DVR window; otherwise a player that joins mid-break, or
+    whose playlist/manifest reload lands after the break's *first* segment
+    has already scrolled out of the window, never sees any signal that
+    it's mid-ad-break at all, even though later segments of that same
+    break are still being served.
+
+    A CUE-IN marker (or any marker with no duration) is instead a single
+    point-in-time signal -- it only ever belongs to the one segment whose
+    window contains its own `pts_time_ticks`, regardless of any duration
+    field it happens to carry (that field describes the segmentation
+    interval that just elapsed, not an instruction to keep signaling
+    forward from here).
+    """
+    start = marker["pts_time_ticks"]
+    duration = marker.get("segmentation_duration_ticks")
+    if duration and is_out_marker(marker):
+        end = start + duration
+        return seg_start_ticks < end and start < seg_end_ticks
+    return seg_start_ticks <= start < seg_end_ticks
 
 
 def _numeric_segment_index(path: Path) -> int:
@@ -438,9 +467,13 @@ class Channel:
             # gets a START-DATE strictly after that segment's PDT and before
             # the next one's, still correctly anchored to real wall-clock
             # time -- never a fixed placeholder epoch.
+            #
+            # A CUE-OUT's DATERANGE must keep appearing on every segment its
+            # active interval overlaps (not just the one containing its own
+            # start tick) -- see _marker_covers_segment.
             matching_markers = [
                 m for m in pkg.markers
-                if ref_seg_start_ticks <= m["pts_time_ticks"] < ref_seg_end_ticks
+                if _marker_covers_segment(m, ref_seg_start_ticks, ref_seg_end_ticks)
             ]
             if matching_markers:
                 loop_start_ticks = program_date_time_ticks(
@@ -627,23 +660,36 @@ class Channel:
             reference_entries = _period_entries(pkg.segment_boundary_ticks, local_indices)
 
             event_xml_parts = []
-            for seg_start_local, duration_ticks, local_index in reference_entries:
-                seg_end_local = seg_start_local + duration_ticks
-                for marker in pkg.markers:
-                    if seg_start_local <= marker["pts_time_ticks"] < seg_end_local:
-                        duration_attr = (
-                            f' duration="{marker["segmentation_duration_ticks"]}"'
-                            if marker.get("segmentation_duration_ticks") is not None
-                            else ""
-                        )
-                        event_xml_parts.append(
-                            f'    <Event presentationTime="{marker["pts_time_ticks"]}"'
-                            f'{duration_attr} id="{marker["event_id"]}-loop{loop_number}">\n'
-                            f'      <Signal xmlns="urn:scte:scte35:2013:xml">\n'
-                            f'        <Binary>{marker["splice_command_b64"]}</Binary>\n'
-                            f"      </Signal>\n"
-                            f"    </Event>"
-                        )
+            for marker in pkg.markers:
+                # A single <Event> element describes the whole
+                # [presentationTime, presentationTime+duration) interval on
+                # its own -- unlike HLS's per-segment EXT-X-DATERANGE tags,
+                # it doesn't need repeating once per overlapping segment.
+                # But it must still be included in this Period as long as
+                # ANY of the Period's currently-served segments overlaps
+                # it (see _marker_covers_segment) -- not just the one
+                # segment containing the marker's own start tick -- so a
+                # player whose manifest poll lands after that first segment
+                # has scrolled out of the window (while later segments of
+                # the same break are still being served) still sees it.
+                if not any(
+                    _marker_covers_segment(marker, seg_start_local, seg_start_local + duration_ticks)
+                    for seg_start_local, duration_ticks, _local_index in reference_entries
+                ):
+                    continue
+                duration_attr = (
+                    f' duration="{marker["segmentation_duration_ticks"]}"'
+                    if marker.get("segmentation_duration_ticks") is not None
+                    else ""
+                )
+                event_xml_parts.append(
+                    f'    <Event presentationTime="{marker["pts_time_ticks"]}"'
+                    f'{duration_attr} id="{marker["event_id"]}-loop{loop_number}">\n'
+                    f'      <Signal xmlns="urn:scte:scte35:2013:xml">\n'
+                    f'        <Binary>{marker["splice_command_b64"]}</Binary>\n'
+                    f"      </Signal>\n"
+                    f"    </Event>"
+                )
 
             video_representations = []
             for idx, rendition in enumerate(pkg.video_renditions):
