@@ -129,8 +129,14 @@ def build_daterange_tags(
     as a final display step (SCOPE.md §4.2 "Hard rule").
 
     Follows the standard SCTE-35-in-HLS mapping: CUE-OUT markers get
-    SCTE35-OUT + PLANNED-DURATION, CUE-IN markers get SCTE35-IN, both also
-    carry SCTE35-CMD with the raw splice command.
+    SCTE35-OUT + PLANNED-DURATION, CUE-IN markers get SCTE35-IN.
+    SCTE35-CMD is intentionally never emitted here -- it's the fallback
+    attribute for a splice command with no resolvable CUE-OUT/CUE-IN
+    direction, which never happens for markers that reach this function
+    (`is_out_marker` always resolves one or the other, defaulting to
+    CUE-OUT). Emitting SCTE35-CMD alongside SCTE35-OUT/-IN would just be
+    redundant duplication of the same encoded command under a second
+    attribute name.
 
     `loop_number` is folded into the emitted DATERANGE `ID` (e.g.
     "0x00000001" -> "0x00000001-loop3"). Per RFC 8216 §4.4.5.1, an `ID`
@@ -162,7 +168,6 @@ def build_daterange_tags(
             )
             attrs.append(f'PLANNED-DURATION={duration_seconds:.3f}')
 
-        attrs.append(f'SCTE35-CMD=0x{_b64_to_hex(marker.splice_command_b64)}')
         if marker.is_out:
             attrs.append(f'SCTE35-OUT=0x{_b64_to_hex(marker.splice_command_b64)}')
         else:
