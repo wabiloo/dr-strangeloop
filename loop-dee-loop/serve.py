@@ -499,11 +499,35 @@ class Channel:
         authored directly from markers.json (never GPAC's own aggregation
         -- SCOPE.md §6).
 
-        All SegmentTimeline `t` and EventStream `presentationTime` values
-        are *period-relative* ticks measured from the fixed channel epoch
-        (the Period starts at epoch, `start="PT0S"`, never restarted), so
-        they grow monotonically across loops exactly like HLS's
-        ever-increasing MEDIA-SEQUENCE.
+        One <Period> per loop iteration covered by the current window,
+        each starting at `PT{loop_number * total_loop_duration_seconds}S`
+        (real wall-clock offset from availabilityStartTime). This mirrors
+        the HLS side's #EXT-X-DISCONTINUITY fix for the same underlying
+        reason: every physical segment file is reused byte-for-byte on
+        every loop iteration (SCOPE.md §4.1 step 6), so its internal fMP4
+        timestamps (tfdt/baseMediaDecodeTime) always restart from the same
+        loop-relative values regardless of which real loop iteration is
+        being served. A single, never-restarted Period whose
+        <SegmentTimeline> `t` values grow forever across loops would assert
+        an ever-increasing presentation timeline while the underlying
+        media's actual decode timestamps repeatedly reset -- exactly the
+        HLS "no discontinuity signaled" bug, just via DASH's own
+        discontinuity mechanism (Periods) instead of HLS's
+        #EXT-X-DISCONTINUITY tag. Starting a new Period at each loop
+        boundary makes every Period's own <SegmentTimeline> genuinely
+        period-relative (starting back at the segment's own loop-relative
+        tick), consistent with what's actually inside the segment files,
+        and gives players an explicit, spec-compliant boundary to reset
+        timestamp-continuity expectations at -- rather than a single Period
+        silently lying about being one continuous timeline forever.
+
+        Within the currently OPEN (still loop-in-progress) Period, the
+        <SegmentTimeline> is never front-pruned/renumbered across requests
+        -- see the `open_count`/`periods_plan` comment below for why that's
+        both required (real DASH clients, e.g. dash.js, get stuck forever
+        once a still-growing Period's timeline is trimmed out from under
+        them) and safe to do without violating serve.py's "no persisted
+        state" rule (bounded naturally by `segments_per_loop`).
         """
         window_segments = window_segments or self.window_segments
         pos = self.current_position()
@@ -511,10 +535,7 @@ class Channel:
         seg_index = segment_index_for_position(
             pos.position_in_loop_ticks, pkg.segment_boundary_ticks
         )
-        media_sequence = global_segment_number(
-            pos.loop_number, seg_index, pkg.segments_per_loop
-        )
-        first_number = media_sequence
+        current_loop_number = pos.loop_number
 
         epoch_seconds = ticks_to_wall_clock_seconds(self.epoch_ticks, pkg.timescale)
         availability_start_time = (
@@ -526,63 +547,112 @@ class Channel:
             _dt.datetime.utcfromtimestamp(now_seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
             + "Z"
         )
+        total_loop_duration_seconds = ticks_to_wall_clock_seconds(
+            pkg.total_loop_duration_ticks, pkg.timescale
+        )
 
-        def _segment_entries(boundary_ticks: list[int]) -> list[tuple[int, int, int]]:
+        # Build the list of (loop_number, [local_index, ...]) pairs, one per
+        # <Period> to emit. Crucially, the CURRENTLY OPEN loop iteration
+        # (current_loop_number) always gets every one of its segments from
+        # local index 0 up to the current live edge (seg_index) -- it is
+        # NEVER front-pruned to fit `window_segments`.
+        #
+        # This is a real DASH client requirement, not a style choice: once a
+        # player has parsed a Period's <SegmentTimeline> and started walking
+        # forward through it, it expects each subsequent MPD refresh for
+        # that SAME (still-open) Period to be a strict superset of what it
+        # already saw -- new <S> entries appended at the tail, never a
+        # front-trimmed/renumbered replacement. A naive fixed-size sliding
+        # window applied to the currently-growing Period breaks that
+        # invariant every time the window slides, which was observed to
+        # make dash.js's reference player get stuck forever repeating
+        # "No segment found at index: N. Wait for next loop" once the
+        # window had slid a few segments past where it started watching.
+        #
+        # This is safe/bounded without any persisted state (SCOPE.md's
+        # "no accumulated state" rule): local index 0..seg_index is a
+        # small, fully deterministic function of current wall-clock time,
+        # capped at `segments_per_loop` entries (one whole loop) -- it can
+        # never grow unboundedly, since a new Period starts at the next
+        # loop wrap regardless.
+        #
+        # Only PAST, already-closed loop iterations (loop_number <
+        # current_loop_number) are eligible for window-based trimming --
+        # their own <SegmentTimeline> is permanently fixed/immutable content
+        # (that loop iteration already fully happened and will never gain
+        # new segments), so repeatedly re-serving the same fixed tail slice
+        # of a closed Period across polls is fully consistent and safe.
+        # Used only to pad out extra DVR history when the current loop
+        # hasn't yet produced `window_segments` worth of its own segments
+        # (e.g. right after a loop wrap).
+        open_count = seg_index + 1
+        periods_plan: list[tuple[int, list[int]]] = []
+        if open_count < window_segments and current_loop_number > 0:
+            needed_from_prev = min(
+                window_segments - open_count, pkg.segments_per_loop
+            )
+            prev_loop_number = current_loop_number - 1
+            start_local = pkg.segments_per_loop - needed_from_prev
+            periods_plan.append(
+                (prev_loop_number, list(range(start_local, pkg.segments_per_loop)))
+            )
+        periods_plan.append((current_loop_number, list(range(0, seg_index + 1))))
+
+        def _period_entries(
+            boundary_ticks: list[int], local_indices: list[int]
+        ) -> list[tuple[int, int, int]]:
+            """(segment_start_ticks, duration_ticks, local_index), period-relative."""
             entries = []
-            for i in range(window_segments):
-                global_index = media_sequence + i
-                local_index = global_index % pkg.segments_per_loop
-                local_loop_number = global_index // pkg.segments_per_loop
+            for local_index in local_indices:
                 segment_start_ticks = boundary_ticks[local_index]
                 if local_index + 1 < len(boundary_ticks):
                     seg_end_ticks_local = boundary_ticks[local_index + 1]
                 else:
                     seg_end_ticks_local = pkg.total_loop_duration_ticks
-                period_relative_start = (
-                    local_loop_number * pkg.total_loop_duration_ticks + segment_start_ticks
-                )
                 duration_ticks = seg_end_ticks_local - segment_start_ticks
-                entries.append((period_relative_start, duration_ticks, local_index))
+                entries.append((segment_start_ticks, duration_ticks, local_index))
             return entries
 
-        # Reference (ad-decision authority) entries, used for marker placement.
-        reference_entries = _segment_entries(pkg.segment_boundary_ticks)
+        period_xml_parts = []
+        for loop_number, local_indices in periods_plan:
+            if not local_indices:
+                continue
+            period_start_seconds = loop_number * total_loop_duration_seconds
+            first_number = loop_number * pkg.segments_per_loop + local_indices[0]
 
-        event_xml_parts = []
-        for period_relative_start, duration_ticks, local_index in reference_entries:
-            seg_start_local = pkg.segment_boundary_ticks[local_index]
-            local_loop_number = (
-                (period_relative_start - seg_start_local) // pkg.total_loop_duration_ticks
-            )
-            seg_end_local = seg_start_local + duration_ticks
-            for marker in pkg.markers:
-                if seg_start_local <= marker["pts_time_ticks"] < seg_end_local:
-                    marker_period_relative = (
-                        local_loop_number * pkg.total_loop_duration_ticks
-                        + marker["pts_time_ticks"]
-                    )
-                    duration_attr = (
-                        f' duration="{marker["segmentation_duration_ticks"]}"'
-                        if marker.get("segmentation_duration_ticks") is not None
-                        else ""
-                    )
-                    event_xml_parts.append(
-                        f'    <Event presentationTime="{marker_period_relative}"'
-                        f'{duration_attr} id="{marker["event_id"]}">\n'
-                        f'      <Signal xmlns="urn:scte:scte35:2013:xml">\n'
-                        f'        <Binary>{marker["splice_command_b64"]}</Binary>\n'
-                        f"      </Signal>\n"
-                        f"    </Event>"
-                    )
+            # Reference (ad-decision authority) entries for this period,
+            # used for marker placement -- loop-relative ticks, since each
+            # Period's own <EventStream> is independently time-based from
+            # its own start.
+            reference_entries = _period_entries(pkg.segment_boundary_ticks, local_indices)
 
-        video_representations = []
-        for idx, rendition in enumerate(pkg.video_renditions):
-            entries = _segment_entries(rendition.segment_boundary_ticks)
-            timeline_lines = "\n".join(
-                f'        <S t="{t}" d="{d}" />' for t, d, _ in entries
-            )
-            v = rendition.video_variant
-            video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
+            event_xml_parts = []
+            for seg_start_local, duration_ticks, local_index in reference_entries:
+                seg_end_local = seg_start_local + duration_ticks
+                for marker in pkg.markers:
+                    if seg_start_local <= marker["pts_time_ticks"] < seg_end_local:
+                        duration_attr = (
+                            f' duration="{marker["segmentation_duration_ticks"]}"'
+                            if marker.get("segmentation_duration_ticks") is not None
+                            else ""
+                        )
+                        event_xml_parts.append(
+                            f'    <Event presentationTime="{marker["pts_time_ticks"]}"'
+                            f'{duration_attr} id="{marker["event_id"]}-loop{loop_number}">\n'
+                            f'      <Signal xmlns="urn:scte:scte35:2013:xml">\n'
+                            f'        <Binary>{marker["splice_command_b64"]}</Binary>\n'
+                            f"      </Signal>\n"
+                            f"    </Event>"
+                        )
+
+            video_representations = []
+            for idx, rendition in enumerate(pkg.video_renditions):
+                entries = _period_entries(rendition.segment_boundary_ticks, local_indices)
+                timeline_lines = "\n".join(
+                    f'        <S t="{t}" d="{d}" />' for t, d, _ in entries
+                )
+                v = rendition.video_variant
+                video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
         <SegmentTemplate media="{rendition.name}/seg/$Number$.m4s" initialization="{rendition.name}/init.mp4"
                          timescale="{pkg.timescale}" startNumber="{first_number}">
           <SegmentTimeline>
@@ -591,14 +661,16 @@ class Channel:
         </SegmentTemplate>
       </Representation>''')
 
-        audio_adaptation_set = ""
-        if pkg.has_audio:
-            a = pkg.audio_rendition.audio_variant
-            audio_entries = _segment_entries(pkg.audio_rendition.audio_segment_boundary_ticks)
-            audio_timeline_lines = "\n".join(
-                f'        <S t="{t}" d="{d}" />' for t, d, _ in audio_entries
-            )
-            audio_adaptation_set = f'''
+            audio_adaptation_set = ""
+            if pkg.has_audio:
+                a = pkg.audio_rendition.audio_variant
+                audio_entries = _period_entries(
+                    pkg.audio_rendition.audio_segment_boundary_ticks, local_indices
+                )
+                audio_timeline_lines = "\n".join(
+                    f'        <S t="{t}" d="{d}" />' for t, d, _ in audio_entries
+                )
+                audio_adaptation_set = f'''
     <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
       <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
         <SegmentTemplate media="audio/seg/$Number$.m4s" initialization="audio/init.mp4"
@@ -610,6 +682,28 @@ class Channel:
       </Representation>
     </AdaptationSet>'''
 
+            period_xml_parts.append(f'''  <Period id="loop{loop_number}" start="PT{period_start_seconds}S">
+    <EventStream schemeIdUri="urn:scte:scte35:2014:xml+bin" timescale="{pkg.timescale}">
+{chr(10).join(event_xml_parts)}
+    </EventStream>
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
+{chr(10).join(video_representations)}
+    </AdaptationSet>{audio_adaptation_set}
+  </Period>''')
+
+        # @suggestedPresentationDelay tells compliant players to deliberately
+        # stay this far behind the true live edge, rather than chasing it as
+        # closely as possible. Without it, aggressive live-catchup players
+        # (e.g. dash.js's default CatchupController) can outrun the actual
+        # availability of the newest segment -- there is always up to one
+        # segment-duration's worth of "not yet aired" content sitting right
+        # at the live edge for any live stream (looping or not), since a
+        # segment can't be advertised before its content has actually
+        # occurred in wall-clock time. Observed effect without this: players
+        # occasionally ran into that always-there edge gap and invoked their
+        # own "jump the gap" recovery instead of just comfortably waiting
+        # behind it. Two segment durations of delay margin is a
+        # conservative, standard buffer for this.
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
      profiles="urn:mpeg:dash:profile:isoff-live:2011"
@@ -618,15 +712,9 @@ class Channel:
      publishTime="{publish_time}"
      minimumUpdatePeriod="PT{pkg.max_segment_duration_seconds_rounded_up}S"
      timeShiftBufferDepth="PT{pkg.max_segment_duration_seconds_rounded_up * window_segments}S"
+     suggestedPresentationDelay="PT{pkg.max_segment_duration_seconds_rounded_up * 2}S"
      minBufferTime="PT2S">
-  <Period id="0" start="PT0S">
-    <EventStream schemeIdUri="urn:scte:scte35:2014:xml+bin" timescale="{pkg.timescale}">
-{chr(10).join(event_xml_parts)}
-    </EventStream>
-    <AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
-{chr(10).join(video_representations)}
-    </AdaptationSet>{audio_adaptation_set}
-  </Period>
+{chr(10).join(period_xml_parts)}
 </MPD>
 '''
         return mpd
