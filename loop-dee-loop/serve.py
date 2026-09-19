@@ -424,6 +424,22 @@ class Channel:
             f'#EXT-X-MAP:URI="{init_uri}"',
         ]
 
+        # An EXT-X-DATERANGE describes one point on the presentation
+        # timeline; it must appear exactly ONCE per manifest response, on
+        # whichever currently-in-window segment is the earliest one its
+        # active interval still overlaps -- NOT repeated on every segment
+        # that interval spans. As older overlapping segments age out of the
+        # window across successive polls, the tag's anchor simply moves
+        # forward to whatever is now the earliest still-present overlapping
+        # segment (same ID, byte-identical attributes, per RFC 8216
+        # 4.4.5.1) -- it disappears entirely only once the very last
+        # overlapping segment (i.e. the one containing the marker's own end
+        # tick, for a CUE-IN) has scrolled out. Segments are visited below
+        # in increasing window order (oldest/earliest first), so a simple
+        # "already emitted in this response" set is sufficient to enforce
+        # the single-occurrence rule without a separate pre-pass.
+        already_emitted_markers: set[tuple[str, int]] = set()
+
         for i in range(window_segments):
             global_index = media_sequence + i
             local_index = global_index % pkg.segments_per_loop
@@ -468,13 +484,17 @@ class Channel:
             # the next one's, still correctly anchored to real wall-clock
             # time -- never a fixed placeholder epoch.
             #
-            # A CUE-OUT's DATERANGE must keep appearing on every segment its
-            # active interval overlaps (not just the one containing its own
-            # start tick) -- see _marker_covers_segment.
+            # A CUE-OUT's DATERANGE stays "active" (per _marker_covers_segment)
+            # across every segment its interval overlaps, but must only be
+            # emitted on the FIRST such segment still present in this window
+            # -- not repeated on each one (see already_emitted_markers above).
             matching_markers = [
                 m for m in pkg.markers
-                if _marker_covers_segment(m, ref_seg_start_ticks, ref_seg_end_ticks)
+                if (m["event_id"], m["pts_time_ticks"]) not in already_emitted_markers
+                and _marker_covers_segment(m, ref_seg_start_ticks, ref_seg_end_ticks)
             ]
+            for m in matching_markers:
+                already_emitted_markers.add((m["event_id"], m["pts_time_ticks"]))
             if matching_markers:
                 loop_start_ticks = program_date_time_ticks(
                     local_loop_number, 0, pkg.total_loop_duration_ticks, self.epoch_ticks
