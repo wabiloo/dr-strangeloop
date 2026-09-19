@@ -733,6 +733,11 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
 
     app = Flask(__name__)
 
+    @app.after_request
+    def _add_cors(resp):
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
     @app.get("/master.m3u8")
     def hls_master_playlist():
         body = channel.build_hls_master_playlist()
