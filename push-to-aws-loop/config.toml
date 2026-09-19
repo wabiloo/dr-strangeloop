@@ -1,0 +1,41 @@
+# push-to-aws-loop / config.toml
+#
+# Each deployment (channel) gets its own config file. The `name` field
+# drives every AWS resource name and the S3 key prefix, so multiple config
+# files == multiple independent channels in the same account.
+
+[deploy]
+name = "default"          # stack becomes LoopChannelStack-<name>
+
+[aws]
+region = "eu-west-1"
+
+[s3]
+# Existing bucket (referenced only, never created/deleted by this stack).
+bucket_name = "my-existing-bucket"
+# Baked loop packages live under <folder>/<name>/ in this bucket.
+# (franken-ts input never touches S3 -- bake runs locally, see below.)
+loop_package_folder = "loop-dee-loop/packages"
+
+[input]
+# Local franken-ts output baked by `channel.py bake`: either a single .ts
+# file (its sibling .markers.json is picked up automatically by bake.py),
+# or a directory containing a rendition ladder (markers.json + N *.ts files
+# -- see loop-dee-loop/README.md "Multi-rendition").
+source_path = "../outputs/mychannel"
+
+[bake]
+# Where `channel.py bake` writes the local loop package before pushing it
+# to S3. Defaults to ./.local-loop-package/<name> next to this file.
+# local_output_dir = "/tmp/my-channel-loop-package"
+
+[channel]
+segment_duration    = 4.0   # nominal bake segment duration, seconds
+dvr_window_seconds  = 30    # serve.py sliding-window size, seconds
+port                = 8080  # serve.py listen port (container-internal)
+
+[apprunner]
+# App Runner CPU/memory codes (same numeric convention as Fargate: 256 =
+# 0.25 vCPU). See AWS App Runner docs for the full supported list.
+cpu    = 256   # 0.25 vCPU
+memory = 512   # 0.5 GB

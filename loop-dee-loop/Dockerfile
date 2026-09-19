@@ -34,18 +34,27 @@ RUN ./configure --disable-x11 \
     && make install
 
 # Collect runtime shared-library dependencies for the runtime stage.
+#
+# NOTE: do NOT hardcode /usr/bin/gpac -- GPAC's `./configure` (no --prefix
+# given) installs to /usr/local/bin, not /usr/bin. A previous version of
+# this stage assumed /usr/bin and masked the resulting `cp` failure with a
+# trailing `|| true`, silently producing a runtime image with NO gpac
+# binary at all (build "succeeded" but `gpac`/`MP4Box` were simply absent
+# from /out/bin). Resolve the real install location via `command -v`
+# instead, and do not swallow failures here.
 RUN mkdir -p /out/lib /out/bin \
-    && cp /usr/bin/gpac /usr/bin/MP4Box /out/bin/ \
-    && ldd /usr/bin/gpac /usr/bin/MP4Box \
+    && GPAC_BIN="$(command -v gpac)" && MP4BOX_BIN="$(command -v MP4Box)" \
+    && cp "$GPAC_BIN" "$MP4BOX_BIN" /out/bin/ \
+    && ldd "$GPAC_BIN" "$MP4BOX_BIN" \
         | awk '{print $3}' | grep '^/' | sort -u \
-        | xargs -I{} cp -L {} /out/lib/ || true
+        | xargs -I{} cp -L {} /out/lib/
 
 # ---------------------------------------------------------------------------
 
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 python3-pip ffmpeg \
+        python3 python3-pip ffmpeg awscli \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=gpac-build /out/bin/ /usr/local/bin/
@@ -57,6 +66,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 COPY bake.py serve.py gpac_pipeline.py scte35_signaling.py loop_math.py ./
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-ENTRYPOINT ["python3"]
+# All channel-specific data (franken-ts input, baked loop package) lives in
+# S3, never in the image -- see docker-entrypoint.sh for the sync contract
+# driven by FRANKEN_TS_S3_URI / LOOP_PACKAGE_S3_URI. Only code + the
+# GPAC/ffmpeg toolchain above are baked in, so this image is shared
+# unchanged across every channel/schedule.
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["serve.py", "--help"]

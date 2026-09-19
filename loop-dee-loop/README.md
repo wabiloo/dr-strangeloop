@@ -223,6 +223,32 @@ didn't land exactly on a segment boundary (GPAC's `cues=...:cts` mode can
 silently snap an imprecise cue to the nearest keyframe — SCOPE.md §6 —
 which is fine for nominal grid points but never acceptable for a marker).
 
+## Deploying to Fargate/App Runner
+
+The image (see `Dockerfile`) never bakes in channel-specific content — only
+code and the GPAC/ffmpeg toolchain. All franken-ts input and baked loop
+packages live in S3, synced in/out at container start by
+`docker-entrypoint.sh` (the image's `ENTRYPOINT`), driven by two env vars:
+
+- `LOOP_PACKAGE_S3_URI` — used by both `serve.py` (synced down before
+  starting) and `bake.py` (synced up after baking).
+- `FRANKEN_TS_S3_URI` — used by `bake.py` only (synced down before baking).
+
+When either var is set, **omit the corresponding positional path
+argument** (and, for `bake.py`, `--output`) from the container `CMD` — the
+shim supplies it. Without the var set, both scripts run exactly as given
+(pure passthrough), e.g. for local `docker run` with a bind-mounted volume
+— which is exactly how `../push-to-aws-loop/channel.py bake` uses this
+image: it runs `bake.py` locally/via `docker run` (no cloud compute for
+the one-shot bake step) and pushes the result to S3 with a plain
+`aws s3 sync`, since baking once per schedule change doesn't warrant its
+own cloud task definition.
+
+This means one shared image + one shared CDK stack serve every
+channel/schedule — only S3 prefixes differ. See `../push-to-aws-loop/` for
+the full CDK project that provisions the long-running `serve` side on
+**AWS App Runner** (no ALB/VPC needed) behind CloudFront.
+
 ## Known limitations in this initial implementation
 
 - `bake.py` runs two full GPAC passes (one for DASH, one for HLS) rather
