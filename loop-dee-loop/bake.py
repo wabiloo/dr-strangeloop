@@ -313,6 +313,140 @@ def _numeric_segment_index(path: Path) -> int:
     return int(tail)
 
 
+def _iter_top_level_boxes(data: bytes) -> list[tuple[str, int, int]]:
+    """Return [(box_type, start_offset, size), ...] for every top-level
+    ISOBMFF box in `data`. Only handles the standard 32-bit size field
+    (with size==0 meaning "rest of data") -- sufficient for the small
+    fragmented-mp4 structures GPAC produces here; a 64-bit largesize box
+    would be unexpected in a single ~4s CMAF segment and is not handled."""
+    boxes: list[tuple[str, int, int]] = []
+    i = 0
+    n = len(data)
+    while i + 8 <= n:
+        size = int.from_bytes(data[i:i + 4], "big")
+        typ = data[i + 4:i + 8].decode("latin1", errors="replace")
+        if size == 0:
+            size = n - i
+        elif size == 1:
+            raise RuntimeError(
+                f"64-bit largesize box ({typ!r} at offset {i}) not supported "
+                f"by the malformed-fragment repair scan"
+            )
+        if size < 8 or i + size > n:
+            break
+        boxes.append((typ, i, size))
+        i += size
+    return boxes
+
+
+def _moof_has_tfdt(moof_bytes: bytes) -> bool:
+    """Whether a `moof` box's (only) `traf` contains a `tfdt` box."""
+    payload = moof_bytes[8:]
+    for typ, start, size in _iter_top_level_boxes(payload):
+        if typ == "traf":
+            traf_payload = payload[start + 8:start + size]
+            for t2, _s2, _sz2 in _iter_top_level_boxes(traf_payload):
+                if t2 == "tfdt":
+                    return True
+    return False
+
+
+def repair_trailing_malformed_fragment(segment_path: Path) -> bool:
+    """Detect and strip a spurious trailing movie-fragment (`moof`+`mdat`
+    pair) from a GPAC-produced CMAF media segment, if present. Returns True
+    if the file was rewritten.
+
+    Observed defect (confirmed by hand -- see chat history for the full
+    investigation, reproduced independently of any Period/manifest/HLS
+    logic via a bare `SourceBuffer.appendBuffer()` test): the very LAST
+    segment GPAC produces for a *finite* input file sometimes contains not
+    one but TWO `moof`+`mdat` pairs concatenated in the same `.m4s` file --
+    a normal, fully-formed first fragment (188 audio samples, matching
+    every other segment) immediately followed by a second, malformed
+    fragment (observed: only 2 samples, and critically, missing its own
+    `tfdt`/`TrackFragmentBaseMediaDecodeTimeBox` entirely). This looks like
+    an end-of-stream flush artifact in GPAC's live-profile dasher when the
+    input stream genuinely ends (as opposed to a real live encoder feed,
+    which never does) -- not something introduced by this tool's own
+    manifest/Period authoring.
+
+    A `traf` without a `tfdt` is invalid per the fragmented-MP4/CMAF spec,
+    and Chrome's MSE demuxer rejects the whole segment outright on append
+    (`MEDIA_ERR_DECODE`) rather than merely warning -- which is fatal for a
+    looping channel, since every loop iteration re-serves this exact same
+    broken byte sequence forever. Trimming the file back to just its
+    well-formed leading fragment(s) removes a couple of stray audio samples
+    (a few tens of ms) that were never valid content instead of poisoning
+    the entire segment.
+
+    Scans strictly forward through the top-level boxes: the first `moof`
+    lacking a `tfdt` in its `traf`, and everything from that point on, is
+    dropped. If the file only ever contained one `moof`+`mdat` pair (the
+    normal case), this is a no-op.
+    """
+    data = segment_path.read_bytes()
+    boxes = _iter_top_level_boxes(data)
+    moof_indices = [i for i, (typ, _s, _sz) in enumerate(boxes) if typ == "moof"]
+    if len(moof_indices) <= 1:
+        return False
+
+    good_end: int | None = None
+    for idx in moof_indices:
+        typ, start, size = boxes[idx]
+        moof_bytes = data[start:start + size]
+        if not _moof_has_tfdt(moof_bytes):
+            break
+        frag_end = start + size
+        if idx + 1 < len(boxes) and boxes[idx + 1][0] == "mdat":
+            frag_end = boxes[idx + 1][1] + boxes[idx + 1][2]
+        good_end = frag_end
+    else:
+        return False  # every fragment was well-formed; nothing to repair
+
+    if good_end is None:
+        raise RuntimeError(
+            f"{segment_path}: the FIRST movie fragment in this segment is "
+            f"missing its own tfdt box -- refusing to guess a safe repair "
+            f"(there is no well-formed content left to keep)."
+        )
+    if good_end >= len(data):
+        return False
+
+    dropped_bytes = len(data) - good_end
+    fragments_kept = sum(1 for i in moof_indices if boxes[i][1] < good_end)
+    fragments_dropped = len(moof_indices) - fragments_kept
+    logger.warning(
+        "Repaired malformed trailing movie fragment in %s: dropped %d "
+        "trailing byte(s) (%d fragment(s) removed, %d fragment(s) kept) -- "
+        "see repair_trailing_malformed_fragment docstring for why this "
+        "happens and why it's safe to drop.",
+        segment_path, dropped_bytes, fragments_dropped, fragments_kept,
+    )
+    segment_path.write_bytes(data[:good_end])
+    return True
+
+
+def repair_malformed_segments_in_dir(rendition_dir: Path) -> int:
+    """Run `repair_trailing_malformed_fragment` over every `.m4s` media
+    segment in `rendition_dir` (both video and audio tracks -- filenames
+    are `*_track<id>_<index>.m4s`; init segments (`*_init.mp4`) are
+    untouched, they carry no `moof`/`mdat`). Returns the number of segment
+    files that needed repair. Must run once, right after GPAC produces the
+    segments and before anything reads them back (tfdt boundaries, ffprobe
+    duration, etc.) -- a malformed trailing fragment would otherwise
+    corrupt those readings too, not just downstream playback."""
+    repaired = 0
+    for seg_path in sorted(rendition_dir.glob("*.m4s")):
+        if repair_trailing_malformed_fragment(seg_path):
+            repaired += 1
+    if repaired:
+        logger.info(
+            "Repaired %d segment(s) with a malformed trailing movie "
+            "fragment in %s", repaired, rendition_dir,
+        )
+    return repaired
+
+
 def compute_total_loop_duration_ticks(
     output_dir: Path,
     video_track_id: int,
@@ -619,6 +753,11 @@ def bake_one_rendition(
 
     if dry_run:
         return None
+
+    # Must run before anything reads the produced segments back (tfdt
+    # boundaries, ffprobe duration, etc.) -- see
+    # repair_malformed_segments_in_dir's docstring.
+    repair_malformed_segments_in_dir(rendition_dir)
 
     total_loop_duration_ticks = compute_total_loop_duration_ticks(rendition_dir, video_track_id)
     segment_boundary_ticks = read_segment_boundary_ticks(rendition_dir, video_track_id)
