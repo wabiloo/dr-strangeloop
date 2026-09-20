@@ -1,0 +1,18 @@
+[deploy]
+name = "testlocal"
+backend = "local-docker"
+
+[aws]
+region = "eu-west-1"
+
+[s3]
+bucket_name = ""
+content_folder = "its-a-live/content"
+
+[input]
+source_path = "../outputs/short-loop-1min.ts"
+
+[channel]
+segment_duration   = 4.0
+dvr_window_seconds = 30.0
+port               = 8090
