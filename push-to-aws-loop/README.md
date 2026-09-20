@@ -156,10 +156,10 @@ uv run python channel.py bake
 #    app also contains LoopSharedStack.
 cdk deploy LoopChannelStack-<name>
 
-# 3. (Re)start the channel: scales back to 1 task if stopped, updates the
-#    container command with --epoch-utc=now (so the loop's epoch always
-#    starts "now" relative to when you actually go live), waits for the
-#    new task to be running, prints the CloudFront playback URLs.
+# 3. Start the channel: scales the Express service to 1 task (if it was
+#    stopped), waits for the task to be running, prints the CloudFront
+#    playback URLs. Epoch is fixed (see Notes below), so this is a pure
+#    scaling operation, not a redeploy.
 uv run python channel.py start
 
 # ... channel is live ...
@@ -174,27 +174,32 @@ cdk destroy LoopChannelStack-<name>
 
 - **First `cdk deploy`**: ~9-10 minutes (Express service creation ~5-6 min,
   CloudFront distribution ~3 min, run in parallel where possible).
-- **`channel.py start`/`stop`**: the CLI command itself returns once the
-  new/old task reaches the requested running count (~1-2 minutes) — but
+- **`channel.py start`/`stop`**: fast (well under a minute) — pure scaling,
+  no new task revision.
+- **`channel.py refresh`** (see "Updating content" below): the CLI command
+  returns once the new task reaches the running count (~1-2 minutes) — but
   **that is not the same as full viewer cutover**. ECS Express Mode uses a
   canary deployment strategy with a fixed ~3 minute bake period during
   which most or all traffic can still be served by the *previous* task
   (observed directly: zero requests landed on the new task for the full
   ~3 minutes, then a hard cutover). There's no fast, reliable API signal
   for "100% of viewers now see the new content" — budget a few extra
-  minutes of buffer after `start` before publicizing a playback URL.
+  minutes of buffer after `refresh` before assuming every viewer sees it.
 
 ## Updating content on a running channel (no image rebuild, no redeploy)
 
 ```bash
-uv run python channel.py bake     # re-bake locally, push new package to S3
-uv run python channel.py start    # restart with a fresh epoch so the new
-                                   # package's loop/markers line up
+uv run python channel.py bake      # re-bake locally, push new package to S3
+uv run python channel.py refresh   # force the running task to restart and
+                                    # re-sync LOOP_PACKAGE_S3_URI
 ```
 
 `docker-entrypoint.sh` re-syncs `LOOP_PACKAGE_S3_URI` from scratch every
 time the container starts, so a restart is all that's needed to pick up a
-new bake — the image itself never changes. Remember the canary bake-period
+new bake — the image itself never changes. `refresh` exists specifically
+to force that restart on an *already-running* service (`start` alone won't
+trigger it if the service is already at its target task count — see
+Notes). Remember the canary bake-period
 caveat above: give it a few minutes before assuming every viewer sees the
 new content.
 
@@ -228,14 +233,24 @@ implemented here.
 | Command | Description |
 |---|---|
 | `bake` | Run `bake.py` locally against `input.source_path`, push the result to S3 |
-| `start` | Scale to 1 task if stopped, update the container command with `--epoch-utc=now`, wait for the task to be running, print playback URLs |
+| `start` | Scale the Express service to 1 task (if it was stopped), wait for the task to be running, print playback URLs |
 | `stop` | Scale the Express service to 0 tasks — this is what actually stops paying for Fargate compute between airings |
+| `refresh` | Force a new task launch on an already-running service so it re-syncs `LOOP_PACKAGE_S3_URI` and picks up a fresh `bake` — not needed after `start` from a stopped state |
 | `status` | Print the Express service's current status/scaling |
 | `outputs` | Print all CloudFormation stack outputs |
 | `redeploy` | Delete a broken stack if needed, then `cdk deploy` |
 
 ## Notes / gotchas
 
+- **Epoch is fixed** at the Unix epoch (`1970-01-01T00:00:00Z`), permanently
+  — never patched or reset. This is looping content simulating live, not a
+  real broadcast, so there's no need to force loop position 0 on every
+  start; landing mid-ad-break on start/restart is an accepted tradeoff. The
+  upside: `start`/`stop` never need to touch the container command, so
+  they're pure (fast) scaling operations, and multiple tasks briefly
+  running side by side (e.g. during a `refresh`'s canary window, or a
+  future multi-task auto-scale-out) always agree on position, since
+  nothing about the epoch ever changes between them.
 - **Cost**: Fargate compute (0.25 vCPU/0.5GB by default) + a *shared*
   ALB + CloudWatch logs/metrics + data transfer — no separate "Express
   Mode" charge per AWS's pricing page. `channel.py stop` genuinely stops
@@ -250,12 +265,10 @@ implemented here.
   `channel.py bake` uses your own local AWS credentials (via the AWS CLI)
   to push to S3, same as any other `aws s3 sync`.
 - **Canary deployments, not instant cutover** — see the timing section
-  above. This matters for this specific app because `loop_math`'s
-  drift-free design assumes one epoch is authoritative at a time; during
-  the ~3 minute canary bake window after `start`, some viewers may
-  transiently see the old epoch's manifest while others see the new one,
-  depending on which task their (possibly reused/keep-alive) connection
-  lands on.
+  above. `refresh` forces a new task via `forceNewDeployment`, and ECS
+  Express Mode's canary strategy means the *previous* task can still serve
+  most/all traffic for ~3 minutes before cutover, with no fast/reliable
+  API signal for "100% of viewers now see the new content."
 - The pushed loop package is **not** deleted by `cdk destroy` (the stack
   doesn't own the bucket) — clean up manually with
   `aws s3 rm --recursive s3://<bucket>/<folder>/<name>/` if needed.

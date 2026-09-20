@@ -144,10 +144,13 @@ class LoopChannelStack(Stack):
         # deleting the cluster out from under every other channel.
 
         # ── Express service (long-running, auto-scaling `serve.py`) ──────────
-        # epoch-utc is a placeholder here -- `channel.py start` calls
-        # UpdateExpressGatewayService with the current UTC timestamp each
-        # time the channel is (re)started, same idea as the previous
-        # App Runner/ECS task-def-revision tricks.
+        # --epoch-utc is fixed at the Unix epoch (1970-01-01), permanently --
+        # this is looping content simulating live, not a real broadcast start
+        # time, so there's no need to reset loop position to 0 on every
+        # (re)start; landing mid-ad-break on start/restart is acceptable.
+        # This also means `channel.py start` never needs to touch
+        # primaryContainer (just scalingTarget), so it's a fast scale-only
+        # operation rather than a new task revision/canary deployment.
         service = ecs.CfnExpressGatewayService(
             self,
             "ServeService",

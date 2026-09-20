@@ -10,12 +10,17 @@ Commands:
             then push the resulting loop package to S3 (no AWS compute
             involved -- bake is a one-shot, run-once-per-schedule-change
             process, so for this stack it just runs on your machine)
-  start     (Re)start the ECS Express service with epoch-utc=now (scaling
-            back to 1 task if it was stopped), wait for it to take effect,
-            print playback URLs
+  start     Scale the Express service back to 1 task (if it was stopped),
+            wait for the task to be running, print playback URLs. Epoch is
+            fixed (see loop_channel_stack.py), so this is a pure scaling
+            operation -- no new task revision/canary deployment involved.
   stop      Scale the Express service to 0 tasks -- this is what actually
             stops paying for Fargate compute between airings (the shared
             ALB itself keeps running for other channels)
+  refresh   Force a new task launch on an ALREADY-running service so it
+            re-syncs LOOP_PACKAGE_S3_URI and picks up a fresh `bake` --
+            not needed after `start` from a stopped state (that already
+            launches a fresh task)
   status    Print the Express service's current status/scaling
   outputs   Print all CloudFormation stack outputs
   redeploy  Delete a broken stack if needed, then run cdk deploy
@@ -26,7 +31,6 @@ derived from [deploy].name in the config file, so each config file
 targets an independent channel deployment.
 """
 
-import datetime
 import os
 import shutil
 import subprocess
@@ -167,44 +171,57 @@ def _wait_for_primary_deployment_healthy(ecs_client, service_arn, expected_desir
     sys.exit("Timed out waiting for the primary deployment to reach the expected running count.")
 
 
-def _patch_epoch_utc(command, epoch_utc):
-    command = list(command)
-    for i, arg in enumerate(command):
-        if arg == "--epoch-utc" and i + 1 < len(command):
-            command[i + 1] = epoch_utc
-            return command
-    sys.exit("Could not find --epoch-utc in the service's command -- has the stack drifted?")
-
-
 def cmd_start(cfg):
     outputs = _cf_outputs(cfg)
     service_arn = outputs.get("ExpressServiceArn")
     if not service_arn:
         sys.exit("Missing ExpressServiceArn output -- has the stack been deployed?")
 
+    # Epoch is fixed at 1970-01-01T00:00:00Z (see loop_channel_stack.py) --
+    # this is looping content simulating live, not a real broadcast start
+    # time, so there's no need to reset the loop to position 0 on every
+    # start; viewers landing mid-ad-break on (re)start is acceptable. That
+    # means `start` is a pure scaling operation (no primaryContainer change,
+    # so no new task revision/canary deployment). Resuming from a stopped
+    # (0-task) state already launches a brand-new task, which re-syncs
+    # LOOP_PACKAGE_S3_URI at boot regardless -- see `refresh` below for
+    # picking up a new bake on an ALREADY-running service.
     ecs_client = _session(cfg).client("ecs")
-    service = ecs_client.describe_express_gateway_service(serviceArn=service_arn)["service"]
-    active = service["activeConfigurations"][0]
-    primary_container = dict(active["primaryContainer"])
-
-    epoch_utc = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    new_command = _patch_epoch_utc(primary_container.get("command", []), epoch_utc)
-    primary_container["command"] = new_command
-
-    print(f"Updating service with --epoch-utc {epoch_utc} (and scaling back to 1 task if stopped) ...")
+    print("Scaling service to 1 task (if stopped) ...")
     ecs_client.update_express_gateway_service(
         serviceArn=service_arn,
-        primaryContainer=primary_container,
         scalingTarget={"minTaskCount": 1, "maxTaskCount": 1},
     )
 
-    print("Waiting for the new task to be up and running (this confirms the"
-          " task itself is healthy, NOT that all viewer traffic has cut over"
-          " yet -- ECS Express Mode uses a canary deployment strategy with a"
-          " ~3 minute bake period during which most/all traffic can still be"
-          " served by the OLD task; there's no fast, reliable API signal for"
-          " full cutover, so budget a few extra minutes before publicizing"
-          " a URL after `start`) ...")
+    print("Waiting for the task to be up and running ...")
+    _wait_for_primary_deployment_healthy(ecs_client, service_arn, expected_desired_count=1)
+
+    print(f"\nHLS:  {outputs.get('HlsPlaybackUrl', 'n/a')}")
+    print(f"DASH: {outputs.get('DashPlaybackUrl', 'n/a')}")
+
+
+def cmd_refresh(cfg):
+    """Force a fresh task launch on an already-running service, so it
+    re-syncs LOOP_PACKAGE_S3_URI and picks up a new bake. Not needed after
+    `channel.py start` from a stopped state -- that already launches a new
+    task. Only needed when you `bake` new content while the channel is
+    already running and want it to take effect without a stop/start cycle."""
+    outputs = _cf_outputs(cfg)
+    service_arn = outputs.get("ExpressServiceArn")
+    if not service_arn:
+        sys.exit("Missing ExpressServiceArn output -- has the stack been deployed?")
+
+    ecs_client = _session(cfg).client("ecs")
+    cluster, service_name = _parse_cluster_and_service(service_arn)
+
+    print("Forcing a new deployment so the running task re-syncs"
+          " LOOP_PACKAGE_S3_URI and picks up the latest bake ...")
+    ecs_client.update_service(cluster=cluster, service=service_name, forceNewDeployment=True)
+
+    print("Waiting for the new task to be up and running (ECS Express Mode's"
+          " canary deployment strategy means the OLD task can still serve"
+          " most/all traffic for a ~3 minute bake period -- see README for"
+          " details) ...")
     _wait_for_primary_deployment_healthy(ecs_client, service_arn, expected_desired_count=1)
 
     print(f"\nHLS:  {outputs.get('HlsPlaybackUrl', 'n/a')}")
@@ -309,6 +326,7 @@ COMMANDS = {
     "bake": cmd_bake,
     "start": cmd_start,
     "stop": cmd_stop,
+    "refresh": cmd_refresh,
     "status": cmd_status,
     "outputs": cmd_outputs,
     "redeploy": cmd_redeploy,
