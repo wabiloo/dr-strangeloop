@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-deploy.py — Full pipeline runner for live-scte-loop-generator.
+galvanise.py — Full pipeline runner for live-scte-loop-generator.
 
 Usage:
-  uv run python deploy.py <config.yaml> [--backend aws-media|ecs-express]
+  uv run python galvanise.py <config.yaml> [--backend aws-media|ecs-express]
 
 The config.yaml should be a franken-ts config (e.g. franken-ts/configs/foo.yaml).
 Paths may be absolute or relative to the current working directory.
@@ -141,7 +141,7 @@ def _generate_toml(backend: str, name: str, ts_file_abs: str) -> str:
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(
-        prog="deploy.py",
+        prog="galvanise.py",
         description="Full pipeline runner for live-scte-loop-generator.",
     )
     parser.add_argument("config_yaml", metavar="config.yaml",

@@ -51,16 +51,16 @@ using it. All commands below are run from the repo root regardless.
 
 ### Full pipeline (recommended)
 
-[`deploy.py`](./deploy.py) runs the entire pipeline from a single franken-ts YAML config,
+[`galvanise.py`](./galvanise.py) runs the entire pipeline from a single franken-ts YAML config,
 prompting for confirmation at each step. `--backend` selects which its-a-live
 backend to deploy to (default `aws-media`):
 
 ```bash
 # MediaLive + MediaPackage (default)
-uv run python deploy.py franken-ts/configs/my-stream.yaml
+uv run python galvanise.py franken-ts/configs/my-stream.yaml
 
 # loop-dee-loop on ECS Express Mode + CloudFront
-uv run python deploy.py franken-ts/configs/my-stream.yaml --backend ecs-express
+uv run python galvanise.py franken-ts/configs/my-stream.yaml --backend ecs-express
 ```
 
 Steps performed:
