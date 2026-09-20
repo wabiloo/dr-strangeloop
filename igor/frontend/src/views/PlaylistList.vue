@@ -8,14 +8,14 @@ import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { buildConfig, deleteConfig, listConfigs } from '../api/client'
-import type { ConfigListItem } from '../api/types'
+import { buildPlaylist, deletePlaylist, listPlaylists } from '../api/client'
+import type { PlaylistListItem } from '../api/types'
 
 const router = useRouter()
 const confirm = useConfirm()
 const toast = useToast()
 
-const configs = ref<ConfigListItem[]>([])
+const playlists = ref<PlaylistListItem[]>([])
 const loading = ref(true)
 const error = ref('')
 
@@ -23,7 +23,7 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    configs.value = await listConfigs()
+    playlists.value = await listPlaylists()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -33,7 +33,7 @@ async function load() {
 
 async function build(name: string) {
   try {
-    const job = await buildConfig(name)
+    const job = await buildPlaylist(name)
     toast.add({
       severity: 'info',
       summary: 'Build started',
@@ -48,9 +48,9 @@ async function build(name: string) {
 function confirmDelete(event: MouseEvent, name: string) {
   confirm.require({
     target: event.currentTarget as HTMLElement,
-    message: `Delete config "${name}"?`,
+    message: `Delete playlist "${name}"?`,
     accept: async () => {
-      await deleteConfig(name)
+      await deletePlaylist(name)
       await load()
     },
   })
@@ -62,16 +62,16 @@ onMounted(load)
 <template>
   <div class="flex flex-column gap-3">
     <div class="flex justify-content-between align-items-center">
-      <h2 class="m-0">Content configs (franken-ts)</h2>
+      <h2 class="m-0">Playlists (franken-ts)</h2>
       <div class="flex gap-2">
         <Button label="Refresh" icon="pi pi-refresh" severity="secondary" outlined @click="load" :loading="loading" />
-        <Button label="New config" icon="pi pi-plus" @click="router.push('/configs/new')" />
+        <Button label="New playlist" icon="pi pi-plus" @click="router.push('/playlists/new')" />
       </div>
     </div>
 
     <Message v-if="error" severity="error">{{ error }}</Message>
 
-    <DataTable :value="configs" :loading="loading" data-key="name">
+    <DataTable :value="playlists" :loading="loading" data-key="name">
       <Column field="name" header="Name" />
       <Column field="output_file" header="Output file" />
       <Column field="output_dir" header="Output dir (ladder)" />
@@ -80,13 +80,13 @@ onMounted(load)
       <Column header="Actions">
         <template #body="{ data }">
           <div class="flex gap-2">
-            <Button icon="pi pi-pencil" severity="secondary" text @click="router.push(`/configs/${data.name}`)" />
+            <Button icon="pi pi-pencil" severity="secondary" text @click="router.push(`/playlists/${data.name}`)" />
             <Button icon="pi pi-play" severity="success" text @click="build(data.name)" title="Build .ts" />
             <Button icon="pi pi-trash" severity="danger" text @click="confirmDelete($event, data.name)" />
           </div>
         </template>
       </Column>
-      <template #empty>No franken-ts configs yet. Click "New config" to create one.</template>
+      <template #empty>No franken-ts playlists yet. Click "New playlist" to create one.</template>
     </DataTable>
     <ConfirmPopup />
   </div>

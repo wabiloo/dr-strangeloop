@@ -15,7 +15,7 @@ import Tabs from 'primevue/tabs'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
-import { getConfig, saveConfig } from '../api/client'
+import { getPlaylist, savePlaylist } from '../api/client'
 import AssetTimeline from '../components/AssetTimeline.vue'
 import AssetFileField from '../components/AssetFileField.vue'
 import {
@@ -115,9 +115,9 @@ const form = reactive({
   assets: [] as AssetForm[],
 })
 
-/** Resets the form to its blank-new-config state -- needed because vue-router
- * reuses this component instance when navigating between /configs/new and
- * /configs/:name, so mount-time initializers alone aren't enough. */
+/** Resets the form to its blank-new-playlist state -- needed because vue-router
+ * reuses this component instance when navigating between /playlists/new and
+ * /playlists/:name, so mount-time initializers alone aren't enough. */
 function resetForm() {
   outputMode.value = 'single'
   Object.assign(form.output, defaultOutput())
@@ -162,7 +162,7 @@ function timeOrUndefined(v: string): string | number | undefined {
 /** Converts the form's local shape into the franken-ts YAML shape
  * (franken_ts.config.Config) -- server re-validates against the real
  * Pydantic model on save regardless. */
-function toYamlConfig(): Record<string, unknown> {
+function toYamlPlaylist(): Record<string, unknown> {
   const output: Record<string, unknown> = {
     framerate: form.output.framerate,
     bitrate_kbps: form.output.bitrate_kbps,
@@ -207,9 +207,9 @@ function toYamlConfig(): Record<string, unknown> {
   return cfg
 }
 
-/** Best-effort inverse of toYamlConfig(), for loading an existing config
+/** Best-effort inverse of toYamlPlaylist(), for loading an existing playlist
  * back into the form. */
-function fromYamlConfig(data: Record<string, unknown>) {
+function fromYamlPlaylist(data: Record<string, unknown>) {
   const output = (data.output as Record<string, unknown>) ?? {}
   outputMode.value = output.dir ? 'ladder' : 'single'
   form.output.file = (output.file as string) ?? form.output.file
@@ -265,8 +265,8 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const data = await getConfig(props.name)
-    fromYamlConfig(data)
+    const data = await getPlaylist(props.name)
+    fromYamlPlaylist(data)
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -276,15 +276,15 @@ async function load() {
 
 async function save() {
   if (!nameInput.value.trim()) {
-    error.value = 'Config name is required.'
+    error.value = 'Playlist name is required.'
     return
   }
   saving.value = true
   error.value = ''
   try {
-    await saveConfig(nameInput.value.trim(), toYamlConfig())
+    await savePlaylist(nameInput.value.trim(), toYamlPlaylist())
     toast.add({ severity: 'success', summary: 'Saved', life: 3000 })
-    router.push('/configs')
+    router.push('/playlists')
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -317,10 +317,10 @@ function applyHexPopover() {
   <div class="flex flex-column gap-3">
     <div class="editor-header">
       <div class="flex flex-column gap-1">
-        <RouterLink to="/configs" class="editor-back"><i class="pi pi-arrow-left" /> Content configs</RouterLink>
-        <h2 class="m-0">{{ isNew ? 'New content config' : `Edit: ${name}` }}</h2>
+        <RouterLink to="/playlists" class="editor-back"><i class="pi pi-arrow-left" /> Playlists</RouterLink>
+        <h2 class="m-0">{{ isNew ? 'New playlist' : `Edit: ${name}` }}</h2>
       </div>
-      <Button label="Save config" icon="pi pi-check" :loading="saving" @click="save" />
+      <Button label="Save playlist" icon="pi pi-check" :loading="saving" @click="save" />
     </div>
 
     <Message v-if="error" severity="error">{{ error }}</Message>
@@ -338,8 +338,8 @@ function applyHexPopover() {
         <TabPanel value="settings">
           <div class="flex flex-column gap-4" style="max-width: 56rem">
             <div class="flex flex-column gap-1">
-              <label for="cfg-name">Config name</label>
-              <InputText id="cfg-name" v-model="nameInput" :disabled="!isNew" placeholder="my-stream" />
+              <label for="playlist-name">Playlist name</label>
+              <InputText id="playlist-name" v-model="nameInput" :disabled="!isNew" placeholder="my-stream" />
             </div>
 
             <Divider align="left"><span class="font-bold">Output</span></Divider>

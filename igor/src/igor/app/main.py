@@ -6,9 +6,9 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from igor.app.routes.channels import router as channels_router
-from igor.app.routes.configs import router as configs_router
 from igor.app.routes.files import router as files_router
 from igor.app.routes.jobs import router as jobs_router
+from igor.app.routes.playlists import router as playlists_router
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]  # igor/
 
@@ -21,7 +21,7 @@ app = FastAPI(
     ),
 )
 
-app.include_router(configs_router, prefix="/api/v1/configs", tags=["configs"])
+app.include_router(playlists_router, prefix="/api/v1/playlists", tags=["playlists"])
 app.include_router(channels_router, prefix="/api/v1/channels", tags=["channels"])
 app.include_router(jobs_router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(files_router, prefix="/api/v1/files", tags=["files"])

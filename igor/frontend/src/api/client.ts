@@ -5,9 +5,9 @@ import type {
   ChannelListItem,
   ChannelOutputs,
   ChannelStatus,
-  ConfigListItem,
-  FrankenTsConfig,
+  FrankenTsPlaylist,
   Job,
+  PlaylistListItem,
   ProbeResult,
 } from './types'
 
@@ -42,26 +42,26 @@ async function postJson<T>(url: string, body?: unknown): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// franken-ts configs
+// franken-ts playlists
 // ---------------------------------------------------------------------------
 
-const CONFIGS_BASE = '/api/v1/configs'
+const PLAYLISTS_BASE = '/api/v1/playlists'
 
-export function getConfigSchema(): Promise<Record<string, unknown>> {
-  return getJson(`${CONFIGS_BASE}/schema`)
+export function getPlaylistSchema(): Promise<Record<string, unknown>> {
+  return getJson(`${PLAYLISTS_BASE}/schema`)
 }
 
-export function listConfigs(): Promise<ConfigListItem[]> {
-  return getJson(`${CONFIGS_BASE}/`)
+export function listPlaylists(): Promise<PlaylistListItem[]> {
+  return getJson(`${PLAYLISTS_BASE}/`)
 }
 
-export function getConfig(name: string): Promise<FrankenTsConfig> {
-  return getJson(`${CONFIGS_BASE}/${encodeURIComponent(name)}`)
+export function getPlaylist(name: string): Promise<FrankenTsPlaylist> {
+  return getJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}`)
 }
 
-export async function saveConfig(name: string, data: FrankenTsConfig): Promise<{ path: string }> {
+export async function savePlaylist(name: string, data: FrankenTsPlaylist): Promise<{ path: string }> {
   const res = await handle(
-    await fetch(`${CONFIGS_BASE}/${encodeURIComponent(name)}`, {
+    await fetch(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ data }),
@@ -70,12 +70,12 @@ export async function saveConfig(name: string, data: FrankenTsConfig): Promise<{
   return res.json()
 }
 
-export async function deleteConfig(name: string): Promise<void> {
-  await handle(await fetch(`${CONFIGS_BASE}/${encodeURIComponent(name)}`, { method: 'DELETE' }))
+export async function deletePlaylist(name: string): Promise<void> {
+  await handle(await fetch(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}`, { method: 'DELETE' }))
 }
 
-export function buildConfig(name: string): Promise<Job> {
-  return postJson(`${CONFIGS_BASE}/${encodeURIComponent(name)}/build`)
+export function buildPlaylist(name: string): Promise<Job> {
+  return postJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/build`)
 }
 
 // ---------------------------------------------------------------------------

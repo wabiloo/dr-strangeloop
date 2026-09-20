@@ -5,7 +5,7 @@ galvanise.py — Full pipeline runner for dr-strangeloop.
 Usage:
   uv run python galvanise.py <config.yaml> [--backend aws-media|ecs-express]
 
-The config.yaml should be a franken-ts config (e.g. franken-ts/configs/foo.yaml).
+The config.yaml should be a franken-ts playlist (e.g. franken-ts/playlists/foo.yaml).
 Paths may be absolute or relative to the current working directory.
 
 Pipeline (its-a-live backend selected by --backend, default aws-media):

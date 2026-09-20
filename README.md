@@ -58,10 +58,10 @@ backend to deploy to (default `aws-media`):
 
 ```bash
 # MediaLive + MediaPackage (default)
-uv run python galvanise.py franken-ts/configs/my-stream.yaml
+uv run python galvanise.py franken-ts/playlists/my-stream.yaml
 
 # loop-dee-loop on ECS Express Mode + CloudFront
-uv run python galvanise.py franken-ts/configs/my-stream.yaml --backend ecs-express
+uv run python galvanise.py franken-ts/playlists/my-stream.yaml --backend ecs-express
 ```
 
 Steps performed:
@@ -80,7 +80,7 @@ At the end it prints the exact commands to update content, stop the channel, and
 #### Build a TS file
 
 ```bash
-uv run franken-ts franken-ts/configs/example.yaml
+uv run franken-ts franken-ts/playlists/example.yaml
 ```
 
 #### Inspect a TS file

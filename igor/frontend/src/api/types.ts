@@ -4,7 +4,7 @@
  * yet, so double check both sides when changing a route's response shape.
  */
 
-export interface ConfigListItem {
+export interface PlaylistListItem {
   name: string
   path: string
   output_file?: string | null
@@ -15,9 +15,9 @@ export interface ConfigListItem {
 }
 
 /** franken-ts's franken_ts.config.Config, as raw parsed YAML -- kept as a
- * loose record because the form is schema-driven (see /api/v1/configs/schema,
+ * loose record because the form is schema-driven (see /api/v1/playlists/schema,
  * a live JSON Schema export of the Pydantic model) rather than hand-typed. */
-export type FrankenTsConfig = Record<string, unknown>
+export type FrankenTsPlaylist = Record<string, unknown>
 
 export interface FileEntry {
   name: string

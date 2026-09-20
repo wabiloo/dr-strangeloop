@@ -1,7 +1,7 @@
 # Agent reference — igor (Dr. Strangeloop UI)
 
 Web console (FastAPI + Vue 3) that lets a human or agent define
-`franken-ts` content/ad-break configs, deploy/manage `its-a-live`
+`franken-ts` playlists (content/ad-break definitions), deploy/manage `its-a-live`
 channels (either backend), and monitor them -- a UI on top of the same
 CLIs described in the repo-root [`AGENTS.md`](../AGENTS.md), not a
 replacement for them. See [`README.md`](./README.md) for layout/run
@@ -32,7 +32,7 @@ another agent unless you're specifically building on its HTTP API.
 
 | Prefix | Purpose |
 |---|---|
-| `GET/PUT/DELETE /api/v1/configs/*` | franken-ts YAML CRUD + `/schema` (JSON Schema) + `/build` (spawns a job) |
+| `GET/PUT/DELETE /api/v1/playlists/*` | franken-ts YAML playlist CRUD + `/schema` (JSON Schema) + `/build` (spawns a job) |
 | `GET/POST/DELETE /api/v1/channels/*` | its-a-live TOML CRUD, `/status`, `/outputs`, `/health` (ecs-express), and job-spawning `/create`, `/spark`, `/start`, `/stop`, `/refresh`, `/redeploy` |
 | `GET /api/v1/jobs/*` | poll job status/log (`?log_offset=` for incremental tailing) |
 

@@ -6,23 +6,23 @@ import Message from 'primevue/message'
 import Select from 'primevue/select'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { buildConfig, defineChannel, listConfigs } from '../api/client'
+import { buildPlaylist, defineChannel, listPlaylists } from '../api/client'
 import JobPanel from '../components/JobPanel.vue'
-import type { ChannelCreatePayload, ConfigListItem, Job } from '../api/types'
+import type { ChannelCreatePayload, Job, PlaylistListItem } from '../api/types'
 
 const router = useRouter()
 const saving = ref(false)
 const error = ref('')
 
-const configs = ref<ConfigListItem[]>([])
-const selectedConfigName = ref<string | null>(null)
+const playlists = ref<PlaylistListItem[]>([])
+const selectedPlaylistName = ref<string | null>(null)
 const buildJobId = ref<string | null>(null)
 const building = ref(false)
 
-const selectedConfig = computed(() => configs.value.find((c) => c.name === selectedConfigName.value) ?? null)
+const selectedPlaylist = computed(() => playlists.value.find((c) => c.name === selectedPlaylistName.value) ?? null)
 
-const configOptions = computed(() =>
-  configs.value.map((c) => ({
+const playlistOptions = computed(() =>
+  playlists.value.map((c) => ({
     label: c.error
       ? `${c.name} (invalid: ${c.error})`
       : `${c.name} -- ${c.asset_count ?? 0} asset${c.asset_count === 1 ? '' : 's'}, ${c.ad_break_count ?? 0} ad break${c.ad_break_count === 1 ? '' : 's'}`,
@@ -45,26 +45,26 @@ const form = reactive<ChannelCreatePayload>({
   memory: 512,
 })
 
-function selectConfig(name: string | null) {
-  selectedConfigName.value = name
-  const c = configs.value.find((cfg) => cfg.name === name)
-  if (c) form.source_path = c.output_dir ?? c.output_file ?? form.source_path
+function selectPlaylist(name: string | null) {
+  selectedPlaylistName.value = name
+  const p = playlists.value.find((pl) => pl.name === name)
+  if (p) form.source_path = p.output_dir ?? p.output_file ?? form.source_path
 }
 
-async function loadConfigs() {
+async function loadPlaylists() {
   try {
-    configs.value = await listConfigs()
+    playlists.value = await listPlaylists()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   }
 }
 
 async function build() {
-  if (!selectedConfigName.value) return
+  if (!selectedPlaylistName.value) return
   building.value = true
   error.value = ''
   try {
-    const job = await buildConfig(selectedConfigName.value)
+    const job = await buildPlaylist(selectedPlaylistName.value)
     buildJobId.value = job.id
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -77,7 +77,7 @@ function onBuildFinished(job: Job) {
   if (job.status !== 'succeeded') error.value = 'Build failed -- see log above.'
 }
 
-onMounted(loadConfigs)
+onMounted(loadPlaylists)
 
 const backendOptions = [
   { label: 'ecs-express (loop-dee-loop, self-hosted, cheap)', value: 'ecs-express' },
@@ -137,19 +137,19 @@ async function submit() {
     </div>
 
     <div class="flex flex-column gap-1">
-      <label for="source-config">Content config</label>
+      <label for="source-playlist">Playlist</label>
       <Select
-        id="source-config"
-        :model-value="selectedConfigName"
-        :options="configOptions"
+        id="source-playlist"
+        :model-value="selectedPlaylistName"
+        :options="playlistOptions"
         option-label="label"
         option-value="value"
-        placeholder="Pick a franken-ts content config, or enter a path manually below"
+        placeholder="Pick a franken-ts playlist, or enter a path manually below"
         show-clear
-        @update:model-value="selectConfig"
+        @update:model-value="selectPlaylist"
       />
-      <div v-if="selectedConfig" class="flex align-items-center gap-2 mt-1">
-        <RouterLink :to="`/configs/${selectedConfig.name}`" class="text-sm">Edit this config</RouterLink>
+      <div v-if="selectedPlaylist" class="flex align-items-center gap-2 mt-1">
+        <RouterLink :to="`/playlists/${selectedPlaylist.name}`" class="text-sm">Edit this playlist</RouterLink>
         <Button label="Build now" icon="pi pi-cog" size="small" text :loading="building" @click="build" />
       </div>
       <JobPanel v-if="buildJobId" :job-id="buildJobId" @finished="onBuildFinished" />

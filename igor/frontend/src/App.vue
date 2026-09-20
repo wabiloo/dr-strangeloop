@@ -20,8 +20,8 @@ const router = useRouter()
           <RouterLink to="/channels" class="app-nav-link" active-class="app-nav-link-active">
             Channels
           </RouterLink>
-          <RouterLink to="/configs" class="app-nav-link" active-class="app-nav-link-active">
-            Content configs
+          <RouterLink to="/playlists" class="app-nav-link" active-class="app-nav-link-active">
+            Playlists
           </RouterLink>
         </nav>
 
