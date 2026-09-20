@@ -36,6 +36,7 @@ export interface SegmentationPairOption {
 export const SEGMENTATION_PAIR_OPTIONS: SegmentationPairOption[] = [
   { value: '0x00', label: '0x00 -- Not Indicated', name: 'Not Indicated', instant: true },
   { value: '0x01', label: '0x01 -- Content Identification', name: 'Content Identification', instant: true },
+  { value: '0x02', label: '0x02 -- Call Ad Server', name: 'Call Ad Server', instant: true },
   { value: '0x10', label: '0x10/0x11 -- Program (Start/End)', name: 'Program', instant: false },
   { value: '0x12', label: '0x12 -- Program Early Termination', name: 'Program Early Termination', instant: true },
   { value: '0x13', label: '0x13 -- Program Breakaway', name: 'Program Breakaway', instant: true },
@@ -127,6 +128,7 @@ export function colorForLaneKey(key: string): string {
 export const SEGMENTATION_TYPE_ID_OPTIONS: PresetOption[] = [
   { value: '0x00', label: '0x00 -- Not Indicated' },
   { value: '0x01', label: '0x01 -- Content Identification' },
+  { value: '0x02', label: '0x02 -- Call Ad Server' },
   { value: '0x10', label: '0x10 -- Program Start' },
   { value: '0x11', label: '0x11 -- Program End' },
   { value: '0x12', label: '0x12 -- Program Early Termination' },

@@ -198,6 +198,7 @@ def lane_for_type_id(type_id: str | int) -> str:
 INSTANT_SEGMENTATION_TYPE_IDS: frozenset[str] = frozenset({
     "0x00",  # Not Indicated
     "0x01",  # Content Identification
+    "0x02",  # Call Ad Server
     "0x12",  # Program Early Termination
     "0x13",  # Program Breakaway
     "0x14",  # Program Resumption
