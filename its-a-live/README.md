@@ -1,7 +1,7 @@
 # its-a-live
 
 Provisions a live-looping HLS/DASH channel from `franken-ts` output, on
-either of two backends selected per-channel via config — one command-line
+one of three backends selected per-channel via config — one command-line
 tool, one config schema, identical commands regardless of which backend
 you pick:
 
@@ -10,6 +10,9 @@ you pick:
   managed media services involved.
 - **`aws-media`** — **MediaLive + MediaPackage v1** (fully managed AWS
   media services, real live transcoding).
+- **`local-docker`** — `loop-dee-loop` in a `docker run` container on
+  your own machine. No AWS resources at all, no CloudFormation stack —
+  good for local dev/demo/testing before spending anything on AWS.
 
 > This tool was formerly two separate projects (`push-to-aws-media` and
 > `push-to-aws-loop`); they're merged here under one CLI so you don't have
@@ -145,15 +148,19 @@ uv run python channel.py refresh    # pick it up on the running channel
 Every command works the same way regardless of backend — `[deploy].backend`
 in your config file picks the implementation.
 
-| Command | `ecs-express` | `aws-media` |
-|---|---|---|
-| `spark` | Bake locally (GPAC via `bake.py`), push loop package to S3 | Upload the raw `.ts` to S3 as-is |
-| `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Start the MediaLive channel, wait for `RUNNING` |
-| `stop` | Scale ECS to 0 tasks (shared ALB keeps running for other channels) | Stop the MediaLive channel, wait for `IDLE` |
-| `refresh` | Force a new ECS task launch to re-sync S3 content | Full stop→start cycle (no hot-reload exists) |
-| `status` | ECS service scaling/status | MediaLive channel state |
-| `outputs` | CloudFormation stack outputs | CloudFormation stack outputs |
-| `redeploy` | Delete a broken stack if needed (and ensure the shared cluster stack is deployed), then `cdk deploy` | Delete a broken stack if needed, then `cdk deploy` |
+| Command | `ecs-express` | `aws-media` | `local-docker` |
+|---|---|---|---|
+| `spark` | Bake locally (GPAC via `bake.py`), push loop package to S3 | Upload the raw `.ts` to S3 as-is | Bake locally (GPAC via `bake.py`), no upload — package stays on disk |
+| `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Start the MediaLive channel, wait for `RUNNING` | `docker run` a container bind-mounting the baked package (building the image on first use); epoch defaults to the Unix epoch, `--epoch-utc` works the same as `ecs-express` |
+| `stop` | Scale ECS to 0 tasks (shared ALB keeps running for other channels) | Stop the MediaLive channel, wait for `IDLE` | `docker rm -f` the container |
+| `refresh` | Force a new ECS task launch to re-sync S3 content | Full stop→start cycle (no hot-reload exists) | Recreate the container (seconds, no canary) |
+| `status` | ECS service scaling/status | MediaLive channel state | Docker container status |
+| `outputs` | CloudFormation stack outputs | CloudFormation stack outputs | N/A — no stack; use `status` |
+| `redeploy` | Delete a broken stack if needed (and ensure the shared cluster stack is deployed), then `cdk deploy` | Delete a broken stack if needed, then `cdk deploy` | N/A — no stack; equivalent to `refresh` |
+
+`local-docker` has no CloudFormation/CDK involvement whatsoever: no
+`cdk deploy`/`cdk destroy` step exists for it, and playback URLs are
+always `http://localhost:<channel.port>/...`.
 
 ## Notes / gotchas
 
