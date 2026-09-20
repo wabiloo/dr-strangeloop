@@ -19,13 +19,53 @@ const FALLBACK_SECONDS = 15 // weight used for assets with an unparseable/empty 
 const segments = computed(() => {
   const durations = props.assets.map((a) => parseApproxSeconds(a.duration) ?? FALLBACK_SECONDS)
   const total = durations.reduce((sum, d) => sum + d, 0) || 1
-  return props.assets.map((a, i) => ({
-    asset: a,
-    seconds: durations[i],
-    percent: (durations[i] / total) * 100,
-    approx: parseApproxSeconds(a.duration) === null,
-  }))
+  let offset = 0
+  return props.assets.map((a, i) => {
+    const seconds = durations[i]
+    const seg = {
+      asset: a,
+      seconds,
+      offsetSeconds: offset,
+      percent: (seconds / total) * 100,
+      approx: parseApproxSeconds(a.duration) === null,
+    }
+    offset += seconds
+    return seg
+  })
 })
+
+const totalSeconds = computed(() => segments.value.reduce((sum, s) => sum + s.seconds, 0) || 1)
+const hasApproxSegments = computed(() => segments.value.some((s) => s.approx))
+
+/** "Nice" round numbers to space ruler ticks at, in seconds. */
+const NICE_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200]
+
+const tickStepSeconds = computed(() => {
+  const total = totalSeconds.value
+  // Aim for roughly 5-10 ticks across the timeline.
+  const target = total / 7
+  return NICE_STEPS.find((step) => step >= target) ?? NICE_STEPS[NICE_STEPS.length - 1]
+})
+
+const ticks = computed(() => {
+  const step = tickStepSeconds.value
+  const total = totalSeconds.value
+  const result: { seconds: number; percent: number }[] = []
+  for (let t = 0; t <= total + 0.001; t += step) {
+    result.push({ seconds: t, percent: (t / total) * 100 })
+  }
+  return result
+})
+
+function formatDuration(totalSecondsValue: number): string {
+  const s = Math.round(totalSecondsValue)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+  if (m > 0) return `${m}:${String(sec).padStart(2, '0')}`
+  return `${sec}s`
+}
 
 function fileLabel(path: string): string {
   const parts = path.split('/')
@@ -35,6 +75,11 @@ function fileLabel(path: string): string {
 
 <template>
   <div class="timeline">
+    <div class="timeline-header">
+      <span class="font-semibold">Total duration: {{ formatDuration(totalSeconds) }}</span>
+      <span v-if="hasApproxSegments" class="text-color-secondary text-sm">(approximate -- see ~ below)</span>
+    </div>
+
     <div class="timeline-track">
       <div
         v-for="(seg, i) in segments"
@@ -42,10 +87,10 @@ function fileLabel(path: string): string {
         class="timeline-segment"
         :class="{ 'timeline-segment-ad': seg.asset.ad_break.enabled }"
         :style="{ width: seg.percent + '%' }"
-        :title="`${fileLabel(seg.asset.file)} (${seg.asset.duration || 'unknown duration'})`"
+        :title="`${fileLabel(seg.asset.file)} -- ${formatDuration(seg.seconds)}${seg.approx ? ' (approximate)' : ''}`"
       >
         <span class="timeline-segment-label">{{ fileLabel(seg.asset.file) }}</span>
-        <span v-if="seg.approx" class="timeline-segment-approx">~</span>
+        <span class="timeline-segment-duration">{{ formatDuration(seg.seconds) }}<span v-if="seg.approx">~</span></span>
       </div>
     </div>
 
@@ -65,10 +110,22 @@ function fileLabel(path: string): string {
       </template>
     </div>
 
+    <div class="timeline-ruler">
+      <div
+        v-for="(tick, i) in ticks"
+        :key="i"
+        class="timeline-tick"
+        :style="{ left: tick.percent + '%' }"
+      >
+        <span class="timeline-tick-line" />
+        <span class="timeline-tick-label">{{ formatDuration(tick.seconds) }}</span>
+      </div>
+    </div>
+
     <div class="timeline-legend">
       <span class="timeline-legend-item"><span class="timeline-swatch timeline-swatch-content" /> Content</span>
       <span class="timeline-legend-item"><span class="timeline-swatch timeline-swatch-ad" /> Ad break (SCTE-35)</span>
-      <span class="timeline-legend-item text-color-secondary">~ = duration not set / not parseable, shown at equal weight</span>
+      <span class="timeline-legend-item text-color-secondary">~ = duration not set / not parseable, shown at {{ formatDuration(FALLBACK_SECONDS) }} placeholder weight</span>
     </div>
   </div>
 </template>
@@ -80,9 +137,15 @@ function fileLabel(path: string): string {
   gap: 0.35rem;
 }
 
+.timeline-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
 .timeline-track {
   display: flex;
-  height: 2.5rem;
+  height: 2.75rem;
   border-radius: 6px;
   overflow: hidden;
   border: 1px solid #cbd5e1;
@@ -92,6 +155,7 @@ function fileLabel(path: string): string {
   background: #38bdf8;
   border-right: 1px solid rgba(255, 255, 255, 0.6);
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   min-width: 2px;
@@ -114,14 +178,13 @@ function fileLabel(path: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   padding: 0 0.35rem;
+  max-width: 100%;
 }
 
-.timeline-segment-approx {
-  position: absolute;
-  top: 1px;
-  right: 2px;
+.timeline-segment-duration {
   font-size: 0.65rem;
-  color: #0f172a99;
+  color: #0f172acc;
+  white-space: nowrap;
 }
 
 .timeline-markers {
@@ -142,6 +205,40 @@ function fileLabel(path: string): string {
   font-size: 0.65rem;
   color: #ea580c;
   white-space: nowrap;
+}
+
+.timeline-ruler {
+  position: relative;
+  height: 1.5rem;
+  margin-top: 0.15rem;
+}
+
+.timeline-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-1px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Last tick's label would overflow the container to the right -- anchor
+ * it to the right edge of the tick mark instead of centering. */
+.timeline-tick:last-child {
+  transform: translateX(-100%);
+}
+
+.timeline-tick-line {
+  width: 1px;
+  height: 0.4rem;
+  background: #94a3b8;
+}
+
+.timeline-tick-label {
+  font-size: 0.65rem;
+  color: #64748b;
+  white-space: nowrap;
+  margin-top: 0.1rem;
 }
 
 .timeline-legend {

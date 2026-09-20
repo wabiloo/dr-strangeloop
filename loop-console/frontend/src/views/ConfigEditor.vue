@@ -12,6 +12,7 @@ import { useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { getConfig, saveConfig } from '../api/client'
 import AssetTimeline from '../components/AssetTimeline.vue'
+import AssetFileField from '../components/AssetFileField.vue'
 import {
   SEGMENTATION_TYPE_ID_OPTIONS,
   UPID_TYPE_OPTIONS,
@@ -355,7 +356,7 @@ function applyHexPopover() {
     </div>
     <div class="flex flex-column gap-1">
       <label>Global slate image (optional, used by fade_in/fade_out cross-dissolves)</label>
-      <InputText v-model="form.slate_image" placeholder="/path/to/slate.png" />
+      <AssetFileField v-model="form.slate_image" placeholder="/path/to/slate.png" />
     </div>
 
     <Divider align="left"><span class="font-bold">Assets (ordered timeline)</span></Divider>
@@ -369,8 +370,8 @@ function applyHexPopover() {
       </div>
       <div class="grid">
         <div class="col-12 flex flex-column gap-1">
-          <label>File path</label>
-          <InputText v-model="a.file" placeholder="content.mp4" />
+          <label>File path (local path or https:// URL)</label>
+          <AssetFileField v-model="a.file" placeholder="content.mp4" />
         </div>
         <div class="col-6 flex flex-column gap-1">
           <label>Start</label>
@@ -394,7 +395,7 @@ function applyHexPopover() {
         </div>
         <div class="col-12 flex flex-column gap-1">
           <label>Per-asset slate image (overrides global)</label>
-          <InputText v-model="a.slate_image" />
+          <AssetFileField v-model="a.slate_image" />
         </div>
       </div>
 

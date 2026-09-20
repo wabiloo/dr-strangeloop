@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from loop_console.app.routes.channels import router as channels_router
 from loop_console.app.routes.configs import router as configs_router
+from loop_console.app.routes.files import router as files_router
 from loop_console.app.routes.jobs import router as jobs_router
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]  # loop-console/
@@ -23,6 +24,7 @@ app = FastAPI(
 app.include_router(configs_router, prefix="/api/v1/configs", tags=["configs"])
 app.include_router(channels_router, prefix="/api/v1/channels", tags=["channels"])
 app.include_router(jobs_router, prefix="/api/v1/jobs", tags=["jobs"])
+app.include_router(files_router, prefix="/api/v1/files", tags=["files"])
 
 
 @app.get("/health")

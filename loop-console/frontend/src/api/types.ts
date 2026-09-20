@@ -19,6 +19,31 @@ export interface ConfigListItem {
  * a live JSON Schema export of the Pydantic model) rather than hand-typed. */
 export type FrankenTsConfig = Record<string, unknown>
 
+export interface FileEntry {
+  name: string
+  path: string
+  is_dir: boolean
+  is_video: boolean
+}
+
+export interface BrowseResult {
+  path: string
+  parent: string | null
+  entries: FileEntry[]
+}
+
+export interface ProbeResult {
+  duration_seconds: number | null
+  width: number | null
+  height: number | null
+  video_codec: string | null
+  frame_rate: number | null
+  has_audio: boolean
+  audio_codec: string | null
+  format_name: string | null
+  size_bytes: number | null
+}
+
 export interface ChannelListItem {
   config_path: string
   name: string

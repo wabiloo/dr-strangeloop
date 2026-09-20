@@ -1,4 +1,5 @@
 import type {
+  BrowseResult,
   ChannelCreatePayload,
   ChannelHealth,
   ChannelListItem,
@@ -7,6 +8,7 @@ import type {
   ConfigListItem,
   FrankenTsConfig,
   Job,
+  ProbeResult,
 } from './types'
 
 async function handle(res: Response): Promise<Response> {
@@ -147,4 +149,19 @@ export function listJobs(channel?: string): Promise<Job[]> {
 
 export function getJob(id: string, logOffset = 0): Promise<Job> {
   return getJson(`${JOBS_BASE}/${encodeURIComponent(id)}?log_offset=${logOffset}`)
+}
+
+// ---------------------------------------------------------------------------
+// local files (browse + probe, for the asset file picker)
+// ---------------------------------------------------------------------------
+
+const FILES_BASE = '/api/v1/files'
+
+export function browseFiles(path?: string): Promise<BrowseResult> {
+  const qs = path ? `?path=${encodeURIComponent(path)}` : ''
+  return getJson(`${FILES_BASE}/browse${qs}`)
+}
+
+export function probeMedia(pathOrUrl: string): Promise<ProbeResult> {
+  return getJson(`${FILES_BASE}/probe?path_or_url=${encodeURIComponent(pathOrUrl)}`)
 }
