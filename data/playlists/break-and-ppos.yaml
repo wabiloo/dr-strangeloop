@@ -230,3 +230,51 @@ markers:
     no_regional_blackout: false
     archive_allowed: false
     device_restrictions: 1
+- event_id: 208
+  splice_type: time_signal
+  assets:
+  - jingle1
+  segmentation:
+    type_id: '0x02'
+    upid_type: '0x0C'
+    upid_hex: 414446520133f10134b04f065e060220
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 209
+  splice_type: time_signal
+  assets:
+  - ad1a
+  segmentation:
+    type_id: '0x02'
+    upid_type: '0x0C'
+    upid_hex: 414446520133f10134b04f065e060220
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 210
+  splice_type: time_signal
+  assets:
+  - ad1b
+  segmentation:
+    type_id: '0x02'
+    upid_type: '0x0C'
+    upid_hex: 414446520133f10134b04f065e060220
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 211
+  splice_type: time_signal
+  assets:
+  - ad1c
+  segmentation:
+    type_id: '0x02'
+    upid_type: '0x0C'
+    upid_hex: 414446520133f10134b04f065e060220
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1

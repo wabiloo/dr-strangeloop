@@ -560,9 +560,15 @@ async function save() {
   saving.value = true
   error.value = ''
   try {
-    await savePlaylist(nameInput.value.trim(), toYamlPlaylist())
+    const savedName = nameInput.value.trim()
+    await savePlaylist(savedName, toYamlPlaylist())
     toast.add({ severity: 'success', summary: 'Saved', life: 3000 })
-    router.push('/playlists')
+    if (isNew.value) {
+      // Was creating a new playlist -- move to its edit route (in place,
+      // no list navigation) so subsequent saves update it instead of
+      // re-creating, and reloads/refreshes work as expected.
+      router.replace(`/playlists/${encodeURIComponent(savedName)}`)
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
