@@ -413,13 +413,28 @@ class Channel:
         # is then emitted immediately before every subsequent segment that
         # starts a new loop iteration (local_index == 0), so the player
         # resets its timestamp-continuity expectations there.
-        first_loop_number = media_sequence // pkg.segments_per_loop
+        #
+        # `media_sequence` (from segment_index_for_position/
+        # global_segment_number above) is the segment CONTAINING "now" --
+        # i.e. the live edge, the LAST entry the window should end at. The
+        # window itself must span BACKWARD from there (recent history up
+        # to and including the live edge), never forward past it: segments
+        # after the live edge haven't been "reached" in real time yet, even
+        # though the underlying files already exist (every segment is
+        # pre-baked -- see LoopPackage docstring), so serving them as if
+        # already live lets a client play ahead of true wall-clock time.
+        # Clamped to 0 only matters in the first few seconds after this
+        # process starts, when fewer than `window_segments` have "aged"
+        # yet -- the window is simply smaller than requested until then,
+        # same as any real live stream's startup ramp-up.
+        first_global_index = max(0, media_sequence - window_segments + 1)
+        first_loop_number = first_global_index // pkg.segments_per_loop
 
         lines = [
             "#EXTM3U",
             "#EXT-X-VERSION:7",
             f"#EXT-X-TARGETDURATION:{pkg.max_segment_duration_seconds_rounded_up}",
-            f"#EXT-X-MEDIA-SEQUENCE:{media_sequence}",
+            f"#EXT-X-MEDIA-SEQUENCE:{first_global_index}",
             f"#EXT-X-DISCONTINUITY-SEQUENCE:{first_loop_number}",
             f'#EXT-X-MAP:URI="{init_uri}"',
         ]
@@ -440,8 +455,14 @@ class Channel:
         # the single-occurrence rule without a separate pre-pass.
         already_emitted_markers: set[tuple[str, int]] = set()
 
-        for i in range(window_segments):
-            global_index = media_sequence + i
+        # Never emit past `media_sequence` (the live edge) -- when
+        # first_global_index was clamped to 0 above (only possible in the
+        # first few seconds of this process's life), a plain
+        # `range(window_segments)` would overshoot past the live edge and
+        # reintroduce future segments, the exact bug being fixed here.
+        entries_in_window = media_sequence - first_global_index + 1
+        for i in range(entries_in_window):
+            global_index = first_global_index + i
             local_index = global_index % pkg.segments_per_loop
             local_loop_number = global_index // pkg.segments_per_loop
 
