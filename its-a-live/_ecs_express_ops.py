@@ -236,10 +236,23 @@ def refresh(cfg, session, outputs):
 
 
 def status(cfg, session, outputs):
+    """Prints a human-readable summary and returns a structured dict (used
+    by `channel.py status --json` and, longer-term, by any programmatic
+    caller such as a management API/UI)."""
     service_arn = outputs.get("ExpressServiceArn")
     ecs_client = session.client("ecs")
     service = ecs_client.describe_express_gateway_service(serviceArn=service_arn)["service"]
     active = service["activeConfigurations"][0]
     scaling = active.get("scalingTarget", {})
-    print(f"Service {service['serviceName']}: status={service['status']['statusCode']} "
-          f"minTasks={scaling.get('minTaskCount')} maxTasks={scaling.get('maxTaskCount')}")
+    result = {
+        "backend": "ecs-express",
+        "service_name": service["serviceName"],
+        "status": service["status"]["statusCode"],
+        "min_tasks": scaling.get("minTaskCount"),
+        "max_tasks": scaling.get("maxTaskCount"),
+        "hls_url": outputs.get("HlsPlaybackUrl"),
+        "dash_url": outputs.get("DashPlaybackUrl"),
+    }
+    print(f"Service {result['service_name']}: status={result['status']} "
+          f"minTasks={result['min_tasks']} maxTasks={result['max_tasks']}")
+    return result

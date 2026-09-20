@@ -1,4 +1,4 @@
-# ts-scte-maker
+# dr-strangeloop
 
 A suite of tools for building broadcast-ready MPEG-TS files with SCTE-35 ad markers, inspecting them frame-by-frame, and deploying them as live looping streams on AWS.
 
@@ -9,6 +9,7 @@ A suite of tools for building broadcast-ready MPEG-TS files with SCTE-35 ad mark
 | [`franken-ts/`](./franken-ts/README.md) | Stitch MP4 assets together and inject SCTE-35 markers from a YAML config |
 | [`frame-extractor/`](./frame-extractor/README.md) | Extract every frame from a video and build an interactive HTML timeline viewer |
 | [`its-a-live/`](./its-a-live/README.md) | Deploy a live looping HLS/DASH stream to AWS, on either of two backends selected per-channel: **MediaLive + MediaPackage** (`aws-media`) or **loop-dee-loop on ECS Express Mode + CloudFront** (`ecs-express`) |
+| [`igor/`](./igor/README.md) | Web UI (branded "Dr. Strangeloop", codenamed Igor) to define channels, launch them, and monitor them -- a UI on top of the tools above |
 
 Outputs from all three tools — `.ts` files, HTML reports, frame timeline directories — land in [`outputs/`](./outputs/).
 
@@ -36,7 +37,7 @@ All tools share the same Python environment. External binaries needed:
 
 ```bash
 git clone <repo>
-cd ts-scte-maker
+cd dr-strangeloop
 uv sync --all-packages
 ```
 
@@ -57,10 +58,10 @@ backend to deploy to (default `aws-media`):
 
 ```bash
 # MediaLive + MediaPackage (default)
-uv run python galvanise.py franken-ts/configs/my-stream.yaml
+uv run python galvanise.py franken-ts/playlists/my-stream.yaml
 
 # loop-dee-loop on ECS Express Mode + CloudFront
-uv run python galvanise.py franken-ts/configs/my-stream.yaml --backend ecs-express
+uv run python galvanise.py franken-ts/playlists/my-stream.yaml --backend ecs-express
 ```
 
 Steps performed:
@@ -79,7 +80,7 @@ At the end it prints the exact commands to update content, stop the channel, and
 #### Build a TS file
 
 ```bash
-uv run franken-ts franken-ts/configs/example.yaml
+uv run franken-ts franken-ts/playlists/example.yaml
 ```
 
 #### Inspect a TS file

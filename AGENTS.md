@@ -1,4 +1,4 @@
-# Agent entrypoint — live-scte-loop-generator
+# Agent entrypoint — dr-strangeloop
 
 This repo is a three-phase pipeline that turns a list of source video
 assets + ad-break definitions into a live-looping HLS/DASH channel
@@ -23,11 +23,12 @@ names or CLI flags from this file alone.
 | 3. Deploy + run in AWS | `its-a-live/` | [`its-a-live/AGENTS.md`](./its-a-live/AGENTS.md), [`its-a-live/AGENT_BRIEF.md`](./its-a-live/AGENT_BRIEF.md) |
 | (3a) Self-hosted backend internals | `loop-dee-loop/` | [`loop-dee-loop/AGENTS.md`](./loop-dee-loop/AGENTS.md) |
 | Inspect/verify a built `.ts` | `frame-extractor/` | [`frame-extractor/README.md`](./frame-extractor/README.md) |
+| Web UI over all of the above | `igor/` | [`igor/AGENTS.md`](./igor/AGENTS.md) |
 
 ## Architecture
 
 ```
-franken-ts/configs/*.yaml
+franken-ts/playlists/*.yaml
         │  (asset list, ad breaks, single- or multi-rendition)
         ▼
    franken-ts CLI            →  outputs/<name>.ts (+ .markers.json)
@@ -57,10 +58,10 @@ appropriate (local dev/testing).
 ## Orchestration
 
 [`galvanise.py`](./galvanise.py) runs all three phases from a single
-franken-ts YAML config, prompting for confirmation at each step:
+franken-ts YAML playlist, prompting for confirmation at each step:
 
 ```bash
-uv run python galvanise.py franken-ts/configs/my-stream.yaml --backend ecs-express
+uv run python galvanise.py franken-ts/playlists/my-stream.yaml --backend ecs-express
 ```
 
 It generates `configs/<name>.toml` for you (its-a-live config) — you
@@ -79,7 +80,7 @@ commands at the end of its run.
 
 ## Where things live
 
-- `franken-ts/configs/*.yaml` — content/ad-break definitions (source of
+- `franken-ts/playlists/*.yaml` — content/ad-break definitions (source of
   truth for what a loop contains).
 - `configs/*.toml` — its-a-live per-channel deploy config (backend, AWS
   region, S3 location).

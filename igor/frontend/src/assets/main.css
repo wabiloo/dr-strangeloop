@@ -1,0 +1,79 @@
+/* Minimal global styles -- most spacing/layout comes from PrimeFlex utility classes in templates. */
+body {
+  margin: 0;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  background: var(--p-surface-50, #f8fafc);
+}
+
+#app {
+  min-height: 100vh;
+}
+
+code {
+  font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
+}
+
+.job-log {
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
+  font-size: 0.8rem;
+  padding: 0.75rem;
+  border-radius: 6px;
+  max-height: 24rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+/* ---------------------------------------------------------------------
+ * Filled vs. placeholder contrast.
+ *
+ * Default PrimeVue/Aura styling makes placeholder text and real user
+ * input look too similar (both a muted gray), so it's hard to tell at a
+ * glance whether a field actually has a value or is just showing a hint.
+ * Placeholder text: lighter, italic. Real value: dark, solid, slightly
+ * bolder, with a subtle tinted background so filled fields visually pop
+ * out of a form full of empty ones.
+ * ------------------------------------------------------------------- */
+.p-inputtext,
+.p-inputnumber-input,
+.p-select-label,
+.p-textarea {
+  color: #0f172a;
+  font-weight: 500;
+}
+
+.p-inputtext::placeholder,
+.p-inputnumber-input::placeholder,
+.p-textarea::placeholder {
+  color: #94a3b8;
+  font-style: italic;
+  font-weight: 400;
+  opacity: 1;
+}
+
+/* :placeholder-shown only matches when the input is empty AND has a
+ * placeholder -- i.e. exactly the "showing a hint, not a real value"
+ * case this is meant to distinguish. */
+.p-inputtext:placeholder-shown,
+.p-inputnumber-input:placeholder-shown {
+  background: #f8fafc;
+}
+
+.p-inputtext:not(:placeholder-shown),
+.p-inputnumber-input:not(:placeholder-shown) {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+
+.p-select:not(.p-select-placeholder-active) .p-select-label {
+  color: #0f172a;
+  font-weight: 500;
+}
+

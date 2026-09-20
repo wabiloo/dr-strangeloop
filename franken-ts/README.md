@@ -15,26 +15,26 @@ Stitch video assets together, bolt in ad breaks, and inject SCTE-35 markers — 
 From the repo root:
 
 ```bash
-uv run franken-ts franken-ts/configs/example.yaml
+uv run franken-ts franken-ts/playlists/example.yaml
 ```
 
 With verification (extracts markers after injection and generates an HTML report):
 
 ```bash
-uv run franken-ts franken-ts/configs/example.yaml --verify
+uv run franken-ts franken-ts/playlists/example.yaml --verify
 ```
 
 Dry run (prints all commands, executes nothing):
 
 ```bash
-uv run franken-ts franken-ts/configs/example.yaml --dry-run
+uv run franken-ts franken-ts/playlists/example.yaml --dry-run
 ```
 
 Output is written to `outputs/`.
 
 ## Configuration
 
-All inputs and options are declared in a YAML file. Put configs in `franken-ts/configs/`.
+All inputs and options are declared in a YAML file. Put playlists in `franken-ts/playlists/`.
 
 ### Minimal example
 
