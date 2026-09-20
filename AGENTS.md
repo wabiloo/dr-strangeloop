@@ -1,4 +1,4 @@
-# Agent entrypoint — live-scte-loop-generator
+# Agent entrypoint — dr-strangeloop
 
 This repo is a three-phase pipeline that turns a list of source video
 assets + ad-break definitions into a live-looping HLS/DASH channel

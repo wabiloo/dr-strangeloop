@@ -1,10 +1,11 @@
-# loop-console
+# loop-console (Dr. Strangeloop UI)
 
-Web console (FastAPI + Vue 3) to define, launch, and monitor
-`live-scte-loop-generator` channels: author `franken-ts` content/ad-break
-YAML, deploy via `its-a-live` (either backend), and monitor running
-channels (status, playback URLs, logs, and — for `ecs-express` channels —
-live loop position via `loop-dee-loop`'s `serve.py` `/health` endpoint).
+Web console (FastAPI + Vue 3), branded **Dr. Strangeloop**, to define,
+launch, and monitor `dr-strangeloop` channels: author `franken-ts`
+content/ad-break YAML, deploy via `its-a-live` (either backend), and
+monitor running channels (status, playback URLs, logs, and — for
+`ecs-express` channels — live loop position via `loop-dee-loop`'s
+`serve.py` `/health` endpoint).
 
 See the repo-root [`AGENTS.md`](../AGENTS.md) for how this fits into the
 overall pipeline, and [`AGENT_BRIEF.md`](./AGENT_BRIEF.md) *(TODO)* for

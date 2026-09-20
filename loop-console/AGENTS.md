@@ -1,4 +1,4 @@
-# Agent reference — loop-console
+# Agent reference — loop-console (Dr. Strangeloop UI)
 
 Web console (FastAPI + Vue 3) that lets a human or agent define
 `franken-ts` content/ad-break configs, deploy/manage `its-a-live`

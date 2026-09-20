@@ -1,7 +1,7 @@
 [project]
 name = "loop-console"
 version = "0.1.0"
-description = "Web console to define, launch, and monitor live-scte-loop-generator channels."
+description = "Dr. Strangeloop: web console to define, launch, and monitor dr-strangeloop channels."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

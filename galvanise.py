@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-galvanise.py — Full pipeline runner for live-scte-loop-generator.
+galvanise.py — Full pipeline runner for dr-strangeloop.
 
 Usage:
   uv run python galvanise.py <config.yaml> [--backend aws-media|ecs-express]
@@ -142,7 +142,7 @@ def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(
         prog="galvanise.py",
-        description="Full pipeline runner for live-scte-loop-generator.",
+        description="Full pipeline runner for dr-strangeloop.",
     )
     parser.add_argument("config_yaml", metavar="config.yaml",
                         help="franken-ts YAML config file.")

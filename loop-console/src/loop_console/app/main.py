@@ -13,9 +13,9 @@ from loop_console.app.routes.jobs import router as jobs_router
 PROJECT_ROOT = Path(__file__).resolve().parents[3]  # loop-console/
 
 app = FastAPI(
-    title="loop-console",
+    title="Dr. Strangeloop",
     description=(
-        "Define, launch, and monitor live-scte-loop-generator channels: "
+        "Define, launch, and monitor dr-strangeloop channels: "
         "franken-ts content/ad-break authoring, its-a-live deploy/lifecycle, "
         "and loop-dee-loop monitoring."
     ),

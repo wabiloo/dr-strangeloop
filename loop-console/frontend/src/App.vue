@@ -13,7 +13,7 @@ const router = useRouter()
       <div class="app-header-inner">
         <RouterLink to="/channels" class="app-brand">
           <i class="pi pi-sync" />
-          <span>loop-console</span>
+          <span>Dr. Strangeloop</span>
         </RouterLink>
 
         <nav class="app-nav">
