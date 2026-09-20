@@ -10,7 +10,120 @@ export interface PresetOption {
   label: string
 }
 
-/** Table 22: segmentation_type_id */
+/** Table 22 grouped into Start/End pairs (or standalone/"instant" signals
+ * that have no defined End partner -- e.g. 0x13 Program Breakaway is its
+ * own distinct type, not "0x12 End"). This is what the marker editor
+ * presents instead of raw individual type_ids, so there's exactly one
+ * decision: picking a pair sets `segmentation.type_id` to the Start (or
+ * standalone) value; franken-ts derives the End value (`+1`) itself for
+ * paired types. There is no separate "lane"/"type" field any more --
+ * timeline lanes are grouped directly by (splice_type, type_id), labeled
+ * with `name` (the bare segmentation name, no "Start/End" wording) -- see
+ * `laneKeyForMarker`/`laneLabelForMarker` below. */
+export interface SegmentationPairOption {
+  /** segmentation.type_id to store (the Start value, or the only value for
+   * standalone/instant types). */
+  value: string
+  label: string
+  /** Bare name (no "Start/End"/hex prefix), used as the timeline lane
+   * label -- e.g. "Break", "Provider Placement Opportunity". */
+  name: string
+  /** No defined End partner -- resolves to a single instantaneous marker
+   * (one boundary, at the span's start) instead of a Start/End pair. */
+  instant: boolean
+}
+
+export const SEGMENTATION_PAIR_OPTIONS: SegmentationPairOption[] = [
+  { value: '0x00', label: '0x00 -- Not Indicated', name: 'Not Indicated', instant: true },
+  { value: '0x01', label: '0x01 -- Content Identification', name: 'Content Identification', instant: true },
+  { value: '0x10', label: '0x10/0x11 -- Program (Start/End)', name: 'Program', instant: false },
+  { value: '0x12', label: '0x12 -- Program Early Termination', name: 'Program Early Termination', instant: true },
+  { value: '0x13', label: '0x13 -- Program Breakaway', name: 'Program Breakaway', instant: true },
+  { value: '0x14', label: '0x14 -- Program Resumption', name: 'Program Resumption', instant: true },
+  { value: '0x15', label: '0x15 -- Program Runover Planned', name: 'Program Runover Planned', instant: true },
+  { value: '0x16', label: '0x16 -- Program Runover Unplanned', name: 'Program Runover Unplanned', instant: true },
+  { value: '0x17', label: '0x17 -- Program Overlap Start', name: 'Program Overlap Start', instant: true },
+  { value: '0x18', label: '0x18 -- Program Blackout Override', name: 'Program Blackout Override', instant: true },
+  { value: '0x19', label: '0x19 -- Program Start -- In Progress', name: 'Program Start -- In Progress', instant: true },
+  { value: '0x20', label: '0x20/0x21 -- Chapter (Start/End)', name: 'Chapter', instant: false },
+  { value: '0x22', label: '0x22/0x23 -- Break (Start/End)', name: 'Break', instant: false },
+  { value: '0x24', label: '0x24/0x25 -- Opening Credit (Start/End)', name: 'Opening Credit', instant: false },
+  { value: '0x26', label: '0x26/0x27 -- Closing Credit (Start/End)', name: 'Closing Credit', instant: false },
+  { value: '0x30', label: '0x30/0x31 -- Provider Advertisement (Start/End)', name: 'Provider Advertisement', instant: false },
+  { value: '0x32', label: '0x32/0x33 -- Distributor Advertisement (Start/End)', name: 'Distributor Advertisement', instant: false },
+  { value: '0x34', label: '0x34/0x35 -- Provider Placement Opportunity (Start/End)', name: 'Provider Placement Opportunity', instant: false },
+  { value: '0x36', label: '0x36/0x37 -- Distributor Placement Opportunity (Start/End)', name: 'Distributor Placement Opportunity', instant: false },
+  { value: '0x38', label: '0x38/0x39 -- Provider Overlay Placement Opportunity (Start/End)', name: 'Provider Overlay Placement Opportunity', instant: false },
+  { value: '0x3A', label: '0x3A/0x3B -- Distributor Overlay Placement Opportunity (Start/End)', name: 'Distributor Overlay Placement Opportunity', instant: false },
+  { value: '0x3C', label: '0x3C/0x3D -- Provider Promo (Start/End)', name: 'Provider Promo', instant: false },
+  { value: '0x3E', label: '0x3E/0x3F -- Distributor Promo (Start/End)', name: 'Distributor Promo', instant: false },
+  { value: '0x40', label: '0x40/0x41 -- Unscheduled Event (Start/End)', name: 'Unscheduled Event', instant: false },
+  { value: '0x42', label: '0x42/0x43 -- Alternate Content Opportunity (Start/End)', name: 'Alternate Content Opportunity', instant: false },
+  { value: '0x44', label: '0x44/0x45 -- Provider Ad Block (Start/End)', name: 'Provider Ad Block', instant: false },
+  { value: '0x46', label: '0x46/0x47 -- Distributor Ad Block (Start/End)', name: 'Distributor Ad Block', instant: false },
+  { value: '0x50', label: '0x50/0x51 -- Network (Start/End)', name: 'Network', instant: false },
+]
+
+/** SCTE-35 Table 22 segmentation_type_id values with no defined End partner
+ * (mirrors franken_ts.config.INSTANT_SEGMENTATION_TYPE_IDS). */
+export const INSTANT_SEGMENTATION_TYPE_IDS = new Set(
+  SEGMENTATION_PAIR_OPTIONS.filter((o) => o.instant).map((o) => o.value),
+)
+
+function normalizeTypeId(typeId: string): string {
+  return typeId.toUpperCase().replace('X', 'x')
+}
+
+export function isInstantTypeId(typeId: string): boolean {
+  return INSTANT_SEGMENTATION_TYPE_IDS.has(normalizeTypeId(typeId))
+}
+
+/** A minimal shape covering what's needed to key/label a timeline lane --
+ * matches (a subset of) MarkerLike from markerLayout.ts. */
+export interface LaneableMarker {
+  splice_type?: string
+  segmentation?: { type_id: string }
+}
+
+/** Groups markers into timeline lanes by (splice_type, segmentation.type_id)
+ * -- e.g. every "Break" marker shares a lane, every "Provider Placement
+ * Opportunity" marker shares a different lane, etc. `splice_insert` markers
+ * (no type_id to group by) share one lane of their own. */
+export function laneKeyForMarker(marker: LaneableMarker): string {
+  if (marker.splice_type === 'time_signal' && marker.segmentation?.type_id) {
+    return `time_signal:${normalizeTypeId(marker.segmentation.type_id)}`
+  }
+  return 'splice_insert'
+}
+
+/** Human label for a lane -- the bare segmentation type name (no
+ * "Start/End" wording), or a generic label for splice_insert markers. */
+export function laneLabelForMarker(marker: LaneableMarker): string {
+  if (marker.splice_type === 'time_signal' && marker.segmentation?.type_id) {
+    const normalized = normalizeTypeId(marker.segmentation.type_id)
+    const pair = SEGMENTATION_PAIR_OPTIONS.find((o) => o.value === normalized)
+    return pair?.name ?? normalized
+  }
+  return 'Ad Break (splice_insert)'
+}
+
+/** Deterministic color per lane key (same lane always gets the same color
+ * everywhere it's shown -- the timeline lane bars and the marker editor's
+ * "Timeline lane" badge -- without needing a fixed enum of known types,
+ * since there can be as many lanes as distinct segmentation types used. */
+const LANE_PALETTE = [
+  '#dc2626', '#7c3aed', '#0891b2', '#d97706', '#059669',
+  '#db2777', '#4f46e5', '#65a30d', '#0d9488', '#ea580c',
+]
+export function colorForLaneKey(key: string): string {
+  let hash = 0
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0
+  return LANE_PALETTE[hash % LANE_PALETTE.length]
+}
+
+/** Table 22: segmentation_type_id (individual values, kept for reference /
+ * any lingering direct-value use -- the marker editor itself now uses
+ * SEGMENTATION_PAIR_OPTIONS above). */
 export const SEGMENTATION_TYPE_ID_OPTIONS: PresetOption[] = [
   { value: '0x00', label: '0x00 -- Not Indicated' },
   { value: '0x01', label: '0x01 -- Content Identification' },
