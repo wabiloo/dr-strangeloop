@@ -89,3 +89,32 @@ _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 def is_image(path: Path) -> bool:
     """Return True if *path* is a still image (JPEG or PNG) rather than a video."""
     return path.suffix.lower() in _IMAGE_SUFFIXES
+
+
+# ── Remote (http/https) asset support ────────────────────────────────────────
+#
+# `AssetConfig.file` (and `slate_image`) are typed as `pathlib.Path` so the
+# rest of the codebase can use `.name`/`.suffix`/etc uniformly for local
+# files. But `pathlib` always collapses a run of 2+ slashes to one EXCEPT a
+# *leading* "//" (POSIX allows exactly two leading slashes with
+# implementation-defined meaning) -- so `Path("https://host/a.mp4")` silently
+# becomes `https:/host/a.mp4` the moment it's constructed, since the "//"
+# here isn't at the very start of the string. `.name`/`.suffix`/`.parent`
+# etc are unaffected by this (only the scheme's "//" is mangled), so we don't
+# need a custom Path subclass -- we only need to undo the collapse at the
+# handful of places that hand the raw string to something that cares about
+# it being a real URL: ffmpeg/ffprobe `-i` arguments and `Path.exists()`/
+# `.stat()` local-filesystem checks.
+_MANGLED_URL_RE = re.compile(r'^(https?):/(?!/)')
+
+
+def is_url(path: Path | str) -> bool:
+    """True if *path* is (the pathlib-mangled form of) an http(s) URL."""
+    return bool(_MANGLED_URL_RE.match(str(path)))
+
+
+def source_str(path: Path | str) -> str:
+    """The correct on-the-wire string for *path*, undoing pathlib's
+    single-slash collapse of an http(s) URL's "//" if present. A no-op for
+    ordinary local paths."""
+    return _MANGLED_URL_RE.sub(lambda m: f"{m.group(1)}://", str(path))

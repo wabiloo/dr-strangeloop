@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from .config import OutputConfig
+from .utils import is_url, source_str
 
 if TYPE_CHECKING:
     from .timeline import TimelineEntry
@@ -40,7 +41,11 @@ def entry_cache_key(entry: TimelineEntry, output: OutputConfig) -> str:
     two entries are identical iff they would produce the same extracted segments.
 
     Keyed on:
-    - Source file identity: resolved path + mtime + size
+    - Source file identity: resolved path + mtime + size (local files), or
+      just the URL string (remote files -- no local stat available; the
+      recipe version bump is relied on if the remote content ever changes
+      without the URL changing, which is expected to be rare/never for
+      these immutable ad-placeholder assets)
     - Output spec: resolution, framerate, gop, bitrate
     - Cut range: frame-snapped inpoint + outpoint
     - Overlay params: countdown window, next_label, fade_in, fade_out
@@ -48,19 +53,26 @@ def entry_cache_key(entry: TimelineEntry, output: OutputConfig) -> str:
     - Recipe version: invalidates stale cache entries after pipeline changes
     """
     source = entry.source_file
-    stat = source.stat()
+    if is_url(source):
+        source_part = f"url:{source_str(source)}"
+    else:
+        stat = source.stat()
+        source_part = f"{source.resolve()}|{stat.st_mtime}|{stat.st_size}"
 
     fade_part = f"{entry.fade_in}:{entry.fade_out}"
     countdown_part = f"{entry.countdown}:{entry.next_label}"
 
     if entry.slate_image is not None:
-        ss = entry.slate_image.stat()
-        slate_part = f"{entry.slate_image.resolve()}|{ss.st_mtime}|{ss.st_size}"
+        if is_url(entry.slate_image):
+            slate_part = f"url:{source_str(entry.slate_image)}"
+        else:
+            ss = entry.slate_image.stat()
+            slate_part = f"{entry.slate_image.resolve()}|{ss.st_mtime}|{ss.st_size}"
     else:
         slate_part = "none"
 
     parts = (
-        f"{source.resolve()}|{stat.st_mtime}|{stat.st_size}"
+        f"{source_part}"
         f"|{output.resolution}|{output.framerate}|{output.gop}|{output.bitrate_kbps}|48000"
         f"|in={entry.inpoint:.6f}|out={entry.outpoint:.6f}"
         f"|countdown={countdown_part}"

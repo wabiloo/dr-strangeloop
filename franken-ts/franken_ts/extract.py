@@ -77,7 +77,7 @@ from typing import Optional
 from .cache import ClipSegments
 from .config import OutputConfig
 from .timeline import TimelineEntry
-from .utils import is_image, run_cmd
+from .utils import is_image, run_cmd, source_str
 
 logger = logging.getLogger(__name__)
 
@@ -318,12 +318,12 @@ def _extract_video(
     if src_is_image:
         # Still image: loop the single frame indefinitely; -frames:v N cuts it.
         # No -ss seek — images have no timeline to seek within.
-        cmd += ["-loop", "1", "-i", str(src)]
+        cmd += ["-loop", "1", "-i", source_str(src)]
     else:
-        cmd += ["-ss", f"{inpoint:.6f}", "-i", str(src)]
+        cmd += ["-ss", f"{inpoint:.6f}", "-i", source_str(src)]
 
     if has_slate:
-        cmd += ["-loop", "1", "-i", str(slate_image)]
+        cmd += ["-loop", "1", "-i", source_str(slate_image)]
 
     cmd += [
         "-an",                              # NO AUDIO — handled separately
@@ -387,7 +387,7 @@ def _extract_audio(
         [
             "ffmpeg", "-y",
             "-ss", f"{inpoint:.6f}",
-            "-i", str(src),
+            "-i", source_str(src),
             "-vn",                          # NO VIDEO
             "-t", f"{duration:.6f}",
             "-af", ",".join(af_parts),

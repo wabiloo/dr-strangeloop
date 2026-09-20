@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import AssetConfig, OutputConfig
-from .utils import is_image, run_cmd
+from .utils import is_image, is_url, run_cmd, source_str
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ def probe_file(path: Path) -> VideoInfo:
             "ffprobe", "-v", "error",
             "-show_streams", "-show_format",
             "-of", "json",
-            str(path),
+            source_str(path),
         ],
         capture=True,
     )
@@ -139,7 +139,9 @@ def validate_inputs(
     infos: dict[Path, VideoInfo] = {}
 
     for asset in assets:
-        if not asset.file.exists():
+        # Remote (http/https) assets have no local filesystem entry to check
+        # -- ffprobe below is the real reachability/validity check for them.
+        if not is_url(asset.file) and not asset.file.exists():
             report.errors.append(f"File not found: {asset.file}")
             continue
 
@@ -202,11 +204,11 @@ def validate_inputs(
 
         if info.video_streams != 1:
             report.errors.append(
-                f"{asset.file}: expected 1 video stream, found {info.video_streams}"
+                f"{source_str(asset.file)}: expected 1 video stream, found {info.video_streams}"
             )
         if info.audio_streams != 1:
             report.errors.append(
-                f"{asset.file}: expected 1 audio stream, found {info.audio_streams}"
+                f"{source_str(asset.file)}: expected 1 audio stream, found {info.audio_streams}"
             )
 
         if info.is_vfr:
