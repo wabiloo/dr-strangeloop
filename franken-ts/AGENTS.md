@@ -56,47 +56,74 @@ doesn't set its own `slate_image`. Requires an actual fade to have effect.
 
 ### `assets` — ordered list, each item one of:
 
-Every asset: `file` (path, required), `start` (optional offset),
-`duration` (optional length) — omit both to use the whole file. Time
-values accept `HH:MM:SS[.mmm]`, plain seconds, or human phrases like
+Every asset: `file` (path, required), `id` (string, optional but required
+if any `markers` entry references it — see below), `start` (optional
+offset), `duration` (optional length) — omit both to use the whole file.
+Time values accept `HH:MM:SS[.mmm]`, plain seconds, or human phrases like
 `"10 min"` / `"1 hour 30 min"`.
 
 Optional per-asset: `countdown` (seconds of corner-bug overlay before the
 next element, or `-1` for the whole clip), `fade_in`/`fade_out`
 (seconds), `slate_image` (per-asset override).
 
-**Ad markers** — add an `ad_break` block to mark an asset as an ad
-(anything without `ad_break` is content):
+### `markers` — top-level list (sibling of `assets`), the only way to signal ad breaks
+
+Each marker names the contiguous run of asset `id`s it covers; its
+start/end are always *derived* from those assets' resolved positions in
+the built timeline, never authored directly — trimming/re-ordering
+assets moves every marker over it automatically, nothing to desync:
 
 ```yaml
-ad_break:
-  event_id: 1                    # unique int per break (start+stop pair reuse the same id)
-  splice_type: splice_insert     # splice_insert | time_signal
-  # time_signal only, optional:
-  segmentation:
-    type_id: "0x34"               # SCTE-35 segmentation_type_id, e.g. 0x34 = provider ad
-    upid_type: "0x09"
-    upid_hex: "53 49 47 4e 41 4c 3a 43 52"
-    web_delivery_allowed: true
-    no_regional_blackout: false
-    archive_allowed: false
-    device_restrictions: 1
+assets:
+  - file: content1.mp4
+  - file: ad1.mp4
+    id: ad1                        # required: markers reference assets by id
+  - file: content2.mp4
+
+markers:
+  - event_id: 1                    # unique int per marker (start+stop pair reuse the same id)
+    type: ad                       # ad | ppo | break | any custom label
+    splice_type: splice_insert     # splice_insert | time_signal
+    assets: [ad1]                  # contiguous run of asset ids this marker covers
+    # time_signal only, optional:
+    segmentation:
+      type_id: "0x34"               # SCTE-35 segmentation_type_id, e.g. 0x34 = provider ad
+      upid_type: "0x09"
+      upid_hex: "53 49 47 4e 41 4c 3a 43 52"
+      web_delivery_allowed: true
+      no_regional_blackout: false
+      archive_allowed: false
+      device_restrictions: 1
 ```
 
 - `splice_insert` — two-point out/in splice, no segmentation block needed.
 - `time_signal` — needs `segmentation`; `segmentation_duration` derives
-  from the asset's duration unless overridden.
+  from the marker's span duration unless overridden.
+- `type` (`break`/`ppo`/`ad`/custom) is a label that also supplies a
+  default `segmentation.type_id` (break→`0x22`, ppo→`0x34`, ad→`0x30`) —
+  always overridable via an explicit `segmentation.type_id`.
+- **Nested markers** (e.g. a `break` spanning a jingle + several `ad`s,
+  with a `ppo` spanning just the ads): give each nesting level its own
+  marker entry over the appropriate sub-range of asset ids. Nesting is
+  expressed by span *containment*, not an authored tree — every pair of
+  marker spans must be disjoint or one must strictly contain the other
+  (validated at load time). `segmentation.segment_num`/`segments_expected`
+  auto-fill from sibling position/count under the same immediate parent
+  (e.g. the Nth of M placements in a break) unless set explicitly.
+- Every `event_id` across all markers must be unique.
 
 ## What to ask the user before writing a config (if not already specified)
 
 1. **Source assets** — file paths, and for each: is it content or an ad
-   (and if ad, `event_id`/`splice_type`/segmentation UPID)?
+   (and if ad, `event_id`/`splice_type`/segmentation UPID, and whether it's
+   part of a larger nested break — see `markers` above)?
 2. **Single file vs ABR ladder output** — depends on the chosen `its-a-live`
    backend (see table above); ask if unknown, don't assume.
-3. **Output location** — defaults to `../outputs/<name>.ts` (or
-   `../outputs/<name>/` for ladders) relative to `franken-ts/`; confirm if
-   the user wants a specific name/path (this feeds `its-a-live`'s
-   `[input].source_path`).
+3. **Output location** — defaults to `outputs/<name>.ts` (or
+   `outputs/<name>/` for ladders), relative to the repo root (playlists
+   live in `data/playlists/`, `franken-ts` is invoked from the repo root);
+   confirm if the user wants a specific name/path (this feeds
+   `its-a-live`'s `[input].source_path`).
 4. **Visual polish** — countdowns, fades, slates: only ask if the user
    mentioned wanting them; otherwise omit (no defaults imposed).
 5. **`normalize`** — only needed if source assets have mismatched

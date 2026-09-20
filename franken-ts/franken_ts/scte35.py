@@ -23,7 +23,7 @@ def _splice_insert_pair(
     start_pts: int,
     end_pts: int,
 ) -> None:
-    ab = boundary_start.ad_break
+    ab = boundary_start.marker
     break_duration_pts = round(boundary_start.break_duration * PTS_CLOCK)
     event_hex = f"0x{ab.event_id:08X}"
 
@@ -63,73 +63,62 @@ def _splice_insert_pair(
     _avail_descriptor(sit_in, ab.provider_avail_id)
 
 
-def _time_signal_pair(
+def _time_signal_message(
     root: ET.Element,
-    boundary_start: AdBoundary,
-    start_pts: int,
-    end_pts: int,
+    boundaries_at_pts: list[AdBoundary],
+    pts_map: dict[tuple[int, bool], int],
+    pts: int,
 ) -> None:
-    ab = boundary_start.ad_break
-    seg = ab.segmentation
-    event_hex = f"0x{ab.event_id:08X}"
+    """Emit ONE `time_signal` splice_information_table at `pts`, containing one
+    `splice_segmentation_descriptor` per boundary that resolves to this PTS.
 
-    break_duration_pts = round(boundary_start.break_duration * PTS_CLOCK)
-    seg_duration_pts = (
-        round(seg.duration_seconds() * PTS_CLOCK)
-        if seg.duration_seconds() is not None
-        else break_duration_pts
-    )
+    This is how nested markers (e.g. BreakStart + first child's Start, both
+    at the same instant) get combined into a single SCTE-35 message instead
+    of one message per event -- the standard way multiple simultaneous
+    segmentation events are signaled.
+    """
+    sit = ET.SubElement(root, "splice_information_table",
+                         protocol_version="0",
+                         pts_adjustment="0",
+                         tier="0x0FFF")
+    ET.SubElement(sit, "time_signal", pts_time=format_pts(pts))
 
-    # The start and stop type_ids are defined as consecutive pairs in SCTE-35
-    # Table 23: e.g. 0x34 Program Start / 0x35 Program End, 0x38 Break Start /
-    # 0x39 Break End.  The stop is always start + 1.
-    start_type_id = int(seg.type_id, 16) if isinstance(seg.type_id, str) else seg.type_id
-    stop_type_id  = start_type_id + 1
+    # One avail descriptor is enough per message; reuse the first boundary's.
+    _avail_descriptor(sit, boundaries_at_pts[0].marker.provider_avail_id)
 
-    # ── Time signal start ─────────────────────────────────────────────────────
-    sit_start = ET.SubElement(root, "splice_information_table",
-                              protocol_version="0",
-                              pts_adjustment="0",
-                              tier="0x0FFF")
-    ET.SubElement(sit_start, "time_signal", pts_time=format_pts(start_pts))
-    _avail_descriptor(sit_start, ab.provider_avail_id)
+    for boundary in boundaries_at_pts:
+        ab = boundary.marker
+        seg = ab.segmentation
+        event_hex = f"0x{boundary.event_id:08X}"
 
-    seg_desc_start = ET.SubElement(sit_start, "splice_segmentation_descriptor",
-                             segmentation_event_id=event_hex,
-                             web_delivery_allowed=str(seg.web_delivery_allowed).lower(),
-                             no_regional_blackout=str(seg.no_regional_blackout).lower(),
-                             archive_allowed=str(seg.archive_allowed).lower(),
-                             device_restrictions=str(seg.device_restrictions),
-                             segmentation_duration=format_pts(seg_duration_pts),
-                             segmentation_type_id=seg.type_id,
-                             segment_num="0",
-                             segments_expected="0",
-                             sub_segment_num="0",
-                             sub_segments_expected="0")
-    upid_start = ET.SubElement(seg_desc_start, "segmentation_upid", type=seg.upid_type)
-    upid_start.text = seg.upid_hex
+        break_duration_pts = round(boundary.break_duration * PTS_CLOCK)
+        seg_duration_pts = (
+            round(seg.duration_seconds() * PTS_CLOCK)
+            if seg.duration_seconds() is not None
+            else break_duration_pts
+        )
 
-    # ── Time signal stop ──────────────────────────────────────────────────────
-    sit_stop = ET.SubElement(root, "splice_information_table",
-                             protocol_version="0",
-                             pts_adjustment="0",
-                             tier="0x0FFF")
-    ET.SubElement(sit_stop, "time_signal", pts_time=format_pts(end_pts))
-    _avail_descriptor(sit_stop, ab.provider_avail_id)
+        # Start/stop type_ids are consecutive pairs in SCTE-35 Table 22, e.g.
+        # 0x34 Program Start / 0x35 Program End, 0x38 Break Start / 0x39 Break
+        # End. The stop is always start + 1.
+        start_type_id = int(seg.type_id, 16) if isinstance(seg.type_id, str) else seg.type_id
+        stop_type_id = start_type_id + 1
+        type_id = start_type_id if boundary.is_start else stop_type_id
 
-    seg_desc_stop = ET.SubElement(sit_stop, "splice_segmentation_descriptor",
-                             segmentation_event_id=event_hex,
-                             web_delivery_allowed=str(seg.web_delivery_allowed).lower(),
-                             no_regional_blackout=str(seg.no_regional_blackout).lower(),
-                             archive_allowed=str(seg.archive_allowed).lower(),
-                             device_restrictions=str(seg.device_restrictions),
-                             segmentation_type_id=f"0x{stop_type_id:02X}",
-                             segment_num="0",
-                             segments_expected="0",
-                             sub_segment_num="0",
-                             sub_segments_expected="0")
-    upid_stop = ET.SubElement(seg_desc_stop, "segmentation_upid", type=seg.upid_type)
-    upid_stop.text = seg.upid_hex
+        seg_desc = ET.SubElement(sit, "splice_segmentation_descriptor",
+                                 segmentation_event_id=event_hex,
+                                 web_delivery_allowed=str(seg.web_delivery_allowed).lower(),
+                                 no_regional_blackout=str(seg.no_regional_blackout).lower(),
+                                 archive_allowed=str(seg.archive_allowed).lower(),
+                                 device_restrictions=str(seg.device_restrictions),
+                                 segmentation_duration=format_pts(seg_duration_pts),
+                                 segmentation_type_id=f"0x{type_id:02X}",
+                                 segment_num=str(seg.segment_num or 0),
+                                 segments_expected=str(seg.segments_expected or 0),
+                                 sub_segment_num="0",
+                                 sub_segments_expected="0")
+        upid = ET.SubElement(seg_desc, "segmentation_upid", type=seg.upid_type)
+        upid.text = seg.upid_hex
 
 
 def generate_xml(
@@ -141,7 +130,13 @@ def generate_xml(
     root = ET.Element("tsduck")
 
     seen: set[int] = set()
+
+    # `splice_insert` boundaries: one message pair per event, exactly as
+    # before -- splice_insert has no natural way to combine multiple events
+    # into a single message, so no merging is needed/possible here.
     for boundary in boundaries:
+        if boundary.marker.splice_type != "splice_insert":
+            continue
         if not boundary.is_start:
             continue
         eid = boundary.event_id
@@ -151,14 +146,27 @@ def generate_xml(
 
         start_pts = pts_map[(eid, True)]
         end_pts = pts_map[(eid, False)]
-        ab = boundary.ad_break
 
         root.append(ET.Comment(f" Event {eid} "))
+        _splice_insert_pair(root, boundary, start_pts, end_pts)
 
-        if ab.splice_type == "splice_insert":
-            _splice_insert_pair(root, boundary, start_pts, end_pts)
-        else:
-            _time_signal_pair(root, boundary, start_pts, end_pts)
+    # `time_signal` boundaries: group by resolved PTS so that coincident
+    # markers (e.g. BreakStart + PPOStart + nested AdStart, all at the same
+    # instant) emit ONE message with multiple descriptors instead of one
+    # message per event.
+    by_pts: dict[int, list[AdBoundary]] = {}
+    for boundary in boundaries:
+        if boundary.marker.splice_type != "time_signal":
+            continue
+        pts = pts_map[(boundary.event_id, boundary.is_start)]
+        by_pts.setdefault(pts, []).append(boundary)
+        seen.add(boundary.event_id)
+
+    for pts in sorted(by_pts):
+        boundaries_at_pts = by_pts[pts]
+        ids = ", ".join(str(b.event_id) for b in boundaries_at_pts)
+        root.append(ET.Comment(f" Events {ids} @ pts {pts} "))
+        _time_signal_message(root, boundaries_at_pts, pts_map, pts)
 
     ET.indent(root, space="    ")
     tree = ET.ElementTree(root)

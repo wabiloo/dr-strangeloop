@@ -453,7 +453,8 @@ def _run_pipeline_single(
 
     # ── Step 2: build timeline ────────────────────────────────────────────────
     entries, boundaries = build_timeline(cfg.assets, infos, cfg.output.framerate,
-                                          global_slate_image=cfg.slate_image)
+                                          global_slate_image=cfg.slate_image,
+                                          markers=cfg.markers)
     total_duration = entries[-1].output_end if entries else 0.0
     ad_count = sum(1 for b in boundaries if b.is_start)
 

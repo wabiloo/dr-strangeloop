@@ -141,56 +141,64 @@ def build_diag_rows(
     framerate: int,
     muxer_offset: float = 0.0,
 ) -> list[DiagRow]:
+    """One row per marker boundary (start/stop, from `boundaries` -- covers
+    any marker, single- or multi-asset, any nesting depth) plus one row per
+    plain content transition (an entry boundary with no marker starting
+    there). Rows are ordered by output time; multiple markers coincident at
+    the same instant (e.g. a break ending exactly when its last ad ends)
+    each get their own row, grouped by the HTML renderer below.
+    """
     actual_idrs = _load_idr_timestamps(final_ts)
     actual_scte = _collect_scte_from_xml(verify_xml) if verify_xml else {}
 
+    boundaries_by_time: dict[float, list[AdBoundary]] = {}
+    for b in boundaries:
+        boundaries_by_time.setdefault(b.output_time, []).append(b)
+
+    # Plain content transitions: every entry start except the very first
+    # (nothing before it) and any that coincide with a marker boundary
+    # (that instant already gets an ad_start/ad_stop row below).
+    transition_times = {
+        e.output_start for e in entries[1:] if e.output_start not in boundaries_by_time
+    }
+
     rows: list[DiagRow] = []
+    for t in sorted(set(boundaries_by_time) | transition_times):
+        actual_idr = _nearest(actual_idrs, t + muxer_offset)
 
-    for i, entry in enumerate(entries):
-        if i == 0:
-            continue
+        for b in boundaries_by_time.get(t, []):
+            kind = "ad_start" if b.is_start else "ad_stop"
+            label = f"Event #{b.event_id} {'Start' if b.is_start else 'Stop'}"
+            scte_pts = pts_map.get((b.event_id, b.is_start))
+            scte_t = scte_pts / PTS_CLOCK if scte_pts else None
+            actual_entry = actual_scte.get((b.event_id, b.is_start))
 
-        prev = entries[i - 1]
-        asset_t = entry.output_start
+            rows.append(DiagRow(
+                label=label,
+                kind=kind,
+                asset_t=t + muxer_offset,
+                scte_target_t=scte_t,
+                scte_target_pts=scte_pts,
+                actual_idr_t=actual_idr,
+                actual_scte_t=actual_entry.pts_seconds if actual_entry else None,
+                actual_scte_pts=actual_entry.pts_ticks if actual_entry else None,
+                event_id=b.event_id,
+            ))
 
-        if entry.is_ad_break:
-            ab = entry.ad_break
-            label = f"Event #{ab.event_id} Start"
-            kind = "ad_start"
-            scte_pts = pts_map.get((ab.event_id, True))
-        elif prev.is_ad_break:
-            ab = prev.ad_break
-            label = f"Event #{ab.event_id} Stop"
-            kind = "ad_stop"
-            scte_pts = pts_map.get((ab.event_id, False))
-        else:
-            label = f"Transition → {entry.source_file.name}"
-            kind = "transition"
-            scte_pts = None
-            ab = None
-
-        scte_t = scte_pts / PTS_CLOCK if scte_pts else None
-
-        # Search for the nearest actual IDR around (asset_t + muxer_offset),
-        # i.e. in the same PTS space as the output TS timestamps.
-        actual_idr = _nearest(actual_idrs, asset_t + muxer_offset)
-
-        actual_entry = None
-        if ab is not None:
-            is_start = (kind == "ad_start")
-            actual_entry = actual_scte.get((ab.event_id, is_start))
-
-        rows.append(DiagRow(
-            label=label,
-            kind=kind,
-            asset_t=asset_t + muxer_offset,  # expected IDR position in output PTS space
-            scte_target_t=scte_t,
-            scte_target_pts=scte_pts,
-            actual_idr_t=actual_idr,
-            actual_scte_t=actual_entry.pts_seconds if actual_entry else None,
-            actual_scte_pts=actual_entry.pts_ticks if actual_entry else None,
-            event_id=ab.event_id if ab is not None else None,
-        ))
+        if t in transition_times:
+            entry = next((e for e in entries if e.output_start == t), None)
+            if entry is not None:
+                rows.append(DiagRow(
+                    label=f"Transition → {entry.source_file.name}",
+                    kind="transition",
+                    asset_t=t + muxer_offset,
+                    scte_target_t=None,
+                    scte_target_pts=None,
+                    actual_idr_t=actual_idr,
+                    actual_scte_t=None,
+                    actual_scte_pts=None,
+                    event_id=None,
+                ))
 
     return rows
 

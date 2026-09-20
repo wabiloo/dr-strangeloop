@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .config import AdBreakConfig, AssetConfig
+from .config import AssetConfig, MarkerConfig, is_instant_segmentation
 from .utils import is_image
 from .validate import VideoInfo
 
@@ -20,9 +20,9 @@ class TimelineEntry:
     outpoint: float        # seconds within the source file (frame-snapped)
     output_start: float    # seconds from start of the output stream
     output_end: float      # seconds from start of the output stream
-    ad_break: Optional[AdBreakConfig]
     inpoint_raw: float     # as computed before frame-snapping
     outpoint_raw: float    # as computed before frame-snapping
+    asset_id: Optional[str] = field(default=None)  # AssetConfig.id, for `markers` resolution
     # Countdown overlay fields — resolved in build_timeline().
     countdown: Optional[float] = field(default=None)  # window in seconds (already clamped)
     next_label: Optional[str] = field(default=None)   # "ASSET", "AD", or "END"
@@ -36,10 +36,6 @@ class TimelineEntry:
     def clip_duration(self) -> float:
         return self.outpoint - self.inpoint
 
-    @property
-    def is_ad_break(self) -> bool:
-        return self.ad_break is not None
-
 
 @dataclass
 class AdBoundary:
@@ -47,8 +43,8 @@ class AdBoundary:
     output_time: float       # seconds in the output
     event_id: int
     is_start: bool           # True = splice-out, False = splice-in
-    ad_break: AdBreakConfig
-    break_duration: float    # seconds (full ad asset duration)
+    marker: MarkerConfig
+    break_duration: float    # seconds (full marker span duration)
 
 
 def _snap_inpoint(t: float, framerate: int) -> float:
@@ -66,6 +62,7 @@ def build_timeline(
     infos: dict[Path, VideoInfo],
     framerate: int = 25,
     global_slate_image: Optional[Path] = None,
+    markers: Optional[list[MarkerConfig]] = None,
 ) -> tuple[list[TimelineEntry], list[AdBoundary]]:
     """Build the ordered clip list and collect ad break boundary timestamps.
 
@@ -127,30 +124,25 @@ def build_timeline(
             outpoint=end,
             output_start=cursor,
             output_end=cursor + clip_dur,
-            ad_break=asset.ad_break,
             inpoint_raw=start_raw,
             outpoint_raw=end_raw,
+            asset_id=asset.id,
         )
         entries.append(entry)
 
-        if asset.is_ad_break:
-            ab = asset.ad_break
-            boundaries.append(AdBoundary(
-                output_time=cursor,
-                event_id=ab.event_id,
-                is_start=True,
-                ad_break=ab,
-                break_duration=clip_dur,
-            ))
-            boundaries.append(AdBoundary(
-                output_time=cursor + clip_dur,
-                event_id=ab.event_id,
-                is_start=False,
-                ad_break=ab,
-                break_duration=clip_dur,
-            ))
-
         cursor += clip_dur
+
+    # Asset ids covered by a leaf (single-asset) "ad"-type marker -- used
+    # below to label the countdown overlay's "next up" element as an ad
+    # vs. plain content. Computed once, ahead of the countdown pass, since
+    # full marker resolution (incl. segment_num, below) isn't needed for
+    # this — just which single assets a "ad" marker points at.
+    id_to_index = {e.asset_id: i for i, e in enumerate(entries) if e.asset_id is not None}
+    ad_entry_indices: set[int] = set()
+    for m in (markers or []):
+        indices = [id_to_index[aid] for aid in m.assets if aid in id_to_index]
+        if indices and m.type == "ad" and min(indices) == max(indices):
+            ad_entry_indices.add(indices[0])
 
     # ── Countdown overlay resolution ──────────────────────────────────────────
     # Done in a second pass so every entry's clip_duration is already known.
@@ -167,7 +159,7 @@ def build_timeline(
             label = "END"
             for j in range(i + 1, len(assets)):
                 if not is_image(assets[j].file):
-                    label = "AD" if assets[j].is_ad_break else "ASSET"
+                    label = "AD" if j in ad_entry_indices else "ASSET"
                     break
 
             if raw < 0:
@@ -199,7 +191,105 @@ def build_timeline(
         # Per-asset slate_image takes precedence over the global fallback.
         entry.slate_image = asset.slate_image if asset.slate_image is not None else global_slate_image
 
+    boundaries.extend(resolve_markers(markers or [], entries))
+
     return entries, boundaries
+
+
+def resolve_markers(
+    markers: list[MarkerConfig],
+    entries: list[TimelineEntry],
+) -> list[AdBoundary]:
+    """Resolve the flat `markers` list into `AdBoundary` splice points.
+
+    Each marker's own start/end are *derived* from the already-built
+    `entries` (via `asset_id` lookup), never taken from anywhere else --
+    this is what keeps nested markers frame-accurate: a marker spanning
+    `[jingle, ad1, ad2]` always starts exactly where `jingle`'s entry starts
+    and ends exactly where `ad2`'s entry ends, however those durations were
+    computed upstream (trims, normalization, frame-snapping, ...).
+
+    Containment (not an authored tree) determines nesting: a marker's
+    "immediate parent" is the smallest other marker span that strictly
+    contains it, and "siblings" are markers sharing that same immediate
+    parent. `segmentation.segment_num`/`segments_expected` are auto-filled
+    from sibling position/count when left unset by the user (explicit
+    values always win). `Config.validate_markers` already guarantees every
+    pair of spans is either nested or disjoint, so this is safe to compute
+    without re-checking here.
+    """
+    if not markers:
+        return []
+
+    id_to_index: dict[str, int] = {}
+    for i, entry in enumerate(entries):
+        if entry.asset_id is not None:
+            id_to_index[entry.asset_id] = i
+
+    # (start_idx, end_idx, marker) per marker, in input order.
+    spans: list[tuple[int, int, MarkerConfig]] = []
+    for marker in markers:
+        indices = [id_to_index[aid] for aid in marker.assets]
+        spans.append((min(indices), max(indices), marker))
+
+    def contains(outer: tuple[int, int, MarkerConfig], inner: tuple[int, int, MarkerConfig]) -> bool:
+        lo_o, hi_o, _ = outer
+        lo_i, hi_i, _ = inner
+        return lo_o <= lo_i and hi_i <= hi_o and (lo_o, hi_o) != (lo_i, hi_i)
+
+    # Immediate parent = smallest span that strictly contains this one.
+    parent_of: dict[int, Optional[int]] = {}  # span index -> parent span index (or None = top-level)
+    for i, span in enumerate(spans):
+        candidates = [j for j, other in enumerate(spans) if j != i and contains(other, span)]
+        parent_of[i] = min(candidates, key=lambda j: spans[j][1] - spans[j][0]) if candidates else None
+
+    # Siblings = spans sharing the same immediate parent, ordered by position.
+    siblings_by_parent: dict[Optional[int], list[int]] = {}
+    for i, p in parent_of.items():
+        siblings_by_parent.setdefault(p, []).append(i)
+    for group in siblings_by_parent.values():
+        group.sort(key=lambda i: spans[i][0])
+
+    for group in siblings_by_parent.values():
+        n = len(group)
+        for position, i in enumerate(group):
+            marker = spans[i][2]
+            seg = marker.segmentation
+            if seg is None:
+                continue
+            if seg.segment_num is None:
+                seg.segment_num = position
+            if seg.segments_expected is None:
+                seg.segments_expected = n
+
+    boundaries: list[AdBoundary] = []
+    for lo, hi, marker in spans:
+        start_time = entries[lo].output_start
+        end_time = entries[hi].output_end
+        break_duration = end_time - start_time
+        boundaries.append(AdBoundary(
+            output_time=start_time,
+            event_id=marker.event_id,
+            is_start=True,
+            marker=marker,
+            break_duration=break_duration,
+        ))
+        # Instant/standalone segmentation types (see
+        # INSTANT_SEGMENTATION_TYPE_IDS) have no defined "end" partner --
+        # e.g. 0x13 Program Breakaway is its own distinct type, not "0x12
+        # End" -- so only one boundary is emitted, at the marker's span
+        # start. Start/End pairs (the common case: break/ppo/ad/etc.) keep
+        # emitting both.
+        if not is_instant_segmentation(marker.segmentation):
+            boundaries.append(AdBoundary(
+                output_time=end_time,
+                event_id=marker.event_id,
+                is_start=False,
+                marker=marker,
+                break_duration=break_duration,
+            ))
+
+    return boundaries
 
 
 def all_forced_keyframe_times(entries: list[TimelineEntry]) -> list[float]:

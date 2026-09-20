@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
-from .config import AdBreakConfig
+from .config import MarkerConfig
 from .timeline import AdBoundary, TimelineEntry
 
 logger = logging.getLogger(__name__)
@@ -26,8 +26,8 @@ class BoundaryPoint:
     timestamp: float          # seconds in the output TS
     pts_ticks: Optional[int]  # 90 kHz ticks, if known from pts_map
     event_id: Optional[int]
-    ad_break: Optional[AdBreakConfig] = None   # config for ad events
-    break_duration: Optional[float] = None     # ad break length in seconds
+    marker: Optional[MarkerConfig] = None      # config for ad events
+    break_duration: Optional[float] = None     # marker span length in seconds
 
 
 def _collect_boundary_points(
@@ -35,49 +35,39 @@ def _collect_boundary_points(
     boundaries: list[AdBoundary],
     pts_map: dict[tuple[int, bool], int],
 ) -> list[BoundaryPoint]:
+    """One point per marker boundary (any span, any nesting depth) plus one
+    per plain content transition not coincident with a marker boundary."""
     points: list[BoundaryPoint] = []
+
+    boundaries_by_time: dict[float, list[AdBoundary]] = {}
+    for b in boundaries:
+        boundaries_by_time.setdefault(b.output_time, []).append(b)
+
+    for b in boundaries:
+        pts = pts_map.get((b.event_id, b.is_start))
+        ts = pts / 90_000 if pts else b.output_time
+        points.append(BoundaryPoint(
+            label=f"Event #{b.event_id} {'Start' if b.is_start else 'Stop'}",
+            kind="ad_start" if b.is_start else "ad_stop",
+            timestamp=ts,
+            pts_ticks=pts,
+            event_id=b.event_id,
+            marker=b.marker,
+            break_duration=b.break_duration,
+        ))
 
     for i, entry in enumerate(entries):
         if i == 0:
             continue  # nothing before the first asset
-
-        prev = entries[i - 1]
-        t = entry.output_start
-
-        if entry.is_ad_break:
-            ab = entry.ad_break
-            pts = pts_map.get((ab.event_id, True))
-            ts = pts / 90_000 if pts else t
-            points.append(BoundaryPoint(
-                label=f"Ad Break Start — Event #{ab.event_id}",
-                kind="ad_start",
-                timestamp=ts,
-                pts_ticks=pts,
-                event_id=ab.event_id,
-                ad_break=ab,
-                break_duration=entry.clip_duration,
-            ))
-        elif prev.is_ad_break:
-            ab = prev.ad_break
-            pts = pts_map.get((ab.event_id, False))
-            ts = pts / 90_000 if pts else t
-            points.append(BoundaryPoint(
-                label=f"Ad Break Stop — Event #{ab.event_id}",
-                kind="ad_stop",
-                timestamp=ts,
-                pts_ticks=pts,
-                event_id=ab.event_id,
-                ad_break=ab,
-                break_duration=prev.clip_duration,
-            ))
-        else:
-            points.append(BoundaryPoint(
-                label=f"Content Transition ({entry.source_file.name})",
-                kind="transition",
-                timestamp=t,
-                pts_ticks=None,
-                event_id=None,
-            ))
+        if entry.output_start in boundaries_by_time:
+            continue  # already represented by an ad_start/ad_stop point above
+        points.append(BoundaryPoint(
+            label=f"Content Transition ({entry.source_file.name})",
+            kind="transition",
+            timestamp=entry.output_start,
+            pts_ticks=None,
+            event_id=None,
+        ))
 
     points.sort(key=lambda p: p.timestamp)
     return points
@@ -147,14 +137,24 @@ def _fmt_time(seconds: float) -> str:
     return f"{int(h):02d}:{int(m):02d}:{s:06.3f}"
 
 
-def _build_timeline_bar(entries: list[TimelineEntry], total: float) -> str:
+def _marker_intervals(boundaries: list[AdBoundary]) -> list[tuple[float, float]]:
+    """Pair up start/stop boundaries by event_id into (start, end) intervals,
+    covering markers of any span/depth -- used to shade the timeline bar."""
+    starts = {b.event_id: b.output_time for b in boundaries if b.is_start}
+    stops = {b.event_id: b.output_time for b in boundaries if not b.is_start}
+    return [(starts[eid], stops[eid]) for eid in starts if eid in stops]
+
+
+def _build_timeline_bar(entries: list[TimelineEntry], total: float, boundaries: list[AdBoundary]) -> str:
     if total == 0:
         return ""
+    intervals = _marker_intervals(boundaries)
     segs = []
     for entry in entries:
         pct_l = entry.output_start / total * 100
         pct_w = (entry.output_end - entry.output_start) / total * 100
-        kind = "ad" if entry.is_ad_break else "content"
+        is_ad = any(lo <= entry.output_start and entry.output_end <= hi for lo, hi in intervals)
+        kind = "ad" if is_ad else "content"
         title = (
             f"{entry.source_file.name} "
             f"[{_fmt_time(entry.output_start)} → {_fmt_time(entry.output_end)}]"
@@ -213,7 +213,7 @@ def _build_boundary_section(
 
 def _build_scte_panel(point: BoundaryPoint) -> str:
     """Render a compact metadata strip showing the SCTE-35 marker fields."""
-    ab = point.ad_break
+    ab = point.marker
     if not ab:
         return ""
 
@@ -279,7 +279,7 @@ def _build_event_group(
     frame_dur: float,
 ) -> str:
     """Wrap a paired start + stop boundary into a single visual group card."""
-    ab = (start_p or stop_p).ad_break if (start_p or stop_p) else None  # type: ignore[union-attr]
+    ab = (start_p or stop_p).marker if (start_p or stop_p) else None  # type: ignore[union-attr]
     splice_type = ab.splice_type if ab else "unknown"
     break_dur = (start_p or stop_p).break_duration if (start_p or stop_p) else None  # type: ignore[union-attr]
 
@@ -372,7 +372,7 @@ def generate_report(
 
     logger.info("Building report: %d boundary points, total %.1fs", len(points), total)
 
-    timeline_html = _build_timeline_bar(entries, total)
+    timeline_html = _build_timeline_bar(entries, total, boundaries)
     sections_html = _render_all_sections(points, ts_file, total, frame_dur)
 
     html = _render_page(

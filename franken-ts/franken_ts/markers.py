@@ -32,14 +32,16 @@ def build_markers(
     markers: list[dict] = []
 
     for boundary in boundaries:
-        ab = boundary.ad_break
+        ab = boundary.marker
         pts = pts_map[(boundary.event_id, boundary.is_start)]
 
         entry: dict = {
             "event_id": f"0x{boundary.event_id:08X}",
+            "type": ab.type,
             "splice_type": ab.splice_type,
             "pts_time_ticks": pts,
             "pts_time_seconds": pts / PTS_CLOCK,
+            "assets": list(ab.assets),
         }
 
         if ab.splice_type == "time_signal" and ab.segmentation is not None:
@@ -59,6 +61,8 @@ def build_markers(
                 {
                     "segmentation_type_id": f"0x{type_id:02X}",
                     "segmentation_duration_ticks": seg_duration_ticks,
+                    "segment_num": seg.segment_num or 0,
+                    "segments_expected": seg.segments_expected or 0,
                     "upid_type": seg.upid_type,
                     "upid_hex": seg.upid_hex,
                     "flags": _flags_for(seg),

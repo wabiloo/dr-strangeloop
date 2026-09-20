@@ -15,26 +15,26 @@ Stitch video assets together, bolt in ad breaks, and inject SCTE-35 markers — 
 From the repo root:
 
 ```bash
-uv run franken-ts franken-ts/playlists/example.yaml
+uv run franken-ts data/playlists/example.yaml
 ```
 
 With verification (extracts markers after injection and generates an HTML report):
 
 ```bash
-uv run franken-ts franken-ts/playlists/example.yaml --verify
+uv run franken-ts data/playlists/example.yaml --verify
 ```
 
 Dry run (prints all commands, executes nothing):
 
 ```bash
-uv run franken-ts franken-ts/playlists/example.yaml --dry-run
+uv run franken-ts data/playlists/example.yaml --dry-run
 ```
 
 Output is written to `outputs/`.
 
 ## Configuration
 
-All inputs and options are declared in a YAML file. Put playlists in `franken-ts/playlists/`.
+All inputs and options are declared in a YAML file. Put playlists in `data/playlists/` (repo root).
 
 ### Minimal example
 
@@ -47,13 +47,17 @@ assets:
     duration: "10 min"
 
   - file: ad.mp4
+    id: ad1
     duration: "2 min"
-    ad_break:
-      event_id: 1
-      splice_type: splice_insert
 
   - file: movie.mp4
     start: "10 min"
+
+markers:
+  - event_id: 1
+    type: ad
+    splice_type: splice_insert
+    assets: [ad1]
 ```
 
 ### Full reference
@@ -81,26 +85,88 @@ assets:
     slate_image: /path/to/slate.png  # optional — cross-dissolve image for fades
 
   - file: ad.mp4
+    id: ad1                    # required if referenced by a `markers` entry
     duration: "2 min"
     countdown: 3               # optional — countdown in the last 3s of this ad
-    ad_break:
-      event_id: 1              # unique integer per break
-      splice_type: splice_insert  # splice_insert | time_signal
 
   - file: ad2.mp4
+    id: ad2
     duration: "3 min"
-    ad_break:
-      event_id: 2
-      splice_type: time_signal
-      segmentation:
-        type_id: "0x34"
-        upid_type: "0x09"
-        upid_hex: "53 49 47 4e 41 4c 3a 43 52"
-        web_delivery_allowed: true
-        no_regional_blackout: false
-        archive_allowed: false
-        device_restrictions: 1
+
+markers:
+  - event_id: 1                # unique integer per marker
+    type: ad
+    splice_type: splice_insert  # splice_insert | time_signal
+    assets: [ad1]
+
+  - event_id: 2
+    type: ad
+    splice_type: time_signal
+    assets: [ad2]
+    segmentation:
+      type_id: "0x34"
+      upid_type: "0x09"
+      upid_hex: "53 49 47 4e 41 4c 3a 43 52"
+      web_delivery_allowed: true
+      no_regional_blackout: false
+      archive_allowed: false
+      device_restrictions: 1
 ```
+
+### Nested markers (breaks, placements, ads)
+
+`markers` is a flat list — nesting (e.g. a `break` spanning a jingle plus
+several `ad`s, with a `ppo` spanning just the ads) is expressed by having
+each level's marker name the sub-range of asset `id`s it covers, not by
+an authored tree:
+
+```yaml
+assets:
+  - file: content1.mp4
+  - file: jingle.mp4
+    id: jingle
+  - file: ad1.mp4
+    id: ad1
+  - file: ad2.mp4
+    id: ad2
+  - file: content2.mp4
+
+markers:
+  - event_id: 100
+    type: break                  # BreakStart/End (0x22/0x23)
+    splice_type: time_signal
+    assets: [jingle, ad1, ad2]
+    segmentation: { upid_hex: "aa" }
+
+  - event_id: 101
+    type: ppo                    # ProviderPlacementOpportunity (0x34/0x35)
+    splice_type: time_signal
+    assets: [ad1, ad2]
+    segmentation: { upid_hex: "bb" }
+
+  - event_id: 102
+    type: ad                     # ProviderAdvertisement (0x30/0x31)
+    splice_type: time_signal
+    assets: [ad1]
+    segmentation: { upid_hex: "cc" }
+
+  - event_id: 103
+    type: ad
+    splice_type: time_signal
+    assets: [ad2]
+    segmentation: { upid_hex: "dd" }
+```
+
+Every marker's start/end are *derived* from its assets' resolved timeline
+positions — never authored directly — so trimming/reordering assets moves
+every enclosing marker automatically; there's nothing to desync. Two
+marker spans must be disjoint or one must strictly contain the other
+(validated at load time); `segmentation.segment_num`/`segments_expected`
+auto-fill from sibling position/count under the same immediate parent
+(e.g. the jingle is the break's first child, so it gets `segment_num: 0`
+automatically) unless set explicitly. `type` (`break`/`ppo`/`ad`/anything
+else) also supplies a default `segmentation.type_id` per the mapping
+above, always overridable.
 
 ### Multi-rendition (ABR ladder) output
 
@@ -157,7 +223,7 @@ use exactly one.
 
 #### Asset rules
 
-- Any asset without `ad_break` is treated as content.
+- Any asset not covered by a `markers` entry is treated as content.
 - The same file can appear multiple times with different `start`/`duration` ranges.
 - `start` only → from that offset to end of file.
 - `duration` only → from the beginning of the file.
@@ -213,12 +279,16 @@ assets:
     # uses the global slate_image above
 
   - file: ad.mp4
+    id: ad1
     duration: "30s"
     fade_out: 1
     slate_image: /path/to/other_slate.png   # overrides the global for this asset
-    ad_break:
-      event_id: 1
-      splice_type: splice_insert
+
+markers:
+  - event_id: 1
+    type: ad
+    splice_type: splice_insert
+    assets: [ad1]
 ```
 
 - `slate_image` only takes effect when at least one of `fade_in` / `fade_out` is also set.
@@ -233,9 +303,9 @@ assets:
 
 #### SCTE-35 marker types
 
-**`splice_insert`** — classic two-point splice: a splice-out at the start of the ad asset and a splice-in at the end.
+**`splice_insert`** — classic two-point splice: a splice-out at the start of the marker's span and a splice-in at the end.
 
-**`time_signal`** — time signal with a segmentation descriptor. Requires a `segmentation` block. The `segmentation_duration` is derived from the asset duration unless overridden in the config.
+**`time_signal`** — time signal with a segmentation descriptor. Requires a `segmentation` block. The `segmentation_duration` is derived from the marker's span duration unless overridden in the config. Required if the marker is part of a nested group (break/ppo/ad) that needs coincident boundaries merged into shared SCTE-35 messages.
 
 ## CLI reference
 

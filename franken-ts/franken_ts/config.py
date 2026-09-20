@@ -127,6 +127,13 @@ class SegmentationConfig(BaseModel):
     archive_allowed: bool = False
     device_restrictions: int = 1
     duration: Optional[TimeValue] = None
+    # Sibling position within an enclosing marker (e.g. the Nth of M Provider
+    # Placement Opportunities inside a Break).  Left unset by the user in the
+    # common case: the `markers` resolution pass (see timeline.py) fills these
+    # in automatically from inferred containment, but an explicit value here
+    # always wins.
+    segment_num: Optional[int] = None
+    segments_expected: Optional[int] = None
 
     def duration_seconds(self) -> Optional[float]:
         if self.duration is None:
@@ -134,7 +141,9 @@ class SegmentationConfig(BaseModel):
         return parse_time(self.duration)
 
 
-class AdBreakConfig(BaseModel):
+class SpliceConfig(BaseModel):
+    """Shared SCTE-35 splice-signaling fields, used by `MarkerConfig`."""
+
     event_id: int
     splice_type: Literal["splice_insert", "time_signal"] = "splice_insert"
     unique_program_id: str = "0x0001"
@@ -144,17 +153,111 @@ class AdBreakConfig(BaseModel):
     segmentation: Optional[SegmentationConfig] = None
 
     @model_validator(mode="after")
-    def segmentation_required_for_time_signal(self) -> "AdBreakConfig":
+    def segmentation_required_for_time_signal(self) -> "SpliceConfig":
         if self.splice_type == "time_signal" and self.segmentation is None:
             raise ValueError("'segmentation' is required when splice_type is 'time_signal'")
         return self
 
 
+# SCTE-35 Table 22 segmentation_type_id (Start value) -> `type` lane label.
+# `type` is purely a downstream/UI convenience (timeline lane grouping,
+# markers.json labeling) -- `segmentation.type_id` is the single source of
+# truth for what a marker actually signals, so `type` is always *derived*
+# from it (never the other way around -- that's what let them silently
+# disagree: a marker authored/edited to say `type: break` while its
+# `segmentation.type_id` was left at an unrelated PPO value).
+LANE_FOR_SEGMENTATION_TYPE_ID: dict[str, str] = {
+    "0x22": "break",   # Break
+    "0x34": "ppo",      # Provider Placement Opportunity
+    "0x36": "ppo",      # Distributor Placement Opportunity
+    "0x38": "ppo",      # Provider Overlay Placement Opportunity
+    "0x3A": "ppo",      # Distributor Overlay Placement Opportunity
+    "0x30": "ad",       # Provider Advertisement
+    "0x32": "ad",       # Distributor Advertisement
+    "0x3C": "ad",       # Provider Promo
+    "0x3E": "ad",       # Distributor Promo
+    "0x44": "ad",       # Provider Ad Block
+    "0x46": "ad",       # Distributor Ad Block
+}
+
+
+def lane_for_type_id(type_id: str | int) -> str:
+    """The `type` lane (break/ppo/ad/custom) a segmentation_type_id belongs
+    to -- "custom" for anything not in LANE_FOR_SEGMENTATION_TYPE_ID (e.g.
+    Program/Chapter/Credit/Network/standalone-instant types)."""
+    value = int(type_id, 16) if isinstance(type_id, str) else int(type_id)
+    normalized = f"0x{value:02X}"
+    return LANE_FOR_SEGMENTATION_TYPE_ID.get(normalized, "custom")
+
+# SCTE-35 Table 22 segmentation_type_id values that are standalone/instant
+# signals -- NOT part of a Start/End pair (there is no "+1" partner; e.g.
+# 0x13 Program Breakaway is its own distinct type, not "0x12 End"). Every
+# other type_id in the table is a Start (even) / End (odd) pair. Used to
+# decide whether a `time_signal` marker resolves to one boundary (instant,
+# at the marker span's start) or two (start + stop, spanning the marker).
+INSTANT_SEGMENTATION_TYPE_IDS: frozenset[str] = frozenset({
+    "0x00",  # Not Indicated
+    "0x01",  # Content Identification
+    "0x12",  # Program Early Termination
+    "0x13",  # Program Breakaway
+    "0x14",  # Program Resumption
+    "0x15",  # Program Runover Planned
+    "0x16",  # Program Runover Unplanned
+    "0x17",  # Program Overlap Start
+    "0x18",  # Program Blackout Override
+    "0x19",  # Program Start -- In Progress
+})
+
+
+def is_instant_segmentation(segmentation: Optional["SegmentationConfig"]) -> bool:
+    """True if `segmentation` describes a standalone/instant signal (see
+    INSTANT_SEGMENTATION_TYPE_IDS) rather than a Start/End pair."""
+    if segmentation is None:
+        return False
+    type_id = segmentation.type_id
+    value = int(type_id, 16) if isinstance(type_id, str) else int(type_id)
+    normalized = f"0x{value:02X}"
+    return normalized in INSTANT_SEGMENTATION_TYPE_IDS
+
+
+class MarkerConfig(SpliceConfig):
+    """One node in the flat `markers` list (top-level, sibling of `assets`) --
+    the only way to signal ad breaks/placements/etc. A marker names the
+    contiguous run of asset `id`s it covers via `assets`, and its start/end
+    timestamps are always *derived* from those assets' resolved timeline
+    positions (see `timeline.resolve_markers`), never authored directly.
+    This is what keeps nested markers frame-accurate by construction: there
+    is nothing to desync.
+
+    Nesting (e.g. break ⊃ ppo ⊃ ad) is expressed implicitly by span
+    containment across sibling `MarkerConfig` entries, not by an authored
+    parent/child relationship -- see `Config.validate_markers` for the
+    containment check.
+    """
+
+    assets: list[str] = Field(min_length=1)
+
+    @property
+    def type(self) -> str:
+        """The lane (break/ppo/ad/custom) this marker belongs to, for
+        timeline grouping and markers.json labeling -- NOT a stored/authored
+        field. Always computed from `segmentation.type_id` (the single
+        source of truth for what a marker signals); `splice_insert` markers
+        have no type_id to derive from, so this is "ad" (the common case:
+        a plain two-point ad splice). There is deliberately no way to set
+        this independently and have it disagree with type_id -- that was
+        the original bug (a marker could say `type: break` while its
+        `segmentation.type_id` was left at an unrelated PPO value)."""
+        if self.segmentation is not None:
+            return lane_for_type_id(self.segmentation.type_id)
+        return "ad"
+
+
 class AssetConfig(BaseModel):
     file: Path
+    id: Optional[str] = None
     start: Optional[TimeValue] = None
     duration: Optional[TimeValue] = None
-    ad_break: Optional[AdBreakConfig] = None
     countdown: Optional[TimeValue] = None
     fade_in: Optional[TimeValue] = None
     fade_out: Optional[TimeValue] = None
@@ -205,14 +308,11 @@ class AssetConfig(BaseModel):
             return None
         return parse_time(self.fade_out)
 
-    @property
-    def is_ad_break(self) -> bool:
-        return self.ad_break is not None
-
 
 class Config(BaseModel):
     output: OutputConfig
     assets: list[AssetConfig] = Field(min_length=1)
+    markers: list[MarkerConfig] = Field(default_factory=list)
     normalize: bool = False
     slate_image: Optional[Path] = None
 
@@ -224,12 +324,83 @@ class Config(BaseModel):
     @model_validator(mode="after")
     def validate_event_ids_unique(self) -> "Config":
         seen: set[int] = set()
+        for marker in self.markers:
+            eid = marker.event_id
+            if eid in seen:
+                raise ValueError(f"Duplicate marker event_id: {eid}")
+            seen.add(eid)
+        return self
+
+    @model_validator(mode="after")
+    def validate_asset_ids(self) -> "Config":
+        seen: set[str] = set()
         for asset in self.assets:
-            if asset.ad_break is not None:
-                eid = asset.ad_break.event_id
-                if eid in seen:
-                    raise ValueError(f"Duplicate ad_break event_id: {eid}")
-                seen.add(eid)
+            if asset.id is None:
+                continue
+            if asset.id in seen:
+                raise ValueError(f"Duplicate asset id: {asset.id!r}")
+            seen.add(asset.id)
+        return self
+
+    @model_validator(mode="after")
+    def validate_markers(self) -> "Config":
+        """Validate the flat `markers` list against the asset order:
+
+        - every referenced asset id must exist exactly once in `assets`
+        - each marker's own `assets` must be a contiguous run in the
+          asset list (no gaps, matching the asset list's own order)
+        - every pair of marker spans must be disjoint or one must
+          strictly contain the other -- never partially overlapping
+          (this is the invariant that stands in for an authored
+          parent/child tree; see MarkerConfig docstring)
+        """
+        if not self.markers:
+            return self
+
+        id_to_index: dict[str, int] = {}
+        for i, asset in enumerate(self.assets):
+            if asset.id is not None:
+                id_to_index[asset.id] = i
+
+        spans: list[tuple[int, int, "MarkerConfig"]] = []  # (start_idx, end_idx, marker)
+        for marker in self.markers:
+            indices: list[int] = []
+            for aid in marker.assets:
+                if aid not in id_to_index:
+                    raise ValueError(
+                        f"markers: event_id {marker.event_id} references unknown asset id {aid!r}"
+                    )
+                indices.append(id_to_index[aid])
+
+            lo, hi = min(indices), max(indices)
+            expected = set(range(lo, hi + 1))
+            if set(indices) != expected or len(indices) != len(expected):
+                raise ValueError(
+                    f"markers: event_id {marker.event_id}'s assets {marker.assets!r} "
+                    f"are not a contiguous run in the asset list (resolved indices {sorted(indices)})"
+                )
+            spans.append((lo, hi, marker))
+
+        for i in range(len(spans)):
+            lo_a, hi_a, m_a = spans[i]
+            for j in range(i + 1, len(spans)):
+                lo_b, hi_b, m_b = spans[j]
+                disjoint = hi_a < lo_b or hi_b < lo_a
+                a_contains_b = lo_a <= lo_b and hi_b <= hi_a
+                b_contains_a = lo_b <= lo_a and hi_a <= hi_b
+                if disjoint:
+                    continue
+                if a_contains_b and b_contains_a:
+                    raise ValueError(
+                        f"markers: event_id {m_a.event_id} and {m_b.event_id} "
+                        f"cover the exact same assets -- remove the redundant one"
+                    )
+                if not (a_contains_b or b_contains_a):
+                    raise ValueError(
+                        f"markers: event_id {m_a.event_id} ({m_a.assets!r}) and "
+                        f"event_id {m_b.event_id} ({m_b.assets!r}) partially overlap -- "
+                        f"marker spans must be nested or disjoint, never partially overlapping"
+                    )
         return self
 
 
