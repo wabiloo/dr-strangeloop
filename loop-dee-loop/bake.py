@@ -135,41 +135,54 @@ def decode_embedded_scte35(ts_file: Path) -> list[DecodedMarker]:
                 "this indicates unexpected content in the .ts."
             )
         ticks = round(pts_time * TIMESCALE)
-
-        # event_id lives on the segmentation descriptor (segmentation_event_id,
-        # a "0x.." string), not on the splice command itself for time_signal.
-        event_id = None
-        for descriptor in getattr(cue, "descriptors", []):
-            seg_event_id = getattr(descriptor, "segmentation_event_id", None)
-            if seg_event_id is not None:
-                event_id = seg_event_id
-                break
-        if event_id is None:
-            # splice_insert carries its own splice_event_id directly.
-            event_id = getattr(cue.command, "splice_event_id", None)
-        if event_id is None:
-            raise ValidationError(
-                "decoded SCTE-35 message has no event_id on either its "
-                "segmentation descriptor or splice command -- cannot "
-                "cross-validate against markers.json."
-            )
-
-        event_id_str = (
-            event_id
-            if isinstance(event_id, str) and event_id.startswith("0x")
-            else f"0x{int(event_id):08X}"
-        )
-        # Normalize to the same fixed-width 0x%08X form markers.json uses.
-        event_id_str = f"0x{int(event_id_str, 16):08X}"
-
         b64 = cue.base64()
-        decoded.append(
-            DecodedMarker(
-                event_id=event_id_str,
-                pts_time_ticks=ticks,
-                splice_command_b64=b64,
+
+        # A single splice_information_table message can carry MULTIPLE
+        # segmentation descriptors -- franken-ts merges every event
+        # coincident at the same PTS into one message (e.g. a Break start +
+        # a nested PPO start + a nested Ad start, all at the same instant)
+        # instead of emitting one message per event. Every descriptor's
+        # event_id is therefore a real, independent marker that must be
+        # cross-validated -- NOT just the first one found. (The same raw
+        # `splice_command_b64` -- the whole message's bytes -- is correctly
+        # shared by all events from that message: downstream SCTE35-OUT/IN
+        # and DASH <Binary> signaling embed the full message regardless of
+        # which of its descriptors a given marker corresponds to.)
+        seg_event_ids = [
+            getattr(descriptor, "segmentation_event_id", None)
+            for descriptor in getattr(cue, "descriptors", [])
+        ]
+        seg_event_ids = [eid for eid in seg_event_ids if eid is not None]
+
+        if not seg_event_ids:
+            # splice_insert carries its own splice_event_id directly on the
+            # command (no segmentation descriptors at all).
+            event_id = getattr(cue.command, "splice_event_id", None)
+            if event_id is None:
+                raise ValidationError(
+                    "decoded SCTE-35 message has no event_id on either its "
+                    "segmentation descriptor(s) or splice command -- cannot "
+                    "cross-validate against markers.json."
+                )
+            seg_event_ids = [event_id]
+
+        for event_id in seg_event_ids:
+            event_id_str = (
+                event_id
+                if isinstance(event_id, str) and event_id.startswith("0x")
+                else f"0x{int(event_id):08X}"
             )
-        )
+            # Normalize to the same fixed-width 0x%08X form markers.json uses.
+            event_id_str = f"0x{int(event_id_str, 16):08X}"
+
+            decoded.append(
+                DecodedMarker(
+                    event_id=event_id_str,
+                    pts_time_ticks=ticks,
+                    splice_command_b64=b64,
+                )
+            )
+
 
     stream = threefive.Stream(str(ts_file))
     stream.decode(func=_callback)

@@ -278,3 +278,75 @@ markers:
     no_regional_blackout: false
     archive_allowed: false
     device_restrictions: 1
+- event_id: 212
+  splice_type: time_signal
+  assets:
+  - jingle2
+  segmentation:
+    type_id: '0x02'
+    upid_type: '0x0C'
+    upid_hex: 414446520133f10134b04f065e060220
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 213
+  splice_type: time_signal
+  assets:
+  - ad2a
+  segmentation:
+    type_id: '0x02'
+    upid_type: '0x0C'
+    upid_hex: 414446520133f10134b04f065e060220
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 214
+  splice_type: time_signal
+  assets:
+  - ad2b
+  segmentation:
+    type_id: '0x02'
+    upid_type: '0x0C'
+    upid_hex: 414446520133f10134b04f065e060220
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 215
+  splice_type: time_signal
+  assets:
+  - ad2c
+  segmentation:
+    type_id: '0x02'
+    upid_type: '0x0C'
+    upid_hex: 414446520133f10134b04f065e060220
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 216
+  splice_type: time_signal
+  assets:
+  - ad2d
+  segmentation:
+    type_id: '0x02'
+    upid_type: '0x0C'
+    upid_hex: 414446520133f10134b04f065e060220
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 217
+  splice_type: time_signal
+  assets:
+  - ad2e
+  segmentation:
+    type_id: '0x02'
+    upid_type: '0x0C'
+    upid_hex: 414446520133f10134b04f065e060220
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
