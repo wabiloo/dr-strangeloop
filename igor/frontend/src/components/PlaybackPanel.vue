@@ -5,6 +5,7 @@ import Button from 'primevue/button'
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import type { ChannelHealth } from '../api/types'
+import { describeMarkerLabel } from '../scte35Lite'
 
 const props = defineProps<{
   hlsUrl?: string | null
@@ -18,6 +19,13 @@ const toast = useToast()
 const HLS_CDN = 'https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js'
 const DASH_CDN = 'https://cdn.dashjs.org/latest/dash.all.min.js'
 
+// Both players target the SAME distance behind the live edge, explicitly,
+// rather than each deriving its own default (hls.js: liveSyncDurationCount
+// segments; dash.js: the MPD's suggestedPresentationDelay) -- those two
+// defaults don't actually agree (15s vs 10s here) and drift apart further
+// if segment duration or the manifest ever change independently.
+const TARGET_LIVE_DELAY_SECONDS = 10
+
 const hlsVideo = ref<HTMLVideoElement | null>(null)
 const dashVideo = ref<HTMLVideoElement | null>(null)
 const hlsError = ref('')
@@ -26,6 +34,8 @@ const hlsLoading = ref(false)
 const dashLoading = ref(false)
 const hlsPlaying = ref(false)
 const dashPlaying = ref(false)
+const hlsPlayheadTime = ref('')
+const dashPlayheadTime = ref('')
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let hlsInstance: any = null
@@ -33,6 +43,96 @@ let hlsInstance: any = null
 let dashInstance: any = null
 
 const scriptPromises: Record<string, Promise<void> | undefined> = {}
+
+// --- SCTE-35 marker toast overlay -------------------------------------------
+//
+// hls.js: EXT-X-DATERANGE tags are exposed as real, natively-timed
+// TextTrackCues -- hls.js's ID3TrackController creates a hidden `metadata`
+// kind <track> on the video element and appends one VTTCue per DATERANGE
+// attribute (id = the DATERANGE's own ID, value = {key: attrName, data:
+// attrValue}, start/endTime = the actual media-timeline position). Since
+// these are genuine TextTrackCues, the BROWSER's own native cue-timing
+// fires `cuechange` at exactly the right playback position -- no need to
+// reimplement "has playback reached this timestamp yet" ourselves (an
+// earlier version of this did that by hand via LEVEL_UPDATED, which only
+// reports when a DATERANGE enters the DVR window -- several segments
+// before it's actually reached -- causing toasts unrelated to on-screen
+// content).
+//
+// dash.js: surfaces MPD <Event>/emsg occurrences by registering a listener
+// on the event's own schemeIdUri directly ("urn:scte:scte35:2014:xml+bin"
+// here, see loop-dee-loop/scte35_signaling.py) -- dash.js already only
+// invokes plain (mode-less) listeners at the event's actual presentation
+// time (EVENT_MODE_ON_START), so no equivalent gating is needed there.
+const SCTE35_DASH_SCHEME = 'urn:scte:scte35:2014:xml+bin'
+
+interface MarkerToast {
+  key: string
+  label: string
+}
+
+const hlsMarkerToasts = ref<MarkerToast[]>([])
+const dashMarkerToasts = ref<MarkerToast[]>([])
+const hlsSeenActivations = new Set<string>()
+const dashSeenEventKeys = new Set<string>()
+
+function pushMarkerToast(list: typeof hlsMarkerToasts, label: string) {
+  const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  list.value.push({ key, label })
+  setTimeout(() => {
+    list.value = list.value.filter((t) => t.key !== key)
+  }, 3000)
+}
+
+/** "<event_id>-loop<n>" (event_id a "0x..." hex string) -> the event_id as
+ * a plain decimal number, matching how dash.js hands us its own event.id
+ * (a plain number) -- so both players label the same marker identically. */
+function eventIdFromDateRangeId(id: string): number {
+  return parseInt(id.split('-')[0], 16)
+}
+
+/** Wire up hls.js's native "id3"/metadata TextTrack so SCTE35-OUT/IN cues
+ * pop a toast exactly when the browser's own cue timing says they're
+ * active -- attaches immediately if the track already exists, and again
+ * for any track hls.js adds later (it's created lazily on first fragment
+ * with PROGRAM-DATE-TIME, which may be after this runs). The cue's
+ * "SCTE35-OUT"/"SCTE35-IN" key is only used to know a marker fired at all
+ * -- describeMarkerLabel() decodes the real Start/End (or no-suffix,
+ * instant) wording from the actual segmentation_type_id, not from HLS's
+ * own OUT/IN naming (which is CUE-OUT/CUE-IN terminology, not SCTE-35's). */
+function attachHlsMetadataCueListener(video: HTMLVideoElement) {
+  const wired = new WeakSet<TextTrack>()
+
+  function wireTrack(track: TextTrack) {
+    if (track.kind !== 'metadata' || wired.has(track)) return
+    wired.add(track)
+    track.addEventListener('cuechange', () => {
+      const active = track.activeCues
+      if (!active) return
+      for (let i = 0; i < active.length; i++) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const cue = active[i] as any
+        const key = cue.value?.key
+        if (key !== 'SCTE35-OUT' && key !== 'SCTE35-IN') continue
+        const id = String(cue.id ?? 'unknown')
+        const activation = `${id}:${key}`
+        if (hlsSeenActivations.has(activation)) continue
+        hlsSeenActivations.add(activation)
+        const eventId = eventIdFromDateRangeId(id)
+        const bytes = new Uint8Array(cue.value.data as ArrayBuffer)
+        const label = Number.isNaN(eventId) ? 'SCTE-35' : describeMarkerLabel(bytes, eventId)
+        pushMarkerToast(hlsMarkerToasts, `${label} · ${Number.isNaN(eventId) ? id : eventId}`)
+      }
+    })
+  }
+
+  Array.from(video.textTracks).forEach(wireTrack)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  video.textTracks.addEventListener('addtrack', (e: any) => {
+    if (e.track) wireTrack(e.track)
+  })
+}
+
 
 function loadScript(src: string, globalName: string): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -68,15 +168,55 @@ async function playHls() {
     const video = hlsVideo.value
     if (!video) return
     if (Hls.isSupported()) {
-      hlsInstance = new Hls({ liveSyncDurationCount: 3 })
+      // hls.js's LatencyController targets liveSyncDuration seconds behind
+      // the live edge -- an explicit absolute value (rather than
+      // liveSyncDurationCount, a segment-count multiple that only matched
+      // dash.js's target by coincidence and drifted apart with any
+      // segment-duration change) keeps this aligned with DASH's own
+      // liveDelay (see playDash()) at the SAME distance from live, not two
+      // independently-derived, different-by-design values.
+      //
+      // maxLiveSyncPlaybackRate defaults to 1 -- i.e. hls.js computes the
+      // target and then is capped from ever actually speeding up to reach
+      // it, so any one-off delay (a stall, a slow segment fetch, the
+      // initial join itself) is permanent at 1.0x. liveMaxLatencyDuration
+      // is the second half of recovering from a BIG one-off stall
+      // specifically: past this absolute latency, hls.js seeks forward
+      // immediately instead of waiting for a slow multi-minute gradual
+      // catch-up at a capped, mild speed-up.
+      hlsInstance = new Hls({
+        liveSyncDuration: TARGET_LIVE_DELAY_SECONDS,
+        maxLiveSyncPlaybackRate: 1.5,
+        liveMaxLatencyDuration: TARGET_LIVE_DELAY_SECONDS * 2,
+      })
       hlsInstance.loadSource(url)
       hlsInstance.attachMedia(video)
+      attachHlsMetadataCueListener(video)
       hlsInstance.on(Hls.Events.ERROR, (_evt: unknown, data: { fatal?: boolean; details?: string }) => {
         if (data?.fatal) hlsError.value = `hls.js fatal error: ${data.details ?? 'unknown'}`
       })
       hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
         hlsLoading.value = false
         video.play().catch(() => {})
+      })
+      // Playhead position (wall-clock): hls.js exposes the currently-active
+      // fragment's own PROGRAM-DATE-TIME (ms epoch) + its start offset on
+      // FRAG_CHANGED; map video.currentTime onto that to get the real
+      // wall-clock instant currently being displayed -- video.currentTime
+      // itself is on hls.js's own internal (non-epoch) timeline, not wall
+      // clock, so it can't be shown directly (unlike DASH -- see playDash()).
+      let hlsFragProgramDateTime: number | null = null
+      let hlsFragStart = 0
+      hlsInstance.on(Hls.Events.FRAG_CHANGED, (_evt: unknown, data: { frag?: { programDateTime?: number | null; start?: number } }) => {
+        if (data.frag?.programDateTime != null) {
+          hlsFragProgramDateTime = data.frag.programDateTime
+          hlsFragStart = data.frag.start ?? video.currentTime
+        }
+      })
+      video.addEventListener('timeupdate', () => {
+        if (hlsFragProgramDateTime == null) return
+        const wallMs = hlsFragProgramDateTime + (video.currentTime - hlsFragStart) * 1000
+        hlsPlayheadTime.value = new Date(wallMs).toISOString().replace('T', ' ')
       })
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari: native HLS support, no hls.js needed.
@@ -108,12 +248,59 @@ async function playDash() {
     const video = dashVideo.value
     if (!video) return
     dashInstance = dashjs.MediaPlayer().create()
+    // Playhead position (wall-clock): our MPD's availabilityStartTime is
+    // 1970-01-01 (unix epoch) by construction (see loop-dee-loop/serve.py),
+    // so video.currentTime for a dash.js-driven <video> IS already real
+    // Unix epoch seconds directly -- no fragment-metadata mapping needed
+    // here, unlike hls.js (see playHls()), whose currentTime lives on its
+    // own internal, non-epoch timeline.
+    video.addEventListener('timeupdate', () => {
+      if (!Number.isFinite(video.currentTime) || video.currentTime <= 0) return
+      dashPlayheadTime.value = new Date(video.currentTime * 1000).toISOString().replace('T', ' ')
+    })
+    // dash.js's live-catchup (actively nudging playback rate to stay near
+    // the live edge) defaults to enabled:null -- auto-on only for
+    // low-latency (LL-DASH) manifests. Ours is a regular "dynamic" MPD, so
+    // it stays off by default and any drift (a stall, a slow segment
+    // fetch, ...) is permanent: dash.js just keeps playing at 1.0x forever
+    // behind. hls.js has no such off-switch -- its LatencyController
+    // continuously corrects for regular HLS too -- which is why the two
+    // players visibly diverge over time without this.
+    //
+    // delay.liveDelay: explicit, matching hls.js's liveSyncDuration (see
+    // playHls()) instead of implicitly trusting the MPD's own
+    // suggestedPresentationDelay to happen to agree with it.
+    //
+    // liveCatchup.maxDrift + playbackRate: mild speed-up alone (the
+    // default bounds) only closes a SMALL drift in reasonable time --
+    // recovering from a big one-off stall (a rebuffer, a slow segment
+    // fetch) at a capped ~1.05x can take minutes. Past maxDrift seconds
+    // behind target, dash.js seeks forward immediately instead.
+    dashInstance.updateSettings({
+      streaming: {
+        delay: { liveDelay: TARGET_LIVE_DELAY_SECONDS },
+        liveCatchup: {
+          enabled: true,
+          maxDrift: TARGET_LIVE_DELAY_SECONDS * 2,
+          playbackRate: { min: -0.5, max: 0.5 },
+        },
+      },
+    })
     dashInstance.initialize(video, url, true)
     dashInstance.on(dashjs.MediaPlayer.events.ERROR, (e: { error?: { message?: string } }) => {
       dashError.value = `dash.js error: ${e?.error?.message ?? 'unknown'}`
     })
     dashInstance.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
       dashLoading.value = false
+    })
+    dashInstance.on(SCTE35_DASH_SCHEME, (e: { event?: { id?: number; duration?: number; messageData?: Uint8Array } }) => {
+      const id = e.event?.id
+      if (id == null) return
+      const key = `${id}-${e.event?.duration ?? ''}`
+      if (dashSeenEventKeys.has(key)) return
+      dashSeenEventKeys.add(key)
+      const label = e.event?.messageData ? describeMarkerLabel(e.event.messageData, id) : 'SCTE-35'
+      pushMarkerToast(dashMarkerToasts, `${label} · ${id}`)
     })
   } catch (e) {
     dashError.value = e instanceof Error ? e.message : String(e)
@@ -133,6 +320,9 @@ function destroyHls() {
   hlsPlaying.value = false
   hlsLoading.value = false
   hlsError.value = ''
+  hlsSeenActivations.clear()
+  hlsMarkerToasts.value = []
+  hlsPlayheadTime.value = ''
 }
 
 function destroyDash() {
@@ -147,6 +337,9 @@ function destroyDash() {
   dashPlaying.value = false
   dashLoading.value = false
   dashError.value = ''
+  dashSeenEventKeys.clear()
+  dashMarkerToasts.value = []
+  dashPlayheadTime.value = ''
 }
 
 // If the channel gets redeployed/refreshed with new URLs, stop rather than
@@ -157,6 +350,11 @@ onBeforeUnmount(() => {
   destroyHls()
   destroyDash()
 })
+
+// Autoplay both players as soon as a URL is available -- no need to click
+// "Play HLS"/"Play DASH" manually every time.
+watch(() => props.hlsUrl, (url) => { if (url) playHls() }, { immediate: true })
+watch(() => props.dashUrl, (url) => { if (url) playDash() }, { immediate: true })
 
 function openUrl(url?: string | null) {
   if (url) window.open(url, '_blank')
@@ -209,8 +407,18 @@ async function copyUrl(url?: string | null) {
             <i class="pi pi-play-circle" />
             <span>Play HLS</span>
           </button>
+          <TransitionGroup name="marker-toast" tag="div" class="marker-toast-stack">
+            <div v-for="t in hlsMarkerToasts" :key="t.key" class="marker-toast">
+              <i class="pi pi-bell" />
+              <span>{{ t.label }}</span>
+            </div>
+          </TransitionGroup>
         </div>
         <Message v-if="hlsError" severity="error" :closable="false" class="text-xs">{{ hlsError }}</Message>
+        <div v-if="hlsPlayheadTime" class="playhead-row">
+          <i class="pi pi-clock" />
+          <span>Playhead: {{ hlsPlayheadTime }}</span>
+        </div>
         <div class="url-row">
           <input class="url-input" type="text" readonly :value="hlsUrl" @focus="($event.target as HTMLInputElement).select()" />
           <Button icon="pi pi-copy" text size="small" title="Copy URL" @click="copyUrl(hlsUrl)" />
@@ -230,8 +438,18 @@ async function copyUrl(url?: string | null) {
             <i class="pi pi-play-circle" />
             <span>Play DASH</span>
           </button>
+          <TransitionGroup name="marker-toast" tag="div" class="marker-toast-stack">
+            <div v-for="t in dashMarkerToasts" :key="t.key" class="marker-toast">
+              <i class="pi pi-bell" />
+              <span>{{ t.label }}</span>
+            </div>
+          </TransitionGroup>
         </div>
         <Message v-if="dashError" severity="error" :closable="false" class="text-xs">{{ dashError }}</Message>
+        <div v-if="dashPlayheadTime" class="playhead-row">
+          <i class="pi pi-clock" />
+          <span>Playhead: {{ dashPlayheadTime }}</span>
+        </div>
         <div class="url-row">
           <input class="url-input" type="text" readonly :value="dashUrl" @focus="($event.target as HTMLInputElement).select()" />
           <Button icon="pi pi-copy" text size="small" title="Copy URL" @click="copyUrl(dashUrl)" />
@@ -354,6 +572,69 @@ async function copyUrl(url?: string | null) {
 
 .play-overlay:hover {
   background: rgba(15, 23, 42, 0.7);
+}
+
+.marker-toast-stack {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  right: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.marker-toast {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(96, 165, 250, 0.5);
+  color: #e0f2fe;
+  font-size: 0.75rem;
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.marker-toast i {
+  color: #60a5fa;
+  font-size: 0.8rem;
+}
+
+.marker-toast-enter-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.marker-toast-leave-active {
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.marker-toast-enter-from {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.marker-toast-leave-to {
+  opacity: 0;
+  transform: translateX(8px);
+}
+
+.playhead-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  font-family: var(--font-mono, monospace);
 }
 
 .url-row {

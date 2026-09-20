@@ -79,6 +79,30 @@ export function isInstantTypeId(typeId: string): boolean {
   return INSTANT_SEGMENTATION_TYPE_IDS.has(normalizeTypeId(typeId))
 }
 
+/** Human name for a raw segmentation_type_id byte value (0-255), as decoded
+ * directly off the wire (e.g. from a live player's own SCTE-35 marker
+ * event) -- handles BOTH the Start value (in SEGMENTATION_PAIR_OPTIONS
+ * directly) and its End partner (Start value + 1) by flooring to even
+ * before lookup, except for instant/standalone type_ids which are never
+ * part of a pair and must be looked up as-is (e.g. flooring 0x13 Program
+ * Breakaway would incorrectly land on 0x12 Program Early Termination). */
+export function nameForTypeIdByte(value: number): string {
+  const asHex = `0x${value.toString(16).padStart(2, '0').toUpperCase()}`
+  if (INSTANT_SEGMENTATION_TYPE_IDS.has(asHex)) {
+    return SEGMENTATION_PAIR_OPTIONS.find((o) => o.value === asHex)?.name ?? asHex
+  }
+  const flooredHex = `0x${(value & ~1).toString(16).padStart(2, '0').toUpperCase()}`
+  return SEGMENTATION_PAIR_OPTIONS.find((o) => o.value === flooredHex)?.name ?? asHex
+}
+
+/** Same instant/standalone check as isInstantTypeId(), but taking the raw
+ * decoded byte value instead of a "0xNN" string -- for callers working
+ * directly off wire-decoded bytes (e.g. a live player's SCTE-35 event). */
+export function isInstantTypeIdValue(value: number): boolean {
+  const asHex = `0x${value.toString(16).padStart(2, '0').toUpperCase()}`
+  return INSTANT_SEGMENTATION_TYPE_IDS.has(asHex)
+}
+
 /** A minimal shape covering what's needed to key/label a timeline lane --
  * matches (a subset of) MarkerLike from markerLayout.ts. */
 export interface LaneableMarker {

@@ -13,6 +13,7 @@
     "primeflex": "^4.0.0",
     "primeicons": "^7.0.0",
     "primevue": "^4.5.5",
+    "scte35": "^0.7.0",
     "vue": "^3.5.42",
     "vue-router": "^4.6.4"
   },
