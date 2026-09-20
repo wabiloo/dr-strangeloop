@@ -33,8 +33,9 @@ config file selects "aws-media" (MediaLive + MediaPackage v1) or
   outputs   Print all CloudFormation stack outputs
   redeploy  Delete a broken stack if needed, then run cdk deploy
   create    First-time, non-interactive setup: (ecs-express only) ensure
-            the shared ECS cluster stack is deployed, `cdk deploy` the
-            channel stack, `spark`, then `start`. Equivalent to
+            the shared ECS cluster stack is deployed, `spark` (content
+            MUST be staged before the channel stack exists), `cdk deploy`
+            the channel stack, then `start`. Equivalent to
             galvanise.py's pipeline minus the interactive confirmations --
             intended for programmatic callers (e.g. a management UI).
   list      List channels found under a directory of TOML configs
@@ -237,17 +238,28 @@ def _ensure_shared_stack_if_needed(cfg, config_path):
 
 def cmd_create(cfg, config_path, extra_args):
     """Non-interactive first-time channel setup: ensure the shared stack
-    (ecs-express only), `cdk deploy` the channel stack, `spark`, then
-    `start`. This is `galvanise.py`'s pipeline (steps 3-6) with every
-    interactive confirmation removed -- intended for programmatic callers
-    (a management API/UI) that already know they want to proceed, as
-    opposed to a human running galvanise.py's guided terminal flow."""
+    (ecs-express only), `spark` (stage content), `cdk deploy` the channel
+    stack, then `start`. This is `galvanise.py`'s pipeline (steps 3-6)
+    with every interactive confirmation removed -- intended for
+    programmatic callers (a management API/UI) that already know they
+    want to proceed, as opposed to a human running galvanise.py's guided
+    terminal flow.
+
+    Content MUST be staged before the channel stack is deployed: on
+    ecs-express, the ECS task's entrypoint syncs the loop package from S3
+    at container startup and hard-crashes if nothing is there yet, which
+    sends the ECS service into an endless crashloop that CloudFormation
+    waits on (and eventually times out/rolls back) -- see
+    its-a-live/AGENTS.md and README.md."""
     if extra_args:
         sys.exit("`create` does not take extra arguments")
 
     import subprocess
 
     _ensure_shared_stack_if_needed(cfg, config_path)
+
+    print("Sparking (staging content) ...")
+    cmd_spark(cfg, [])
 
     stack_name = _stack_name(cfg)
     print(f"Deploying {stack_name} ...")
@@ -258,9 +270,6 @@ def cmd_create(cfg, config_path, extra_args):
     )
     if result.returncode != 0:
         sys.exit(result.returncode)
-
-    print("Sparking (staging content) ...")
-    cmd_spark(cfg, [])
 
     print("Starting the channel ...")
     cmd_start(cfg, [])

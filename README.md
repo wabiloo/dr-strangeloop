@@ -9,7 +9,7 @@ A suite of tools for building broadcast-ready MPEG-TS files with SCTE-35 ad mark
 | [`franken-ts/`](./franken-ts/README.md) | Stitch MP4 assets together and inject SCTE-35 markers from a YAML config |
 | [`frame-extractor/`](./frame-extractor/README.md) | Extract every frame from a video and build an interactive HTML timeline viewer |
 | [`its-a-live/`](./its-a-live/README.md) | Deploy a live looping HLS/DASH stream to AWS, on either of two backends selected per-channel: **MediaLive + MediaPackage** (`aws-media`) or **loop-dee-loop on ECS Express Mode + CloudFront** (`ecs-express`) |
-| [`loop-console/`](./loop-console/README.md) | Web UI (branded "Dr. Strangeloop") to define channels, launch them, and monitor them -- a UI on top of the tools above |
+| [`igor/`](./igor/README.md) | Web UI (branded "Dr. Strangeloop", codenamed Igor) to define channels, launch them, and monitor them -- a UI on top of the tools above |
 
 Outputs from all three tools — `.ts` files, HTML reports, frame timeline directories — land in [`outputs/`](./outputs/).
 

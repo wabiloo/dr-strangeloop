@@ -1,0 +1,29 @@
+output:
+  framerate: 25
+  bitrate_kbps: 4000
+  service_provider: broadpeak
+  service_name: broadpeak.io
+  gop: 50
+  file: ../outputs/short-loop.ts
+  resolution: 1280x720
+assets:
+- file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+  duration: 10s
+  countdown: 5
+- file: /Users/fabrelambeau/Broadpeak/Resources/Video Idents/broadpeakio-promo-1080p_5000k.mp4
+  duration: 5s
+  ad_break:
+    event_id: 1
+    splice_type: time_signal
+    segmentation:
+      type_id: '0x22'
+      upid_type: '0x0C'
+      upid_hex: 5349474E3A4C494E454152
+      web_delivery_allowed: true
+      no_regional_blackout: false
+      archive_allowed: false
+      device_restrictions: 1
+- file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+  start: 10s
+  duration: 10s
+normalize: true

@@ -9,5 +9,5 @@ members = [
     "franken-ts",
     "frame-extractor",
     "loop-dee-loop",
-    "loop-console",
+    "igor",
 ]
