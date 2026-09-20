@@ -71,6 +71,14 @@ const phase = computed<Phase>(() => {
     if (s.status === 'RUNNING' || s.status === 'STARTING') return 'running'
     return 'unknown'
   }
+  if (s.backend === 'local-docker') {
+    // No CloudFormation stack, so no real "not-deployed" state -- a
+    // container that was never created reads the same as "stopped": the
+    // Spark/Start actions are what create it, not a separate deploy step.
+    if (s.status === 'running') return 'running'
+    if (s.status === 'not created' || s.status === 'exited') return 'stopped'
+    return 'unknown'
+  }
   // ecs-express: scaled to 0 tasks == stopped, otherwise running.
   if (s.min_tasks === 0) return 'stopped'
   if ((s.min_tasks ?? 0) > 0) return 'running'
@@ -107,11 +115,19 @@ const firstDeployAction = computed<ActionDef>(() => ({
   label: 'Create / deploy',
   icon: 'pi pi-cloud-upload',
   description:
-    'One-time, first deploy of this channel: stages content to S3, deploys the AWS stack, then starts it. This is the only action available before the channel exists in AWS.',
-  eta: '~5-10 min -- Docker image build + push, ECS task startup, and (ecs-express) a brand-new CloudFront distribution, which alone typically takes several minutes to propagate. This is normal AWS behavior, not a hang.',
+    status.value?.backend === 'local-docker'
+      ? 'Bakes the content locally and starts the local-docker container (no AWS involved). Equivalent to Spark then Start below -- shown here too since local-docker has no separate "deploy" step to gate on.'
+      : 'One-time, first deploy of this channel: stages content to S3, deploys the AWS stack, then starts it. This is the only action available before the channel exists in AWS.',
+  eta:
+    status.value?.backend === 'local-docker'
+      ? '~10-60s -- local bake, plus a one-time docker build the first time (a few minutes).'
+      : '~5-10 min -- Docker image build + push, ECS task startup, and (ecs-express) a brand-new CloudFront distribution, which alone typically takes several minutes to propagate. This is normal AWS behavior, not a hang.',
   fn: () => createChannel(props.name),
-  disabled: () => phase.value !== 'not-deployed',
-  disabledReason: () => 'Already deployed -- use the actions on the right to manage it, or Redeploy for stack/config changes.',
+  disabled: () => (status.value?.backend === 'local-docker' ? phase.value === 'running' : phase.value !== 'not-deployed'),
+  disabledReason: () =>
+    status.value?.backend === 'local-docker'
+      ? 'Already running -- use the actions on the right to manage it.'
+      : 'Already deployed -- use the actions on the right to manage it, or Redeploy for stack/config changes.',
 }))
 
 const lifecycleActions = computed<ActionDef[]>(() => [
@@ -181,6 +197,15 @@ const lifecycleActions = computed<ActionDef[]>(() => [
   },
 ])
 
+// local-docker has no stack outputs (see /outputs route) -- its playback
+// URLs come straight from /status instead (http://localhost:<port>/...).
+const playbackHlsUrl = computed(() =>
+  status.value?.backend === 'local-docker' ? status.value.hls_url : outputs.value?.HlsPlaybackUrl,
+)
+const playbackDashUrl = computed(() =>
+  status.value?.backend === 'local-docker' ? status.value.dash_url : outputs.value?.DashPlaybackUrl,
+)
+
 async function loadConfig() {
   try {
     config.value = await getChannel(props.name)
@@ -202,7 +227,7 @@ async function loadStatus() {
 }
 
 async function loadHealth() {
-  if (status.value?.backend !== 'ecs-express') return
+  if (status.value?.backend !== 'ecs-express' && status.value?.backend !== 'local-docker') return
   try {
     health.value = await getChannelHealth(props.name)
     healthError.value = ''
@@ -274,11 +299,11 @@ watch(() => props.name, reload)
     </Message>
 
     <PlaybackPanel
-      v-if="outputs && (outputs.HlsPlaybackUrl || outputs.DashPlaybackUrl)"
-      :hls-url="outputs.HlsPlaybackUrl"
-      :dash-url="outputs.DashPlaybackUrl"
+      v-if="playbackHlsUrl || playbackDashUrl"
+      :hls-url="playbackHlsUrl"
+      :dash-url="playbackDashUrl"
       :health="health"
-      :health-error="status?.backend === 'ecs-express' ? healthError : ''"
+      :health-error="status?.backend === 'ecs-express' || status?.backend === 'local-docker' ? healthError : ''"
     />
 
     <div class="flex gap-4 flex-wrap align-items-start">
