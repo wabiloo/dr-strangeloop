@@ -7,6 +7,7 @@ import type {
   ChannelStatus,
   FrankenTsPlaylist,
   Job,
+  MarkersPreview,
   PlaylistListItem,
   ProbeResult,
 } from './types'
@@ -76,6 +77,10 @@ export async function deletePlaylist(name: string): Promise<void> {
 
 export function buildPlaylist(name: string): Promise<Job> {
   return postJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/build`)
+}
+
+export function resolveMarkers(name: string, data?: FrankenTsPlaylist): Promise<MarkersPreview> {
+  return postJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/resolve-markers`, data ? { data } : undefined)
 }
 
 // ---------------------------------------------------------------------------

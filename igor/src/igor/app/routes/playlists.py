@@ -49,6 +49,20 @@ def delete_playlist(name: str) -> None:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post("/{name}/resolve-markers")
+def resolve_markers(name: str, payload: PlaylistPayload | None = None) -> dict:
+    """Probe real source files and resolve `markers` spans/segment_num for
+    the timeline editor -- used to render marker lanes and auto-fill IDs
+    without requiring a full build. Pass a body ({"data": ...}) to preview
+    unsaved edits; omit it to resolve the saved-on-disk playlist."""
+    try:
+        return franken_ts.resolve_markers_preview(name, payload.data if payload else None)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 -- surface validation/probe errors to the client
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/{name}/build")
 def build_playlist(name: str) -> dict:
     try:

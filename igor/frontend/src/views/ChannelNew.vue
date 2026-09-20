@@ -25,7 +25,7 @@ const playlistOptions = computed(() =>
   playlists.value.map((c) => ({
     label: c.error
       ? `${c.name} (invalid: ${c.error})`
-      : `${c.name} -- ${c.asset_count ?? 0} asset${c.asset_count === 1 ? '' : 's'}, ${c.ad_break_count ?? 0} ad break${c.ad_break_count === 1 ? '' : 's'}`,
+      : `${c.name} -- ${c.asset_count ?? 0} asset${c.asset_count === 1 ? '' : 's'}, ${c.marker_count ?? 0} marker${c.marker_count === 1 ? '' : 's'}`,
     value: c.name,
     disabled: Boolean(c.error),
   })),

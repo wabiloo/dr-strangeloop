@@ -10,7 +10,7 @@ export interface PlaylistListItem {
   output_file?: string | null
   output_dir?: string | null
   asset_count?: number
-  ad_break_count?: number
+  marker_count?: number
   error?: string
 }
 
@@ -18,6 +18,45 @@ export interface PlaylistListItem {
  * loose record because the form is schema-driven (see /api/v1/playlists/schema,
  * a live JSON Schema export of the Pydantic model) rather than hand-typed. */
 export type FrankenTsPlaylist = Record<string, unknown>
+
+/** One `markers` entry from the playlist YAML, as edited in the UI. */
+export interface MarkerEntry {
+  event_id: number
+  type: string
+  splice_type: 'splice_insert' | 'time_signal'
+  assets: string[]
+  segmentation?: {
+    type_id: string
+    upid_type?: string
+    upid_hex?: string
+    web_delivery_allowed?: boolean
+    no_regional_blackout?: boolean
+    archive_allowed?: boolean
+    device_restrictions?: number
+    segment_num?: number | null
+    segments_expected?: number | null
+  }
+}
+
+/** One resolved entry from POST /playlists/{name}/resolve-markers -- real
+ * start/end seconds (from ffprobe'd durations) and the auto-filled
+ * segment_num/segments_expected, for rendering marker lanes on the timeline. */
+export interface ResolvedMarker {
+  event_id: number
+  type: string
+  assets: string[]
+  start_seconds: number | null
+  end_seconds: number | null
+  segment_num?: number | null
+  segments_expected?: number | null
+}
+
+export interface MarkersPreview {
+  markers: ResolvedMarker[]
+  warnings: string[]
+  /** Real (ffprobe'd) per-asset durations in seconds, keyed by asset id. */
+  asset_durations: Record<string, number>
+}
 
 export interface FileEntry {
   name: string

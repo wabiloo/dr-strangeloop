@@ -76,7 +76,7 @@ onMounted(load)
       <Column field="output_file" header="Output file" />
       <Column field="output_dir" header="Output dir (ladder)" />
       <Column field="asset_count" header="Assets" />
-      <Column field="ad_break_count" header="Ad breaks" />
+      <Column field="marker_count" header="Markers" />
       <Column header="Actions">
         <template #body="{ data }">
           <div class="flex gap-2">

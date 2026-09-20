@@ -17,6 +17,8 @@ from pathlib import PurePosixPath
 
 import yaml
 from franken_ts.config import Config
+from franken_ts.timeline import resolve_markers
+from franken_ts.validate import validate_inputs
 
 from igor import paths
 from igor.jobs.runner import Job, runner
@@ -30,7 +32,7 @@ def playlist_schema() -> dict:
 
 def list_playlists() -> list[dict]:
     """All *.yaml playlists in franken-ts/playlists/, with just enough
-    parsed metadata for a list view (name, output path, asset/ad-break
+    parsed metadata for a list view (name, output path, asset/marker
     counts) -- full content is fetched separately via get_playlist."""
     out = []
     for path in sorted(paths.FRANKEN_TS_PLAYLISTS_DIR.glob("*.yaml")):
@@ -41,13 +43,14 @@ def list_playlists() -> list[dict]:
             continue
         output = raw.get("output", {}) or {}
         assets = raw.get("assets", []) or []
+        markers = raw.get("markers", []) or []
         out.append({
             "name": path.stem,
             "path": str(path),
             "output_file": output.get("file"),
             "output_dir": output.get("dir"),
             "asset_count": len(assets),
-            "ad_break_count": sum(1 for a in assets if isinstance(a, dict) and a.get("ad_break")),
+            "marker_count": len(markers),
         })
     return out
 
@@ -71,6 +74,73 @@ def delete_playlist(name: str) -> None:
     _resolve_path(name).unlink()
 
 
+def resolve_markers_preview(name: str, data: dict | None = None) -> dict:
+    """Probe the playlist's real source files and resolve every `markers`
+    entry to concrete (start_seconds, end_seconds) plus its auto-filled
+    `segment_num`/`segments_expected`, for the "Timeline & markers" editor
+    to render marker lanes/spans without running the full build (no
+    ffmpeg extraction/assembly -- just ffprobe + the same pure-Python
+    timeline math the CLI uses).
+
+    `data`, if given, is used instead of the saved-on-disk YAML -- lets the
+    editor preview unsaved in-progress edits (new/moved markers) without
+    requiring a save round-trip first.
+
+    Raises on the same validation errors a real build would hit (missing
+    files, bad durations, etc.) -- callers surface these as 422s so the
+    UI can show them next to the timeline instead of only failing on
+    save/build.
+    """
+    cfg = Config.model_validate(data if data is not None else get_playlist(name))
+
+    report, infos = validate_inputs(cfg.assets, cfg.output, normalize=True)
+    if report.has_errors:
+        raise ValueError("; ".join(report.errors))
+
+    from franken_ts.timeline import build_timeline
+
+    entries, _asset_boundaries = build_timeline(
+        cfg.assets, infos, cfg.output.framerate,
+        global_slate_image=cfg.slate_image,
+        markers=[],  # resolve markers separately below so we can report
+                     # per-marker spans, not just the flattened boundary list
+    )
+
+    # Real (ffprobe'd) per-asset durations, keyed by asset id -- lets the
+    # timeline editor render assets that have no explicit `duration:` in the
+    # YAML (very common for ads: "use the whole file") at their true width
+    # instead of a placeholder guess.
+    asset_durations = {
+        e.asset_id: e.clip_duration for e in entries if e.asset_id is not None
+    }
+
+    marker_boundaries = resolve_markers(cfg.markers, entries)
+    by_event: dict[int, dict[bool, float]] = {}
+    for b in marker_boundaries:
+        by_event.setdefault(b.event_id, {})[b.is_start] = b.output_time
+
+    markers_out = []
+    for marker in cfg.markers:
+        span = by_event.get(marker.event_id, {})
+        entry = {
+            "event_id": marker.event_id,
+            "type": marker.type,
+            "assets": marker.assets,
+            "start_seconds": span.get(True),
+            "end_seconds": span.get(False),
+        }
+        if marker.segmentation is not None:
+            entry["segment_num"] = marker.segmentation.segment_num
+            entry["segments_expected"] = marker.segmentation.segments_expected
+        markers_out.append(entry)
+
+    return {
+        "markers": markers_out,
+        "warnings": report.warnings,
+        "asset_durations": asset_durations,
+    }
+
+
 def _resolve_path(name: str, must_exist: bool = True):
     if "/" in name or "\\" in name or name in ("..", "."):
         raise ValueError(f"Invalid playlist name: {name!r}")
@@ -89,7 +159,7 @@ def spawn_build_job(name: str, extra_args: list[str] | None = None) -> Job:
 def find_playlist_for_source(source_path: str) -> str | None:
     """Best-effort reverse lookup: which playlist's output matches an
     its-a-live channel's [input].source_path? Playlist output paths (in
-    franken-ts/playlists/*.yaml) and a channel's source_path are both
+    data/playlists/*.yaml) and a channel's source_path are both
     relative, but resolved against whatever working directory each tool
     was last invoked from -- not guaranteed to be the same one -- so a
     strict path-equality check would false-negative constantly. Matching
