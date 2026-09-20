@@ -11,9 +11,14 @@ Commands:
             involved -- bake is a one-shot, run-once-per-schedule-change
             process, so for this stack it just runs on your machine)
   start     Scale the Express service back to 1 task (if it was stopped),
-            wait for the task to be running, print playback URLs. Epoch is
-            fixed (see loop_channel_stack.py), so this is a pure scaling
-            operation -- no new task revision/canary deployment involved.
+            wait for the task to be running, print playback URLs.
+            By default this leaves the epoch untouched (pure scaling, fast,
+            no new task revision). Pass `--epoch-utc now` or `--epoch-utc
+            <ISO8601 UTC timestamp>` to explicitly (re)set the loop's
+            epoch instead -- that forces a real redeploy (new task
+            revision, ~3 minute canary bake before full cutover).
+            The stack's own default epoch (used when never explicitly
+            set) is the Unix epoch, 1970-01-01T00:00:00Z.
   stop      Scale the Express service to 0 tasks -- this is what actually
             stops paying for Fargate compute between airings (the shared
             ALB itself keeps running for other channels)
@@ -31,6 +36,7 @@ derived from [deploy].name in the config file, so each config file
 targets an independent channel deployment.
 """
 
+import datetime
 import os
 import shutil
 import subprocess
@@ -44,6 +50,8 @@ _LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loo
 
 
 def _parse_args():
+    """Returns (config_path, command, extra_args) -- extra_args is whatever
+    follows the command (e.g. `start --epoch-utc now`)."""
     args = sys.argv[1:]
     config_path = _DEFAULT_CONFIG
     if args and args[0] in ("--config", "-c"):
@@ -51,9 +59,9 @@ def _parse_args():
             sys.exit("--config requires a path argument")
         config_path = args[1]
         args = args[2:]
-    if len(args) != 1:
-        return config_path, None
-    return config_path, args[0]
+    if not args:
+        return config_path, None, []
+    return config_path, args[0], args[1:]
 
 
 def _config(config_path):
@@ -171,29 +179,78 @@ def _wait_for_primary_deployment_healthy(ecs_client, service_arn, expected_desir
     sys.exit("Timed out waiting for the primary deployment to reach the expected running count.")
 
 
-def cmd_start(cfg):
+def _patch_epoch_utc(command, epoch_utc):
+    command = list(command)
+    for i, arg in enumerate(command):
+        if arg == "--epoch-utc" and i + 1 < len(command):
+            command[i + 1] = epoch_utc
+            return command
+    sys.exit("Could not find --epoch-utc in the service's command -- has the stack drifted?")
+
+
+def _resolve_epoch_arg(raw):
+    """`raw` is whatever followed --epoch-utc on the command line: the
+    literal string "now", or an ISO8601 UTC timestamp (e.g.
+    2026-01-01T00:00:00Z). Returns the resolved timestamp string."""
+    if raw == "now":
+        return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        datetime.datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        sys.exit(f"--epoch-utc value {raw!r} must be 'now' or an ISO8601 UTC "
+                  f"timestamp like 2026-01-01T00:00:00Z")
+    return raw
+
+
+def cmd_start(cfg, extra_args=None):
+    """Scale the Express service to 1 task (if it was stopped).
+
+    Epoch defaults to whatever is already baked into the service (the
+    stack's own default is the Unix epoch, 1970-01-01T00:00:00Z -- see
+    loop_channel_stack.py) and is left untouched, making this a pure
+    scaling operation: no primaryContainer change, no new task revision,
+    no canary deployment. Pass `--epoch-utc now` or `--epoch-utc
+    <ISO8601>` to explicitly (re)set the loop's epoch instead -- that
+    forces a real redeploy (new task revision, ~3 minute canary bake
+    before full cutover, per README) since it does change primaryContainer.
+    """
     outputs = _cf_outputs(cfg)
     service_arn = outputs.get("ExpressServiceArn")
     if not service_arn:
         sys.exit("Missing ExpressServiceArn output -- has the stack been deployed?")
 
-    # Epoch is fixed at 1970-01-01T00:00:00Z (see loop_channel_stack.py) --
-    # this is looping content simulating live, not a real broadcast start
-    # time, so there's no need to reset the loop to position 0 on every
-    # start; viewers landing mid-ad-break on (re)start is acceptable. That
-    # means `start` is a pure scaling operation (no primaryContainer change,
-    # so no new task revision/canary deployment). Resuming from a stopped
-    # (0-task) state already launches a brand-new task, which re-syncs
-    # LOOP_PACKAGE_S3_URI at boot regardless -- see `refresh` below for
-    # picking up a new bake on an ALREADY-running service.
-    ecs_client = _session(cfg).client("ecs")
-    print("Scaling service to 1 task (if stopped) ...")
-    ecs_client.update_express_gateway_service(
-        serviceArn=service_arn,
-        scalingTarget={"minTaskCount": 1, "maxTaskCount": 1},
-    )
+    epoch_arg = None
+    extra_args = extra_args or []
+    if extra_args:
+        if extra_args[0] != "--epoch-utc" or len(extra_args) < 2:
+            sys.exit("Usage: channel.py start [--epoch-utc now|<ISO8601 UTC timestamp>]")
+        epoch_arg = _resolve_epoch_arg(extra_args[1])
 
-    print("Waiting for the task to be up and running ...")
+    ecs_client = _session(cfg).client("ecs")
+
+    if epoch_arg is None:
+        print("Scaling service to 1 task (if stopped); epoch left as-is ...")
+        ecs_client.update_express_gateway_service(
+            serviceArn=service_arn,
+            scalingTarget={"minTaskCount": 1, "maxTaskCount": 1},
+        )
+    else:
+        service = ecs_client.describe_express_gateway_service(serviceArn=service_arn)["service"]
+        primary_container = dict(service["activeConfigurations"][0]["primaryContainer"])
+        primary_container["command"] = _patch_epoch_utc(primary_container.get("command", []), epoch_arg)
+
+        print(f"Setting --epoch-utc {epoch_arg} and scaling to 1 task ...")
+        ecs_client.update_express_gateway_service(
+            serviceArn=service_arn,
+            primaryContainer=primary_container,
+            scalingTarget={"minTaskCount": 1, "maxTaskCount": 1},
+        )
+
+    print("Waiting for the task to be up and running"
+          + ("" if epoch_arg is None else
+             " (this confirms the task is healthy, NOT that all viewer"
+             " traffic has cut over to the new epoch yet -- see README's"
+             " canary deployment notes)") + " ...")
     _wait_for_primary_deployment_healthy(ecs_client, service_arn, expected_desired_count=1)
 
     print(f"\nHLS:  {outputs.get('HlsPlaybackUrl', 'n/a')}")
@@ -333,7 +390,7 @@ COMMANDS = {
 }
 
 if __name__ == "__main__":
-    config_path, command = _parse_args()
+    config_path, command, extra_args = _parse_args()
 
     if command not in COMMANDS:
         prog = "python channel.py"
@@ -344,5 +401,9 @@ if __name__ == "__main__":
 
     if command == "redeploy":
         cmd_redeploy(cfg, config_path)
+    elif command == "start":
+        cmd_start(cfg, extra_args)
+    elif extra_args:
+        sys.exit(f"`{command}` does not take extra arguments: {extra_args}")
     else:
         COMMANDS[command](cfg)

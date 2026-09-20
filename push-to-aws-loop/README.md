@@ -158,8 +158,9 @@ cdk deploy LoopChannelStack-<name>
 
 # 3. Start the channel: scales the Express service to 1 task (if it was
 #    stopped), waits for the task to be running, prints the CloudFront
-#    playback URLs. Epoch is fixed (see Notes below), so this is a pure
-#    scaling operation, not a redeploy.
+#    playback URLs. By default epoch is left as-is (see Notes below), so
+#    this is a pure scaling operation, not a redeploy -- pass
+#    `--epoch-utc now` to explicitly reset the loop to position 0.
 uv run python channel.py start
 
 # ... channel is live ...
@@ -233,7 +234,7 @@ implemented here.
 | Command | Description |
 |---|---|
 | `bake` | Run `bake.py` locally against `input.source_path`, push the result to S3 |
-| `start` | Scale the Express service to 1 task (if it was stopped), wait for the task to be running, print playback URLs |
+| `start` | Scale the Express service to 1 task (if it was stopped), wait for the task to be running, print playback URLs. Add `--epoch-utc now\|<ISO8601>` to explicitly (re)set the loop's epoch (forces a real redeploy) |
 | `stop` | Scale the Express service to 0 tasks — this is what actually stops paying for Fargate compute between airings |
 | `refresh` | Force a new task launch on an already-running service so it re-syncs `LOOP_PACKAGE_S3_URI` and picks up a fresh `bake` — not needed after `start` from a stopped state |
 | `status` | Print the Express service's current status/scaling |
@@ -242,15 +243,16 @@ implemented here.
 
 ## Notes / gotchas
 
-- **Epoch is fixed** at the Unix epoch (`1970-01-01T00:00:00Z`), permanently
-  — never patched or reset. This is looping content simulating live, not a
-  real broadcast, so there's no need to force loop position 0 on every
-  start; landing mid-ad-break on start/restart is an accepted tradeoff. The
-  upside: `start`/`stop` never need to touch the container command, so
-  they're pure (fast) scaling operations, and multiple tasks briefly
-  running side by side (e.g. during a `refresh`'s canary window, or a
-  future multi-task auto-scale-out) always agree on position, since
-  nothing about the epoch ever changes between them.
+- **Epoch defaults to the Unix epoch** (`1970-01-01T00:00:00Z`, set in
+  `loop_channel_stack.py`) and is left untouched by a plain `channel.py
+  start` — this is looping content simulating live, not a real broadcast,
+  so there's no need to force loop position 0 on every start; landing
+  mid-ad-break on start/restart is an accepted tradeoff, and it keeps
+  `start`/`stop` fast (pure scaling, no new task revision). Pass
+  `channel.py start --epoch-utc now` or `--epoch-utc <ISO8601 UTC
+  timestamp>` to explicitly (re)set it when you do want a clean restart
+  from position 0 — that forces a real redeploy (new task revision, ~3
+  minute canary bake before full cutover, same as `refresh`).
 - **Cost**: Fargate compute (0.25 vCPU/0.5GB by default) + a *shared*
   ALB + CloudWatch logs/metrics + data transfer — no separate "Express
   Mode" charge per AWS's pricing page. `channel.py stop` genuinely stops
