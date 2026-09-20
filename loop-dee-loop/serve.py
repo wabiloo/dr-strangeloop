@@ -796,6 +796,7 @@ class Channel:
 def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) -> Flask:
     package = LoopPackage(package_dir)
     channel = Channel(package, epoch_ticks, window_segments=window_segments)
+    process_start_ticks = channel.now_ticks()
 
     app = Flask(__name__)
 
@@ -803,6 +804,30 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
     def _add_cors(resp):
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
+
+    @app.get("/health")
+    def health():
+        """Lightweight JSON status for external monitoring (e.g. a channel
+        management UI). Not part of the HLS/DASH viewer-facing contract --
+        safe to poll frequently, cheap (no file I/O beyond what's already
+        loaded in memory at startup)."""
+        pos = channel.current_position()
+        now_ticks = channel.now_ticks()
+        return {
+            "status": "ok",
+            "package_dir": str(package_dir),
+            "timescale": package.timescale,
+            "epoch_ticks": epoch_ticks,
+            "total_loop_duration_ticks": package.total_loop_duration_ticks,
+            "total_loop_duration_seconds": package.total_loop_duration_ticks / package.timescale,
+            "loop_number": pos.loop_number,
+            "position_in_loop_ticks": pos.position_in_loop_ticks,
+            "position_in_loop_seconds": pos.position_in_loop_ticks / package.timescale,
+            "uptime_seconds": (now_ticks - process_start_ticks) / package.timescale,
+            "renditions": [r.name for r in package.video_renditions],
+            "has_audio": package.has_audio,
+            "window_segments": channel.window_segments,
+        }
 
     @app.get("/master.m3u8")
     def hls_master_playlist():

@@ -32,6 +32,18 @@ config file selects "aws-media" (MediaLive + MediaPackage v1) or
   status    Print the channel's current status
   outputs   Print all CloudFormation stack outputs
   redeploy  Delete a broken stack if needed, then run cdk deploy
+  create    First-time, non-interactive setup: (ecs-express only) ensure
+            the shared ECS cluster stack is deployed, `cdk deploy` the
+            channel stack, `spark`, then `start`. Equivalent to
+            galvanise.py's pipeline minus the interactive confirmations --
+            intended for programmatic callers (e.g. a management UI).
+  list      List channels found under a directory of TOML configs
+            (default: the directory containing --config), each with its
+            CloudFormation stack status if deployed.
+
+Global flag --json (before or after the command) makes `status`,
+`outputs`, and `list` print a single JSON document instead of
+human-readable text -- for programmatic callers.
 
 The --config flag (short: -c) selects a config file; defaults to
 config.toml in the same directory as this script. The stack name is
@@ -39,6 +51,8 @@ derived from [deploy].name and [deploy].backend in the config file, so
 each config file targets an independent channel deployment.
 """
 
+import glob
+import json
 import os
 import sys
 import time
@@ -51,9 +65,12 @@ _BACKENDS = ("aws-media", "ecs-express")
 
 
 def _parse_args():
-    """Returns (config_path, command, extra_args) -- extra_args is whatever
-    follows the command (e.g. `start --epoch-utc now`)."""
+    """Returns (config_path, command, extra_args, as_json) -- extra_args is
+    whatever follows the command (e.g. `start --epoch-utc now`). --json may
+    appear anywhere in the argument list."""
     args = sys.argv[1:]
+    as_json = "--json" in args
+    args = [a for a in args if a != "--json"]
     config_path = _DEFAULT_CONFIG
     if args and args[0] in ("--config", "-c"):
         if len(args) < 2:
@@ -61,8 +78,8 @@ def _parse_args():
         config_path = args[1]
         args = args[2:]
     if not args:
-        return config_path, None, []
-    return config_path, args[0], args[1:]
+        return config_path, None, [], as_json
+    return config_path, args[0], args[1:], as_json
 
 
 def _config(config_path):
@@ -135,20 +152,118 @@ def cmd_refresh(cfg, extra_args):
     _ops(cfg).refresh(cfg, _session(cfg), outputs)
 
 
-def cmd_status(cfg, extra_args):
+def cmd_status(cfg, extra_args, as_json=False):
     if extra_args:
         sys.exit("`status` does not take extra arguments")
     outputs = _cf_outputs(cfg)
-    _ops(cfg).status(cfg, _session(cfg), outputs)
+    result = _ops(cfg).status(cfg, _session(cfg), outputs)
+    if as_json:
+        print(json.dumps(result))
 
 
-def cmd_outputs(cfg, extra_args):
+def cmd_outputs(cfg, extra_args, as_json=False):
     if extra_args:
         sys.exit("`outputs` does not take extra arguments")
     outputs = _cf_outputs(cfg)
+    if as_json:
+        print(json.dumps(outputs))
+        return
     max_key = max(len(k) for k in outputs) if outputs else 0
     for k, v in sorted(outputs.items()):
         print(f"  {k:<{max_key}}  {v}")
+
+
+def _stack_status(cf, stack_name):
+    try:
+        resp = cf.describe_stacks(StackName=stack_name)
+        return resp["Stacks"][0]["StackStatus"]
+    except cf.exceptions.ClientError:
+        return None
+
+
+def cmd_list(config_path, extra_args, as_json=False):
+    """List channels found from TOML configs in the same directory as
+    --config (or the directory given as the sole extra arg), each paired
+    with its CloudFormation stack status if one exists yet (None if the
+    channel has never been deployed)."""
+    if len(extra_args) > 1:
+        sys.exit("Usage: channel.py list [directory]")
+    directory = extra_args[0] if extra_args else os.path.dirname(os.path.abspath(config_path))
+
+    channels = []
+    for path in sorted(glob.glob(os.path.join(directory, "*.toml"))):
+        try:
+            cfg = _config(path)
+        except SystemExit:
+            continue
+        name = _channel_name(cfg)
+        backend = _backend(cfg)
+        stack_name = _stack_name(cfg)
+        cf = _session(cfg).client("cloudformation")
+        channels.append({
+            "config_path": path,
+            "name": name,
+            "backend": backend,
+            "stack_name": stack_name,
+            "stack_status": _stack_status(cf, stack_name),
+        })
+
+    if as_json:
+        print(json.dumps(channels))
+        return
+    if not channels:
+        print(f"No *.toml configs found in {directory}")
+        return
+    for c in channels:
+        print(f"  {c['name']:<20} backend={c['backend']:<12} "
+              f"stack_status={c['stack_status'] or 'not deployed':<20} {c['config_path']}")
+
+
+def _ensure_shared_stack_if_needed(cfg, config_path):
+    import subprocess
+
+    if _backend(cfg) != "ecs-express":
+        return
+    shared_stack_name = _shared_stack_name(cfg)
+    print(f"Ensuring {shared_stack_name} is deployed ...")
+    result = subprocess.run(
+        ["cdk", "deploy", "--require-approval", "never",
+         "-c", f"config={config_path}", shared_stack_name],
+        check=False,
+    )
+    if result.returncode != 0:
+        sys.exit(result.returncode)
+
+
+def cmd_create(cfg, config_path, extra_args):
+    """Non-interactive first-time channel setup: ensure the shared stack
+    (ecs-express only), `cdk deploy` the channel stack, `spark`, then
+    `start`. This is `galvanise.py`'s pipeline (steps 3-6) with every
+    interactive confirmation removed -- intended for programmatic callers
+    (a management API/UI) that already know they want to proceed, as
+    opposed to a human running galvanise.py's guided terminal flow."""
+    if extra_args:
+        sys.exit("`create` does not take extra arguments")
+
+    import subprocess
+
+    _ensure_shared_stack_if_needed(cfg, config_path)
+
+    stack_name = _stack_name(cfg)
+    print(f"Deploying {stack_name} ...")
+    result = subprocess.run(
+        ["cdk", "deploy", "--require-approval", "never",
+         "-c", f"config={config_path}", stack_name],
+        check=False,
+    )
+    if result.returncode != 0:
+        sys.exit(result.returncode)
+
+    print("Sparking (staging content) ...")
+    cmd_spark(cfg, [])
+
+    print("Starting the channel ...")
+    cmd_start(cfg, [])
 
 
 def cmd_redeploy(cfg, config_path, extra_args):
@@ -228,23 +343,39 @@ COMMANDS = {
     "start": cmd_start,
     "stop": cmd_stop,
     "refresh": cmd_refresh,
+}
+
+# Commands taking (cfg, extra_args, as_json) instead of just (cfg, extra_args).
+JSON_COMMANDS = {
     "status": cmd_status,
     "outputs": cmd_outputs,
 }
 
-if __name__ == "__main__":
-    config_path, command, extra_args = _parse_args()
+# Commands needing config_path in addition to cfg (they shell out to `cdk`).
+CONFIG_PATH_COMMANDS = {
+    "redeploy": cmd_redeploy,
+    "create": cmd_create,
+}
 
-    if command not in COMMANDS and command != "redeploy":
+if __name__ == "__main__":
+    config_path, command, extra_args, as_json = _parse_args()
+
+    if command == "list":
+        cmd_list(config_path, extra_args, as_json=as_json)
+        sys.exit(0)
+
+    all_commands = list(COMMANDS) + list(JSON_COMMANDS) + list(CONFIG_PATH_COMMANDS) + ["list"]
+    if command not in COMMANDS and command not in JSON_COMMANDS and command not in CONFIG_PATH_COMMANDS:
         prog = "python channel.py"
-        all_commands = list(COMMANDS) + ["redeploy"]
-        print(f"Usage: {prog} [--config path/to/config.toml] [{' | '.join(all_commands)}]")
+        print(f"Usage: {prog} [--config path/to/config.toml] [--json] [{' | '.join(all_commands)}]")
         sys.exit(1)
 
     cfg = _config(config_path)
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-    if command == "redeploy":
-        cmd_redeploy(cfg, config_path, extra_args)
+    if command in CONFIG_PATH_COMMANDS:
+        CONFIG_PATH_COMMANDS[command](cfg, config_path, extra_args)
+    elif command in JSON_COMMANDS:
+        JSON_COMMANDS[command](cfg, extra_args, as_json=as_json)
     else:
         COMMANDS[command](cfg, extra_args)

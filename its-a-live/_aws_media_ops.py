@@ -99,7 +99,18 @@ def refresh(cfg, session, outputs):
 
 
 def status(cfg, session, outputs):
+    """Prints a human-readable summary and returns a structured dict (used
+    by `channel.py status --json` and, longer-term, by any programmatic
+    caller such as a management API/UI)."""
     channel_id = _channel_id(outputs)
     ml = session.client("medialive")
     state = ml.describe_channel(ChannelId=channel_id)["State"]
+    result = {
+        "backend": "aws-media",
+        "channel_id": channel_id,
+        "status": state,
+        "hls_url": outputs.get("HlsPlaybackUrl"),
+        "dash_url": outputs.get("DashPlaybackUrl"),
+    }
     print(f"Channel {channel_id}: {state}")
+    return result

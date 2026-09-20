@@ -23,6 +23,7 @@ names or CLI flags from this file alone.
 | 3. Deploy + run in AWS | `its-a-live/` | [`its-a-live/AGENTS.md`](./its-a-live/AGENTS.md), [`its-a-live/AGENT_BRIEF.md`](./its-a-live/AGENT_BRIEF.md) |
 | (3a) Self-hosted backend internals | `loop-dee-loop/` | [`loop-dee-loop/AGENTS.md`](./loop-dee-loop/AGENTS.md) |
 | Inspect/verify a built `.ts` | `frame-extractor/` | [`frame-extractor/README.md`](./frame-extractor/README.md) |
+| Web UI over all of the above | `loop-console/` | [`loop-console/AGENTS.md`](./loop-console/AGENTS.md) |
 
 ## Architecture
 

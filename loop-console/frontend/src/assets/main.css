@@ -1,0 +1,32 @@
+/* Minimal global styles -- most spacing/layout comes from PrimeFlex utility classes in templates. */
+body {
+  margin: 0;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  background: var(--p-surface-50, #f8fafc);
+}
+
+#app {
+  min-height: 100vh;
+}
+
+code {
+  font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
+}
+
+.job-log {
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
+  font-size: 0.8rem;
+  padding: 0.75rem;
+  border-radius: 6px;
+  max-height: 24rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
