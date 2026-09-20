@@ -52,21 +52,27 @@ using it. All commands below are run from the repo root regardless.
 ### Full pipeline (recommended)
 
 [`deploy.py`](./deploy.py) runs the entire pipeline from a single franken-ts YAML config,
-prompting for confirmation at each step. It targets its-a-live's `aws-media`
-backend (MediaLive + MediaPackage):
+prompting for confirmation at each step. `--backend` selects which its-a-live
+backend to deploy to (default `aws-media`):
 
 ```bash
+# MediaLive + MediaPackage (default)
 uv run python deploy.py franken-ts/configs/my-stream.yaml
+
+# loop-dee-loop on ECS Express Mode + CloudFront
+uv run python deploy.py franken-ts/configs/my-stream.yaml --backend ecs-express
 ```
 
 Steps performed:
 1. Build the `.ts` file with SCTE-35 markers (`franken-ts`)
-2. Generate `configs/my-stream.toml` (its-a-live settings, `backend = "aws-media"`)
-3. Deploy the AWS stack (`cdk deploy`)
-4. Spark: upload the `.ts` to S3
-5. Start the MediaLive channel
+2. Generate `configs/my-stream.toml` (its-a-live settings, `backend = <chosen backend>`)
+3. *(`ecs-express` only)* Ensure the shared ECS cluster stack is deployed
+4. Deploy the channel stack (`cdk deploy`)
+5. Spark: stage the input for the chosen backend (upload the raw `.ts`
+   for `aws-media`; bake it locally via GPAC + push to S3 for `ecs-express`)
+6. Start the channel
 
-At the end it prints the exact commands to stop the channel and destroy the stack.
+At the end it prints the exact commands to update content, stop the channel, and destroy the stack.
 
 ### Step by step
 
@@ -90,7 +96,13 @@ TOML configs for its-a-live live in `configs/`. Generate one or copy an existing
 (remember to set `[deploy].backend` to `"aws-media"` or `"ecs-express"`), then:
 
 ```bash
-# Deploy the stack (stack name includes the backend: ItsALiveStack-<name>-<backend>)
+# ecs-express only, once per account/region: deploy the shared ECS cluster
+# stack before any channel (not needed for aws-media)
+cd its-a-live
+cdk deploy ItsALiveSharedStack-ecs-express -c config=../configs/my-stream.toml
+cd ..
+
+# Deploy the channel stack (stack name includes the backend: ItsALiveStack-<name>-<backend>)
 cd its-a-live
 cdk deploy ItsALiveStack-my-stream-aws-media -c config=../configs/my-stream.toml
 cd ..

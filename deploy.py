@@ -3,21 +3,23 @@
 deploy.py — Full pipeline runner for live-scte-loop-generator.
 
 Usage:
-  uv run python deploy.py <config.yaml>
+  uv run python deploy.py <config.yaml> [--backend aws-media|ecs-express]
 
 The config.yaml should be a franken-ts config (e.g. franken-ts/configs/foo.yaml).
 Paths may be absolute or relative to the current working directory.
 
-Pipeline:
+Pipeline (its-a-live backend selected by --backend, default aws-media):
   1. Run franken-ts to build the .ts file
-  2. Generate configs/<basename>.toml at the repo root (backend = "aws-media")
-  3. Run CDK deploy (cdk deploy)
-  4. Spark: upload .ts to S3
-  5. Start the MediaLive channel
+  2. Generate configs/<basename>.toml at the repo root
+  3. (ecs-express only) Ensure the shared ECS cluster stack is deployed
+  4. Run CDK deploy (cdk deploy) for the channel stack
+  5. Spark: stage the input for the chosen backend (upload .ts for
+     aws-media; bake it locally via GPAC + push to S3 for ecs-express)
+  6. Start the channel
 
 Each step prompts for confirmation before running.
-All channel management commands (spark/start/stop) can be run from the
-repo root using the generated TOML in configs/.
+All channel management commands (spark/start/stop/refresh) can be run
+from the repo root using the generated TOML in configs/.
 """
 
 import os
@@ -81,7 +83,7 @@ def _repo_root() -> str:
 # TOML generation
 # ---------------------------------------------------------------------------
 
-_TOML_TEMPLATE = """\
+_AWS_MEDIA_TOML_TEMPLATE = """\
 [deploy]
 name = "{name}"
 backend = "aws-media"
@@ -97,9 +99,39 @@ content_folder = "fabre/ts-files-with-scte"  # prefix inside the bucket
 source_path = "{ts_file}"
 """
 
+_ECS_EXPRESS_TOML_TEMPLATE = """\
+[deploy]
+name = "{name}"
+backend = "ecs-express"
 
-def _generate_toml(name: str, ts_file_abs: str) -> str:
-    return _TOML_TEMPLATE.format(name=name, ts_file=ts_file_abs)
+[aws]
+region = "eu-west-1"
+
+[s3]
+bucket_name = "bpkio-cs-demos"
+content_folder = "fabre/its-a-live"  # prefix inside the bucket
+
+[input]
+source_path = "{ts_file}"
+
+[channel]
+segment_duration   = 4.0
+dvr_window_seconds = 30
+port               = 8080
+
+[express]
+cpu    = 256   # 0.25 vCPU
+memory = 512   # 0.5 GB
+"""
+
+_TOML_TEMPLATES = {
+    "aws-media": _AWS_MEDIA_TOML_TEMPLATE,
+    "ecs-express": _ECS_EXPRESS_TOML_TEMPLATE,
+}
+
+
+def _generate_toml(backend: str, name: str, ts_file_abs: str) -> str:
+    return _TOML_TEMPLATES[backend].format(name=name, ts_file=ts_file_abs)
 
 
 # ---------------------------------------------------------------------------
@@ -114,10 +146,17 @@ def main() -> None:
     )
     parser.add_argument("config_yaml", metavar="config.yaml",
                         help="franken-ts YAML config file.")
+    parser.add_argument("--backend", choices=["aws-media", "ecs-express"],
+                        default="aws-media",
+                        help="its-a-live backend to deploy to: 'aws-media' "
+                             "(MediaLive + MediaPackage, default) or "
+                             "'ecs-express' (loop-dee-loop on ECS Express "
+                             "Mode + CloudFront).")
     parser.add_argument("--clear-cache", action="store_true",
                         help="Delete the franken-ts clip cache (~/.cache/franken_ts) "
                              "before running Step 1.")
     args = parser.parse_args()
+    backend = args.backend
 
     config_yaml = os.path.abspath(args.config_yaml)
     if not os.path.isfile(config_yaml):
@@ -154,6 +193,7 @@ def main() -> None:
     # Print a summary before starting.
     print(f"\n{BOLD}Pipeline summary{RESET}")
     print(f"  YAML config : {config_yaml}")
+    print(f"  Backend     : {backend}")
     print(f"  Basename    : {basename}")
     print(f"  Output .ts  : {ts_file_abs}")
     print(f"  TOML config : {toml_path}")
@@ -186,7 +226,7 @@ def main() -> None:
     # Step 2 — Generate TOML config
     # ------------------------------------------------------------------
     _header(2, f"Generate TOML config (configs/{basename}.toml)")
-    toml_content = _generate_toml(name=basename, ts_file_abs=ts_file_abs)
+    toml_content = _generate_toml(backend=backend, name=basename, ts_file_abs=ts_file_abs)
     print(f"  Will write : {toml_path}\n")
     print("  Content preview:")
     for line in toml_content.splitlines():
@@ -201,10 +241,31 @@ def main() -> None:
         print(f"{GREEN}TOML written to {toml_path}{RESET}")
 
     # ------------------------------------------------------------------
-    # Step 3 — CDK deploy
+    # Step 3 — (ecs-express only) ensure the shared ECS cluster stack
     # ------------------------------------------------------------------
-    _header(3, "Deploy AWS stack (cdk deploy)")
-    stack_name = f"ItsALiveStack-{basename}-aws-media"
+    step = 3
+    if backend == "ecs-express":
+        _header(step, "Ensure shared ECS cluster stack is deployed (ItsALiveSharedStack-ecs-express)")
+        shared_cmd = [
+            "cdk", "deploy",
+            "--require-approval", "never",
+            "-c", f"config={toml_path}",
+            "ItsALiveSharedStack-ecs-express",
+        ]
+        print(f"  cwd        : {push_dir}")
+        print(f"  command    : {' '.join(shared_cmd)}")
+        if not _confirm("Deploy the shared cluster stack now? (safe/idempotent if already deployed)"):
+            print("Skipped.")
+        else:
+            _run(shared_cmd, cwd=push_dir)
+            print(f"{GREEN}Shared stack ready.{RESET}")
+        step += 1
+
+    # ------------------------------------------------------------------
+    # Step — CDK deploy (channel stack)
+    # ------------------------------------------------------------------
+    _header(step, "Deploy AWS stack (cdk deploy)")
+    stack_name = f"ItsALiveStack-{basename}-{backend}"
     cdk_cmd = [
         "cdk", "deploy",
         "--require-approval", "never",
@@ -218,11 +279,14 @@ def main() -> None:
     else:
         _run(cdk_cmd, cwd=push_dir)
         print(f"{GREEN}CDK deploy complete.{RESET}")
+    step += 1
 
     # ------------------------------------------------------------------
-    # Step 4 — Spark (upload .ts to S3)
+    # Step — Spark (stage the input for the chosen backend)
     # ------------------------------------------------------------------
-    _header(4, "Spark: upload .ts to S3")
+    spark_title = ("Spark: upload .ts to S3" if backend == "aws-media"
+                   else "Spark: bake locally (GPAC) and push loop package to S3")
+    _header(step, spark_title)
     spark_cmd = [
         "uv", "run", "--project", push_dir, "python", channel_py,
         "-c", toml_path,
@@ -235,11 +299,14 @@ def main() -> None:
     else:
         _run(spark_cmd)
         print(f"{GREEN}Spark complete.{RESET}")
+    step += 1
 
     # ------------------------------------------------------------------
-    # Step 5 — Start channel
+    # Step — Start channel
     # ------------------------------------------------------------------
-    _header(5, "Start the MediaLive channel")
+    start_title = ("Start the MediaLive channel" if backend == "aws-media"
+                   else "Start the channel (scale ECS Express service to 1 task)")
+    _header(step, start_title)
     start_cmd = [
         "uv", "run", "--project", push_dir, "python", channel_py,
         "-c", toml_path,
@@ -256,7 +323,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Follow-up instructions
     # ------------------------------------------------------------------
-    # (stack_name was set in Step 3, above)
+    # (stack_name was set above)
 
     # Display-friendly versions using paths relative to the repo root.
     _channel_py_rel  = os.path.relpath(channel_py, repo_root)
@@ -276,6 +343,10 @@ def main() -> None:
         if start_skipped:
             print(f"  Start   : {channel_display} start")
 
+    print(f"\n{BOLD}To update content on a running channel:{RESET}")
+    print(f"  {channel_display} spark      # re-bake/re-upload new content to S3")
+    print(f"  {channel_display} refresh    # pick it up on the running channel")
+
     print(f"\n{BOLD}To stop the channel:{RESET}")
     print(f"  {channel_display} stop")
 
@@ -283,6 +354,9 @@ def main() -> None:
     print(f"  {channel_display} stop           # stop the channel first if running")
     print(f"  cd {_push_dir_rel}")
     print(f"  cdk destroy {stack_name} -c config={_toml_rel_from_push_dir}")
+    if backend == "ecs-express":
+        print(f"  # Note: ItsALiveSharedStack-ecs-express is shared across every")
+        print(f"  # ecs-express channel -- leave it deployed if you have others.")
     print()
 
 
