@@ -82,9 +82,15 @@ onMounted(loadPlaylists)
 const backendOptions = [
   { label: 'ecs-express (loop-dee-loop, self-hosted, cheap)', value: 'ecs-express' },
   { label: 'aws-media (MediaLive + MediaPackage, fully managed)', value: 'aws-media' },
+  { label: 'local-docker (loop-dee-loop on this machine, no AWS)', value: 'local-docker' },
 ]
 
 const isEcsExpress = computed(() => form.backend === 'ecs-express')
+const isLocalDocker = computed(() => form.backend === 'local-docker')
+// Both ecs-express and local-docker bake+serve via loop-dee-loop and share
+// the [channel] config section; only ecs-express additionally needs
+// Fargate [express] CPU/memory.
+const usesChannelSection = computed(() => isEcsExpress.value || isLocalDocker.value)
 
 async function submit() {
   saving.value = true
@@ -123,17 +129,20 @@ async function submit() {
 
     <div class="flex flex-column gap-1">
       <label for="region">AWS region</label>
-      <InputText id="region" v-model="form.region" placeholder="eu-west-1" />
+      <InputText id="region" v-model="form.region" placeholder="eu-west-1" :disabled="isLocalDocker" />
+      <div v-if="isLocalDocker" class="text-color-secondary text-xs">Ignored by local-docker (no AWS resources involved).</div>
     </div>
 
     <div class="flex flex-column gap-1">
       <label for="bucket">Existing S3 bucket name</label>
-      <InputText id="bucket" v-model="form.bucket_name" placeholder="my-existing-bucket" />
+      <InputText id="bucket" v-model="form.bucket_name" placeholder="my-existing-bucket" :disabled="isLocalDocker" />
+      <div v-if="isLocalDocker" class="text-color-secondary text-xs">Ignored by local-docker.</div>
     </div>
 
     <div class="flex flex-column gap-1">
       <label for="folder">S3 content folder (prefix)</label>
-      <InputText id="folder" v-model="form.content_folder" placeholder="its-a-live/content" />
+      <InputText id="folder" v-model="form.content_folder" placeholder="its-a-live/content" :disabled="isLocalDocker" />
+      <div v-if="isLocalDocker" class="text-color-secondary text-xs">Ignored by local-docker.</div>
     </div>
 
     <div class="flex flex-column gap-1">
@@ -160,7 +169,7 @@ async function submit() {
       <InputText id="source" v-model="form.source_path" placeholder="../outputs/mychannel" />
     </div>
 
-    <template v-if="isEcsExpress">
+    <template v-if="usesChannelSection">
       <div class="grid">
         <div class="col-6 flex flex-column gap-1">
           <label for="segdur">Segment duration (s)</label>
@@ -171,17 +180,19 @@ async function submit() {
           <InputNumber id="dvr" v-model="form.dvr_window_seconds" />
         </div>
         <div class="col-12 flex flex-column gap-1">
-          <label for="port">Serve port</label>
+          <label for="port">Serve port{{ isLocalDocker ? ' (also the host port -- http://localhost:<port>)' : '' }}</label>
           <InputNumber id="port" v-model="form.port" :use-grouping="false" />
         </div>
-        <div class="col-6 flex flex-column gap-1">
-          <label for="cpu">Express CPU units</label>
-          <InputNumber id="cpu" v-model="form.cpu" :use-grouping="false" />
-        </div>
-        <div class="col-6 flex flex-column gap-1">
-          <label for="memory">Express memory (MB)</label>
-          <InputNumber id="memory" v-model="form.memory" :use-grouping="false" />
-        </div>
+        <template v-if="isEcsExpress">
+          <div class="col-6 flex flex-column gap-1">
+            <label for="cpu">Express CPU units</label>
+            <InputNumber id="cpu" v-model="form.cpu" :use-grouping="false" />
+          </div>
+          <div class="col-6 flex flex-column gap-1">
+            <label for="memory">Express memory (MB)</label>
+            <InputNumber id="memory" v-model="form.memory" :use-grouping="false" />
+          </div>
+        </template>
       </div>
     </template>
 

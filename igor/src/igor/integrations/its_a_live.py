@@ -48,6 +48,13 @@ cpu    = {cpu}
 memory = {memory}
 """
 
+_LOCAL_DOCKER_EXTRA = """
+[channel]
+segment_duration   = {segment_duration}
+dvr_window_seconds = {dvr_window_seconds}
+port               = {port}
+"""
+
 
 def generate_toml(
     *,
@@ -63,8 +70,10 @@ def generate_toml(
     cpu: int = 256,
     memory: int = 512,
 ) -> str:
-    if backend not in ("aws-media", "ecs-express"):
-        raise ValueError(f"backend must be 'aws-media' or 'ecs-express', got {backend!r}")
+    if backend not in ("aws-media", "ecs-express", "local-docker"):
+        raise ValueError(
+            f"backend must be 'aws-media', 'ecs-express', or 'local-docker', got {backend!r}"
+        )
     content = _TOML_TEMPLATE.format(
         name=name, backend=backend, region=region, bucket_name=bucket_name,
         content_folder=content_folder, source_path=source_path,
@@ -73,6 +82,14 @@ def generate_toml(
         content += _ECS_EXPRESS_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             port=port, cpu=cpu, memory=memory,
+        )
+    elif backend == "local-docker":
+        # No [express] section -- local-docker has no Fargate CPU/memory
+        # concept, and [aws]/[s3] above are written but ignored by
+        # channel.py for this backend (kept for TOML-shape consistency).
+        content += _LOCAL_DOCKER_EXTRA.format(
+            segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
+            port=port,
         )
     return content
 

@@ -92,6 +92,17 @@ export function defineChannel(payload: ChannelCreatePayload): Promise<{ path: st
   return postJson(`${CHANNELS_BASE}/`, payload)
 }
 
+export async function updateChannel(name: string, payload: ChannelCreatePayload): Promise<{ path: string }> {
+  const res = await handle(
+    await fetch(`${CHANNELS_BASE}/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  )
+  return res.json()
+}
+
 export function getChannel(name: string): Promise<Record<string, unknown>> {
   return getJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}`)
 }

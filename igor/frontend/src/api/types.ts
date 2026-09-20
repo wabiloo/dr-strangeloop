@@ -47,15 +47,15 @@ export interface ProbeResult {
 export interface ChannelListItem {
   config_path: string
   name: string
-  backend: 'aws-media' | 'ecs-express'
-  stack_name: string
+  backend: 'aws-media' | 'ecs-express' | 'local-docker'
+  stack_name: string | null
   stack_status: string | null
   source_path?: string
   playlist_name?: string | null
 }
 
 export interface ChannelStatus {
-  backend: 'aws-media' | 'ecs-express'
+  backend: 'aws-media' | 'ecs-express' | 'local-docker'
   status: string
   hls_url?: string | null
   dash_url?: string | null
@@ -65,6 +65,8 @@ export interface ChannelStatus {
   max_tasks?: number
   // aws-media only:
   channel_id?: string
+  // local-docker only:
+  container_name?: string
 }
 
 export type ChannelOutputs = Record<string, string>
@@ -87,7 +89,7 @@ export interface ChannelHealth {
 
 export interface ChannelCreatePayload {
   name: string
-  backend: 'aws-media' | 'ecs-express'
+  backend: 'aws-media' | 'ecs-express' | 'local-docker'
   region: string
   bucket_name: string
   content_folder: string

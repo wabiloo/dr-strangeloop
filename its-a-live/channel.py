@@ -62,7 +62,11 @@ import boto3
 
 _DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "config.toml")
 
-_BACKENDS = ("aws-media", "ecs-express")
+_BACKENDS = ("aws-media", "ecs-express", "local-docker")
+
+# Backends with no CloudFormation/CDK stack at all -- channel.py must never
+# call _cf_outputs() or `cdk deploy`/`cdk destroy` for these.
+_NO_STACK_BACKENDS = ("local-docker",)
 
 
 def _parse_args():
@@ -126,8 +130,19 @@ def _ops(cfg):
     if _backend(cfg) == "ecs-express":
         import _ecs_express_ops
         return _ecs_express_ops
+    if _backend(cfg) == "local-docker":
+        import _local_docker_ops
+        return _local_docker_ops
     import _aws_media_ops
     return _aws_media_ops
+
+
+def _outputs_if_needed(cfg):
+    """local-docker has no CloudFormation stack -- skip _cf_outputs entirely
+    for it and pass None down to the ops module instead."""
+    if _backend(cfg) in _NO_STACK_BACKENDS:
+        return None
+    return _cf_outputs(cfg)
 
 
 def cmd_spark(cfg, extra_args):
@@ -135,28 +150,28 @@ def cmd_spark(cfg, extra_args):
 
 
 def cmd_start(cfg, extra_args):
-    outputs = _cf_outputs(cfg)
+    outputs = _outputs_if_needed(cfg)
     _ops(cfg).start(cfg, _session(cfg), outputs, extra_args)
 
 
 def cmd_stop(cfg, extra_args):
     if extra_args:
         sys.exit("`stop` does not take extra arguments")
-    outputs = _cf_outputs(cfg)
+    outputs = _outputs_if_needed(cfg)
     _ops(cfg).stop(cfg, _session(cfg), outputs)
 
 
 def cmd_refresh(cfg, extra_args):
     if extra_args:
         sys.exit("`refresh` does not take extra arguments")
-    outputs = _cf_outputs(cfg)
+    outputs = _outputs_if_needed(cfg)
     _ops(cfg).refresh(cfg, _session(cfg), outputs)
 
 
 def cmd_status(cfg, extra_args, as_json=False):
     if extra_args:
         sys.exit("`status` does not take extra arguments")
-    outputs = _cf_outputs(cfg)
+    outputs = _outputs_if_needed(cfg)
     result = _ops(cfg).status(cfg, _session(cfg), outputs)
     if as_json:
         print(json.dumps(result))
@@ -165,6 +180,9 @@ def cmd_status(cfg, extra_args, as_json=False):
 def cmd_outputs(cfg, extra_args, as_json=False):
     if extra_args:
         sys.exit("`outputs` does not take extra arguments")
+    if _backend(cfg) in _NO_STACK_BACKENDS:
+        sys.exit("`outputs` has no meaning for local-docker (no CloudFormation stack) "
+                 "-- use `status` instead.")
     outputs = _cf_outputs(cfg)
     if as_json:
         print(json.dumps(outputs))
@@ -186,7 +204,9 @@ def cmd_list(config_path, extra_args, as_json=False):
     """List channels found from TOML configs in the same directory as
     --config (or the directory given as the sole extra arg), each paired
     with its CloudFormation stack status if one exists yet (None if the
-    channel has never been deployed)."""
+    channel has never been deployed). local-docker channels have no
+    stack; "stack_status" instead reflects the local container's Docker
+    status."""
     if len(extra_args) > 1:
         sys.exit("Usage: channel.py list [directory]")
     directory = extra_args[0] if extra_args else os.path.dirname(os.path.abspath(config_path))
@@ -199,6 +219,16 @@ def cmd_list(config_path, extra_args, as_json=False):
             continue
         name = _channel_name(cfg)
         backend = _backend(cfg)
+        if backend in _NO_STACK_BACKENDS:
+            result = _ops(cfg).status(cfg, _session(cfg), None)
+            channels.append({
+                "config_path": path,
+                "name": name,
+                "backend": backend,
+                "stack_name": None,
+                "stack_status": result.get("status"),
+            })
+            continue
         stack_name = _stack_name(cfg)
         cf = _session(cfg).client("cloudformation")
         channels.append({
@@ -250,11 +280,21 @@ def cmd_create(cfg, config_path, extra_args):
     at container startup and hard-crashes if nothing is there yet, which
     sends the ECS service into an endless crashloop that CloudFormation
     waits on (and eventually times out/rolls back) -- see
-    its-a-live/AGENTS.md and README.md."""
+    its-a-live/AGENTS.md and README.md.
+
+    For local-docker (no CloudFormation stack at all), this reduces to
+    `spark` + `start`."""
     if extra_args:
         sys.exit("`create` does not take extra arguments")
 
     import subprocess
+
+    if _backend(cfg) in _NO_STACK_BACKENDS:
+        print("Sparking (staging content) ...")
+        cmd_spark(cfg, [])
+        print("Starting the channel ...")
+        cmd_start(cfg, [])
+        return
 
     _ensure_shared_stack_if_needed(cfg, config_path)
 
@@ -280,6 +320,14 @@ def cmd_redeploy(cfg, config_path, extra_args):
         sys.exit("`redeploy` does not take extra arguments")
 
     import subprocess
+
+    if _backend(cfg) in _NO_STACK_BACKENDS:
+        # No CloudFormation stack to fix up -- just recreate the local
+        # container from whatever was last spark'ed.
+        print("local-docker has no CloudFormation stack -- recreating the "
+              "local container instead of running `cdk deploy` ...")
+        cmd_refresh(cfg, [])
+        return
 
     stack_name = _stack_name(cfg)
     cf = _session(cfg).client("cloudformation")

@@ -14,7 +14,7 @@ router = APIRouter()
 
 class ChannelCreatePayload(BaseModel):
     name: str
-    backend: str  # "aws-media" | "ecs-express"
+    backend: str  # "aws-media" | "ecs-express" | "local-docker"
     region: str
     bucket_name: str
     content_folder: str
@@ -59,6 +59,43 @@ def define_channel(payload: ChannelCreatePayload) -> dict:
     return {"path": path}
 
 
+@router.put("/{name}")
+def update_channel(name: str, payload: ChannelCreatePayload) -> dict:
+    """Overwrites an existing channel's TOML config. Editable regardless
+    of the channel's current lifecycle state (running/stopped/never
+    deployed) -- there's no reason to require it be stopped first, since
+    this only rewrites the local config file and never touches AWS or the
+    local container/stack by itself. Call the appropriate action
+    afterwards to actually apply the change to a deployed/running
+    channel: `redeploy` (aws-media/ecs-express, or local-docker's
+    container recreate) or `refresh`.
+
+    `backend` cannot be changed here -- it drives the CloudFormation stack
+    name / AWS resource identity (and local-docker's container name), so
+    "changing" it is really defining a different channel. Delete and
+    redefine instead if you need to switch backends. `name` in the body is
+    ignored; the path segment is authoritative and channels cannot be
+    renamed via PUT."""
+    try:
+        existing = channel_store.read_channel_config(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    existing_backend = existing.get("deploy", {}).get("backend")
+    if payload.backend != existing_backend:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot change backend from {existing_backend!r} to {payload.backend!r} via edit "
+                   f"-- delete and redefine the channel instead.",
+        )
+
+    data = payload.model_dump()
+    data["name"] = name
+    toml_content = its_a_live.generate_toml(**data)
+    path = channel_store.write_channel_config(name, toml_content)
+    return {"path": path}
+
+
 @router.get("/{name}")
 def get_channel(name: str) -> dict:
     try:
@@ -88,6 +125,15 @@ def channel_status(name: str) -> dict:
 
 @router.get("/{name}/outputs")
 def channel_outputs(name: str) -> dict:
+    """local-docker has no CloudFormation stack, so no outputs -- returns
+    an empty dict rather than erroring, so callers that always fetch
+    /outputs alongside /status don't need a backend special-case."""
+    try:
+        cfg = channel_store.read_channel_config(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if cfg.get("deploy", {}).get("backend") == "local-docker":
+        return {}
     try:
         return its_a_live.get_outputs(channel_store.config_path_for(name))
     except RuntimeError as exc:
@@ -97,17 +143,39 @@ def channel_outputs(name: str) -> dict:
 @router.get("/{name}/health")
 async def channel_health(name: str) -> dict:
     """Proxies loop-dee-loop's `serve.py` `/health` endpoint (ecs-express
-    channels only) -- hits the direct ECS Express service endpoint (not
-    the CloudFront domain) to bypass manifest/segment cache policies that
-    weren't written with this path in mind."""
-    outputs = its_a_live.get_outputs(channel_store.config_path_for(name))
-    endpoint = outputs.get("ExpressServiceEndpoint")
-    if not endpoint:
+    and local-docker channels only, both of which actually run serve.py --
+    aws-media has no equivalent).
+
+    - ecs-express: hits the direct ECS Express service endpoint (not the
+      CloudFront domain) to bypass manifest/segment cache policies that
+      weren't written with this path in mind.
+    - local-docker: hits the container directly on localhost -- there's
+      no stack/outputs to look up, just the configured port.
+    """
+    try:
+        cfg = channel_store.read_channel_config(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    backend = cfg.get("deploy", {}).get("backend")
+
+    if backend == "local-docker":
+        port = cfg.get("channel", {}).get("port", 8080)
+        url = f"http://localhost:{port}/health"
+    elif backend == "ecs-express":
+        outputs = its_a_live.get_outputs(channel_store.config_path_for(name))
+        endpoint = outputs.get("ExpressServiceEndpoint")
+        if not endpoint:
+            raise HTTPException(
+                status_code=404,
+                detail="No ExpressServiceEndpoint output -- not deployed yet.",
+            )
+        url = endpoint.rstrip("/") + "/health"
+    else:
         raise HTTPException(
             status_code=404,
-            detail="No ExpressServiceEndpoint output -- not an ecs-express channel, or not deployed yet.",
+            detail=f"backend {backend!r} has no /health endpoint (only ecs-express and local-docker run serve.py).",
         )
-    url = endpoint.rstrip("/") + "/health"
+
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(url)

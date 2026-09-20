@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
+import InputNumber from 'primevue/inputnumber'
+import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import JobPanel from '../components/JobPanel.vue'
 import PlaybackPanel from '../components/PlaybackPanel.vue'
@@ -17,8 +19,9 @@ import {
   sparkChannel,
   startChannel,
   stopChannel,
+  updateChannel,
 } from '../api/client'
-import type { ChannelHealth, ChannelOutputs, ChannelStatus } from '../api/types'
+import type { ChannelCreatePayload, ChannelHealth, ChannelOutputs, ChannelStatus } from '../api/types'
 
 const props = defineProps<{ name: string }>()
 
@@ -33,8 +36,81 @@ const activeJobId = ref<string | null>(null)
 const activeAction = ref('')
 const activeActionEta = ref('')
 
+const editing = ref(false)
+const editSaving = ref(false)
+const editError = ref('')
+const editForm = reactive<ChannelCreatePayload>({
+  name: props.name,
+  backend: 'ecs-express',
+  region: '',
+  bucket_name: '',
+  content_folder: '',
+  source_path: '',
+  segment_duration: 4.0,
+  dvr_window_seconds: 30,
+  port: 8080,
+  cpu: 256,
+  memory: 512,
+})
+const editIsEcsExpress = computed(() => editForm.backend === 'ecs-express')
+const editIsLocalDocker = computed(() => editForm.backend === 'local-docker')
+const editUsesChannelSection = computed(() => editIsEcsExpress.value || editIsLocalDocker.value)
+
 const toast = useToast()
 let healthTimer: ReturnType<typeof setInterval> | null = null
+
+function section(key: string): Record<string, unknown> {
+  return (config.value?.[key] as Record<string, unknown>) ?? {}
+}
+
+// Editing is allowed regardless of lifecycle phase (running/stopped/never
+// deployed) -- this only rewrites the local TOML config file, it never
+// touches AWS or the local container/stack by itself. Apply the change
+// afterwards with Redeploy/Refresh.
+function startEdit() {
+  if (!config.value) return
+  const deploy = section('deploy')
+  const aws = section('aws')
+  const s3 = section('s3')
+  const input = section('input')
+  const channel = section('channel')
+  const express = section('express')
+  Object.assign(editForm, {
+    name: props.name,
+    backend: (deploy.backend as ChannelCreatePayload['backend']) ?? 'ecs-express',
+    region: String(aws.region ?? ''),
+    bucket_name: String(s3.bucket_name ?? ''),
+    content_folder: String(s3.content_folder ?? ''),
+    source_path: String(input.source_path ?? ''),
+    segment_duration: Number(channel.segment_duration ?? 4.0),
+    dvr_window_seconds: Number(channel.dvr_window_seconds ?? 30),
+    port: Number(channel.port ?? 8080),
+    cpu: Number(express.cpu ?? 256),
+    memory: Number(express.memory ?? 512),
+  })
+  editError.value = ''
+  editing.value = true
+}
+
+function cancelEdit() {
+  editing.value = false
+  editError.value = ''
+}
+
+async function saveEdit() {
+  editSaving.value = true
+  editError.value = ''
+  try {
+    await updateChannel(props.name, editForm)
+    editing.value = false
+    await loadConfig()
+    toast.add({ severity: 'success', summary: 'Config saved', detail: 'Redeploy/Refresh to apply it to a deployed channel.', life: 5000 })
+  } catch (e) {
+    editError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    editSaving.value = false
+  }
+}
 
 // Flattened "section.key: value" rows for the read-only config panel, in
 // the same section order as the TOML file (deploy, aws, s3, input,
@@ -69,6 +145,14 @@ const phase = computed<Phase>(() => {
   if (s.backend === 'aws-media') {
     if (s.status === 'IDLE' || s.status === 'DELETED') return 'stopped'
     if (s.status === 'RUNNING' || s.status === 'STARTING') return 'running'
+    return 'unknown'
+  }
+  if (s.backend === 'local-docker') {
+    // No CloudFormation stack, so no real "not-deployed" state -- a
+    // container that was never created reads the same as "stopped": the
+    // Spark/Start actions are what create it, not a separate deploy step.
+    if (s.status === 'running') return 'running'
+    if (s.status === 'not created' || s.status === 'exited') return 'stopped'
     return 'unknown'
   }
   // ecs-express: scaled to 0 tasks == stopped, otherwise running.
@@ -107,11 +191,19 @@ const firstDeployAction = computed<ActionDef>(() => ({
   label: 'Create / deploy',
   icon: 'pi pi-cloud-upload',
   description:
-    'One-time, first deploy of this channel: stages content to S3, deploys the AWS stack, then starts it. This is the only action available before the channel exists in AWS.',
-  eta: '~5-10 min -- Docker image build + push, ECS task startup, and (ecs-express) a brand-new CloudFront distribution, which alone typically takes several minutes to propagate. This is normal AWS behavior, not a hang.',
+    status.value?.backend === 'local-docker'
+      ? 'Bakes the content locally and starts the local-docker container (no AWS involved). Equivalent to Spark then Start below -- shown here too since local-docker has no separate "deploy" step to gate on.'
+      : 'One-time, first deploy of this channel: stages content to S3, deploys the AWS stack, then starts it. This is the only action available before the channel exists in AWS.',
+  eta:
+    status.value?.backend === 'local-docker'
+      ? '~10-60s -- local bake, plus a one-time docker build the first time (a few minutes).'
+      : '~5-10 min -- Docker image build + push, ECS task startup, and (ecs-express) a brand-new CloudFront distribution, which alone typically takes several minutes to propagate. This is normal AWS behavior, not a hang.',
   fn: () => createChannel(props.name),
-  disabled: () => phase.value !== 'not-deployed',
-  disabledReason: () => 'Already deployed -- use the actions on the right to manage it, or Redeploy for stack/config changes.',
+  disabled: () => (status.value?.backend === 'local-docker' ? phase.value === 'running' : phase.value !== 'not-deployed'),
+  disabledReason: () =>
+    status.value?.backend === 'local-docker'
+      ? 'Already running -- use the actions on the right to manage it.'
+      : 'Already deployed -- use the actions on the right to manage it, or Redeploy for stack/config changes.',
 }))
 
 const lifecycleActions = computed<ActionDef[]>(() => [
@@ -181,6 +273,15 @@ const lifecycleActions = computed<ActionDef[]>(() => [
   },
 ])
 
+// local-docker has no stack outputs (see /outputs route) -- its playback
+// URLs come straight from /status instead (http://localhost:<port>/...).
+const playbackHlsUrl = computed(() =>
+  status.value?.backend === 'local-docker' ? status.value.hls_url : outputs.value?.HlsPlaybackUrl,
+)
+const playbackDashUrl = computed(() =>
+  status.value?.backend === 'local-docker' ? status.value.dash_url : outputs.value?.DashPlaybackUrl,
+)
+
 async function loadConfig() {
   try {
     config.value = await getChannel(props.name)
@@ -202,7 +303,7 @@ async function loadStatus() {
 }
 
 async function loadHealth() {
-  if (status.value?.backend !== 'ecs-express') return
+  if (status.value?.backend !== 'ecs-express' && status.value?.backend !== 'local-docker') return
   try {
     health.value = await getChannelHealth(props.name)
     healthError.value = ''
@@ -274,11 +375,11 @@ watch(() => props.name, reload)
     </Message>
 
     <PlaybackPanel
-      v-if="outputs && (outputs.HlsPlaybackUrl || outputs.DashPlaybackUrl)"
-      :hls-url="outputs.HlsPlaybackUrl"
-      :dash-url="outputs.DashPlaybackUrl"
+      v-if="playbackHlsUrl || playbackDashUrl"
+      :hls-url="playbackHlsUrl"
+      :dash-url="playbackDashUrl"
       :health="health"
-      :health-error="status?.backend === 'ecs-express' ? healthError : ''"
+      :health-error="status?.backend === 'ecs-express' || status?.backend === 'local-docker' ? healthError : ''"
     />
 
     <div class="flex gap-4 flex-wrap align-items-start">
@@ -340,9 +441,20 @@ watch(() => props.name, reload)
       </div>
 
       <div class="flex flex-column gap-2 p-3 border-round surface-card" style="flex: 1 1 18rem; min-width: 18rem; border: 1px solid var(--surface-border)">
-        <h3 class="m-0">Configuration</h3>
+        <div class="flex align-items-center justify-content-between">
+          <h3 class="m-0">Configuration</h3>
+          <Button
+            v-if="config && !editing"
+            label="Edit"
+            icon="pi pi-pencil"
+            size="small"
+            text
+            @click="startEdit"
+          />
+        </div>
         <div v-if="!config" class="text-color-secondary text-sm">Loading...</div>
-        <table v-else class="text-sm">
+
+        <table v-else-if="!editing" class="text-sm">
           <tbody>
             <template v-for="(row, i) in configRows" :key="`${row.section}.${row.key}`">
               <tr v-if="i === 0 || configRows[i - 1].section !== row.section">
@@ -357,8 +469,70 @@ watch(() => props.name, reload)
             </template>
           </tbody>
         </table>
+
+        <div v-else class="flex flex-column gap-2">
+          <Message v-if="editError" severity="error" :closable="false">{{ editError }}</Message>
+
+          <div class="flex flex-column gap-1">
+            <label class="text-xs text-color-secondary">Backend (immutable)</label>
+            <InputText :model-value="editForm.backend" disabled />
+          </div>
+
+          <template v-if="!editIsLocalDocker">
+            <div class="flex flex-column gap-1">
+              <label class="text-xs text-color-secondary">AWS region</label>
+              <InputText v-model="editForm.region" />
+            </div>
+            <div class="flex flex-column gap-1">
+              <label class="text-xs text-color-secondary">S3 bucket name</label>
+              <InputText v-model="editForm.bucket_name" />
+            </div>
+            <div class="flex flex-column gap-1">
+              <label class="text-xs text-color-secondary">S3 content folder</label>
+              <InputText v-model="editForm.content_folder" />
+            </div>
+          </template>
+
+          <div class="flex flex-column gap-1">
+            <label class="text-xs text-color-secondary">Source path</label>
+            <InputText v-model="editForm.source_path" />
+          </div>
+
+          <template v-if="editUsesChannelSection">
+            <div class="flex flex-column gap-1">
+              <label class="text-xs text-color-secondary">Segment duration (s)</label>
+              <InputNumber v-model="editForm.segment_duration" :min-fraction-digits="1" />
+            </div>
+            <div class="flex flex-column gap-1">
+              <label class="text-xs text-color-secondary">DVR window (s)</label>
+              <InputNumber v-model="editForm.dvr_window_seconds" />
+            </div>
+            <div class="flex flex-column gap-1">
+              <label class="text-xs text-color-secondary">Serve port</label>
+              <InputNumber v-model="editForm.port" :use-grouping="false" />
+            </div>
+            <template v-if="editIsEcsExpress">
+              <div class="flex flex-column gap-1">
+                <label class="text-xs text-color-secondary">Express CPU units</label>
+                <InputNumber v-model="editForm.cpu" :use-grouping="false" />
+              </div>
+              <div class="flex flex-column gap-1">
+                <label class="text-xs text-color-secondary">Express memory (MB)</label>
+                <InputNumber v-model="editForm.memory" :use-grouping="false" />
+              </div>
+            </template>
+          </template>
+
+          <div class="flex gap-2 mt-1">
+            <Button label="Save" icon="pi pi-check" size="small" :loading="editSaving" @click="saveEdit" />
+            <Button label="Cancel" size="small" text :disabled="editSaving" @click="cancelEdit" />
+          </div>
+        </div>
+
         <div class="text-color-secondary text-xs mt-2">
-          Read-only -- edit configs/{{ name }}.toml directly, then Redeploy to apply changes.
+          Editing only rewrites configs/{{ name }}.toml -- it does not touch AWS or a running
+          container by itself. Redeploy (aws-media/ecs-express) or Refresh (local-docker) afterwards
+          to apply the change.
         </div>
       </div>
     </div>
