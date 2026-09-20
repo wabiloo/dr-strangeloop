@@ -2,7 +2,7 @@
 import Button from 'primevue/button'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import JobPanel from '../components/JobPanel.vue'
 import {
@@ -77,14 +77,23 @@ function onJobFinished() {
   loadStatus()
 }
 
-onMounted(() => {
+function reload() {
+  status.value = null
+  outputs.value = null
+  health.value = null
+  activeJobId.value = null
   loadStatus()
-  healthTimer = setInterval(loadHealth, 5000)
   loadHealth()
+}
+
+onMounted(() => {
+  reload()
+  healthTimer = setInterval(loadHealth, 5000)
 })
 onBeforeUnmount(() => {
   if (healthTimer) clearInterval(healthTimer)
 })
+watch(() => props.name, reload)
 </script>
 
 <template>

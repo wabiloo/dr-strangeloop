@@ -5,11 +5,19 @@ import Divider from 'primevue/divider'
 import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
+import Popover from 'primevue/popover'
 import Select from 'primevue/select'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { getConfig, saveConfig } from '../api/client'
+import AssetTimeline from '../components/AssetTimeline.vue'
+import {
+  SEGMENTATION_TYPE_ID_OPTIONS,
+  UPID_TYPE_OPTIONS,
+  hexToText,
+  textToHex,
+} from '../segmentationPresets'
 
 const props = defineProps<{ name: string | null }>()
 const router = useRouter()
@@ -215,6 +223,7 @@ function fromYamlConfig(data: Record<string, unknown>) {
 }
 
 async function load() {
+  nameInput.value = props.name ?? ''
   if (!props.name) return
   loading.value = true
   error.value = ''
@@ -248,6 +257,23 @@ async function save() {
 
 onMounted(load)
 watch(() => props.name, load)
+
+// --- ASCII <-> hex helper popover for upid_hex --------------------------
+const hexPopover = ref<InstanceType<typeof Popover> | null>(null)
+const hexPopoverAssetIndex = ref<number | null>(null)
+const hexPopoverText = ref('')
+
+function openHexPopover(event: Event, assetIndex: number) {
+  hexPopoverAssetIndex.value = assetIndex
+  hexPopoverText.value = hexToText(form.assets[assetIndex].ad_break.segmentation.upid_hex)
+  hexPopover.value?.toggle(event)
+}
+
+function applyHexPopover() {
+  if (hexPopoverAssetIndex.value === null) return
+  form.assets[hexPopoverAssetIndex.value].ad_break.segmentation.upid_hex = textToHex(hexPopoverText.value)
+  hexPopover.value?.hide()
+}
 </script>
 
 <template>
@@ -263,6 +289,28 @@ watch(() => props.name, load)
 
     <Divider align="left"><span class="font-bold">Output</span></Divider>
 
+    <div class="grid">
+      <div class="col-4 flex flex-column gap-1">
+        <label>Framerate</label>
+        <InputNumber v-model="form.output.framerate" :use-grouping="false" />
+      </div>
+      <div class="col-4 flex flex-column gap-1">
+        <label>GOP (default = framerate x2)</label>
+        <InputNumber v-model="form.output.gop" :use-grouping="false" placeholder="auto" />
+      </div>
+      <div class="col-4" />
+      <div class="col-6 flex flex-column gap-1">
+        <label>Service provider</label>
+        <InputText v-model="form.output.service_provider" />
+      </div>
+      <div class="col-6 flex flex-column gap-1">
+        <label>Service name</label>
+        <InputText v-model="form.output.service_name" />
+      </div>
+    </div>
+
+    <Divider />
+
     <div class="flex gap-3 align-items-center">
       <label><input type="radio" value="single" v-model="outputMode" /> Single file (one bitrate)</label>
       <label><input type="radio" value="ladder" v-model="outputMode" /> ABR ladder (multi-rendition, for ecs-express)</label>
@@ -273,33 +321,17 @@ watch(() => props.name, load)
         <label>Output file</label>
         <InputText v-model="form.output.file" />
       </div>
-      <div v-if="outputMode === 'single'" class="col-6 flex flex-column gap-1">
+      <div v-if="outputMode === 'single'" class="col-3 flex flex-column gap-1">
         <label>Resolution</label>
         <InputText v-model="form.output.resolution" />
+      </div>
+      <div v-if="outputMode === 'single'" class="col-3 flex flex-column gap-1">
+        <label>Bitrate (kbps)</label>
+        <InputNumber v-model="form.output.bitrate_kbps" :use-grouping="false" />
       </div>
       <div v-if="outputMode === 'ladder'" class="col-12 flex flex-column gap-1">
         <label>Output directory</label>
         <InputText v-model="form.output.dir" />
-      </div>
-      <div class="col-4 flex flex-column gap-1">
-        <label>Framerate</label>
-        <InputNumber v-model="form.output.framerate" :use-grouping="false" />
-      </div>
-      <div v-if="outputMode === 'single'" class="col-4 flex flex-column gap-1">
-        <label>Bitrate (kbps)</label>
-        <InputNumber v-model="form.output.bitrate_kbps" :use-grouping="false" />
-      </div>
-      <div class="col-4 flex flex-column gap-1">
-        <label>GOP (default = framerate x2)</label>
-        <InputNumber v-model="form.output.gop" :use-grouping="false" placeholder="auto" />
-      </div>
-      <div class="col-6 flex flex-column gap-1">
-        <label>Service provider</label>
-        <InputText v-model="form.output.service_provider" />
-      </div>
-      <div class="col-6 flex flex-column gap-1">
-        <label>Service name</label>
-        <InputText v-model="form.output.service_name" />
       </div>
     </div>
 
@@ -328,6 +360,8 @@ watch(() => props.name, load)
 
     <Divider align="left"><span class="font-bold">Assets (ordered timeline)</span></Divider>
 
+    <AssetTimeline v-if="form.assets.some((a) => a.file.trim())" :assets="form.assets" />
+
     <div v-for="(a, i) in form.assets" :key="i" class="p-3 border-1 surface-border border-round flex flex-column gap-2">
       <div class="flex justify-content-between align-items-center">
         <span class="font-semibold">Asset {{ i + 1 }}</span>
@@ -338,24 +372,25 @@ watch(() => props.name, load)
           <label>File path</label>
           <InputText v-model="a.file" placeholder="content.mp4" />
         </div>
-        <div class="col-3 flex flex-column gap-1">
+        <div class="col-6 flex flex-column gap-1">
           <label>Start</label>
           <InputText v-model="a.start" placeholder="00:00:00 / 10 min" />
         </div>
-        <div class="col-3 flex flex-column gap-1">
+        <div class="col-6 flex flex-column gap-1">
           <label>Duration</label>
           <InputText v-model="a.duration" placeholder="10 min" />
         </div>
-        <div class="col-3 flex flex-column gap-1">
+        <div class="col-4 flex flex-column gap-1">
           <label>Countdown</label>
           <InputText v-model="a.countdown" placeholder="5 or -1" />
         </div>
-        <div class="col-3 flex flex-column gap-1">
-          <label>Fade in / out (s)</label>
-          <div class="flex gap-1">
-            <InputText v-model="a.fade_in" placeholder="in" />
-            <InputText v-model="a.fade_out" placeholder="out" />
-          </div>
+        <div class="col-4 flex flex-column gap-1">
+          <label>Fade in (s)</label>
+          <InputText v-model="a.fade_in" placeholder="1.5" />
+        </div>
+        <div class="col-4 flex flex-column gap-1">
+          <label>Fade out (s)</label>
+          <InputText v-model="a.fade_out" placeholder="1.5" />
         </div>
         <div class="col-12 flex flex-column gap-1">
           <label>Per-asset slate image (overrides global)</label>
@@ -388,9 +423,39 @@ watch(() => props.name, load)
 
         <template v-if="a.ad_break.splice_type === 'time_signal'">
           <div class="col-12"><Divider /></div>
-          <div class="col-3 flex flex-column gap-1"><label>Segmentation type_id</label><InputText v-model="a.ad_break.segmentation.type_id" /></div>
-          <div class="col-3 flex flex-column gap-1"><label>UPID type</label><InputText v-model="a.ad_break.segmentation.upid_type" /></div>
-          <div class="col-6 flex flex-column gap-1"><label>UPID hex</label><InputText v-model="a.ad_break.segmentation.upid_hex" /></div>
+          <div class="col-4 flex flex-column gap-1">
+            <label>Segmentation type_id</label>
+            <Select
+              v-model="a.ad_break.segmentation.type_id"
+              :options="SEGMENTATION_TYPE_ID_OPTIONS"
+              option-label="label"
+              option-value="value"
+              filter
+            />
+          </div>
+          <div class="col-4 flex flex-column gap-1">
+            <label>UPID type</label>
+            <Select
+              v-model="a.ad_break.segmentation.upid_type"
+              :options="UPID_TYPE_OPTIONS"
+              option-label="label"
+              option-value="value"
+              filter
+            />
+          </div>
+          <div class="col-4 flex flex-column gap-1">
+            <label>UPID hex</label>
+            <div class="flex gap-1">
+              <InputText v-model="a.ad_break.segmentation.upid_hex" class="flex-1" />
+              <Button
+                icon="pi pi-language"
+                severity="secondary"
+                outlined
+                title="Enter as text (ASCII) instead of hex"
+                @click="openHexPopover($event, i)"
+              />
+            </div>
+          </div>
           <div class="col-3 flex align-items-center gap-2"><Checkbox v-model="a.ad_break.segmentation.web_delivery_allowed" binary /><label>Web delivery allowed</label></div>
           <div class="col-3 flex align-items-center gap-2"><Checkbox v-model="a.ad_break.segmentation.no_regional_blackout" binary /><label>No regional blackout</label></div>
           <div class="col-3 flex align-items-center gap-2"><Checkbox v-model="a.ad_break.segmentation.archive_allowed" binary /><label>Archive allowed</label></div>
@@ -400,6 +465,17 @@ watch(() => props.name, load)
     </div>
 
     <Button label="Add asset" icon="pi pi-plus" outlined @click="addAsset" />
+
+    <Popover ref="hexPopover">
+      <div class="flex flex-column gap-2" style="width: 20rem">
+        <span class="font-semibold">Enter UPID as text</span>
+        <span class="text-sm text-color-secondary">Converts to/from the hex value above (UTF-8 bytes, hex-encoded).</span>
+        <InputText v-model="hexPopoverText" placeholder="e.g. SIGNAL:LINEAR" autofocus />
+        <div class="flex justify-content-end gap-2">
+          <Button label="Apply" size="small" @click="applyHexPopover" />
+        </div>
+      </div>
+    </Popover>
 
     <Divider />
     <div>
