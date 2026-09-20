@@ -1,0 +1,54 @@
+# its-a-live / config.toml
+#
+# Each deployment (channel) gets its own config file. [deploy].name and
+# [deploy].backend together drive the CloudFormation stack name
+# (ItsALiveStack-<name>-<backend>) and every AWS resource name, so
+# multiple config files == multiple independent channel deployments.
+
+[deploy]
+name = "default"
+# Which backend serves this channel:
+#   "ecs-express" -- loop-dee-loop baked locally, served on ECS Express
+#                     Mode + CloudFront (cheap, self-hosted)
+#   "aws-media"   -- MediaLive + MediaPackage v1 (fully managed AWS media
+#                     services)
+backend = "ecs-express"
+
+[aws]
+region = "eu-west-1"
+
+[s3]
+# Existing bucket (referenced only, never created/deleted by this stack).
+bucket_name = "my-existing-bucket"
+# Channel content lives under <content_folder>/<name>/ in this bucket --
+# a baked loop package for ecs-express, or the raw uploaded .ts for
+# aws-media.
+content_folder = "its-a-live/content"
+
+[input]
+# franken-ts output: for ecs-express, either a single .ts file (its
+# sibling .markers.json is picked up automatically by bake.py) or a
+# directory containing a rendition ladder (see
+# loop-dee-loop/README.md "Multi-rendition"). For aws-media, a single
+# .ts file (SCTE-35 markers must already be embedded -- see
+# AGENT_BRIEF.md's "timed cues" requirement).
+source_path = "../outputs/mychannel"
+
+# ── ecs-express-only sections (ignored by aws-media) ─────────────────────
+
+[bake]
+# Where `channel.py spark` writes the local loop package before pushing it
+# to S3. Defaults to ./.local-loop-package/<name> next to this file.
+# local_output_dir = "/tmp/my-channel-loop-package"
+
+[channel]
+segment_duration   = 4.0   # nominal bake segment duration, seconds
+dvr_window_seconds = 30    # serve.py sliding-window size, seconds
+port               = 8080  # serve.py listen port (container-internal)
+
+[express]
+# ECS Express Mode CPU/memory codes (same numeric convention as Fargate:
+# 256 = 0.25 vCPU). See AWS ECS Express Mode docs for the full supported
+# list.
+cpu    = 256   # 0.25 vCPU
+memory = 512   # 0.5 GB

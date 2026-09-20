@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""
+Helper script for managing an its-a-live channel (either backend).
+
+Usage:
+  python channel.py [--config path/to/config.toml] <command> [args...]
+
+Commands (identical across both backends -- [deploy].backend in the
+config file selects "aws-media" (MediaLive + MediaPackage v1) or
+"ecs-express" (loop-dee-loop on ECS Express Mode + CloudFront)):
+
+  spark     Stage the franken-ts input for this channel's backend:
+              ecs-express -- bake it locally (GPAC, no AWS compute) and
+                              push the loop package to S3
+              aws-media   -- upload the raw .ts to S3 as-is (MediaLive
+                              re-encodes it live, no transformation)
+  start     Start the channel:
+              ecs-express -- scale to 1 task. Epoch is left untouched by
+                              default (fast, no redeploy); pass
+                              `--epoch-utc now|<ISO8601>` to explicitly
+                              (re)set it (forces a real redeploy)
+              aws-media   -- start the MediaLive channel, wait RUNNING
+  stop      Stop the channel:
+              ecs-express -- scale to 0 tasks (Fargate compute cost stops;
+                              the shared ALB keeps running for other
+                              channels)
+              aws-media   -- stop the MediaLive channel, wait IDLE
+  refresh   Pick up newly `spark`ed content on an ALREADY-running channel:
+              ecs-express -- force a new task launch (re-syncs S3)
+              aws-media   -- no hot-reload exists; this is a full
+                              stop -> start cycle (real interruption)
+  status    Print the channel's current status
+  outputs   Print all CloudFormation stack outputs
+  redeploy  Delete a broken stack if needed, then run cdk deploy
+
+The --config flag (short: -c) selects a config file; defaults to
+config.toml in the same directory as this script. The stack name is
+derived from [deploy].name and [deploy].backend in the config file, so
+each config file targets an independent channel deployment.
+"""
+
+import os
+import sys
+import time
+import tomllib
+import boto3
+
+_DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "config.toml")
+
+_BACKENDS = ("aws-media", "ecs-express")
+
+
+def _parse_args():
+    """Returns (config_path, command, extra_args) -- extra_args is whatever
+    follows the command (e.g. `start --epoch-utc now`)."""
+    args = sys.argv[1:]
+    config_path = _DEFAULT_CONFIG
+    if args and args[0] in ("--config", "-c"):
+        if len(args) < 2:
+            sys.exit("--config requires a path argument")
+        config_path = args[1]
+        args = args[2:]
+    if not args:
+        return config_path, None, []
+    return config_path, args[0], args[1:]
+
+
+def _config(config_path):
+    with open(config_path, "rb") as f:
+        cfg = tomllib.load(f)
+    backend = cfg.get("deploy", {}).get("backend")
+    if backend not in _BACKENDS:
+        sys.exit(f"[deploy].backend must be one of {_BACKENDS!r} in {config_path}, got {backend!r}")
+    return cfg
+
+
+def _backend(cfg):
+    return cfg["deploy"]["backend"]
+
+
+def _channel_name(cfg):
+    return cfg.get("deploy", {}).get("name", "default")
+
+
+def _stack_name(cfg):
+    return f"ItsALiveStack-{_channel_name(cfg)}-{_backend(cfg)}"
+
+
+def _shared_stack_name(cfg):
+    """Only meaningful for ecs-express (the shared ECS cluster stack)."""
+    return "ItsALiveSharedStack-ecs-express"
+
+
+def _session(cfg):
+    region = cfg.get("aws", {}).get("region")
+    return boto3.session.Session(region_name=region)
+
+
+def _cf_outputs(cfg, stack_name=None):
+    stack_name = stack_name or _stack_name(cfg)
+    cf = _session(cfg).client("cloudformation")
+    resp = cf.describe_stacks(StackName=stack_name)
+    return {o["OutputKey"]: o["OutputValue"] for o in resp["Stacks"][0].get("Outputs", [])}
+
+
+def _ops(cfg):
+    """Returns the backend-specific ops module for this config."""
+    if _backend(cfg) == "ecs-express":
+        import _ecs_express_ops
+        return _ecs_express_ops
+    import _aws_media_ops
+    return _aws_media_ops
+
+
+def cmd_spark(cfg, extra_args):
+    _ops(cfg).spark(cfg, _session(cfg), _channel_name(cfg), extra_args)
+
+
+def cmd_start(cfg, extra_args):
+    outputs = _cf_outputs(cfg)
+    _ops(cfg).start(cfg, _session(cfg), outputs, extra_args)
+
+
+def cmd_stop(cfg, extra_args):
+    if extra_args:
+        sys.exit("`stop` does not take extra arguments")
+    outputs = _cf_outputs(cfg)
+    _ops(cfg).stop(cfg, _session(cfg), outputs)
+
+
+def cmd_refresh(cfg, extra_args):
+    if extra_args:
+        sys.exit("`refresh` does not take extra arguments")
+    outputs = _cf_outputs(cfg)
+    _ops(cfg).refresh(cfg, _session(cfg), outputs)
+
+
+def cmd_status(cfg, extra_args):
+    if extra_args:
+        sys.exit("`status` does not take extra arguments")
+    outputs = _cf_outputs(cfg)
+    _ops(cfg).status(cfg, _session(cfg), outputs)
+
+
+def cmd_outputs(cfg, extra_args):
+    if extra_args:
+        sys.exit("`outputs` does not take extra arguments")
+    outputs = _cf_outputs(cfg)
+    max_key = max(len(k) for k in outputs) if outputs else 0
+    for k, v in sorted(outputs.items()):
+        print(f"  {k:<{max_key}}  {v}")
+
+
+def cmd_redeploy(cfg, config_path, extra_args):
+    if extra_args:
+        sys.exit("`redeploy` does not take extra arguments")
+
+    import subprocess
+
+    stack_name = _stack_name(cfg)
+    cf = _session(cfg).client("cloudformation")
+
+    if _backend(cfg) == "ecs-express":
+        # The shared ECS cluster stack rarely breaks and isn't config-name
+        # dependent -- just make sure it's deployed (idempotent no-op if
+        # already up to date) before handling the channel stack itself.
+        shared_stack_name = _shared_stack_name(cfg)
+        print(f"Ensuring {shared_stack_name} is deployed ...")
+        result = subprocess.run(
+            ["cdk", "deploy", "--require-approval", "never",
+             "-c", f"config={config_path}", shared_stack_name],
+            check=False,
+        )
+        if result.returncode != 0:
+            sys.exit(result.returncode)
+
+    WAIT_STATES = {
+        "DELETE_IN_PROGRESS",
+        "ROLLBACK_IN_PROGRESS",
+        "UPDATE_ROLLBACK_IN_PROGRESS",
+        "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS",
+    }
+    DELETE_BEFORE_DEPLOY = {
+        "CREATE_IN_PROGRESS",
+        "ROLLBACK_COMPLETE",
+        "CREATE_FAILED",
+        "ROLLBACK_FAILED",
+        "UPDATE_ROLLBACK_FAILED",
+    }
+
+    try:
+        resp = cf.describe_stacks(StackName=stack_name)
+        status = resp["Stacks"][0]["StackStatus"]
+    except cf.exceptions.ClientError:
+        status = None
+
+    if status in WAIT_STATES:
+        print(f"Stack is {status} -- waiting for it to settle ...")
+        while status in WAIT_STATES:
+            time.sleep(10)
+            resp = cf.describe_stacks(StackName=stack_name)
+            status = resp["Stacks"][0]["StackStatus"]
+            print(f"  status: {status}", flush=True)
+
+    if status in DELETE_BEFORE_DEPLOY:
+        print(f"Stack is in {status} -- deleting before redeployment ...")
+        cf.delete_stack(StackName=stack_name)
+        waiter = cf.get_waiter("stack_delete_complete")
+        waiter.wait(StackName=stack_name, WaiterConfig={"Delay": 5, "MaxAttempts": 120})
+        print("Stack deleted.")
+    elif status in ("CREATE_COMPLETE", "UPDATE_COMPLETE"):
+        print(f"Stack is already {status} -- redeploying normally.")
+    elif status is not None:
+        print(f"Stack status: {status}")
+
+    # Explicit stack name: for ecs-express the app also contains
+    # ItsALiveSharedStack-ecs-express, so a bare `cdk deploy` with no stack
+    # argument would be ambiguous and CDK would refuse it.
+    cdk_cmd = ["cdk", "deploy", "--require-approval", "never",
+               "-c", f"config={config_path}", stack_name]
+    print(f"Running: {' '.join(cdk_cmd)}")
+    result = subprocess.run(cdk_cmd, check=False)
+    sys.exit(result.returncode)
+
+
+COMMANDS = {
+    "spark": cmd_spark,
+    "start": cmd_start,
+    "stop": cmd_stop,
+    "refresh": cmd_refresh,
+    "status": cmd_status,
+    "outputs": cmd_outputs,
+}
+
+if __name__ == "__main__":
+    config_path, command, extra_args = _parse_args()
+
+    if command not in COMMANDS and command != "redeploy":
+        prog = "python channel.py"
+        all_commands = list(COMMANDS) + ["redeploy"]
+        print(f"Usage: {prog} [--config path/to/config.toml] [{' | '.join(all_commands)}]")
+        sys.exit(1)
+
+    cfg = _config(config_path)
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+    if command == "redeploy":
+        cmd_redeploy(cfg, config_path, extra_args)
+    else:
+        COMMANDS[command](cfg, extra_args)

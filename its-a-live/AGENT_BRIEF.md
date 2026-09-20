@@ -56,7 +56,7 @@ This mirrors the known-good reference channel `bpkio_default_live_scte35`.
 
 ### S3
 - Reference an existing bucket via `s3.Bucket.from_bucket_name()` (do **not** create one).
-- Upload the `.ts` out-of-band via `channel.py upload`.
+- Upload the `.ts` out-of-band via `channel.py spark`.
 - MediaLive source URL: `s3ssl://<bucket>/<key>`.
 
 ### IAM role for MediaLive
@@ -104,8 +104,8 @@ This mirrors the known-good reference channel `bpkio_default_live_scte35`.
 
 ## Helper script: `channel.py`
 
-`boto3` subcommands: `upload`, `start`, `stop`, `status`, `outputs`,
-`policy` (no-op for v1), `redeploy`. Stack name `ScteLoopStack`; region from
+`boto3` subcommands: `spark`, `start`, `stop`, `refresh`, `status`, `outputs`,
+`redeploy`. Stack name `ItsALiveStack-<name>-aws-media`; region from
 `config.toml`.
 
 ---
@@ -115,7 +115,7 @@ This mirrors the known-good reference channel `bpkio_default_live_scte35`.
 ```bash
 uv sync
 cdk bootstrap
-uv run python channel.py upload
+uv run python channel.py spark
 cdk deploy
 uv run python channel.py start   # prints public HLS + DASH URLs
 uv run python channel.py stop

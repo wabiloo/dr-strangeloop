@@ -11,15 +11,15 @@ from aws_cdk import (
     aws_cloudfront_origins as origins,
 )
 from constructs import Construct
-from shared_stack import CLUSTER_NAME
+from loop_shared_stack import CLUSTER_NAME
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 
 
-class LoopChannelStack(Stack):
+class LoopStack(Stack):
     """
-    Provisions one loop-dee-loop channel on ECS Express Mode, fronted by
-    CloudFront:
+    Provisions one loop-dee-loop channel (its-a-live's "ecs-express"
+    backend) on ECS Express Mode, fronted by CloudFront:
 
       loop-dee-loop image (built from ../loop-dee-loop/Dockerfile, pushed to
       a CDK-managed ECR asset repo -- same image serves every channel)
@@ -43,11 +43,11 @@ class LoopChannelStack(Stack):
     Mode defaults to the account's default VPC unless network_configuration
     is given.
 
-    `bake` is NOT run in AWS at all: it's a one-shot process meant to run
+    `spark` is NOT run in AWS at all: it's a one-shot process meant to run
     once per schedule change, so for this (demo-oriented) stack it's simply
     run locally/via `docker run` and the output pushed to S3 with
-    `channel.py bake` (see channel.py) -- no ECS task definition, IAM role,
-    security group, or subnets needed just for that.
+    `channel.py spark` (see _ecs_express_ops.py) -- no ECS task
+    definition, IAM role, security group, or subnets needed just for that.
 
     NOTE: this stack does not restrict who can reach the Express service's
     ingress endpoint directly (its ALB DNS name is publicly reachable, same
@@ -65,7 +65,7 @@ class LoopChannelStack(Stack):
             # During cdk bootstrap no config values are required -- empty stack.
             return
 
-        loop_package_folder = config.get("s3", {}).get("loop_package_folder", "loop-dee-loop/packages").strip("/")
+        loop_package_folder = config.get("s3", {}).get("content_folder", "its-a-live/content").strip("/")
 
         channel_cfg = config.get("channel", {})
         dvr_window_seconds = str(channel_cfg.get("dvr_window_seconds", 30))
@@ -138,10 +138,11 @@ class LoopChannelStack(Stack):
         # ── ECS cluster ────────────────────────────────────────────────────────
         # Referenced by name only -- NOT created here. Every channel shares the
         # one cluster created once by LoopSharedStack (`cdk deploy
-        # LoopSharedStack`, before deploying any channel). Creating a cluster
-        # per-channel-stack would collide (ECS cluster names are unique per
-        # account/region) and would make `cdk destroy` on one channel risk
-        # deleting the cluster out from under every other channel.
+        # ItsALiveSharedStack-ecs-express`, before deploying any channel).
+        # Creating a cluster per-channel-stack would collide (ECS cluster
+        # names are unique per account/region) and would make `cdk destroy`
+        # on one channel risk deleting the cluster out from under every
+        # other channel.
 
         # ── Express service (long-running, auto-scaling `serve.py`) ──────────
         # --epoch-utc is fixed at the Unix epoch (1970-01-01), permanently --

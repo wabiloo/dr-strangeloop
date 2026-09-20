@@ -23,14 +23,21 @@ AD_TRIGGERS = [
 ]
 
 
-class ScteLoopStack(Stack):
+class MediaStack(Stack):
+    """
+    Provisions one channel on MediaLive + MediaPackage v1 -- the
+    fully-managed-AWS-services counterpart to LoopStack (ecs-express
+    backend), sharing the same its-a-live CLI/config surface (see
+    channel.py, _aws_media_ops.py).
+    """
+
     def __init__(self, scope: Construct, construct_id: str, *, config: dict, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         name        = config.get("deploy", {}).get("name", "default")
-        ts_file     = config.get("input", {}).get("ts_file", "")
+        ts_file     = config.get("input", {}).get("source_path", "")
         bucket_name = config.get("s3", {}).get("bucket_name", "")
-        s3_folder   = config.get("s3", {}).get("folder", "").strip("/")
+        s3_folder   = config.get("s3", {}).get("content_folder", "").strip("/")
 
         if not ts_file or not bucket_name:
             # During cdk bootstrap no config values are required — return empty stack.

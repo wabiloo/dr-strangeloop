@@ -23,8 +23,7 @@ outputs/**/markers.json
 # CDK
 cdk.out/
 
-# push-to-aws-loop: locally-baked packages before they're pushed to S3
-push-to-aws-loop/.local-loop-package/
-# Personal/real per-channel deploy configs (bucket names, etc.) -- same
-# convention as push-to-aws-media/configs/: not committed.
-push-to-aws-loop/configs/*.toml
+# its-a-live: locally-baked (sparked) packages before they're pushed to S3
+its-a-live/.local-loop-package/
+# Personal/real per-channel deploy configs (bucket names, etc.): not committed.
+its-a-live/configs/*.toml

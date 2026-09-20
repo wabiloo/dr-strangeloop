@@ -122,6 +122,23 @@ wheels = [
 ]
 
 [[package]]
+name = "its-a-live"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "aws-cdk-lib" },
+    { name = "boto3" },
+    { name = "constructs" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aws-cdk-lib", specifier = ">=2.100.0" },
+    { name = "boto3", specifier = ">=1.28.0" },
+    { name = "constructs", specifier = ">=10.0.0" },
+]
+
+[[package]]
 name = "jmespath"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -154,23 +171,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/6b/8e/8c9fe7e32fdf9c386f83d59610cc819a25dadb874b5920f2d0ef7d35f46d/publication-0.0.3.tar.gz", hash = "sha256:68416a0de76dddcdd2930d1c8ef853a743cc96c82416c4e4d3b5d901c6276dc4", size = 5484, upload-time = "2019-01-15T07:52:23.914Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/d3/6308debad7afcdb3ea5f50b4b3d852f41eb566a311fbcb4da23755a28155/publication-0.0.3-py2.py3-none-any.whl", hash = "sha256:0248885351febc11d8a1098d5c8e3ab2dabcf3e8c0c96db1e17ecd12b53afbe6", size = 7687, upload-time = "2019-01-15T07:52:22.151Z" },
-]
-
-[[package]]
-name = "push-to-aws-loop"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "aws-cdk-lib" },
-    { name = "boto3" },
-    { name = "constructs" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aws-cdk-lib", specifier = ">=2.100.0" },
-    { name = "boto3", specifier = ">=1.28.0" },
-    { name = "constructs", specifier = ">=10.0.0" },
 ]
 
 [[package]]
