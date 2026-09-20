@@ -59,6 +59,43 @@ def define_channel(payload: ChannelCreatePayload) -> dict:
     return {"path": path}
 
 
+@router.put("/{name}")
+def update_channel(name: str, payload: ChannelCreatePayload) -> dict:
+    """Overwrites an existing channel's TOML config. Editable regardless
+    of the channel's current lifecycle state (running/stopped/never
+    deployed) -- there's no reason to require it be stopped first, since
+    this only rewrites the local config file and never touches AWS or the
+    local container/stack by itself. Call the appropriate action
+    afterwards to actually apply the change to a deployed/running
+    channel: `redeploy` (aws-media/ecs-express, or local-docker's
+    container recreate) or `refresh`.
+
+    `backend` cannot be changed here -- it drives the CloudFormation stack
+    name / AWS resource identity (and local-docker's container name), so
+    "changing" it is really defining a different channel. Delete and
+    redefine instead if you need to switch backends. `name` in the body is
+    ignored; the path segment is authoritative and channels cannot be
+    renamed via PUT."""
+    try:
+        existing = channel_store.read_channel_config(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    existing_backend = existing.get("deploy", {}).get("backend")
+    if payload.backend != existing_backend:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot change backend from {existing_backend!r} to {payload.backend!r} via edit "
+                   f"-- delete and redefine the channel instead.",
+        )
+
+    data = payload.model_dump()
+    data["name"] = name
+    toml_content = its_a_live.generate_toml(**data)
+    path = channel_store.write_channel_config(name, toml_content)
+    return {"path": path}
+
+
 @router.get("/{name}")
 def get_channel(name: str) -> dict:
     try:
