@@ -5,6 +5,7 @@ import Tag from 'primevue/tag'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import JobPanel from '../components/JobPanel.vue'
+import PlaybackPanel from '../components/PlaybackPanel.vue'
 import {
   createChannel,
   getChannel,
@@ -272,6 +273,14 @@ watch(() => props.name, reload)
       </details>
     </Message>
 
+    <PlaybackPanel
+      v-if="outputs && (outputs.HlsPlaybackUrl || outputs.DashPlaybackUrl)"
+      :hls-url="outputs.HlsPlaybackUrl"
+      :dash-url="outputs.DashPlaybackUrl"
+      :health="health"
+      :health-error="status?.backend === 'ecs-express' ? healthError : ''"
+    />
+
     <div class="flex gap-4 flex-wrap align-items-start">
       <div class="flex flex-column gap-4" style="flex: 2 1 40rem; min-width: 28rem">
         <div class="flex flex-column gap-2">
@@ -356,33 +365,9 @@ watch(() => props.name, reload)
 
     <JobPanel :job-id="activeJobId" :eta-hint="activeActionEta" @finished="onJobFinished" />
 
-    <div v-if="outputs" class="flex flex-column gap-2">
-      <h3 class="m-0">Playback</h3>
-      <div v-if="outputs.HlsPlaybackUrl">
-        HLS: <a :href="outputs.HlsPlaybackUrl" target="_blank">{{ outputs.HlsPlaybackUrl }}</a>
-      </div>
-      <div v-if="outputs.DashPlaybackUrl">
-        DASH: <a :href="outputs.DashPlaybackUrl" target="_blank">{{ outputs.DashPlaybackUrl }}</a>
-      </div>
-    </div>
-
-    <div v-if="status?.backend === 'ecs-express'" class="flex flex-column gap-2">
-      <h3 class="m-0">Live loop position</h3>
-      <Message v-if="healthError" severity="warn">
-        No health data yet ({{ healthError }}) -- the deployed task may predate the /health
-        endpoint; redeploy/refresh to pick it up.
-      </Message>
-      <div v-if="health" class="flex flex-column gap-1 text-sm">
-        <div>Loop number: {{ health.loop_number }}</div>
-        <div>Position in loop: {{ health.position_in_loop_seconds.toFixed(1) }}s / {{ health.total_loop_duration_seconds.toFixed(1) }}s</div>
-        <div>Uptime: {{ health.uptime_seconds.toFixed(0) }}s</div>
-        <div>Renditions: {{ health.renditions.join(', ') }}</div>
-      </div>
-    </div>
-
-    <div v-if="outputs" class="flex flex-column gap-2">
-      <h3 class="m-0">Stack outputs</h3>
-      <pre class="job-log">{{ JSON.stringify(outputs, null, 2) }}</pre>
-    </div>
+    <details v-if="outputs" class="text-sm">
+      <summary class="cursor-pointer text-color-secondary">Stack outputs (raw)</summary>
+      <pre class="job-log mt-2">{{ JSON.stringify(outputs, null, 2) }}</pre>
+    </details>
   </div>
 </template>
