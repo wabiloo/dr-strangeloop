@@ -28,13 +28,13 @@ names or CLI flags from this file alone.
 ## Architecture
 
 ```
-franken-ts/playlists/*.yaml
-        │  (asset list, ad breaks, single- or multi-rendition)
+data/playlists/*.yaml
+        │  (asset list, markers -- ad breaks/PPOs/etc, single- or multi-rendition)
         ▼
    franken-ts CLI            →  outputs/<name>.ts (+ .markers.json)
         │                       or outputs/<name>/ (rendition ladder + shared markers.json)
         ▼
-   configs/<name>.toml         (its-a-live channel config: backend, S3, AWS region)
+   data/channels/<name>.toml   (its-a-live channel config: backend, S3, AWS region)
         │
         ▼
    its-a-live/channel.py + cdk  →  spark (stage input) → deploy → start
@@ -61,10 +61,10 @@ appropriate (local dev/testing).
 franken-ts YAML playlist, prompting for confirmation at each step:
 
 ```bash
-uv run python galvanise.py franken-ts/playlists/my-stream.yaml --backend ecs-express
+uv run python galvanise.py data/playlists/my-stream.yaml --backend ecs-express
 ```
 
-It generates `configs/<name>.toml` for you (its-a-live config) — you
+It generates `data/channels/<name>.toml` for you (its-a-live config) — you
 don't hand-write that file for the common case. The individual phases
 can also be run/inspected/torn down independently afterward (see
 `its-a-live/AGENTS.md`) — `galvanise.py` prints the exact follow-up
@@ -80,12 +80,12 @@ commands at the end of its run.
 
 ## Where things live
 
-- `franken-ts/playlists/*.yaml` — content/ad-break definitions (source of
-  truth for what a loop contains).
-- `configs/*.toml` — its-a-live per-channel deploy config (backend, AWS
-  region, S3 location).
+- `data/playlists/*.yaml` — content/marker (ad break/PPO/etc) definitions
+  (source of truth for what a loop contains).
+- `data/channels/*.toml` — its-a-live per-channel deploy config (backend,
+  AWS region, S3 location).
 - `outputs/` — everything franken-ts/frame-extractor produce (`.ts`,
   `.markers.json`, HTML reports, frame timelines).
 - `its-a-live/configs/*.toml` — alternate location some existing configs
-  use (functionally identical to `configs/*.toml`; either is fine, `-c`
-  takes a path).
+  use (functionally identical to `data/channels/*.toml`; either is fine,
+  `-c` takes a path).

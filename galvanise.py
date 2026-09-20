@@ -5,12 +5,12 @@ galvanise.py — Full pipeline runner for dr-strangeloop.
 Usage:
   uv run python galvanise.py <config.yaml> [--backend aws-media|ecs-express]
 
-The config.yaml should be a franken-ts playlist (e.g. franken-ts/playlists/foo.yaml).
+The config.yaml should be a franken-ts playlist (e.g. data/playlists/foo.yaml).
 Paths may be absolute or relative to the current working directory.
 
 Pipeline (its-a-live backend selected by --backend, default aws-media):
   1. Run franken-ts to build the .ts file
-  2. Generate configs/<basename>.toml at the repo root
+  2. Generate data/channels/<basename>.toml at the repo root
   3. (ecs-express only) Ensure the shared ECS cluster stack is deployed
   4. Run CDK deploy (cdk deploy) for the channel stack
   5. Spark: stage the input for the chosen backend (upload .ts for
@@ -19,7 +19,7 @@ Pipeline (its-a-live backend selected by --backend, default aws-media):
 
 Each step prompts for confirmation before running.
 All channel management commands (spark/start/stop/refresh) can be run
-from the repo root using the generated TOML in configs/.
+from the repo root using the generated TOML in data/channels/.
 """
 
 import os
@@ -163,9 +163,8 @@ def main() -> None:
         sys.exit(f"Config file not found: {config_yaml}")
 
     repo_root    = _repo_root()
-    franken_dir  = os.path.join(repo_root, "franken-ts")
     push_dir     = os.path.join(repo_root, "its-a-live")
-    configs_dir  = os.path.join(repo_root, "configs")
+    configs_dir  = os.path.join(repo_root, "data", "channels")
 
     # Derive basename (e.g. "break-and-popos") from the YAML filename.
     basename = os.path.splitext(os.path.basename(config_yaml))[0]
@@ -178,11 +177,12 @@ def main() -> None:
     if not ts_file_raw:
         sys.exit("Could not find output.file in the YAML config.")
 
-    # franken-ts runs with cwd=franken-ts/, so output.file is resolved there.
-    ts_file_abs = os.path.normpath(os.path.join(franken_dir, ts_file_raw))
+    # franken-ts runs with cwd=repo_root (playlists live under data/playlists/
+    # and output paths are repo-root-relative, e.g. "outputs/foo.ts").
+    ts_file_abs = os.path.normpath(os.path.join(repo_root, ts_file_raw))
 
-    # Config path relative to franken-ts/ for the franken-ts invocation.
-    config_rel_to_franken = os.path.relpath(config_yaml, franken_dir)
+    # franken-ts accepts the config path as given (absolute here) regardless
+    # of cwd, so no relative-to-franken-ts computation is needed any more.
 
     toml_path = os.path.join(configs_dir, f"{basename}.toml")
 
@@ -214,18 +214,18 @@ def main() -> None:
     # Step 1 — franken-ts
     # ------------------------------------------------------------------
     _header(1, "Build .ts with SCTE-35 markers (franken-ts)")
-    print(f"  cwd        : {franken_dir}")
-    print(f"  command    : uv run franken-ts {config_rel_to_franken}")
+    print(f"  cwd        : {repo_root}")
+    print(f"  command    : uv run franken-ts {config_yaml}")
     if not _confirm("Run franken-ts now?"):
         print("Skipped.")
     else:
-        _run(["uv", "run", "franken-ts", config_rel_to_franken], cwd=franken_dir)
+        _run(["uv", "run", "franken-ts", config_yaml], cwd=repo_root)
         print(f"{GREEN}franken-ts complete.{RESET}")
 
     # ------------------------------------------------------------------
     # Step 2 — Generate TOML config
     # ------------------------------------------------------------------
-    _header(2, f"Generate TOML config (configs/{basename}.toml)")
+    _header(2, f"Generate TOML config (data/channels/{basename}.toml)")
     toml_content = _generate_toml(backend=backend, name=basename, ts_file_abs=ts_file_abs)
     print(f"  Will write : {toml_path}\n")
     print("  Content preview:")

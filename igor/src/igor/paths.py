@@ -13,8 +13,8 @@ FRANKEN_TS_DIR = REPO_ROOT / "franken-ts"
 ITS_A_LIVE_DIR = REPO_ROOT / "its-a-live"
 LOOP_DEE_LOOP_DIR = REPO_ROOT / "loop-dee-loop"
 
-FRANKEN_TS_PLAYLISTS_DIR = FRANKEN_TS_DIR / "playlists"
-ITS_A_LIVE_CONFIGS_DIR = REPO_ROOT / "configs"
+FRANKEN_TS_PLAYLISTS_DIR = REPO_ROOT / "data" / "playlists"
+ITS_A_LIVE_CONFIGS_DIR = REPO_ROOT / "data" / "channels"
 OUTPUTS_DIR = REPO_ROOT / "outputs"
 
 

@@ -1,0 +1,232 @@
+output:
+  framerate: 25
+  bitrate_kbps: 8000
+  service_provider: broadpeak
+  service_name: broadpeak.io
+  gop: 50
+  file: outputs/break-and-ppos.ts
+  resolution: 1920x1080
+assets:
+- file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+  id: content1
+  duration: 2 min
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/slates/test_cards/grid_h264_1080p_7000k_eng_aac_192k.mp4
+  id: jingle1
+  duration: 5s
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-1-10s/ad-1-10s_h264_1080p_5000k_eng_aac_128k.mp4
+  id: ad1a
+  duration: 10.00s
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-2-15s/ad-2-15s_h264_1080p_5000k_eng_aac_128k.mp4
+  id: ad1b
+  duration: 15.00s
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-3-20s/ad-3-20s_h264_1080p_5000k_eng_aac_128k.mp4
+  id: ad1c
+  duration: 20.00s
+- file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
+  id: content2
+  duration: 2.5 min
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/slates/test_cards/grid_h264_1080p_7000k_eng_aac_192k.mp4
+  id: jingle2
+  duration: 5s
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-4-30s/ad-4-30s_h264_1080p_5000k_eng_aac_128k.mp4
+  id: ad2a
+  duration: 30.00s
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-5-45s/ad-5-45s_h264_1080p_5000k_eng_aac_128k.mp4
+  id: ad2b
+  duration: 45.00s
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-6-60s/ad-6-60s_h264_1080p_5000k_eng_aac_128k.mp4
+  id: ad2c
+  duration: 60.00s
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-7-5s/ad-7-5s_h264_1080p_5000k_eng_aac_128k.mp4
+  id: ad2d
+  duration: 5.00s
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-8-10s/ad-8-10s_h264_1080p_5000k_eng_aac_128k.mp4
+  id: ad2e
+  duration: 10.00s
+- file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset3.mp4
+  id: content3
+  duration: 3 min
+normalize: true
+markers:
+- event_id: 100
+  splice_type: time_signal
+  assets:
+  - jingle1
+  - ad1a
+  - ad1b
+  - ad1c
+  segmentation:
+    type_id: '0x22'
+    upid_type: '0x09'
+    upid_hex: 42 52 45 41 4b 31
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 101
+  splice_type: time_signal
+  assets:
+  - ad1a
+  - ad1b
+  - ad1c
+  segmentation:
+    type_id: '0x34'
+    upid_type: '0x09'
+    upid_hex: 50 50 4f 31
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 102
+  splice_type: time_signal
+  assets:
+  - jingle1
+  segmentation:
+    type_id: '0x30'
+    upid_type: '0x09'
+    upid_hex: 4a 49 4e 47 4c 45 31
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 103
+  splice_type: time_signal
+  assets:
+  - ad1a
+  segmentation:
+    type_id: '0x30'
+    upid_type: '0x09'
+    upid_hex: 41 44 31 41
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 104
+  splice_type: time_signal
+  assets:
+  - ad1b
+  segmentation:
+    type_id: '0x30'
+    upid_type: '0x09'
+    upid_hex: 41 44 31 42
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 105
+  splice_type: time_signal
+  assets:
+  - ad1c
+  segmentation:
+    type_id: '0x30'
+    upid_type: '0x09'
+    upid_hex: 41 44 31 43
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 200
+  splice_type: time_signal
+  assets:
+  - jingle2
+  - ad2a
+  - ad2b
+  - ad2c
+  - ad2d
+  - ad2e
+  segmentation:
+    type_id: '0x22'
+    upid_type: '0x09'
+    upid_hex: 42 52 45 41 4b 32
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 201
+  splice_type: time_signal
+  assets:
+  - ad2a
+  - ad2b
+  - ad2c
+  - ad2d
+  - ad2e
+  segmentation:
+    type_id: '0x34'
+    upid_type: '0x09'
+    upid_hex: 50 50 4f 32
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 202
+  splice_type: time_signal
+  assets:
+  - jingle2
+  segmentation:
+    type_id: '0x30'
+    upid_type: '0x09'
+    upid_hex: 4a 49 4e 47 4c 45 32
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 203
+  splice_type: time_signal
+  assets:
+  - ad2a
+  segmentation:
+    type_id: '0x30'
+    upid_type: '0x09'
+    upid_hex: 41 44 32 41
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 204
+  splice_type: time_signal
+  assets:
+  - ad2b
+  segmentation:
+    type_id: '0x30'
+    upid_type: '0x09'
+    upid_hex: 41 44 32 42
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 205
+  splice_type: time_signal
+  assets:
+  - ad2c
+  segmentation:
+    type_id: '0x30'
+    upid_type: '0x09'
+    upid_hex: 41 44 32 43
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 206
+  splice_type: time_signal
+  assets:
+  - ad2d
+  segmentation:
+    type_id: '0x30'
+    upid_type: '0x09'
+    upid_hex: 41 44 32 44
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 207
+  splice_type: time_signal
+  assets:
+  - ad2e
+  segmentation:
+    type_id: '0x30'
+    upid_type: '0x09'
+    upid_hex: 41 44 32 45
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1

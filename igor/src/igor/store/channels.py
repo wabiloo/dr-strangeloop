@@ -1,5 +1,5 @@
-"""Channel definitions = its-a-live TOML configs (configs/*.toml at the
-repo root, the same convention `channel.py`/`galvanise.py` already use --
+"""Channel definitions = its-a-live TOML configs (data/channels/*.toml at
+the repo root, the same convention `channel.py`/`galvanise.py` already use --
 igor does not invent a separate storage format so channels stay
 fully manageable from the CLI too, not console-only)."""
 

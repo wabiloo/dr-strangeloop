@@ -1,0 +1,12 @@
+[deploy]
+name = "break-and-popos"
+
+[aws]
+region = "us-east-1"
+
+[s3]
+bucket_name = "bpkio-cs-demos"
+folder = "fabre/ts-files-with-scte"          # prefix inside the bucket
+
+[input]
+ts_file = "/Users/fabrelambeau/Broadpeak/Code/live-scte-loop-generator/outputs/break-and-popos.ts"

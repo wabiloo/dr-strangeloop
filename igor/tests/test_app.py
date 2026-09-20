@@ -30,7 +30,7 @@ def test_list_playlists_returns_real_franken_ts_yaml_files():
     resp = client.get("/api/v1/playlists/")
     assert resp.status_code == 200
     names = {c["name"] for c in resp.json()}
-    # These ship in the repo's franken-ts/playlists/ -- if this ever breaks,
+    # These ship in the repo's data/playlists/ -- if this ever breaks,
     # either the fixtures moved or the list route regressed.
     assert "short-loop" in names
 
@@ -41,10 +41,10 @@ def test_get_missing_playlist_is_404():
 
 
 def test_browse_files_lists_a_real_directory():
-    resp = client.get("/api/v1/files/browse", params={"path": str(REPO_ROOT / "franken-ts" / "playlists")})
+    resp = client.get("/api/v1/files/browse", params={"path": str(REPO_ROOT / "data" / "playlists")})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["path"].endswith("franken-ts/playlists")
+    assert body["path"].endswith("data/playlists")
     names = {e["name"] for e in body["entries"]}
     assert "short-loop.yaml" in names
 
