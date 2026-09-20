@@ -223,7 +223,7 @@ didn't land exactly on a segment boundary (GPAC's `cues=...:cts` mode can
 silently snap an imprecise cue to the nearest keyframe — SCOPE.md §6 —
 which is fine for nominal grid points but never acceptable for a marker).
 
-## Deploying to Fargate/App Runner
+## Deploying to Fargate / ECS Express Mode
 
 The image (see `Dockerfile`) never bakes in channel-specific content — only
 code and the GPAC/ffmpeg toolchain. All franken-ts input and baked loop
@@ -247,7 +247,9 @@ own cloud task definition.
 This means one shared image + one shared CDK stack serve every
 channel/schedule — only S3 prefixes differ. See `../push-to-aws-loop/` for
 the full CDK project that provisions the long-running `serve` side on
-**AWS App Runner** (no ALB/VPC needed) behind CloudFront.
+**Amazon ECS Express Mode** (a simplified deployment mode built on
+Fargate + a shared ALB — AWS's recommended replacement for App Runner,
+which stopped onboarding new customers April 30, 2026) behind CloudFront.
 
 ## Known limitations in this initial implementation
 

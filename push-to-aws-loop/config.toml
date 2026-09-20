@@ -34,8 +34,8 @@ segment_duration    = 4.0   # nominal bake segment duration, seconds
 dvr_window_seconds  = 30    # serve.py sliding-window size, seconds
 port                = 8080  # serve.py listen port (container-internal)
 
-[apprunner]
-# App Runner CPU/memory codes (same numeric convention as Fargate: 256 =
-# 0.25 vCPU). See AWS App Runner docs for the full supported list.
+[express]
+# ECS Express Mode CPU/memory codes (same numeric convention as Fargate: 256 =
+# 0.25 vCPU). See AWS ECS Express Mode docs for the full supported list.
 cpu    = 256   # 0.25 vCPU
 memory = 512   # 0.5 GB

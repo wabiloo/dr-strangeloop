@@ -10,12 +10,13 @@ Commands:
             then push the resulting loop package to S3 (no AWS compute
             involved -- bake is a one-shot, run-once-per-schedule-change
             process, so for this stack it just runs on your machine)
-  start     (Re)start the App Runner service with epoch-utc=now (resuming
-            it first if paused), wait for it to be RUNNING, print playback
-            URLs
-  stop      Pause the App Runner service (native pause/resume -- this is
-            what actually stops paying for compute between airings)
-  status    Print the App Runner service's current status
+  start     (Re)start the ECS Express service with epoch-utc=now (scaling
+            back to 1 task if it was stopped), wait for it to take effect,
+            print playback URLs
+  stop      Scale the Express service to 0 tasks -- this is what actually
+            stops paying for Fargate compute between airings (the shared
+            ALB itself keeps running for other channels)
+  status    Print the Express service's current status/scaling
   outputs   Print all CloudFormation stack outputs
   redeploy  Delete a broken stack if needed, then run cdk deploy
 
@@ -27,7 +28,6 @@ targets an independent channel deployment.
 
 import datetime
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -132,56 +132,80 @@ def cmd_bake(cfg):
     print("Run `channel.py start` to (re)start the channel and pick it up.")
 
 
-def _wait_for_apprunner_status(ar, service_arn, target_status, max_attempts=60):
-    FAILURE_STATUSES = {"CREATE_FAILED", "DELETE_FAILED"}
+def _parse_cluster_and_service(service_arn):
+    # arn:aws:ecs:region:account:service/CLUSTER/SERVICE_NAME
+    resource = service_arn.split(":service/", 1)[1]
+    cluster, service_name = resource.split("/", 1)
+    return cluster, service_name
+
+
+def _wait_for_primary_deployment_healthy(ecs_client, service_arn, expected_desired_count, max_attempts=60):
+    """Wait for the real ECS deployment behind the Express service to reach
+    runningCount == desiredCount on its PRIMARY deployment.
+
+    NOTE: this is deliberately NOT the same as waiting for rolloutState to
+    reach COMPLETED -- in practice that ECS-level bookkeeping (traffic-shift
+    finalization, old-task cleanup) can take several more minutes after the
+    new task is already up, healthy, and actually serving the new content.
+    For a single-task, stateless service like this one, "task running" is
+    what matters for `channel.py start`/`stop`'s purposes.
+    """
+    cluster, service_name = _parse_cluster_and_service(service_arn)
     for _ in range(max_attempts):
-        status = ar.describe_service(ServiceArn=service_arn)["Service"]["Status"]
-        print(f"  status: {status}", flush=True)
-        if status == target_status:
-            return status
-        if status in FAILURE_STATUSES:
-            sys.exit(f"Service entered failure state: {status}")
+        resp = ecs_client.describe_services(cluster=cluster, services=[service_name])
+        deployments = resp["services"][0].get("deployments", [])
+        primary = next((d for d in deployments if d["status"] == "PRIMARY"), None)
+        if primary is None:
+            time.sleep(10)
+            continue
+        running = primary.get("runningCount", 0)
+        desired = primary.get("desiredCount", 0)
+        print(f"  primary deployment: desired={desired} running={running} rolloutState={primary.get('rolloutState')}", flush=True)
+        if desired == expected_desired_count and running == expected_desired_count:
+            return primary
         time.sleep(10)
-    sys.exit(f"Timed out waiting for status {target_status}")
+    sys.exit("Timed out waiting for the primary deployment to reach the expected running count.")
+
+
+def _patch_epoch_utc(command, epoch_utc):
+    command = list(command)
+    for i, arg in enumerate(command):
+        if arg == "--epoch-utc" and i + 1 < len(command):
+            command[i + 1] = epoch_utc
+            return command
+    sys.exit("Could not find --epoch-utc in the service's command -- has the stack drifted?")
 
 
 def cmd_start(cfg):
     outputs = _cf_outputs(cfg)
-    service_arn = outputs.get("AppRunnerServiceArn")
+    service_arn = outputs.get("ExpressServiceArn")
     if not service_arn:
-        sys.exit("Missing AppRunnerServiceArn output -- has the stack been deployed?")
+        sys.exit("Missing ExpressServiceArn output -- has the stack been deployed?")
 
-    ar = _session(cfg).client("apprunner")
-    desc = ar.describe_service(ServiceArn=service_arn)["Service"]
-
-    if desc["Status"] == "PAUSED":
-        print("Resuming paused service ...")
-        ar.resume_service(ServiceArn=service_arn)
-        _wait_for_apprunner_status(ar, service_arn, "RUNNING")
-        desc = ar.describe_service(ServiceArn=service_arn)["Service"]
-
-    image_repo = dict(desc["SourceConfiguration"]["ImageRepository"])
-    image_config = dict(image_repo.get("ImageConfiguration", {}))
-    start_command = image_config.get("StartCommand", "")
+    ecs_client = _session(cfg).client("ecs")
+    service = ecs_client.describe_express_gateway_service(serviceArn=service_arn)["service"]
+    active = service["activeConfigurations"][0]
+    primary_container = dict(active["primaryContainer"])
 
     epoch_utc = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if "--epoch-utc" not in start_command:
-        sys.exit("Could not find --epoch-utc in the service's start command -- has the stack drifted?")
-    new_start_command = re.sub(r"--epoch-utc\s+\S+", f"--epoch-utc {epoch_utc}", start_command)
+    new_command = _patch_epoch_utc(primary_container.get("command", []), epoch_utc)
+    primary_container["command"] = new_command
 
-    print(f"Updating service with --epoch-utc {epoch_utc} ...")
-    image_config["StartCommand"] = new_start_command
-    image_repo["ImageConfiguration"] = image_config
-    ar.update_service(
-        ServiceArn=service_arn,
-        SourceConfiguration={
-            "ImageRepository": image_repo,
-            "AutoDeploymentsEnabled": desc["SourceConfiguration"].get("AutoDeploymentsEnabled", False),
-        },
+    print(f"Updating service with --epoch-utc {epoch_utc} (and scaling back to 1 task if stopped) ...")
+    ecs_client.update_express_gateway_service(
+        serviceArn=service_arn,
+        primaryContainer=primary_container,
+        scalingTarget={"minTaskCount": 1, "maxTaskCount": 1},
     )
 
-    print("Waiting for the new deployment to become RUNNING ...")
-    _wait_for_apprunner_status(ar, service_arn, "RUNNING")
+    print("Waiting for the new task to be up and running (this confirms the"
+          " task itself is healthy, NOT that all viewer traffic has cut over"
+          " yet -- ECS Express Mode uses a canary deployment strategy with a"
+          " ~3 minute bake period during which most/all traffic can still be"
+          " served by the OLD task; there's no fast, reliable API signal for"
+          " full cutover, so budget a few extra minutes before publicizing"
+          " a URL after `start`) ...")
+    _wait_for_primary_deployment_healthy(ecs_client, service_arn, expected_desired_count=1)
 
     print(f"\nHLS:  {outputs.get('HlsPlaybackUrl', 'n/a')}")
     print(f"DASH: {outputs.get('DashPlaybackUrl', 'n/a')}")
@@ -189,28 +213,36 @@ def cmd_start(cfg):
 
 def cmd_stop(cfg):
     outputs = _cf_outputs(cfg)
-    service_arn = outputs.get("AppRunnerServiceArn")
+    service_arn = outputs.get("ExpressServiceArn")
     if not service_arn:
-        sys.exit("Missing AppRunnerServiceArn output -- has the stack been deployed?")
+        sys.exit("Missing ExpressServiceArn output -- has the stack been deployed?")
 
-    ar = _session(cfg).client("apprunner")
-    status = ar.describe_service(ServiceArn=service_arn)["Service"]["Status"]
-    if status == "PAUSED":
-        print("Service is already PAUSED.")
+    ecs_client = _session(cfg).client("ecs")
+    service = ecs_client.describe_express_gateway_service(serviceArn=service_arn)["service"]
+    active = service["activeConfigurations"][0]
+    if active.get("scalingTarget", {}).get("maxTaskCount") == 0:
+        print("Service is already scaled to 0 tasks.")
         return
 
-    print("Pausing service ...")
-    ar.pause_service(ServiceArn=service_arn)
-    _wait_for_apprunner_status(ar, service_arn, "PAUSED")
-    print("Service is paused (no compute charges while paused).")
+    print("Scaling service to 0 tasks (no Fargate compute cost while stopped;"
+          " the shared ALB itself keeps running for other channels) ...")
+    ecs_client.update_express_gateway_service(
+        serviceArn=service_arn,
+        scalingTarget={"minTaskCount": 0, "maxTaskCount": 0},
+    )
+    _wait_for_primary_deployment_healthy(ecs_client, service_arn, expected_desired_count=0)
+    print("Service is scaled to 0.")
 
 
 def cmd_status(cfg):
     outputs = _cf_outputs(cfg)
-    service_arn = outputs.get("AppRunnerServiceArn")
-    ar = _session(cfg).client("apprunner")
-    desc = ar.describe_service(ServiceArn=service_arn)["Service"]
-    print(f"Service {desc['ServiceName']}: status={desc['Status']}")
+    service_arn = outputs.get("ExpressServiceArn")
+    ecs_client = _session(cfg).client("ecs")
+    service = ecs_client.describe_express_gateway_service(serviceArn=service_arn)["service"]
+    active = service["activeConfigurations"][0]
+    scaling = active.get("scalingTarget", {})
+    print(f"Service {service['serviceName']}: status={service['status']['statusCode']} "
+          f"minTasks={scaling.get('minTaskCount')} maxTasks={scaling.get('maxTaskCount')}")
 
 
 def cmd_outputs(cfg):
@@ -263,8 +295,11 @@ def cmd_redeploy(cfg, config_path):
     elif status is not None:
         print(f"Stack status: {status}")
 
+    # Explicit stack name: the app also contains LoopSharedStack (the ECS
+    # cluster shared across every channel), so a bare `cdk deploy` with no
+    # stack argument would be ambiguous and CDK would refuse it.
     cdk_cmd = ["cdk", "deploy", "--require-approval", "never",
-               "-c", f"config={config_path}"]
+               "-c", f"config={config_path}", stack_name]
     print(f"Running: {' '.join(cdk_cmd)}")
     result = subprocess.run(cdk_cmd, check=False)
     sys.exit(result.returncode)

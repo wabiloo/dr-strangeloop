@@ -1,8 +1,21 @@
 # push-to-aws-loop
 
-Provisions a **loop-dee-loop** channel on **AWS App Runner**, fronted by
-**CloudFront** — the AWS-native counterpart to `push-to-aws-media`
-(MediaLive/MediaPackage), but for the self-hosted `loop-dee-loop` packager.
+Provisions a **loop-dee-loop** channel on **Amazon ECS Express Mode**,
+fronted by **CloudFront** — the AWS-native counterpart to
+`push-to-aws-media` (MediaLive/MediaPackage), but for the self-hosted
+`loop-dee-loop` packager.
+
+> This stack originally targeted **AWS App Runner**. App Runner stopped
+> onboarding new customers on April 30, 2026, and AWS's own migration
+> guidance recommends **Amazon ECS Express Mode** as the replacement — so
+> that's what this stack now uses. Express Mode is *not* a new compute
+> primitive: it's a simplified deployment mode built on standard
+> Fargate + ALB that auto-provisions/manages the load balancer, target
+> groups, security groups, SSL, and auto-scaling for you, and — per AWS's
+> own docs — *shares* Application Load Balancers across multiple Express
+> Mode services in the same account/networking config, which directly
+> avoids the "N× ALB cost" problem a hand-built Fargate+ALB stack would
+> otherwise have per channel.
 
 ## Architecture
 
@@ -13,7 +26,8 @@ Provisions a **loop-dee-loop** channel on **AWS App Runner**, fronted by
    ECR asset repo
       |
       v
- App Runner service (long-running, auto-scaling `serve.py`)
+ AWS::ECS::ExpressGatewayService (long-running `serve.py`,
+ auto-scaling 1-20 tasks on avg CPU by default)
       |  LOOP_PACKAGE_S3_URI synced down at container start by
       |  docker-entrypoint.sh (see ../loop-dee-loop)
       v
@@ -29,22 +43,21 @@ Provisions a **loop-dee-loop** channel on **AWS App Runner**, fronted by
                                                             LOOP_PACKAGE_S3_URI --+
 ```
 
-No ALB, no VPC, no ECS cluster — App Runner's own price bundles the
-ingress/load-balancing layer, and it has native pause/resume for stopping
-a channel between airings (see cost discussion below). `bake` is
+No VPC lookup, no hand-built ALB/target-group/security-group wiring — the
+`AWS::ECS::ExpressGatewayService` resource (CDK: `ecs.CfnExpressGatewayService`)
+handles all of that, defaulting to the account's default VPC. `bake` is
 deliberately **not** run in AWS at all: it's a one-shot process meant to
 run once per schedule change, so for this stack it just runs locally (or
 via `docker run` using the same image) and the output is pushed to S3 —
 no ECS task definition, IAM role, security group, or subnets needed just
 for that.
 
-⚠️ **Security note:** this stack does not restrict who can reach the App
-Runner service directly — its default `*.awsapprunner.com` domain is
-publicly reachable, same as the CloudFront URL. Fine for demos/internal
-use; if you need to guarantee traffic only goes through CloudFront, add a
-shared-secret custom header check in `serve.py` (CloudFront can inject one
-via an origin request policy) or switch to App Runner VPC ingress + a
-CloudFront VPC origin.
+⚠️ **Security note:** this stack does not restrict who can reach the
+Express service's ingress endpoint directly — its `*.ecs.<region>.on.aws`
+domain is publicly reachable, same as the CloudFront URL. Fine for
+demos/internal use; if you need to guarantee traffic only goes through
+CloudFront, add a shared-secret custom header check in `serve.py`
+(CloudFront can inject one via an origin request policy).
 
 ## Prerequisites
 
@@ -57,17 +70,31 @@ CloudFront VPC origin.
   `uv`), **and** a GPAC/MP4Box build with `scte35dec` support on `PATH`
   (see `../loop-dee-loop/README.md` prerequisites) — or just run
   `../loop-dee-loop`'s `bake.py` via `docker run` using the image this
-  stack builds, if you don't want to build GPAC locally.
-
-No VPC lookup is required (unlike the earlier Fargate+ALB design) — App
-Runner doesn't need to run inside your VPC for this setup.
+  stack builds, if you don't want to build GPAC locally (mount the input
+  **read-write**, not read-only — see Troubleshooting).
+- Two IAM managed policies must exist in the account (they're standard AWS
+  managed policies, nothing to create): `AmazonECSTaskExecutionRolePolicy`
+  and `AmazonECSInfrastructureRoleforExpressGatewayServices` (note: the
+  latter lives under the `service-role/` path —
+  `arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRoleforExpressGatewayServices`).
 
 ## Setup
 
 ```bash
 uv sync
-cdk bootstrap   # once per account/region
+cdk bootstrap        # once per account/region
+cdk deploy LoopSharedStack   # once per account/region -- creates the shared
+                              # "loop-dee-loop" ECS cluster every channel
+                              # lives in (see shared_stack.py)
 ```
+
+`LoopSharedStack` exists specifically so channels don't each create their
+own `AWS::ECS::Cluster`: ECS cluster names are unique per account/region,
+so if every `LoopChannelStack` created one named `loop-dee-loop`, the
+second channel's deploy would collide with the first's, and `cdk destroy`
+on any one channel would risk deleting the cluster out from under every
+other channel. Deploy it once, before any channel; channel stacks just
+reference the cluster by name.
 
 ## Configure
 
@@ -94,7 +121,7 @@ segment_duration   = 4.0
 dvr_window_seconds = 30
 port               = 8080
 
-[apprunner]
+[express]
 cpu    = 256   # 0.25 vCPU
 memory = 512   # 0.5 GB
 ```
@@ -107,11 +134,10 @@ independent, parallel deployments.
 
 ⚠️ **Bake before you deploy, not after.** `serve.py` hard-crashes at
 startup (not just a 404) if `LOOP_PACKAGE_S3_URI` is empty when the
-container starts, and App Runner requires the container to start
+container starts, and the Express service requires its container to start
 successfully to consider the service created — so deploying the stack
-before anything exists at that S3 prefix reliably fails with
-`CREATE_FAILED (NotStabilized)` after ~3 minutes. Push a package to S3
-*first*, then deploy:
+before anything exists at that S3 prefix reliably fails. Push a package to
+S3 *first*, then deploy:
 
 ```bash
 # 1. Bake locally and push the result to S3. No AWS compute involved --
@@ -120,29 +146,43 @@ before anything exists at that S3 prefix reliably fails with
 #    before the stack exists, since it only needs S3 access.
 uv run python channel.py bake
 
-# 2. Provision the stack (builds+pushes the image, creates the App Runner
+# 2. Provision the stack (builds+pushes the image, creates the Express
 #    service + CloudFront distribution -- serve.py finds a real package at
 #    LOOP_PACKAGE_S3_URI immediately, so the service starts cleanly).
-cdk deploy
+#    Takes ~9-10 minutes end to end (Express service ~5-6 min including
+#    ALB/target-group/cert provisioning on first use in the account,
+#    CloudFront ~3 min). Requires LoopSharedStack to already be deployed
+#    (see Setup) -- explicitly targets this one channel's stack, since the
+#    app also contains LoopSharedStack.
+cdk deploy LoopChannelStack-<name>
 
-# 3. (Re)start the channel: resumes the App Runner service if paused,
-#    updates it with --epoch-utc=now (so the loop's epoch always starts
-#    "now" relative to when you actually go live), waits for it to be
-#    RUNNING, prints the CloudFront playback URLs.
+# 3. (Re)start the channel: scales back to 1 task if stopped, updates the
+#    container command with --epoch-utc=now (so the loop's epoch always
+#    starts "now" relative to when you actually go live), waits for the
+#    new task to be running, prints the CloudFront playback URLs.
 uv run python channel.py start
 
 # ... channel is live ...
 
-uv run python channel.py stop     # pauses the service -- no compute charges while paused
+uv run python channel.py stop     # scales to 0 tasks -- no Fargate compute
+                                    # cost while stopped (the shared ALB
+                                    # itself keeps running for other channels)
 cdk destroy LoopChannelStack-<name>
 ```
 
-Both `cdk deploy` (image build + App Runner service + CloudFront
-distribution) and `channel.py start` (redeploying the App Runner service
-with a new start command) reliably take a few minutes each — that's
-inherent AWS latency (App Runner: ~3 min to pull/start/health-check a
-container and land in `RUNNING`; CloudFront: ~3 min to propagate a new
-distribution to edge locations), not something wrong with the setup.
+### Timing you should expect (measured against a real deployment)
+
+- **First `cdk deploy`**: ~9-10 minutes (Express service creation ~5-6 min,
+  CloudFront distribution ~3 min, run in parallel where possible).
+- **`channel.py start`/`stop`**: the CLI command itself returns once the
+  new/old task reaches the requested running count (~1-2 minutes) — but
+  **that is not the same as full viewer cutover**. ECS Express Mode uses a
+  canary deployment strategy with a fixed ~3 minute bake period during
+  which most or all traffic can still be served by the *previous* task
+  (observed directly: zero requests landed on the new task for the full
+  ~3 minutes, then a hard cutover). There's no fast, reliable API signal
+  for "100% of viewers now see the new content" — budget a few extra
+  minutes of buffer after `start` before publicizing a playback URL.
 
 ## Updating content on a running channel (no image rebuild, no redeploy)
 
@@ -153,87 +193,126 @@ uv run python channel.py start    # restart with a fresh epoch so the new
 ```
 
 `docker-entrypoint.sh` re-syncs `LOOP_PACKAGE_S3_URI` from scratch every
-time the App Runner container starts, so a restart is all that's needed to
-pick up a new bake — the image itself never changes.
+time the container starts, so a restart is all that's needed to pick up a
+new bake — the image itself never changes. Remember the canary bake-period
+caveat above: give it a few minutes before assuming every viewer sees the
+new content.
 
 ## Multiple channels
 
 Same pattern as `push-to-aws-media`: one config file per channel, deployed
-and managed independently.
+and managed independently. `LoopSharedStack` (the ECS cluster) only needs
+deploying once total, not once per channel:
 
 ```bash
-cdk deploy -c config=./configs/channel_a.toml
+# Note: bake each channel BEFORE deploying it (see above).
 uv run python channel.py --config ./configs/channel_a.toml bake
+cdk deploy -c config=./configs/channel_a.toml LoopChannelStack-channel_a
 uv run python channel.py --config ./configs/channel_a.toml start
 ...
 cdk destroy LoopChannelStack-channel_a
 ```
 
-Note: each channel still gets its own App Runner service + CloudFront
-distribution (full isolation, same tradeoff discussed for the earlier
-ALB-based design) — consolidating N channels behind one shared CloudFront
-distribution with per-channel behaviors/origins is a further optimization
-worth doing once you're running many channels, not implemented here.
+Each channel gets its own `AWS::ECS::ExpressGatewayService` and its own
+CloudFront distribution, but they all share the one cluster from
+`LoopSharedStack` — and per AWS's docs, Express Mode services in the same
+cluster/networking configuration **share** the underlying ALB, so the ALB
+cost itself doesn't multiply per channel the way it did in the earlier
+hand-built Fargate+ALB design. Consolidating N channels behind one
+shared CloudFront distribution (instead of one per channel) is a further
+optimization worth doing once you're running many channels, not
+implemented here.
 
 ## channel.py reference
 
 | Command | Description |
 |---|---|
 | `bake` | Run `bake.py` locally against `input.source_path`, push the result to S3 |
-| `start` | Resume (if paused) + update the App Runner service with `--epoch-utc=now`, wait for RUNNING, print playback URLs |
-| `stop` | Pause the App Runner service (native pause/resume — actually stops compute billing) |
-| `status` | Print the App Runner service's current status |
+| `start` | Scale to 1 task if stopped, update the container command with `--epoch-utc=now`, wait for the task to be running, print playback URLs |
+| `stop` | Scale the Express service to 0 tasks — this is what actually stops paying for Fargate compute between airings |
+| `status` | Print the Express service's current status/scaling |
 | `outputs` | Print all CloudFormation stack outputs |
 | `redeploy` | Delete a broken stack if needed, then `cdk deploy` |
 
 ## Notes / gotchas
 
-- **Cost**: see chat history for the full breakdown, but roughly:
-  App Runner at 0.25 vCPU/0.5GB costs ~$0.08/day paused (memory-only) and
-  ~$0.47/day if actively serving requests continuously all day — no
-  separate ALB or public-IPv4 line items, unlike the earlier Fargate+ALB
-  design.
-- **`channel.py stop` genuinely stops compute billing** (App Runner's
-  native pause), unlike the earlier ECS+ALB design where scaling the
-  service to 0 tasks still left the ALB (and its public IPs) running and
-  billing.
+- **Cost**: Fargate compute (0.25 vCPU/0.5GB by default) + a *shared*
+  ALB + CloudWatch logs/metrics + data transfer — no separate "Express
+  Mode" charge per AWS's pricing page. `channel.py stop` genuinely stops
+  the Fargate compute line (scales to 0 tasks); the shared ALB keeps
+  running regardless, but its cost is amortized across every Express
+  service using it, not paid per-channel.
 - **Manifests are never cached** by CloudFront (`TTL=0`); segments under
   `*/seg/*` get a 5-minute default TTL — matches SCOPE.md §8's "CDN in
   front of `/seg/*`" recommendation.
-- **Instance role** is scoped to read-only on
-  `loop-dee-loop/packages/<name>/*`. There's no separate bake IAM role
-  anymore — `channel.py bake` uses your own local AWS credentials (via the
-  AWS CLI) to push to S3, same as any other `aws s3 sync`.
+- **Task role** is scoped to read-only on
+  `loop-dee-loop/packages/<name>/*`. There's no separate bake IAM role —
+  `channel.py bake` uses your own local AWS credentials (via the AWS CLI)
+  to push to S3, same as any other `aws s3 sync`.
+- **Canary deployments, not instant cutover** — see the timing section
+  above. This matters for this specific app because `loop_math`'s
+  drift-free design assumes one epoch is authoritative at a time; during
+  the ~3 minute canary bake window after `start`, some viewers may
+  transiently see the old epoch's manifest while others see the new one,
+  depending on which task their (possibly reused/keep-alive) connection
+  lands on.
 - The pushed loop package is **not** deleted by `cdk destroy` (the stack
   doesn't own the bucket) — clean up manually with
   `aws s3 rm --recursive s3://<bucket>/<folder>/<name>/` if needed.
 
 ## Troubleshooting
 
-- **`ServeService ... CREATE_FAILED (NotStabilized)`, logs show
+- **`ServeService CREATE_FAILED`, logs show
   `exec /usr/local/bin/docker-entrypoint.sh: exec format error`**: the
   image was built for the wrong CPU architecture. `loop_channel_stack.py`
   pins `platform=ecr_assets.Platform.LINUX_AMD64` on the `DockerImageAsset`
   specifically to prevent this — on an Apple Silicon (arm64) machine,
-  Docker builds arm64 by default unless told otherwise, and App Runner
-  here expects x86_64. If you still hit this, confirm that pin is in place
-  and that Docker actually rebuilt (not reused a stale local arm64 image
-  under the same tag).
-- **`ServeService ... CREATE_FAILED (NotStabilized)`, logs show
+  Docker builds arm64 by default unless told otherwise. If you still hit
+  this, confirm that pin is in place and that Docker actually rebuilt (not
+  reused a stale local arm64 image under the same tag).
+- **`ServeService` seems to hang in `CREATE_IN_PROGRESS` for far longer
+  than expected (observed: 90+ minutes with zero tasks ever placed and no
+  target groups created)**, and `aws ecs describe-service-revisions`
+  shows a `statusReason` like
+  `ValidationError: Health check path '...' must begin with a '/'
+  character ...`: the `health_check_path` given to
+  `CfnExpressGatewayService` must be a **bare path** (e.g. `/manifest.mpd`),
+  not a `PROTOCOL:PORT/PATH`-style string like `HTTP:8080/manifest.mpd` —
+  despite the AWS docs' *default* being quoted as `"HTTP:80/ping"`, which
+  reads like that combined format. Get this wrong and the deployment
+  doesn't fail cleanly — it just retries the invalid ALB/listener/rule/
+  target-group provisioning indefinitely without ever surfacing a
+  CloudFormation-visible failure. If a `ServeService` create looks stuck,
+  check the *real* underlying resources directly rather than trusting
+  CloudFormation's events feed:
+  ```bash
+  aws ecs describe-service-revisions --service-revision-arns <arn>
+  # look at .serviceRevisions[0].ecsManagedResources.ingressPaths[0].*.statusReason
+  ```
+- **`AWS::IAM::Role ... Policy ... does not exist or is not attachable`**
+  for `AmazonECSInfrastructureRoleforExpressGatewayServices`: the managed
+  policy lives under the `service-role/` path. Use
+  `iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AmazonECSInfrastructureRoleforExpressGatewayServices")`,
+  not the bare name.
+- **`Update of resource type is not permitted`** when redeploying after
+  changing the compute backend (e.g. App Runner → Express Mode) under the
+  same construct ID: CloudFormation refuses in-place resource-type changes
+  for the same logical ID. `cdk destroy` then `cdk deploy` (or
+  `channel.py redeploy`, which does the delete-then-deploy dance
+  automatically for a stack stuck in `ROLLBACK_COMPLETE`) is required.
+- **`ServeService CREATE_FAILED`, logs show
   `FileNotFoundError: ... loop_descriptor.json`**: nothing has been baked
   to `LOOP_PACKAGE_S3_URI` yet — see "bake before you deploy" above. Run
-  `channel.py bake`, then `channel.py redeploy` (it deletes the failed
-  `ROLLBACK_COMPLETE` stack and retries `cdk deploy`).
+  `channel.py bake`, then `channel.py redeploy`.
 - **`bake.py` fails with `'gpac' not found on PATH`** when baking via
   `docker run` with this stack's image: this was a real bug in
   `../loop-dee-loop/Dockerfile`'s build stage (fixed) — it assumed GPAC
   installs to `/usr/bin/gpac`, but a from-source `./configure` (no
   `--prefix`) actually installs to `/usr/local/bin`, and a trailing
   `|| true` was silently swallowing the resulting `cp` failure, so the
-  runtime image shipped with **no gpac binary at all**. If you see this on
-  a fresh `cdk deploy`/local build, make sure you have the current
-  Dockerfile (it resolves the real path via `command -v` and no longer
-  masks that `RUN` command's failures).
+  runtime image shipped with **no gpac binary at all**. Make sure you have
+  the current Dockerfile (resolves the real path via `command -v`, no
+  longer masks that `RUN` command's failures).
 - **Baking via `docker run` and passing `-v host/input:/data/input:ro`**:
   don't mount the input read-only — `bake.py`'s SCTE-35 decoder
   (`threefive`) opens the `.ts` file in `r+b` mode even though it only

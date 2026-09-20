@@ -3,6 +3,7 @@ import os
 import tomllib
 import aws_cdk as cdk
 from loop_channel_stack import LoopChannelStack
+from shared_stack import LoopSharedStack
 
 app = cdk.App()
 
@@ -25,13 +26,25 @@ if source_path_override:
 
 name = config.get("deploy", {}).get("name", "default")
 
+env = cdk.Environment(
+    account=os.environ.get("CDK_DEFAULT_ACCOUNT"),
+    region=config["aws"]["region"],
+)
+
+# Shared prerequisite for every channel (one ECS cluster, "loop-dee-loop",
+# shared by name) -- deploy explicitly once per account/region with
+# `cdk deploy LoopSharedStack`, before deploying any LoopChannelStack.
+# Always present in the synthesized app (so `cdk list`/`cdk synth` show it
+# and CDK can resolve LoopChannelStack's reference to CLUSTER_NAME), but
+# `cdk deploy` without an explicit stack name only deploys the stack that
+# matches the current config -- see channel.py's `redeploy`, which always
+# targets f"LoopChannelStack-{name}" explicitly for exactly this reason.
+LoopSharedStack(app, "LoopSharedStack", env=env)
+
 LoopChannelStack(
     app,
     f"LoopChannelStack-{name}",
     config=config,
-    env=cdk.Environment(
-        account=os.environ.get("CDK_DEFAULT_ACCOUNT"),
-        region=config["aws"]["region"],
-    ),
+    env=env,
 )
 app.synth()
