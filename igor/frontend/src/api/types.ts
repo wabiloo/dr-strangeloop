@@ -50,6 +50,8 @@ export interface ChannelListItem {
   backend: 'aws-media' | 'ecs-express'
   stack_name: string
   stack_status: string | null
+  source_path?: string
+  playlist_name?: string | null
 }
 
 export interface ChannelStatus {

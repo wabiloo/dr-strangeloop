@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from igor.integrations import its_a_live
+from igor.integrations import franken_ts, its_a_live
 from igor.store import channels as channel_store
 
 router = APIRouter()
@@ -29,9 +29,25 @@ class ChannelCreatePayload(BaseModel):
 @router.get("/")
 def list_channels() -> list[dict]:
     try:
-        return its_a_live.list_channels(str(channel_store.paths.ITS_A_LIVE_CONFIGS_DIR))
+        channels = its_a_live.list_channels(str(channel_store.paths.ITS_A_LIVE_CONFIGS_DIR))
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # Enrich with the franken-ts playlist each channel's [input].source_path
+    # was (probably) built from -- channels only store the resolved output
+    # path, not which playlist produced it, so this is a best-effort reverse
+    # lookup (see find_playlist_for_source) purely for display in the list.
+    for channel in channels:
+        source_path = ""
+        try:
+            cfg = channel_store.read_channel_config(channel["name"])
+            source_path = cfg.get("input", {}).get("source_path", "")
+        except FileNotFoundError:
+            pass
+        channel["source_path"] = source_path
+        channel["playlist_name"] = franken_ts.find_playlist_for_source(source_path)
+
+    return channels
 
 
 @router.post("/")

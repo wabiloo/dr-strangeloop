@@ -5,7 +5,7 @@ import DataTable from 'primevue/datatable'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
 import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { listChannels } from '../api/client'
 import type { ChannelListItem } from '../api/types'
 
@@ -51,6 +51,22 @@ onMounted(load)
     <DataTable :value="channels" :loading="loading" data-key="name" @row-click="(e) => router.push(`/channels/${e.data.name}`)" class="cursor-pointer">
       <Column field="name" header="Name" />
       <Column field="backend" header="Backend" />
+      <Column header="Playlist">
+        <template #body="{ data }">
+          <RouterLink
+            v-if="data.playlist_name"
+            :to="`/playlists/${data.playlist_name}`"
+            class="playlist-link"
+            @click.stop
+          >
+            {{ data.playlist_name }}
+          </RouterLink>
+          <span v-else-if="data.source_path" class="text-color-secondary text-sm" :title="data.source_path">
+            {{ data.source_path }}
+          </span>
+          <span v-else class="text-color-secondary text-sm">--</span>
+        </template>
+      </Column>
       <Column header="Stack status">
         <template #body="{ data }">
           <Tag :value="data.stack_status || 'not deployed'" :severity="statusSeverity(data.stack_status)" />
@@ -63,3 +79,15 @@ onMounted(load)
     </DataTable>
   </div>
 </template>
+
+<style scoped>
+.playlist-link {
+  color: var(--p-primary-color, #0e7490);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.playlist-link:hover {
+  text-decoration: underline;
+}
+</style>

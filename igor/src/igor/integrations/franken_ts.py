@@ -13,6 +13,8 @@ own module and Pydantic model names are unchanged.
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
+
 import yaml
 from franken_ts.config import Config
 
@@ -82,3 +84,24 @@ def spawn_build_job(name: str, extra_args: list[str] | None = None) -> Job:
     playlist_path = _resolve_path(name)
     cmd = paths.franken_ts_python() + [str(playlist_path), *(extra_args or [])]
     return runner.spawn("build", cmd, cwd=paths.REPO_ROOT, channel_name=name)
+
+
+def find_playlist_for_source(source_path: str) -> str | None:
+    """Best-effort reverse lookup: which playlist's output matches an
+    its-a-live channel's [input].source_path? Playlist output paths (in
+    franken-ts/playlists/*.yaml) and a channel's source_path are both
+    relative, but resolved against whatever working directory each tool
+    was last invoked from -- not guaranteed to be the same one -- so a
+    strict path-equality check would false-negative constantly. Matching
+    on the final path component (basename) is looser but far more robust
+    in practice, since output filenames are chosen to be unique."""
+    if not source_path:
+        return None
+    target = PurePosixPath(source_path.replace("\\", "/")).name
+    if not target:
+        return None
+    for playlist in list_playlists():
+        for candidate in (playlist.get("output_file"), playlist.get("output_dir")):
+            if candidate and PurePosixPath(str(candidate).replace("\\", "/")).name == target:
+                return playlist["name"]
+    return None
