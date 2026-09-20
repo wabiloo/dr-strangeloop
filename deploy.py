@@ -10,13 +10,13 @@ Paths may be absolute or relative to the current working directory.
 
 Pipeline:
   1. Run franken-ts to build the .ts file
-  2. Generate configs/<basename>.toml at the repo root
+  2. Generate configs/<basename>.toml at the repo root (backend = "aws-media")
   3. Run CDK deploy (cdk deploy)
-  4. Upload .ts to S3
+  4. Spark: upload .ts to S3
   5. Start the MediaLive channel
 
 Each step prompts for confirmation before running.
-All channel management commands (upload/start/stop) can be run from the
+All channel management commands (spark/start/stop) can be run from the
 repo root using the generated TOML in configs/.
 """
 
@@ -84,16 +84,17 @@ def _repo_root() -> str:
 _TOML_TEMPLATE = """\
 [deploy]
 name = "{name}"
+backend = "aws-media"
 
 [aws]
 region = "us-east-1"
 
 [s3]
 bucket_name = "bpkio-cs-demos"
-folder = "fabre/ts-files-with-scte"          # prefix inside the bucket
+content_folder = "fabre/ts-files-with-scte"  # prefix inside the bucket
 
 [input]
-ts_file = "{ts_file}"
+source_path = "{ts_file}"
 """
 
 
@@ -124,7 +125,7 @@ def main() -> None:
 
     repo_root    = _repo_root()
     franken_dir  = os.path.join(repo_root, "franken-ts")
-    push_dir     = os.path.join(repo_root, "push-to-aws-media")
+    push_dir     = os.path.join(repo_root, "its-a-live")
     configs_dir  = os.path.join(repo_root, "configs")
 
     # Derive basename (e.g. "break-and-popos") from the YAML filename.
@@ -203,10 +204,12 @@ def main() -> None:
     # Step 3 — CDK deploy
     # ------------------------------------------------------------------
     _header(3, "Deploy AWS stack (cdk deploy)")
+    stack_name = f"ItsALiveStack-{basename}-aws-media"
     cdk_cmd = [
         "cdk", "deploy",
         "--require-approval", "never",
         "-c", f"config={toml_path}",
+        stack_name,
     ]
     print(f"  cwd        : {push_dir}")
     print(f"  command    : {' '.join(cdk_cmd)}")
@@ -217,28 +220,28 @@ def main() -> None:
         print(f"{GREEN}CDK deploy complete.{RESET}")
 
     # ------------------------------------------------------------------
-    # Step 4 — Upload
+    # Step 4 — Spark (upload .ts to S3)
     # ------------------------------------------------------------------
-    _header(4, "Upload .ts to S3")
-    upload_cmd = [
-        "uv", "run", "python", channel_py,
+    _header(4, "Spark: upload .ts to S3")
+    spark_cmd = [
+        "uv", "run", "--project", push_dir, "python", channel_py,
         "-c", toml_path,
-        "upload",
+        "spark",
     ]
-    print(f"  command    : {' '.join(upload_cmd)}")
-    upload_skipped = not _confirm("Run upload now?")
-    if upload_skipped:
+    print(f"  command    : {' '.join(spark_cmd)}")
+    spark_skipped = not _confirm("Run spark now?")
+    if spark_skipped:
         print("Skipped.")
     else:
-        _run(upload_cmd)
-        print(f"{GREEN}Upload complete.{RESET}")
+        _run(spark_cmd)
+        print(f"{GREEN}Spark complete.{RESET}")
 
     # ------------------------------------------------------------------
     # Step 5 — Start channel
     # ------------------------------------------------------------------
     _header(5, "Start the MediaLive channel")
     start_cmd = [
-        "uv", "run", "python", channel_py,
+        "uv", "run", "--project", push_dir, "python", channel_py,
         "-c", toml_path,
         "start",
     ]
@@ -253,21 +256,23 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Follow-up instructions
     # ------------------------------------------------------------------
-    stack_name = f"ScteLoopStack-{basename}"
+    # (stack_name was set in Step 3, above)
 
     # Display-friendly versions using paths relative to the repo root.
     _channel_py_rel  = os.path.relpath(channel_py, repo_root)
     _toml_rel        = os.path.relpath(toml_path, repo_root)
     _push_dir_rel    = os.path.relpath(push_dir, repo_root)
-    channel_display  = f"uv run python {_channel_py_rel} -c {_toml_rel}"
+    # ... and relative to push_dir, for the "cd its-a-live" destroy step below.
+    _toml_rel_from_push_dir = os.path.relpath(toml_path, push_dir)
+    channel_display  = f"uv run --project {_push_dir_rel} python {_channel_py_rel} -c {_toml_rel}"
 
     print(f"\n{BOLD}{GREEN}All steps complete.{RESET}")
     print(f"{BOLD}(All commands below can be run from the repo root){RESET}")
 
-    if upload_skipped or start_skipped:
+    if spark_skipped or start_skipped:
         print(f"\n{BOLD}To finish manually:{RESET}")
-        if upload_skipped:
-            print(f"  Upload  : {channel_display} upload")
+        if spark_skipped:
+            print(f"  Spark   : {channel_display} spark")
         if start_skipped:
             print(f"  Start   : {channel_display} start")
 
@@ -277,7 +282,7 @@ def main() -> None:
     print(f"\n{BOLD}To destroy the stack (stops billing):{RESET}")
     print(f"  {channel_display} stop           # stop the channel first if running")
     print(f"  cd {_push_dir_rel}")
-    print(f"  cdk destroy {stack_name} -c config={_toml_rel}")
+    print(f"  cdk destroy {stack_name} -c config={_toml_rel_from_push_dir}")
     print()
 
 

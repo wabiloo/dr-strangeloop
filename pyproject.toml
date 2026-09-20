@@ -8,6 +8,5 @@ dependencies = []
 members = [
     "franken-ts",
     "frame-extractor",
-    "push-to-aws-media",
     "loop-dee-loop",
 ]
