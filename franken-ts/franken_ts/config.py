@@ -392,6 +392,14 @@ class Config(BaseModel):
                 if disjoint:
                     continue
                 if a_contains_b and b_contains_a:
+                    # Identical spans are only redundant when both markers are
+                    # spans themselves (Start/End pairs) -- an instant marker
+                    # (e.g. 0x02 Call Ad Server) is a single point signal, not
+                    # a competing span, so it can freely coexist with a span
+                    # marker (or another instant marker) over the exact same
+                    # assets without ambiguity.
+                    if is_instant_segmentation(m_a.segmentation) or is_instant_segmentation(m_b.segmentation):
+                        continue
                     raise ValueError(
                         f"markers: event_id {m_a.event_id} and {m_b.event_id} "
                         f"cover the exact same assets -- remove the redundant one"

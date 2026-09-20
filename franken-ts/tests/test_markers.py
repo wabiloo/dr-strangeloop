@@ -113,6 +113,18 @@ def test_identical_spans_rejected():
         Config.model_validate(raw)
 
 
+def test_identical_spans_allowed_when_one_is_instant():
+    """An instant marker (e.g. 0x02 Call Ad Server) is a single point
+    signal, not a competing span -- it can coexist with a span marker (or
+    another instant marker) over the exact same assets."""
+    raw = _nested_break_config()
+    raw["markers"].append({
+        "event_id": 200, "splice_type": "time_signal",
+        "segmentation": {"type_id": "0x02", "upid_hex": "x"}, "assets": ["jingle", "ad1", "ad2"],
+    })
+    Config.model_validate(raw)  # should not raise
+
+
 def test_duplicate_asset_id_rejected():
     raw = _nested_break_config()
     raw["assets"][0]["id"] = "jingle"  # collides with assets[1]
