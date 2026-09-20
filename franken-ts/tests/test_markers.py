@@ -104,25 +104,46 @@ def test_partially_overlapping_markers_rejected():
 
 
 def test_identical_spans_rejected():
+    """Same splice_type + same segmentation.type_id over the exact same
+    assets as an existing marker (0x22, event 100) -- a true duplicate."""
     raw = _nested_break_config()
     raw["markers"].append({
         "event_id": 200, "splice_type": "time_signal",
-        "segmentation": {"upid_hex": "x"}, "assets": ["jingle", "ad1", "ad2"],
+        "segmentation": {"type_id": "0x22", "upid_hex": "x"}, "assets": ["jingle", "ad1", "ad2"],
     })
     with pytest.raises(ValidationError, match="exact same assets"):
         Config.model_validate(raw)
 
 
-def test_identical_spans_allowed_when_one_is_instant():
-    """An instant marker (e.g. 0x02 Call Ad Server) is a single point
-    signal, not a competing span -- it can coexist with a span marker (or
-    another instant marker) over the exact same assets."""
+def test_identical_spans_with_different_signal_allowed():
+    """Two markers can validly cover the exact same assets as long as they
+    signal different things (different splice_type or segmentation.type_id)
+    -- e.g. a Provider Placement Opportunity span (0x34) and a Call Ad
+    Server instant (0x02) over the same assets are two distinct SCTE-35
+    messages, not a duplicate."""
     raw = _nested_break_config()
     raw["markers"].append({
         "event_id": 200, "splice_type": "time_signal",
         "segmentation": {"type_id": "0x02", "upid_hex": "x"}, "assets": ["jingle", "ad1", "ad2"],
     })
-    Config.model_validate(raw)  # should not raise
+    Config.model_validate(raw)  # should not raise -- 0x22 vs 0x02, different signal
+
+
+def test_identical_instant_spans_with_same_type_id_rejected():
+    """Two instant markers signaling the same exact thing (same type_id)
+    over the same assets ARE a duplicate -- same exact instant, same
+    signal, twice."""
+    raw = _nested_break_config()
+    raw["markers"].append({
+        "event_id": 200, "splice_type": "time_signal",
+        "segmentation": {"type_id": "0x02", "upid_hex": "x"}, "assets": ["ad1"],
+    })
+    raw["markers"].append({
+        "event_id": 201, "splice_type": "time_signal",
+        "segmentation": {"type_id": "0x02", "upid_hex": "y"}, "assets": ["ad1"],
+    })
+    with pytest.raises(ValidationError, match="exact same assets"):
+        Config.model_validate(raw)
 
 
 def test_duplicate_asset_id_rejected():

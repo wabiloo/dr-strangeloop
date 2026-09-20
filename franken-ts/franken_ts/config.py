@@ -221,6 +221,21 @@ def is_instant_segmentation(segmentation: Optional["SegmentationConfig"]) -> boo
     return normalized in INSTANT_SEGMENTATION_TYPE_IDS
 
 
+def _marker_signal_identity(marker: "MarkerConfig") -> tuple:
+    """What (splice_type, segmentation_type_id) this marker actually signals
+    -- two markers over the exact same assets are only redundant duplicates
+    of each other if they signal the *same* thing. Different signals (e.g.
+    a Provider Placement Opportunity span and a Call Ad Server instant, or
+    even two different Start/End pairs) can validly cover identical assets
+    at once -- that's multiple distinct SCTE-35 messages at the same
+    boundary, not a duplicate."""
+    if marker.segmentation is None:
+        return (marker.splice_type, None)
+    type_id = marker.segmentation.type_id
+    value = int(type_id, 16) if isinstance(type_id, str) else int(type_id)
+    return (marker.splice_type, f"0x{value:02X}")
+
+
 class MarkerConfig(SpliceConfig):
     """One node in the flat `markers` list (top-level, sibling of `assets`) --
     the only way to signal ad breaks/placements/etc. A marker names the
@@ -392,18 +407,19 @@ class Config(BaseModel):
                 if disjoint:
                     continue
                 if a_contains_b and b_contains_a:
-                    # Identical spans are only redundant when both markers are
-                    # spans themselves (Start/End pairs) -- an instant marker
-                    # (e.g. 0x02 Call Ad Server) is a single point signal, not
-                    # a competing span, so it can freely coexist with a span
-                    # marker (or another instant marker) over the exact same
-                    # assets without ambiguity.
-                    if is_instant_segmentation(m_a.segmentation) or is_instant_segmentation(m_b.segmentation):
-                        continue
-                    raise ValueError(
-                        f"markers: event_id {m_a.event_id} and {m_b.event_id} "
-                        f"cover the exact same assets -- remove the redundant one"
-                    )
+                    # Identical spans are only redundant when both markers
+                    # signal the exact same thing (same splice_type and, for
+                    # time_signal, the same segmentation.type_id) -- two
+                    # different signals (e.g. a Provider Placement
+                    # Opportunity span and a Call Ad Server instant, or two
+                    # different Start/End pairs) can validly coexist over
+                    # identical assets as distinct SCTE-35 messages.
+                    if _marker_signal_identity(m_a) == _marker_signal_identity(m_b):
+                        raise ValueError(
+                            f"markers: event_id {m_a.event_id} and {m_b.event_id} "
+                            f"cover the exact same assets -- remove the redundant one"
+                        )
+                    continue
                 if not (a_contains_b or b_contains_a):
                     raise ValueError(
                         f"markers: event_id {m_a.event_id} ({m_a.assets!r}) and "
