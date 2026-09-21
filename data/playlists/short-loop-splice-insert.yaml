@@ -1,0 +1,30 @@
+output:
+  framerate: 25
+  bitrate_kbps: 4000
+  service_provider: broadpeak
+  service_name: broadpeak.io
+  gop: 50
+  file: outputs/short-loop-splice-insert.ts
+  resolution: 1280x720
+assets:
+- file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+  id: asset-1
+  duration: 10s
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-1-10s/ad-1-10s_h264_1080p_5000k_eng_aac_128k.mp4
+  id: ad1
+  duration: 10.00s
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-2-5s/ad-2-5s_h264_1080p_5000k_eng_aac_128k.mp4
+  id: ad2
+  duration: 5.00s
+- file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+  id: asset-2
+  start: 10s
+  duration: 10s
+normalize: true
+markers:
+- event_id: 12
+  splice_type: splice_insert
+  assets:
+  - ad1
+  - ad2
+  auto_return: false
