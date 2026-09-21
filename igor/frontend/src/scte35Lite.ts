@@ -36,6 +36,16 @@ import { isInstantTypeIdValue, nameForTypeIdByte } from './segmentationPresets'
 
 const decoder = new SCTE35()
 
+/** 'start'/'end' -- one half of a Start/End pair (a segmentation
+ * descriptor with an even/odd type_id, or a splice_insert with
+ * outOfNetworkIndicator true/false). 'other' -- no Start/End pairing at
+ * all: an instant/standalone segmentation type (e.g. Call Ad Server), a
+ * splice_insert with no resolvable direction, or any non-segmentation,
+ * non-splice_insert command (e.g. a bare Time Signal). Callers use this
+ * to distinguish the three at a glance (icon/color), never `label`'s text
+ * (which is presentation wording, not a stable value to match against). */
+export type Scte35MarkerKind = 'start' | 'end' | 'other'
+
 export interface Scte35MarkerLabel {
   /** The event's own identity from the message itself (its segmentation
    * descriptor's segmentationEventId, or a bare splice_insert's own
@@ -45,6 +55,7 @@ export interface Scte35MarkerLabel {
   /** Human-readable label, e.g. "Break Start", "Call Ad Server", "Splice
    * Insert End". */
   label: string
+  kind: Scte35MarkerKind
 }
 
 export function bytesToHex(bytes: Uint8Array): string {
@@ -75,18 +86,19 @@ export function spliceCommandTypeLabel(spliceCommandType: number): string {
   }
 }
 
-/** Full, correctly-worded label for one segmentation descriptor: the
- * segmentation type name plus " Start"/" End" -- using proper SCTE-35
- * terminology, NOT HLS's CUE-OUT/CUE-IN or DATERANGE SCTE35-OUT/SCTE35-IN
- * attribute naming, which is just how HLS happens to signal the two
- * halves of a pair on the wire and has nothing to do with the
- * segmentation type's own vocabulary. Instant/standalone types (e.g. Call
- * Ad Server) get NO suffix at all -- there is no Start/End pairing for
- * them, just one signal. */
-function segmentationLabel(typeId: number): string {
+/** Full, correctly-worded label (+ kind) for one segmentation descriptor:
+ * the segmentation type name plus " Start"/" End" -- using proper
+ * SCTE-35 terminology, NOT HLS's CUE-OUT/CUE-IN or DATERANGE
+ * SCTE35-OUT/SCTE35-IN attribute naming, which is just how HLS happens
+ * to signal the two halves of a pair on the wire and has nothing to do
+ * with the segmentation type's own vocabulary. Instant/standalone types
+ * (e.g. Call Ad Server) get NO suffix at all -- there is no Start/End
+ * pairing for them, just one signal. */
+function segmentationLabel(typeId: number): { label: string; kind: Scte35MarkerKind } {
   const name = nameForTypeIdByte(typeId)
-  if (isInstantTypeIdValue(typeId)) return name
-  return `${name} ${typeId % 2 === 0 ? 'Start' : 'End'}`
+  if (isInstantTypeIdValue(typeId)) return { label: name, kind: 'other' }
+  const kind: Scte35MarkerKind = typeId % 2 === 0 ? 'start' : 'end'
+  return { label: `${name} ${kind === 'start' ? 'Start' : 'End'}`, kind }
 }
 
 /** Decode `bytes` (a full splice_info_section) into one label per event it
@@ -111,18 +123,17 @@ export function describeAllMarkers(bytes: Uint8Array): Scte35MarkerLabel[] {
   if (segmentationDescriptors.length > 0) {
     return segmentationDescriptors.map((d) => ({
       eventId: d.segmentationEventId ?? null,
-      label: segmentationLabel(d.segmentationTypeId as unknown as number),
+      ...segmentationLabel(d.segmentationTypeId as unknown as number),
     }))
   }
 
   if (spliceCommandType === SPLICE_COMMAND_TYPE_SPLICE_INSERT) {
     const insert = section.spliceCommand as ISpliceInsertEvent | undefined
-    const label =
-      insert?.outOfNetworkIndicator == null
-        ? 'Splice Insert'
-        : `Splice Insert ${insert.outOfNetworkIndicator ? 'Start' : 'End'}`
-    return [{ eventId: insert?.spliceEventId ?? null, label }]
+    const kind: Scte35MarkerKind =
+      insert?.outOfNetworkIndicator == null ? 'other' : insert.outOfNetworkIndicator ? 'start' : 'end'
+    const label = kind === 'other' ? 'Splice Insert' : `Splice Insert ${kind === 'start' ? 'Start' : 'End'}`
+    return [{ eventId: insert?.spliceEventId ?? null, label, kind }]
   }
 
-  return [{ eventId: null, label: spliceCommandTypeLabel(spliceCommandType) }]
+  return [{ eventId: null, label: spliceCommandTypeLabel(spliceCommandType), kind: 'other' }]
 }

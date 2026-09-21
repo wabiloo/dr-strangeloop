@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import Tag from 'primevue/tag'
 import Message from 'primevue/message'
 import Button from 'primevue/button'
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import type { ChannelHealth } from '../api/types'
-import { bytesToHex, describeAllMarkers } from '../scte35Lite'
+import { bytesToHex, describeAllMarkers, type Scte35MarkerKind } from '../scte35Lite'
 
 const props = defineProps<{
   hlsUrl?: string | null
@@ -44,6 +43,10 @@ let dashInstance: any = null
 
 const scriptPromises: Record<string, Promise<void> | undefined> = {}
 
+// Set at the start of each playHls()/playDash() -- see MARKER_JOIN_SUPPRESS_MS.
+let hlsJoinedAt = 0
+let dashJoinedAt = 0
+
 // --- SCTE-35 marker toast overlay -------------------------------------------
 //
 // hls.js: EXT-X-DATERANGE tags are exposed as real, natively-timed
@@ -61,14 +64,35 @@ const scriptPromises: Record<string, Promise<void> | undefined> = {}
 //
 // dash.js: surfaces MPD <Event>/emsg occurrences by registering a listener
 // on the event's own schemeIdUri directly ("urn:scte:scte35:2014:xml+bin"
-// here, see loop-dee-loop/scte35_signaling.py) -- dash.js already only
-// invokes plain (mode-less) listeners at the event's actual presentation
-// time (EVENT_MODE_ON_START), so no equivalent gating is needed there.
+// here, see loop-dee-loop/scte35_signaling.py).
 const SCTE35_DASH_SCHEME = 'urn:scte:scte35:2014:xml+bin'
+
+// Both players, on first join, immediately surface every marker already
+// within their initial window as "active" -- hls.js because ALL DATERANGE
+// tags in the freshly-loaded DVR window (not just ones ahead of where we
+// joined) become active TextTrackCues at once; dash.js because it catches
+// up through every <Event> whose presentationTime already precedes the
+// current position as soon as the MPD's initial Period(s) are parsed.
+// Neither is "wrong" -- those markers genuinely already happened within
+// the window -- but announcing that whole backlog as if it just occurred
+// is misleading (and was the literal complaint: opening the page showed
+// toasts for markers from loops ago). Anything landing within this
+// suppression window of a fresh join is recorded as seen (so it doesn't
+// re-announce once its real recurrence comes around) but never toasted;
+// this only needs to outlast the initial catch-up burst, not overlap with
+// how soon a genuinely new marker could plausibly occur.
+const MARKER_JOIN_SUPPRESS_MS = 2000
+
+// Single source of truth for how long a toast stays mounted -- also drives
+// its CSS fade-out (see the `--marker-toast-life` custom property below and
+// .marker-toast's `animation` rule), so the two can never drift apart the
+// way two independently-chosen numbers could.
+const MARKER_TOAST_LIFE_MS = 4000
 
 interface MarkerToast {
   key: string
   label: string
+  kind: Scte35MarkerKind
 }
 
 const hlsMarkerToasts = ref<MarkerToast[]>([])
@@ -80,12 +104,27 @@ const dashSeenEventKeys = new Set<string>()
  * listener) pending their queueMicrotask flush, grouped by payload bytes. */
 let dashPendingBatch: Map<string, { bytes: Uint8Array; ids: string[] }> | null = null
 
-function pushMarkerToast(list: typeof hlsMarkerToasts, label: string) {
+/** Icon per Scte35MarkerKind -- Start/End/Other get visually distinct
+ * treatment (not just wording) so a run of toasts is scannable at a
+ * glance: sign-out (leaving the main program, e.g. an ad break starting)
+ * for Start, sign-in (returning to it) for End -- matching SCTE-35/HLS's
+ * own CUE-OUT/CUE-IN vocabulary for the same two halves -- and bell (the
+ * original, kind-less icon) for everything without a Start/End pairing
+ * (instant signals, bare splice/Time Signal commands, ...). Color lives
+ * in CSS (.marker-toast-start/-end/-other below), keyed off the same
+ * `kind` value via a class binding -- this table is only the icon. */
+const MARKER_KIND_ICON: Record<Scte35MarkerKind, string> = {
+  start: 'pi pi-sign-out',
+  end: 'pi pi-sign-in',
+  other: 'pi pi-bell',
+}
+
+function pushMarkerToast(list: typeof hlsMarkerToasts, label: string, kind: Scte35MarkerKind) {
   const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  list.value.push({ key, label })
+  list.value.push({ key, label, kind })
   setTimeout(() => {
     list.value = list.value.filter((t) => t.key !== key)
-  }, 5000)
+  }, MARKER_TOAST_LIFE_MS)
 }
 
 /** Wire up hls.js's native "id3"/metadata TextTrack so SCTE35-OUT/IN/CMD
@@ -104,12 +143,14 @@ function pushMarkerToast(list: typeof hlsMarkerToasts, label: string) {
  * By default, several coincident events' DATERANGE tags carry
  * byte-identical SCTE-35 payloads (one shared wire message -- see
  * bake.py's `narrow_scte35_descriptors`), so all not-yet-seen active cues
- * are grouped by (key, payload bytes) first -- each unique payload is
- * decoded, and its toasts pushed, exactly once per activation, no matter
- * how many DATERANGE tags deliver it. `cue.id` (the DATERANGE ID) is only
- * ever used as an opaque per-tag token here, to know whether a given tag
- * has already been processed -- loop-dee-loop scopes it to the loop
- * number, so the same marker's tags are treated as new again next loop. */
+ * are grouped by payload bytes ALONE first (never combined with `key` --
+ * see the comment at the grouping loop below for why that matters) --
+ * each unique payload is decoded, and its toasts pushed, exactly once per
+ * activation, no matter how many DATERANGE tags (even across different
+ * OUT/IN/CMD keys) deliver it. `cue.id` (the DATERANGE ID) is only ever
+ * used as an opaque per-tag token here, to know whether a given tag has
+ * already been processed -- loop-dee-loop scopes it to the loop number,
+ * so the same marker's tags are treated as new again next loop. */
 function attachHlsMetadataCueListener(video: HTMLVideoElement) {
   const wired = new WeakSet<TextTrack>()
 
@@ -120,7 +161,18 @@ function attachHlsMetadataCueListener(video: HTMLVideoElement) {
       const active = track.activeCues
       if (!active) return
 
-      const groups = new Map<string, { key: string; bytes: Uint8Array; ids: string[] }>()
+      // Grouped by payload bytes ALONE, never combined with `key`: the
+      // default (unnarrowed) shared multi-descriptor message routinely
+      // backs cues with DIFFERENT keys at once (e.g. a coincident Break
+      // Start[OUT] + Ad End[IN] + Call Ad Server[CMD] all merged into one
+      // wire message -- see bake.py's `narrow_scte35_descriptors`).
+      // describeAllMarkers() decodes the WHOLE message regardless of
+      // which key led us to it, so grouping by (key, bytes) -- as an
+      // earlier version of this did -- created one group PER DISTINCT KEY
+      // sharing that payload, and each group independently re-announced
+      // every event in it: a payload shared across OUT+IN+CMD got
+      // announced 3 times over, not once.
+      const groups = new Map<string, { bytes: Uint8Array; idKeys: { id: string; key: string }[] }>()
       for (let i = 0; i < active.length; i++) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const cue = active[i] as any
@@ -129,16 +181,19 @@ function attachHlsMetadataCueListener(video: HTMLVideoElement) {
         const id = String(cue.id ?? 'unknown')
         if (hlsSeenActivations.has(`${id}:${key}`)) continue
         const bytes = new Uint8Array(cue.value.data as ArrayBuffer)
-        const groupKey = `${key}:${bytesToHex(bytes)}`
-        const group = groups.get(groupKey) ?? { key, bytes, ids: [] as string[] }
-        group.ids.push(id)
+        const groupKey = bytesToHex(bytes)
+        const group = groups.get(groupKey) ?? { bytes, idKeys: [] as { id: string; key: string }[] }
+        group.idKeys.push({ id, key })
         groups.set(groupKey, group)
       }
 
-      for (const { key, bytes, ids } of groups.values()) {
-        for (const id of ids) hlsSeenActivations.add(`${id}:${key}`)
+      for (const { bytes, idKeys } of groups.values()) {
+        for (const { id, key } of idKeys) hlsSeenActivations.add(`${id}:${key}`)
+        // Suppress the initial catch-up burst (see MARKER_JOIN_SUPPRESS_MS)
+        // -- still marked seen above, so it never re-announces later.
+        if (Date.now() - hlsJoinedAt < MARKER_JOIN_SUPPRESS_MS) continue
         for (const marker of describeAllMarkers(bytes)) {
-          pushMarkerToast(hlsMarkerToasts, `${marker.label} · ${marker.eventId ?? '?'}`)
+          pushMarkerToast(hlsMarkerToasts, `${marker.label} · ${marker.eventId ?? '?'}`, marker.kind)
         }
       }
     })
@@ -209,6 +264,7 @@ async function playHls() {
       })
       hlsInstance.loadSource(url)
       hlsInstance.attachMedia(video)
+      hlsJoinedAt = Date.now()
       attachHlsMetadataCueListener(video)
       hlsInstance.on(Hls.Events.ERROR, (_evt: unknown, data: { fatal?: boolean; details?: string }) => {
         if (data?.fatal) hlsError.value = `hls.js fatal error: ${data.details ?? 'unknown'}`
@@ -304,6 +360,7 @@ async function playDash() {
         },
       },
     })
+    dashJoinedAt = Date.now()
     dashInstance.initialize(video, url, true)
     dashInstance.on(dashjs.MediaPlayer.events.ERROR, (e: { error?: { message?: string } }) => {
       dashError.value = `dash.js error: ${e?.error?.message ?? 'unknown'}`
@@ -351,8 +408,12 @@ async function playDash() {
             if (!batch) return
             for (const { bytes: groupBytes, ids } of batch.values()) {
               for (const groupId of ids) dashSeenEventKeys.add(groupId)
+              // Suppress the initial catch-up burst (see
+              // MARKER_JOIN_SUPPRESS_MS) -- still marked seen above, so it
+              // never re-announces later.
+              if (Date.now() - dashJoinedAt < MARKER_JOIN_SUPPRESS_MS) continue
               for (const marker of describeAllMarkers(groupBytes)) {
-                pushMarkerToast(dashMarkerToasts, `${marker.label} · ${marker.eventId ?? '?'}`)
+                pushMarkerToast(dashMarkerToasts, `${marker.label} · ${marker.eventId ?? '?'}`, marker.kind)
               }
             }
           })
@@ -422,6 +483,16 @@ function openUrl(url?: string | null) {
   if (url) window.open(url, '_blank')
 }
 
+/** Fixed-width HH:MM:SS -- unlike a bare seconds count, its length never
+ * changes as uptime ticks up, so the uptime pill doesn't visibly resize. */
+function formatUptime(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+}
+
 async function copyUrl(url?: string | null) {
   if (!url) return
   try {
@@ -441,13 +512,24 @@ async function copyUrl(url?: string | null) {
         <h3 class="m-0">Live Playback</h3>
       </div>
       <div v-if="health" class="playback-stats">
-        <Tag severity="info" :value="`loop #${health.loop_number}`" />
-        <Tag
-          severity="secondary"
-          :value="`${health.position_in_loop_seconds.toFixed(1)}s / ${health.total_loop_duration_seconds.toFixed(1)}s`"
-        />
-        <Tag severity="secondary" :value="`uptime ${health.uptime_seconds.toFixed(0)}s`" />
-        <Tag severity="secondary" :value="health.renditions.join(', ')" />
+        <div class="stat-pill">
+          <span class="stat-pill-label stat-pill-label-loop">Loop</span>
+          <span class="stat-pill-value stat-pill-value-loop">#{{ health.loop_number }}</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-pill-label stat-pill-label-position">Position</span>
+          <span class="stat-pill-value stat-pill-value-position">
+            {{ health.position_in_loop_seconds.toFixed(1) }}s / {{ health.total_loop_duration_seconds.toFixed(1) }}s
+          </span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-pill-label stat-pill-label-uptime">Uptime</span>
+          <span class="stat-pill-value stat-pill-value-uptime">{{ formatUptime(health.uptime_seconds) }}</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-pill-label stat-pill-label-playlist">Playlist</span>
+          <span class="stat-pill-value stat-pill-value-playlist">{{ health.renditions.join(', ') }}</span>
+        </div>
       </div>
     </div>
 
@@ -469,9 +551,14 @@ async function copyUrl(url?: string | null) {
             <i class="pi pi-play-circle" />
             <span>Play HLS</span>
           </button>
-          <TransitionGroup name="marker-toast" tag="div" class="marker-toast-stack">
-            <div v-for="t in hlsMarkerToasts" :key="t.key" class="marker-toast">
-              <i class="pi pi-bell" />
+          <TransitionGroup
+            name="marker-toast"
+            tag="div"
+            class="marker-toast-stack"
+            :style="{ '--marker-toast-life': `${MARKER_TOAST_LIFE_MS}ms` }"
+          >
+            <div v-for="t in hlsMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`]">
+              <i :class="MARKER_KIND_ICON[t.kind]" />
               <span>{{ t.label }}</span>
             </div>
           </TransitionGroup>
@@ -500,9 +587,14 @@ async function copyUrl(url?: string | null) {
             <i class="pi pi-play-circle" />
             <span>Play DASH</span>
           </button>
-          <TransitionGroup name="marker-toast" tag="div" class="marker-toast-stack">
-            <div v-for="t in dashMarkerToasts" :key="t.key" class="marker-toast">
-              <i class="pi pi-bell" />
+          <TransitionGroup
+            name="marker-toast"
+            tag="div"
+            class="marker-toast-stack"
+            :style="{ '--marker-toast-life': `${MARKER_TOAST_LIFE_MS}ms` }"
+          >
+            <div v-for="t in dashMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`]">
+              <i :class="MARKER_KIND_ICON[t.kind]" />
               <span>{{ t.label }}</span>
             </div>
           </TransitionGroup>
@@ -560,6 +652,72 @@ async function copyUrl(url?: string | null) {
   display: flex;
   gap: 0.4rem;
   flex-wrap: wrap;
+}
+
+/* One pill per stat, sized to fit its own worst case so it doesn't visibly
+ * resize as the numbers inside tick over (loop count climbing, position
+ * cycling each loop) -- tabular-nums keeps digit widths uniform, and each
+ * value gets a min-width generous enough that a longer number doesn't push
+ * the pill wider mid-poll. */
+.stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: #f1f5f9;
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.stat-pill-label {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.62rem;
+  letter-spacing: 0.03em;
+}
+
+.stat-pill-label-loop {
+  color: #3b6ea5;
+}
+
+.stat-pill-label-position {
+  color: #3f8f7f;
+}
+
+.stat-pill-label-uptime {
+  color: #b07a2e;
+}
+
+.stat-pill-label-playlist {
+  color: #8467a8;
+}
+
+.stat-pill-value {
+  color: #0f172a;
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-pill-value-loop {
+  display: inline-block;
+  min-width: 5.5rem;
+}
+
+.stat-pill-value-position {
+  display: inline-block;
+  min-width: 7.5rem;
+}
+
+.stat-pill-value-uptime {
+  display: inline-block;
+  min-width: 4rem;
+}
+
+.stat-pill-value-playlist {
+  display: inline-block;
+  min-width: 8rem;
 }
 
 .players-grid {
@@ -665,11 +823,54 @@ async function copyUrl(url?: string | null) {
   overflow: hidden;
   text-overflow: ellipsis;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  /* Gradual, ACCELERATING fade-out across the toast's whole lifetime
+   * (ease-in: slow at first, rapid near the end) -- not just a quick fade
+   * at removal. `--marker-toast-life` (set on .marker-toast-stack, see
+   * MARKER_TOAST_LIFE_MS) is the single source of truth for how long the
+   * toast stays mounted, so this animation's duration always matches the
+   * JS setTimeout that actually removes it. Held off for the first 1s
+   * (longer than the enter transition's own 0.2s below needs, so that
+   * quick fade-IN isn't fought by this fade-OUT animation starting at the
+   * same instant -- a CSS animation on a property always wins over a
+   * transition on that same property -- and so the toast reads clearly
+   * before it starts dimming at all). */
+  animation: marker-toast-fade calc(var(--marker-toast-life, 4s) - 1s) ease-in 1s forwards;
+}
+
+@keyframes marker-toast-fade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 .marker-toast i {
   color: #60a5fa;
   font-size: 0.8rem;
+}
+
+/* Start/End/Other get their own border + icon color on top of the shared
+ * .marker-toast shape above, so a run of toasts reads at a glance --
+ * green/sign-out = Start, amber/sign-in = End (deliberately NOT red --
+ * an End marker is expected, routine signaling, not an error/alert), the
+ * original blue/bell = Other (no Start/End pairing: instant signals,
+ * bare splice commands, ...). */
+.marker-toast-start {
+  border-color: rgba(74, 222, 128, 0.55);
+}
+
+.marker-toast-start i {
+  color: #4ade80;
+}
+
+.marker-toast-end {
+  border-color: rgba(251, 191, 36, 0.55);
+}
+
+.marker-toast-end i {
+  color: #fbbf24;
 }
 
 .marker-toast-enter-active {
