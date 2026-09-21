@@ -33,6 +33,11 @@ class ChannelCreatePayload(BaseModel):
     port: int = 8080
     cpu: int = 256
     memory: int = 512
+    # [markers] -- shape of the HLS/DASH SCTE-35 signaling loop-dee-loop's
+    # bake.py renders from this channel (see its-a-live/AGENTS.md).
+    daterange_mode: str = "shared"
+    cue_tags: str = "none"
+    increment_event_ids: bool = False
 
     @field_validator("name")
     @classmethod
@@ -42,6 +47,20 @@ class ChannelCreatePayload(BaseModel):
                 "name must be 1-63 lowercase letters, digits, or hyphens, "
                 "and cannot start or end with a hyphen"
             )
+        return v
+
+    @field_validator("daterange_mode")
+    @classmethod
+    def _validate_daterange_mode(cls, v: str) -> str:
+        if v not in ("grouped", "shared", "narrowed"):
+            raise ValueError("daterange_mode must be 'grouped', 'shared', or 'narrowed'")
+        return v
+
+    @field_validator("cue_tags")
+    @classmethod
+    def _validate_cue_tags(cls, v: str) -> str:
+        if v not in ("none", "alongside", "only"):
+            raise ValueError("cue_tags must be 'none', 'alongside', or 'only'")
         return v
 
 
@@ -178,7 +197,7 @@ async def channel_health(name: str) -> dict:
     backend = cfg.get("deploy", {}).get("backend")
 
     if backend == "local-docker":
-        port = cfg.get("channel", {}).get("port", 8080)
+        port = cfg.get("docker", {}).get("port", 8080)
         url = f"http://localhost:{port}/health"
     elif backend == "ecs-express":
         outputs = its_a_live.get_outputs(channel_store.config_path_for(name))

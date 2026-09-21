@@ -12,7 +12,14 @@ content_folder = "its-a-live/content"
 [input]
 source_path = "/Users/fabrelambeau/Broadpeak/Code/dr-strangeloop/outputs/short-loop-splice-insert.ts"
 
-[channel]
+[markers]
+daterange_mode      = "shared"
+cue_tags            = "only"
+increment_event_ids = false
+
+[packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30.0
-port               = 8080
+
+[docker]
+port = 8080

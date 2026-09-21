@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
+import Checkbox from 'primevue/checkbox'
 import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
@@ -52,6 +53,9 @@ const form = reactive<ChannelCreatePayload>({
   port: 8080,
   cpu: 256,
   memory: 512,
+  daterange_mode: 'shared',
+  cue_tags: 'none',
+  increment_event_ids: false,
 })
 
 function selectPlaylist(name: string | null) {
@@ -97,9 +101,22 @@ const backendOptions = [
 const isEcsExpress = computed(() => form.backend === 'ecs-express')
 const isLocalDocker = computed(() => form.backend === 'local-docker')
 // Both ecs-express and local-docker bake+serve via loop-dee-loop and share
-// the [channel] config section; only ecs-express additionally needs
-// Fargate [express] CPU/memory.
+// [packaging]/[markers]; `port` itself lands in [express] for ecs-express
+// or the local-docker-only [docker] section (generate_toml() picks the
+// section, this form just shows one `port` field either way). Only
+// ecs-express additionally needs Fargate cpu/memory (also in [express]).
 const usesChannelSection = computed(() => isEcsExpress.value || isLocalDocker.value)
+
+const daterangeModeOptions = [
+  { label: 'shared -- one DATERANGE per descriptor, full shared payload (default)', value: 'shared' },
+  { label: 'narrowed -- one DATERANGE per descriptor, payload narrowed to just that event', value: 'narrowed' },
+  { label: 'grouped -- one DATERANGE per group of coincident descriptors', value: 'grouped' },
+]
+const cueTagsOptions = [
+  { label: 'none -- DATERANGE only (default)', value: 'none' },
+  { label: 'alongside -- also emit EXT-X-CUE-OUT/-CONT/-IN for splice_insert markers, next to DATERANGE', value: 'alongside' },
+  { label: 'only -- EXT-X-CUE-OUT/-CONT/-IN only, no DATERANGE (splice_insert-only channels)', value: 'only' },
+]
 
 async function submit() {
   if (nameError.value) return
@@ -204,6 +221,27 @@ async function submit() {
             <InputNumber id="memory" v-model="form.memory" :use-grouping="false" />
           </div>
         </template>
+      </div>
+
+      <h4 class="mb-0 mt-2">SCTE-35 signaling</h4>
+      <div class="flex flex-column gap-1">
+        <label for="daterange-mode">HLS DATERANGE mode</label>
+        <Select id="daterange-mode" v-model="form.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" />
+      </div>
+      <div class="flex flex-column gap-1">
+        <label for="cue-tags">HLS CUE-OUT/CUE-IN tags</label>
+        <Select id="cue-tags" v-model="form.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" />
+      </div>
+      <div class="flex align-items-center gap-2">
+        <Checkbox v-model="form.increment_event_ids" binary input-id="increment-event-ids" />
+        <label for="increment-event-ids">Increment SCTE-35 event ids each loop (HLS + DASH)</label>
+      </div>
+      <div class="text-color-secondary text-xs">
+        Off (default) repeats the same event id every loop -- easiest to test against. On bumps
+        each id by loop_number &times; a shared step (a power of 10 above the channel's largest
+        base id, e.g. base ids 100-190 &rarr; step 1000, so loop 1 emits 1100/1190, loop 2 emits
+        2100/2190, ...) -- predictable from wall-clock time alone, and wraps back to the base id
+        at the 32-bit SCTE-35 ceiling.
       </div>
     </template>
 

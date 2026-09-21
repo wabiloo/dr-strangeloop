@@ -47,13 +47,28 @@ source_path = "..."    # required — franken-ts output (.ts file, or ladder dir
 # ecs-express/local-docker only (ignored by aws-media):
 [bake]
 local_output_dir = "..."   # optional, defaults to ./.local-loop-package/<name>
-[channel]
+
+# Shape of the HLS/DASH SCTE-35 signaling loop-dee-loop's bake.py renders
+# (see loop-dee-loop/scte35_signaling.py) -- fixed per bake, read back by
+# serve.py from loop_descriptor.json, not re-decided per request.
+[markers]
+daterange_mode = "shared"        # "shared" (default) | "narrowed" | "grouped" -- one DATERANGE per descriptor with the full shared payload, per descriptor narrowed to just that event, or one per group of coincident descriptors
+cue_tags = "none"                # "none" (default) | "alongside" | "only" -- also emit EXT-X-CUE-OUT/-CONT/-IN next to DATERANGE, or instead of it entirely ("only" requires every marker to be a bare splice_insert). Both modes only ever build CUE-OUT/-CONT/-IN from bare splice_insert markers -- "alongside" still DATERANGE-tags every marker regardless of splice_type, but silently skips CUE-OUT/-IN for non-splice_insert ones, since nested/overlapping time_signal types (e.g. Break containing PPO containing Ad) have no well-formed single CUE-OUT/-IN pair the way a flat splice_insert avail does
+increment_event_ids = false      # bump every event id by (loop number * step) each iteration instead of repeating it every loop -- step is the smallest power of 10 above the channel's largest base event id (e.g. base ids 100-190 -> step 1000, so loop 1 emits 1100/1190, loop 2 emits 2100/2190, ...), so each id's original base stays recognizable as its low-order remainder, and the id at any moment is predictable purely from wall-clock time against the channel's epoch (no runtime counter). Wraps the loop-number component back to 0 at the 32-bit SCTE-35 ceiling.
+
+[packaging]
 segment_duration = 4.0
 dvr_window_seconds = 30
-port = 8080            # for local-docker this is also the HOST port (http://localhost:<port>)
+
+# `port` lives with whichever backend-specific section already exists for
+# that backend, not a shared section:
 [express]
+port = 8080    # ecs-express only
 cpu = 256      # 0.25 vCPU units, Fargate convention -- ecs-express only, ignored by local-docker
 memory = 512   # MB
+# local-docker instead gets, in place of [express]:
+# [docker]
+# port = 8080  # also the HOST port (http://localhost:<port>)
 ```
 
 ## Questions to ask before deploying (if not already answered)

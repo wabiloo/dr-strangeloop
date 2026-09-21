@@ -318,3 +318,279 @@ def loop_relative_ticks(markers: list[dict]) -> list[dict]:
     markers.json's own ticks are already loop-relative (they are, by
     construction, since franken-ts's output starts at tick/time 0)."""
     return [dict(m) for m in markers]
+
+
+# ── [markers].daterange_mode = "grouped" ─────────────────────────────────
+
+
+def build_grouped_daterange_tags(
+    markers: list[SignalingMarker],
+    timescale: int,
+    program_start_datetime: _dt.datetime,
+    loop_number: int = 0,
+) -> list[str]:
+    """Like `build_daterange_tags`, but collapses every group of markers
+    sharing the same `pts_time_ticks` (e.g. a Break start + nested PPO
+    start + nested Ad start -- possibly alongside an unrelated instant
+    signal like 0x02 Call Ad Server, all coincident in one physical
+    message -- see PlaybackPanel.vue's "OUT+IN+CMD all merged into one
+    wire message" comment) into a single tag instead of one tag per
+    descriptor -- see `[markers].daterange_mode = "grouped"`.
+
+    Requires the group's markers to share one `splice_command_b64` (true
+    by construction for coincident descriptors sharing one physical
+    SCTE-35 message -- see bake.py's `decode_embedded_scte35` module
+    docstring): the shared payload is embedded once per group, under
+    `ID="group-<min event_id decimal>-<loop_number>"`, as the generic
+    `SCTE35-CMD` attribute -- never `SCTE35-OUT`/`SCTE35-IN` +
+    `PLANNED-DURATION`, since a real coincident group can (and, per
+    PlaybackPanel.vue's comment above, does in practice) mix directions
+    and durations across its members with no single one of them
+    correctly describing the group as a whole. A player decodes the
+    payload itself regardless of which attribute delivered it (see
+    PlaybackPanel.vue's `describeAllMarkers()`), so nothing is lost.
+
+    A group of size 1 (instant or not) falls back to
+    `build_daterange_tags`'s exact per-marker ID scheme and its normal
+    OUT/IN/CMD attribute choice, for continuity with ungrouped output.
+    """
+    groups: dict[int, list[SignalingMarker]] = {}
+    order: list[int] = []
+    for marker in markers:
+        if marker.pts_time_ticks not in groups:
+            order.append(marker.pts_time_ticks)
+        groups.setdefault(marker.pts_time_ticks, []).append(marker)
+
+    tags: list[str] = []
+    for pts in order:
+        group = groups[pts]
+        if len(group) == 1:
+            tags.extend(
+                build_daterange_tags(group, timescale, program_start_datetime, loop_number)
+            )
+            continue
+
+        offset_seconds = _iso8601_duration_seconds(pts, timescale)
+        start_date = program_start_datetime + _dt.timedelta(seconds=offset_seconds)
+        start_date_str = start_date.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        min_event_id_dec = min(int(m.event_id, 16) for m in group)
+        payload_hex = _b64_to_hex(group[0].splice_command_b64)
+        attrs = [
+            f'ID="group-{min_event_id_dec}-{loop_number}"',
+            f'START-DATE="{start_date_str}"',
+            'CLASS="com.scte35"',
+            f'SCTE35-CMD=0x{payload_hex}',
+        ]
+
+        tags.append("#EXT-X-DATERANGE:" + ",".join(attrs))
+
+    return tags
+
+
+# ── [markers].cue_tags = "alongside" | "only" ────────────────────────────
+
+
+def group_markers_by_event_id(markers: list[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {}
+    for m in markers:
+        grouped.setdefault(m["event_id"], []).append(m)
+    return grouped
+
+
+def resolve_marker_duration_ticks(
+    marker: dict, markers_by_event_id: dict[str, list[dict]]
+) -> int | None:
+    """Best-effort duration (in ticks) for a CUE-OUT-style DURATION
+    attribute. `segmentation_duration_ticks` is present for every
+    `time_signal` marker (franken_ts/markers.py always sets it there) but
+    is absent for bare `splice_insert` markers -- for those, fall back to
+    the paired stop marker's own `pts_time_ticks` (same `event_id`,
+    `is_out` False) minus this marker's, since franken-ts always emits an
+    explicit start+stop pair sharing one event_id. Returns None if `marker`
+    isn't an OUT marker, or has no paired stop marker to derive a fallback
+    from."""
+    if marker.get("segmentation_duration_ticks") is not None:
+        return marker["segmentation_duration_ticks"]
+    if not is_out_marker(marker):
+        return None
+    stop = next(
+        (
+            m
+            for m in markers_by_event_id.get(marker["event_id"], [])
+            if m is not marker and not is_out_marker(m)
+        ),
+        None,
+    )
+    if stop is None:
+        return None
+    return stop["pts_time_ticks"] - marker["pts_time_ticks"]
+
+
+def build_cue_breaks(markers: list[dict]) -> list[dict]:
+    """Every bare `splice_insert` OUT/IN pair's `[start_ticks, end_ticks)`
+    interval, for `#EXT-X-CUE-OUT`/`-CONT`/`-IN` placement -- see
+    `[markers].cue_tags = "alongside" | "only"`.
+
+    Deliberately `splice_insert`-ONLY, in both `cue_tags` modes (not just
+    `"only"`, where bake.py already hard-validates it): a real
+    `time_signal` source can have several coincident-but-differently-
+    *durationed* segmentation types active at once (e.g. a 30s Break
+    containing a 5s PPO containing a 10s Ad) -- each would otherwise
+    become its own independent CUE-OUT/-CONT/-IN sequence, so a single
+    moment ends up under two or three simultaneously-open "avails" with
+    different DURATIONs. CUE-OUT/-IN has no way to represent that
+    nesting (unlike DATERANGE, where each descriptor gets its own
+    independent tag) -- `splice_insert` markers are always flat,
+    non-overlapping avails by construction, which is what this tag pair
+    actually models.
+    """
+    splice_insert_markers = [m for m in markers if m.get("splice_type") == "splice_insert"]
+    markers_by_event_id = group_markers_by_event_id(splice_insert_markers)
+    breaks: list[dict] = []
+    for m in splice_insert_markers:
+        if not is_out_marker(m):
+            continue
+        duration_ticks = resolve_marker_duration_ticks(m, markers_by_event_id)
+        if duration_ticks is None:
+            continue
+        breaks.append({
+            "event_id": m["event_id"],
+            "start_ticks": m["pts_time_ticks"],
+            "end_ticks": m["pts_time_ticks"] + duration_ticks,
+            "duration_ticks": duration_ticks,
+        })
+    return breaks
+
+
+def build_cue_out_tag(duration_ticks: int, timescale: int) -> str:
+    duration_seconds = _iso8601_duration_seconds(duration_ticks, timescale)
+    return f"#EXT-X-CUE-OUT:DURATION={duration_seconds:.3f}"
+
+
+def build_cue_out_cont_tag(elapsed_ticks: int, duration_ticks: int, timescale: int) -> str:
+    elapsed_seconds = _iso8601_duration_seconds(elapsed_ticks, timescale)
+    duration_seconds = _iso8601_duration_seconds(duration_ticks, timescale)
+    return f"#EXT-X-CUE-OUT-CONT:ELAPSED-TIME={elapsed_seconds:.3f},DURATION={duration_seconds:.3f}"
+
+
+def build_cue_in_tag() -> str:
+    return "#EXT-X-CUE-IN"
+
+
+# ── [markers].increment_event_ids ────────────────────────────────────────
+
+SCTE35_EVENT_ID_MAX = 0xFFFFFFFF
+
+
+def compute_event_id_step(base_event_ids: list[str]) -> int:
+    """The smallest power of 10 strictly greater than the largest base
+    event id across the whole channel (e.g. base ids 100-190 -> step
+    1000) -- the per-loop increment used by `compute_incremented_event_id`.
+
+    A single shared step (not one derived per-marker) keeps every
+    marker's own base id recognizable as the low-order remainder of its
+    incremented id on every loop, and keeps the loops themselves
+    identifiable from the high-order part: `event_id % step` recovers
+    the original per-marker id, `event_id // step` recovers the loop
+    number an id was emitted on -- both computable by inspection, from
+    the id alone, without needing this channel's bake-time marker list
+    or any other side channel. Returns 10 if `base_event_ids` is empty
+    (no markers to derive a range from)."""
+    if not base_event_ids:
+        return 10
+    max_id = max(int(eid, 16) for eid in base_event_ids)
+    step = 10
+    while step <= max_id:
+        step *= 10
+    return step
+
+
+def compute_incremented_event_id(base_event_id_hex: str, loop_number: int, step: int) -> str:
+    """SCTE-35 `splice_event_id`/`segmentation_event_id` are 32-bit fields.
+    Returns `base + loop_number * step` (see `compute_event_id_step` for
+    `step`), formatted the same `0x%08X` way markers.json uses --
+    wrapping the loop-number component back to 0 (i.e. the id back to
+    `base_event_id_hex` itself) once `loop_number * step` would push the
+    id past the 32-bit ceiling, so a long-running channel never emits an
+    unexpectedly small/reused-looking id after wraparound.
+
+    `loop_number` itself is always derived from wall-clock time against
+    the channel's epoch (see serve.py's `compute_loop_position`), so the
+    id emitted at any given moment is fully predictable in advance from
+    nothing but the channel's epoch, `step`, and each marker's base id --
+    no runtime counter state involved.
+    """
+    base = int(base_event_id_hex, 16)
+    if loop_number <= 0:
+        return base_event_id_hex
+    max_loop_number = (SCTE35_EVENT_ID_MAX - base) // step
+    wrapped_loop_number = loop_number % (max_loop_number + 1)
+    incremented = base + wrapped_loop_number * step
+    return f"0x{incremented:08X}"
+
+
+def build_event_id_map(markers: list[dict], loop_number: int) -> dict[str, str]:
+    """`{event_id: incremented_event_id}` for every marker, computed once
+    per loop iteration -- see `compute_incremented_event_id` and
+    `compute_event_id_step` (the step is derived from every marker's own
+    base id here, not just the ones in a given request's window, so it
+    stays identical across every request/period for this channel)."""
+    step = compute_event_id_step([m["event_id"] for m in markers])
+    return {
+        m["event_id"]: compute_incremented_event_id(m["event_id"], loop_number, step)
+        for m in markers
+    }
+
+
+def reencode_event_ids(splice_command_b64: str, id_map: dict[str, str]) -> str:
+    """Re-encode `splice_command_b64` with every `splice_event_id`/
+    `segmentation_event_id` present as a key in `id_map` remapped to its
+    mapped value, recomputing length/CRC via `threefive` -- the same
+    decode-mutate-`encode()` pattern bake.py's `narrow_descriptors` path
+    already uses (see its module docstring), just remapping ids instead of
+    dropping descriptors. No-op (returns `splice_command_b64` unchanged)
+    if nothing in the message matches `id_map` (e.g. `loop_number == 0`,
+    where every mapped value equals its own key)."""
+    try:
+        import threefive  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "threefive is required for event id re-encoding (pip install threefive)"
+        ) from exc
+
+    cue = threefive.Cue(splice_command_b64)
+    cue.decode()
+    changed = False
+
+    # `cue.command.splice_event_id` (splice_insert) and
+    # `descriptor.segmentation_event_id` (segmentation descriptors)
+    # decode to DIFFERENT Python types in threefive -- an int and a hex
+    # string ('0x64', not zero-padded), respectively -- and threefive's
+    # own encoder is equally particular about what it accepts back:
+    # assigning an int to `segmentation_event_id` silently corrupts the
+    # descriptor's encoded length (threefive logs "should be type str"
+    # and .encode() then raises deep inside a later decode). Each field
+    # must be read and written back in its own native type.
+    cmd_event_id = getattr(cue.command, "splice_event_id", None)
+    if cmd_event_id is not None:
+        key = f"0x{cmd_event_id:08X}"
+        new_value = id_map.get(key)
+        if new_value is not None and new_value != key:
+            cue.command.splice_event_id = int(new_value, 16)
+            changed = True
+
+    for descriptor in cue.descriptors:
+        seg_event_id = getattr(descriptor, "segmentation_event_id", None)
+        if seg_event_id is None:
+            continue
+        seg_event_id_int = int(seg_event_id, 16) if isinstance(seg_event_id, str) else seg_event_id
+        key = f"0x{seg_event_id_int:08X}"
+        new_value = id_map.get(key)
+        if new_value is not None and new_value != key:
+            descriptor.segmentation_event_id = new_value
+            changed = True
+
+    if not changed:
+        return splice_command_b64
+    return cue.encode()

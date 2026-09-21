@@ -35,11 +35,14 @@ def spark(cfg, session, channel_name, extra_args=None):
     source_path = cfg.get("input", {}).get("source_path", "")
     bucket_name = cfg.get("s3", {}).get("bucket_name", "")
     folder = cfg.get("s3", {}).get("content_folder", "its-a-live/content").strip("/")
-    segment_duration = str(cfg.get("channel", {}).get("segment_duration", 4.0))
+    segment_duration = str(cfg.get("packaging", {}).get("segment_duration", 4.0))
     local_output_dir = cfg.get("bake", {}).get(
         "local_output_dir", os.path.join(os.path.dirname(__file__), ".local-loop-package", channel_name)
     )
-    narrow_scte35_descriptors = cfg.get("bake", {}).get("narrow_scte35_descriptors", False)
+    markers_cfg = cfg.get("markers", {})
+    daterange_mode = markers_cfg.get("daterange_mode", "shared")
+    cue_tags = markers_cfg.get("cue_tags", "none")
+    increment_event_ids = markers_cfg.get("increment_event_ids", False)
 
     if not source_path or not bucket_name:
         sys.exit("input.source_path and s3.bucket_name must be set in the config")
@@ -51,9 +54,11 @@ def spark(cfg, session, channel_name, extra_args=None):
     python_cmd = _resolve_python_cmd()
     bake_script = os.path.join(_LOOP_DEE_LOOP_DIR, "bake.py")
     bake_args = python_cmd + [bake_script, source_path, "--output", local_output_dir,
-                              "--segment-duration", segment_duration]
-    if narrow_scte35_descriptors:
-        bake_args.append("--narrow-scte35-descriptors")
+                              "--segment-duration", segment_duration,
+                              "--daterange-mode", daterange_mode,
+                              "--cue-tags", cue_tags]
+    if increment_event_ids:
+        bake_args.append("--increment-event-ids")
 
     print(f"==> Baking locally: {source_path} -> {local_output_dir}")
     print(f"    {' '.join(bake_args)}")

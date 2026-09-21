@@ -93,15 +93,20 @@ content_folder = "its-a-live/content"
 source_path = "../outputs/mychannel"   # franken-ts output
 
 # ecs-express-only:
-[channel]
+[packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30
-port               = 8080
 
 [express]
+port   = 8080
 cpu    = 256
 memory = 512
 ```
+
+See `AGENTS.md`'s config reference for the full schema, including the
+`[markers]` section controlling the shape of the HLS/DASH SCTE-35
+signaling `loop-dee-loop` renders, and `local-docker`'s `[docker]`
+section (in place of `[express]`, holding just `port`).
 
 `[deploy].name` + `[deploy].backend` together drive the CloudFormation
 stack name (`ItsALiveStack-<name>-<backend>`) and every AWS resource name,

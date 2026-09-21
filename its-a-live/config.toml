@@ -48,16 +48,27 @@ source_path = "../outputs/mychannel"
 # next to this file.
 # local_output_dir = "/tmp/my-channel-loop-package"
 
-[channel]
+[markers]
+# Shape of the HLS/DASH SCTE-35 signaling loop-dee-loop's bake.py renders
+# (see loop-dee-loop/README.md "SCTE-35 signaling shape"). Fixed per bake,
+# read back by serve.py -- not re-decided per request.
+daterange_mode      = "shared"  # "shared" | "narrowed" | "grouped"
+cue_tags            = "none"    # "none" | "alongside" | "only"
+increment_event_ids = false     # bump each event id by loop_number * step (step = a shared power of 10 above the channel's largest base id) instead of repeating it every loop -- see AGENTS.md
+
+[packaging]
 segment_duration   = 4.0   # nominal bake segment duration, seconds
 dvr_window_seconds = 30    # serve.py sliding-window size, seconds
-port               = 8080  # serve.py listen port (container-internal for
-                            # ecs-express; host+container port for
-                            # local-docker, so http://localhost:<port>)
 
 [express]
+# ecs-express only -- local-docker gets [docker] instead (just `port`).
+port   = 8080  # serve.py listen port, container-internal
 # ECS Express Mode CPU/memory codes (same numeric convention as Fargate:
 # 256 = 0.25 vCPU). See AWS ECS Express Mode docs for the full supported
-# list. Ignored by local-docker (and aws-media).
+# list.
 cpu    = 256   # 0.25 vCPU
 memory = 512   # 0.5 GB
+
+# local-docker only, in place of [express]:
+# [docker]
+# port = 8080  # host+container port, so http://localhost:<port>

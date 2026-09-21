@@ -149,6 +149,9 @@ export interface ChannelCreatePayload {
   port?: number
   cpu?: number
   memory?: number
+  daterange_mode?: 'grouped' | 'shared' | 'narrowed'
+  cue_tags?: 'none' | 'alongside' | 'only'
+  increment_event_ids?: boolean
 }
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed'

@@ -156,7 +156,8 @@ function pushMarkerToast(list: typeof hlsMarkerToasts, label: string, kind: Scte
  *
  * By default, several coincident events' DATERANGE tags carry
  * byte-identical SCTE-35 payloads (one shared wire message -- see
- * bake.py's `narrow_scte35_descriptors`), so all not-yet-seen active cues
+ * bake.py's `--daterange-mode` / `[markers] daterange_mode`), so all
+ * not-yet-seen active cues
  * are grouped by payload bytes ALONE first (never combined with `key` --
  * see the comment at the grouping loop below for why that matters) --
  * each unique payload is decoded, and its toasts pushed, exactly once per
@@ -176,10 +177,11 @@ function attachHlsMetadataCueListener(video: HTMLVideoElement) {
       if (!active) return
 
       // Grouped by payload bytes ALONE, never combined with `key`: the
-      // default (unnarrowed) shared multi-descriptor message routinely
-      // backs cues with DIFFERENT keys at once (e.g. a coincident Break
-      // Start[OUT] + Ad End[IN] + Call Ad Server[CMD] all merged into one
-      // wire message -- see bake.py's `narrow_scte35_descriptors`).
+      // default (daterange_mode="shared") multi-descriptor message
+      // routinely backs cues with DIFFERENT keys at once (e.g. a
+      // coincident Break Start[OUT] + Ad End[IN] + Call Ad Server[CMD]
+      // all merged into one wire message -- see bake.py's
+      // `--daterange-mode` / `[markers] daterange_mode`).
       // describeAllMarkers() decodes the WHOLE message regardless of
       // which key led us to it, so grouping by (key, bytes) -- as an
       // earlier version of this did -- created one group PER DISTINCT KEY

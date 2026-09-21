@@ -42,6 +42,8 @@ from gpac_pipeline import (
     compute_segment_boundary_ticks,
     run_gpac_dasher,
 )
+from scte35_signaling import SCTE35_EVENT_ID_MAX, compute_event_id_step
+
 logger = logging.getLogger(__name__)
 
 TIMESCALE = 90_000
@@ -112,8 +114,8 @@ def decode_embedded_scte35(ts_file: Path, *, narrow_descriptors: bool = False) -
     threefive is used here as recommended (SCOPE.md §4.1 step 1: "already
     proven to round-trip franken-ts's cues correctly in prototyping").
 
-    `narrow_descriptors` (default False, opt-in via `--narrow-scte35-descriptors`
-    / channel config `[bake] narrow_scte35_descriptors`): whether each
+    `narrow_descriptors` (default False, set when `--daterange-mode narrowed`
+    / channel config `[markers] daterange_mode = "narrowed"`): whether each
     event's DecodedMarker gets the raw *shared* multi-descriptor message
     (default -- the standard way coincident SCTE-35 events are signaled on
     the wire, and what other systems such as MediaPackage do for
@@ -236,6 +238,60 @@ def load_markers(markers_path: Path) -> list[dict]:
         )
     with markers_path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def validate_cue_tags_only(raw_markers: list[dict]) -> None:
+    """`[markers] cue_tags = "only"` (see its-a-live/AGENTS.md) drops
+    DATERANGE entirely in favor of #EXT-X-CUE-OUT/-CONT/-IN -- there is no
+    DATERANGE fallback in that mode, so every marker must be a bare
+    `splice_insert` (the only splice_type serve.py's cue-tag path knows
+    how to derive a duration/pairing for without a segmentation
+    descriptor). Hard-fails otherwise, same style as
+    `validate_markers_against_ts`."""
+    non_splice_insert = sorted(
+        m["event_id"] for m in raw_markers if m.get("splice_type") != "splice_insert"
+    )
+    if non_splice_insert:
+        raise ValidationError(
+            f"cue_tags='only' requires every marker to be a bare "
+            f"splice_insert (no DATERANGE fallback exists in this mode), "
+            f"but event(s) {non_splice_insert} use a different splice_type. "
+            f"Hard failure -- not reconciled."
+        )
+
+
+def validate_increment_event_ids(raw_markers: list[dict]) -> None:
+    """`[markers] increment_event_ids = true` derives one shared step
+    (`scte35_signaling.compute_event_id_step`) -- the smallest power of
+    10 above the channel's largest base event id -- and bumps every
+    marker's id by `loop_number * step` at serve time.
+
+    If that largest base id already sits close enough to the 32-bit
+    SCTE-35 ceiling that even its own next decade exceeds it, there is
+    no room left for a single real increment:
+    `compute_incremented_event_id`'s wraparound math (`max_loop_number =
+    (SCTE35_EVENT_ID_MAX - base) // step`) degenerates to 0, so `loop_number
+    % (max_loop_number + 1)` is always 0 and every loop silently emits the
+    exact same id as loop 0 -- i.e. the setting would quietly do nothing.
+    Hard-fail instead of shipping a loop package where that's the case,
+    same style as `validate_cue_tags_only`."""
+    event_ids = [m["event_id"] for m in raw_markers]
+    if not event_ids:
+        return
+    step = compute_event_id_step(event_ids)
+    max_base_id = max(int(eid, 16) for eid in event_ids)
+    if step > SCTE35_EVENT_ID_MAX - max_base_id:
+        raise ValidationError(
+            f"increment_event_ids=true derives step={step} (smallest power "
+            f"of 10 above the largest base event id, "
+            f"0x{max_base_id:08X}={max_base_id}), which leaves no room "
+            f"under the 32-bit SCTE-35 ceiling "
+            f"(0x{SCTE35_EVENT_ID_MAX:08X}={SCTE35_EVENT_ID_MAX}) for even "
+            f"one real increment -- every loop would silently emit the "
+            f"exact same id as loop 0. Base event ids are too close to the "
+            f"32-bit ceiling for this feature. Hard failure -- not "
+            f"silently ignored."
+        )
 
 
 def validate_markers_against_ts(
@@ -742,7 +798,7 @@ def bake_one_rendition(
     segment_duration_seconds: float,
     dry_run: bool,
     include_audio: bool,
-    narrow_scte35_descriptors: bool = False,
+    daterange_mode: str = "shared",
 ) -> dict | None:
     """Bake a single rendition's .ts into its own segment set under
     `<output_package_dir>/segments/<name>/`. Returns a rendition result
@@ -762,7 +818,7 @@ def bake_one_rendition(
     """
     logger.info("── Rendition '%s' (%s) ──", name, ts_file)
 
-    decoded = decode_embedded_scte35(ts_file, narrow_descriptors=narrow_scte35_descriptors)
+    decoded = decode_embedded_scte35(ts_file, narrow_descriptors=(daterange_mode == "narrowed"))
     validated_markers = validate_markers_against_ts(raw_markers, decoded)
 
     video_track_id, audio_track_id, audio_params = read_actual_track_params(ts_file)
@@ -881,18 +937,33 @@ def bake(
     segment_duration_seconds: float = 4.0,
     dry_run: bool = False,
     markers_override: Path | None = None,
-    narrow_scte35_descriptors: bool = False,
+    daterange_mode: str = "shared",
+    cue_tags: str = "none",
+    increment_event_ids: bool = False,
 ) -> None:
     """Bake phase entrypoint (SCOPE.md §4.1), generalized to a rendition
     ladder auto-discovered from disk (see discover_renditions()).
 
     A single-rendition input degenerates naturally into a ladder of one --
     no special-casing needed anywhere below this point.
+
+    `daterange_mode`/`cue_tags`/`increment_event_ids` (see
+    `its-a-live/AGENTS.md`'s `[markers]` config section) control the
+    *shape* of the HLS/DASH SCTE-35 signaling serve.py later renders from
+    this bake -- they're recorded as-is into loop_descriptor.json and
+    otherwise only consulted here for `daterange_mode`'s effect on the
+    embedded payload (via `decode_embedded_scte35`'s `narrow_descriptors`)
+    and `cue_tags="only"`'s validation below.
     """
     logger.info("Bake starting: %s -> %s", input_path, output_package_dir)
 
     renditions, markers_json = discover_renditions(input_path, markers_override)
     raw_markers = load_markers(markers_json)
+
+    if cue_tags == "only":
+        validate_cue_tags_only(raw_markers)
+    if increment_event_ids:
+        validate_increment_event_ids(raw_markers)
 
     output_package_dir.mkdir(parents=True, exist_ok=True)
 
@@ -908,7 +979,7 @@ def bake(
             segment_duration_seconds=segment_duration_seconds,
             dry_run=dry_run,
             include_audio=(i == 0),
-            narrow_scte35_descriptors=narrow_scte35_descriptors,
+            daterange_mode=daterange_mode,
         )
         if dry_run:
             continue
@@ -947,6 +1018,9 @@ def bake(
         "timescale": TIMESCALE,
         "total_loop_duration_ticks": reference["total_loop_duration_ticks"],
         "segment_duration_seconds": segment_duration_seconds,
+        "daterange_mode": daterange_mode,
+        "cue_tags": cue_tags,
+        "increment_event_ids": increment_event_ids,
         "markers": reference["markers"],
         "video_renditions": [
             {k: v for k, v in r.items() if k != "markers"} for r in rendition_results
@@ -986,14 +1060,55 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True, help="Output loop package directory")
     parser.add_argument("--segment-duration", type=float, default=4.0)
     parser.add_argument(
-        "--narrow-scte35-descriptors",
+        "--daterange-mode",
+        choices=("grouped", "shared", "narrowed"),
+        default="shared",
+        help="Shape of the HLS DATERANGE/DASH <Binary> SCTE-35 payload for "
+        "coincident descriptors (e.g. a Break start + nested PPO/Ad start, "
+        "all at the same PTS). 'shared' (default): one tag per descriptor, "
+        "each carrying the full shared multi-descriptor message (the "
+        "standard way coincident events are signaled -- what MediaPackage "
+        "does too). 'narrowed': one tag per descriptor, each re-encoded to "
+        "carry only that event's own descriptor -- for downstream "
+        "consumers that can't cope with more than one segmentation "
+        "descriptor per message. 'grouped': one tag per group of "
+        "coincident descriptors, carrying the shared payload once.",
+    )
+    parser.add_argument(
+        "--cue-tags",
+        choices=("none", "alongside", "only"),
+        default="none",
+        help="Whether to also emit #EXT-X-CUE-OUT/-CONT/-IN (no raw SCTE-35 "
+        "payload) alongside DATERANGE ('alongside'), or instead of it "
+        "entirely ('only' -- requires every marker to be a bare "
+        "splice_insert, hard-fails otherwise). Both modes only ever "
+        "consider bare splice_insert markers for the CUE-OUT/-CONT/-IN "
+        "tags themselves -- 'alongside' still tags every marker's "
+        "DATERANGE regardless of splice_type, splice_insert or not, but "
+        "silently emits no CUE-OUT/-IN for any non-splice_insert one, "
+        "since nested/overlapping time_signal segmentation types (e.g. a "
+        "Break containing a shorter PPO containing a shorter Ad) have no "
+        "way to become well-formed CUE-OUT/-IN pairs (unlike DATERANGE, "
+        "which tags each independently) -- splice_insert markers are "
+        "always flat, non-overlapping avails, which is what this tag "
+        "pair actually models. 'none' (default): DATERANGE only, today's "
+        "behavior.",
+    )
+    parser.add_argument(
+        "--increment-event-ids",
         action="store_true",
-        help="Re-encode each event's DATERANGE/<Binary> SCTE-35 payload to carry "
-        "only that event's own segmentation descriptor, instead of the default "
-        "shared multi-descriptor message (the standard way coincident events "
-        "are signaled -- what MediaPackage does too). Opt-in for downstream "
-        "consumers that can't cope with more than one segmentation descriptor "
-        "per message.",
+        help="Bump every marker's segmentation_event_id/splice_event_id by "
+        "the current loop number times a shared step -- the smallest "
+        "power of 10 above the channel's largest base event id (e.g. "
+        "base ids 100-190 -> step 1000, so loop 1 emits 1100/1190, loop "
+        "2 emits 2100/2190, ...), keeping each id's original base "
+        "recognizable as its low-order remainder and predictable purely "
+        "from wall-clock time against the channel's epoch (no runtime "
+        "counter) -- instead of repeating the same id every loop. Wraps "
+        "the loop-number component back to 0 at the 32-bit SCTE-35 "
+        "ceiling. Default off (same id every loop -- easiest to test "
+        "against); this is a serve-time behavior read from "
+        "loop_descriptor.json, recorded here at bake time.",
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -1011,7 +1126,9 @@ def main(argv: list[str] | None = None) -> int:
             segment_duration_seconds=args.segment_duration,
             dry_run=args.dry_run,
             markers_override=args.markers,
-            narrow_scte35_descriptors=args.narrow_scte35_descriptors,
+            daterange_mode=args.daterange_mode,
+            cue_tags=args.cue_tags,
+            increment_event_ids=args.increment_event_ids,
         )
     except ValidationError as exc:
         logger.error("VALIDATION FAILED: %s", exc)

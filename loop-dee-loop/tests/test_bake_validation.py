@@ -15,7 +15,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from bake import DecodedMarker, ValidationError, discover_renditions, validate_markers_against_ts  # noqa: E402
+from bake import (  # noqa: E402
+    DecodedMarker,
+    ValidationError,
+    discover_renditions,
+    validate_cue_tags_only,
+    validate_increment_event_ids,
+    validate_markers_against_ts,
+)
 
 
 def _marker(event_id: str, pts_time_ticks: int) -> dict:
@@ -175,8 +182,8 @@ def test_decode_embedded_scte35_splits_multi_descriptor_message(monkeypatch, tmp
 
 
 def test_decode_embedded_scte35_narrow_descriptors_opt_in(monkeypatch, tmp_path):
-    """With narrow_descriptors=True (the opt-in --narrow-scte35-descriptors
-    flag / channel config `[bake] narrow_scte35_descriptors`), each
+    """With narrow_descriptors=True (set by `--daterange-mode narrowed` /
+    channel config `[markers] daterange_mode = "narrowed"`), each
     per-descriptor DecodedMarker instead gets its OWN re-encoded,
     single-descriptor `splice_command_b64` -- for downstream consumers
     that can't cope with more than one segmentation descriptor per
@@ -256,3 +263,49 @@ def test_discover_renditions_respects_markers_override(tmp_path):
     renditions, markers_json = discover_renditions(tmp_path, markers_override=custom_markers)
 
     assert markers_json == custom_markers
+
+
+def _splice_insert_marker(event_id: str, pts_time_ticks: int) -> dict:
+    return {
+        "event_id": event_id,
+        "splice_type": "splice_insert",
+        "pts_time_ticks": pts_time_ticks,
+        "pts_time_seconds": pts_time_ticks / 90_000,
+    }
+
+
+def test_validate_cue_tags_only_passes_when_every_marker_is_splice_insert():
+    markers = [
+        _splice_insert_marker("0x00000001", 0),
+        _splice_insert_marker("0x00000001", 900_000),
+    ]
+
+    validate_cue_tags_only(markers)  # no raise
+
+
+def test_validate_cue_tags_only_fails_on_time_signal_marker():
+    markers = [
+        _splice_insert_marker("0x00000001", 0),
+        _marker("0x00000002", 900_000),  # time_signal, from the module-level helper
+    ]
+
+    with pytest.raises(ValidationError, match="cue_tags='only'"):
+        validate_cue_tags_only(markers)
+
+
+def test_validate_increment_event_ids_passes_for_small_base_ids():
+    # Realistic franken-ts-generated ids (small, sequential) -- plenty of
+    # 32-bit headroom for any decade-sized step.
+    markers = [_marker("0x00000064", 0), _marker("0x000000BE", 900_000)]
+
+    validate_increment_event_ids(markers)  # no raise
+
+
+def test_validate_increment_event_ids_fails_when_base_id_leaves_no_room_for_a_step():
+    # A base id already using most of the 32-bit range: the smallest
+    # power of 10 above it overshoots the ceiling entirely, so every
+    # increment would silently no-op forever.
+    markers = [_marker("0x48000000", 0)]  # ~1.2 billion
+
+    with pytest.raises(ValidationError, match="increment_event_ids=true"):
+        validate_increment_event_ids(markers)

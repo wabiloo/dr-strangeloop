@@ -114,12 +114,12 @@ content_folder = "fabre/its-a-live"  # prefix inside the bucket
 [input]
 source_path = "{ts_file}"
 
-[channel]
+[packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30
-port               = 8080
 
 [express]
+port   = 8080
 cpu    = 256   # 0.25 vCPU
 memory = 512   # 0.5 GB
 """

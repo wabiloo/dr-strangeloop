@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
+import Checkbox from 'primevue/checkbox'
 import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
+import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
@@ -52,10 +54,24 @@ const editForm = reactive<ChannelCreatePayload>({
   port: 8080,
   cpu: 256,
   memory: 512,
+  daterange_mode: 'shared',
+  cue_tags: 'none',
+  increment_event_ids: false,
 })
 const editIsEcsExpress = computed(() => editForm.backend === 'ecs-express')
 const editIsLocalDocker = computed(() => editForm.backend === 'local-docker')
 const editUsesChannelSection = computed(() => editIsEcsExpress.value || editIsLocalDocker.value)
+
+const daterangeModeOptions = [
+  { label: 'shared -- one DATERANGE per descriptor, full shared payload (default)', value: 'shared' },
+  { label: 'narrowed -- one DATERANGE per descriptor, payload narrowed to just that event', value: 'narrowed' },
+  { label: 'grouped -- one DATERANGE per group of coincident descriptors', value: 'grouped' },
+]
+const cueTagsOptions = [
+  { label: 'none -- DATERANGE only (default)', value: 'none' },
+  { label: 'alongside -- also emit EXT-X-CUE-OUT/-CONT/-IN for splice_insert markers, next to DATERANGE', value: 'alongside' },
+  { label: 'only -- EXT-X-CUE-OUT/-CONT/-IN only, no DATERANGE (splice_insert-only channels)', value: 'only' },
+]
 
 const toast = useToast()
 let healthTimer: ReturnType<typeof setInterval> | null = null
@@ -74,20 +90,29 @@ function startEdit() {
   const aws = section('aws')
   const s3 = section('s3')
   const input = section('input')
-  const channel = section('channel')
+  const packaging = section('packaging')
   const express = section('express')
+  const docker = section('docker')
+  const markers = section('markers')
+  const backend = (deploy.backend as ChannelCreatePayload['backend']) ?? 'ecs-express'
+  // `port` lives in [express] for ecs-express, [docker] for local-docker
+  // (see its_a_live.generate_toml()) -- one form field either way.
+  const portSection = backend === 'local-docker' ? docker : express
   Object.assign(editForm, {
     name: props.name,
-    backend: (deploy.backend as ChannelCreatePayload['backend']) ?? 'ecs-express',
+    backend,
     region: String(aws.region ?? ''),
     bucket_name: String(s3.bucket_name ?? ''),
     content_folder: String(s3.content_folder ?? ''),
     source_path: String(input.source_path ?? ''),
-    segment_duration: Number(channel.segment_duration ?? 4.0),
-    dvr_window_seconds: Number(channel.dvr_window_seconds ?? 30),
-    port: Number(channel.port ?? 8080),
+    segment_duration: Number(packaging.segment_duration ?? 4.0),
+    dvr_window_seconds: Number(packaging.dvr_window_seconds ?? 30),
+    port: Number(portSection.port ?? 8080),
     cpu: Number(express.cpu ?? 256),
     memory: Number(express.memory ?? 512),
+    daterange_mode: (markers.daterange_mode as ChannelCreatePayload['daterange_mode']) ?? 'shared',
+    cue_tags: (markers.cue_tags as ChannelCreatePayload['cue_tags']) ?? 'none',
+    increment_event_ids: Boolean(markers.increment_event_ids ?? false),
   })
   editError.value = ''
   editing.value = true
@@ -114,8 +139,9 @@ async function saveEdit() {
 }
 
 // Flattened "section.key: value" rows for the read-only config panel, in
-// the same section order as the TOML file (deploy, aws, s3, input,
-// channel, express -- see its-a-live/AGENTS.md's config.toml reference).
+// the same section order as the TOML file (deploy, aws, s3, input, bake,
+// markers, packaging, express/docker -- see its-a-live/AGENTS.md's
+// config.toml reference).
 const configRows = computed(() => {
   if (!config.value) return []
   const rows: { section: string; key: string; value: string }[] = []
@@ -126,6 +152,33 @@ const configRows = computed(() => {
     }
   }
   return rows
+})
+
+// Friendly display names for known TOML section keys -- anything not
+// listed here (e.g. a future section) falls back to a capitalized form
+// of the raw key, so the panel never silently drops a section.
+const SECTION_TITLES: Record<string, string> = {
+  deploy: 'Deploy', aws: 'AWS', s3: 'S3', input: 'Input', bake: 'Bake',
+  markers: 'Markers', packaging: 'Packaging', express: 'Express', docker: 'Docker',
+}
+function sectionTitle(section: string): string {
+  return SECTION_TITLES[section] ?? section.charAt(0).toUpperCase() + section.slice(1)
+}
+
+// `configRows` grouped back into per-section blocks, for the read-only
+// panel's visual sections (one card per TOML section, with a real title
+// instead of a raw "[section]" label).
+const configSections = computed(() => {
+  const sections: { section: string; title: string; rows: { key: string; value: string }[] }[] = []
+  for (const row of configRows.value) {
+    const current = sections[sections.length - 1]
+    if (!current || current.section !== row.section) {
+      sections.push({ section: row.section, title: sectionTitle(row.section), rows: [{ key: row.key, value: row.value }] })
+    } else {
+      current.rows.push({ key: row.key, value: row.value })
+    }
+  }
+  return sections
 })
 
 // A missing CloudFormation stack is an expected, common state (not yet
@@ -487,21 +540,26 @@ watch(() => props.name, reload)
         </div>
         <div v-if="!config" class="text-color-secondary text-sm">Loading...</div>
 
-        <table v-else-if="!editing" class="text-sm">
-          <tbody>
-            <template v-for="(row, i) in configRows" :key="`${row.section}.${row.key}`">
-              <tr v-if="i === 0 || configRows[i - 1].section !== row.section">
-                <td colspan="2" class="pt-2 pb-1 font-semibold text-color-secondary uppercase" style="font-size: 0.75rem">
-                  [{{ row.section }}]
-                </td>
-              </tr>
-              <tr>
-                <td class="pr-3 text-color-secondary white-space-nowrap vertical-align-top">{{ row.key }}</td>
-                <td class="font-mono" style="word-break: break-all">{{ row.value }}</td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
+        <div v-else-if="!editing" class="flex flex-column gap-2">
+          <div
+            v-for="sec in configSections"
+            :key="sec.section"
+            class="surface-100 border-round p-2"
+            style="border-left: 3px solid var(--p-primary-color, #0e7490)"
+          >
+            <div class="text-color-secondary font-semibold mb-1" style="font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase">
+              {{ sec.title }}
+            </div>
+            <table class="text-sm" style="table-layout: fixed; width: 100%">
+              <tbody>
+                <tr v-for="row in sec.rows" :key="row.key">
+                  <td class="pr-3 text-color-secondary white-space-nowrap vertical-align-top" style="width: 9.5rem">{{ row.key }}</td>
+                  <td class="font-mono" style="word-break: break-all">{{ row.value }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
 
         <div v-else class="flex flex-column gap-2">
           <Message v-if="editError" severity="error" :closable="false">{{ editError }}</Message>
@@ -554,6 +612,19 @@ watch(() => props.name, reload)
                 <InputNumber v-model="editForm.memory" :use-grouping="false" />
               </div>
             </template>
+
+            <div class="flex flex-column gap-1">
+              <label class="text-xs text-color-secondary">HLS DATERANGE mode</label>
+              <Select v-model="editForm.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" />
+            </div>
+            <div class="flex flex-column gap-1">
+              <label class="text-xs text-color-secondary">HLS CUE-OUT/CUE-IN tags</label>
+              <Select v-model="editForm.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" />
+            </div>
+            <div class="flex align-items-center gap-2">
+              <Checkbox v-model="editForm.increment_event_ids" binary input-id="edit-increment-event-ids" />
+              <label for="edit-increment-event-ids" class="text-xs text-color-secondary">Increment SCTE-35 event ids each loop (HLS + DASH)</label>
+            </div>
           </template>
 
           <div class="flex gap-2 mt-1">

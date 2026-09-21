@@ -37,22 +37,31 @@ content_folder = "{content_folder}"
 source_path = "{source_path}"
 """
 
+_MARKERS_EXTRA = """
+[markers]
+daterange_mode      = "{daterange_mode}"
+cue_tags            = "{cue_tags}"
+increment_event_ids = {increment_event_ids}
+"""
+
 _ECS_EXPRESS_EXTRA = """
-[channel]
+[packaging]
 segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
-port               = {port}
 
 [express]
+port   = {port}
 cpu    = {cpu}
 memory = {memory}
 """
 
 _LOCAL_DOCKER_EXTRA = """
-[channel]
+[packaging]
 segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
-port               = {port}
+
+[docker]
+port = {port}
 """
 
 
@@ -69,6 +78,9 @@ def generate_toml(
     port: int = 8080,
     cpu: int = 256,
     memory: int = 512,
+    daterange_mode: str = "shared",
+    cue_tags: str = "none",
+    increment_event_ids: bool = False,
 ) -> str:
     if backend not in ("aws-media", "ecs-express", "local-docker"):
         raise ValueError(
@@ -79,6 +91,10 @@ def generate_toml(
         content_folder=content_folder, source_path=source_path,
     )
     if backend == "ecs-express":
+        content += _MARKERS_EXTRA.format(
+            daterange_mode=daterange_mode, cue_tags=cue_tags,
+            increment_event_ids=str(increment_event_ids).lower(),
+        )
         content += _ECS_EXPRESS_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             port=port, cpu=cpu, memory=memory,
@@ -87,6 +103,10 @@ def generate_toml(
         # No [express] section -- local-docker has no Fargate CPU/memory
         # concept, and [aws]/[s3] above are written but ignored by
         # channel.py for this backend (kept for TOML-shape consistency).
+        content += _MARKERS_EXTRA.format(
+            daterange_mode=daterange_mode, cue_tags=cue_tags,
+            increment_event_ids=str(increment_event_ids).lower(),
+        )
         content += _LOCAL_DOCKER_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             port=port,

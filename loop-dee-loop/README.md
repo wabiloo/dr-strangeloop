@@ -84,6 +84,60 @@ duplicated per video rendition.
 A single loose `.ts` file remains supported as a lightweight escape hatch
 for quick one-off testing — it degenerates naturally into a ladder of one.
 
+### SCTE-35 signaling shape
+
+`bake.py` accepts three flags controlling the shape of the HLS/DASH
+SCTE-35 signaling `serve.py` later renders (recorded into
+`loop_descriptor.json`, not re-decided per request); `its-a-live`
+surfaces the same three as `config.toml`'s `[markers]` section (see
+`its-a-live/AGENTS.md`):
+
+```bash
+python3 bake.py path/to/output.ts --output /var/loop-packages/2026-01-01 \
+        --daterange-mode grouped --cue-tags alongside --increment-event-ids
+```
+
+- `--daterange-mode {shared,narrowed,grouped}` (default `shared`): how
+  coincident segmentation descriptors (e.g. a Break start + nested PPO/Ad
+  start, all at one PTS) are packed into `#EXT-X-DATERANGE` tags. `shared`
+  emits one tag per descriptor, each carrying the full multi-descriptor
+  message (the standard way, and what MediaPackage does too); `narrowed`
+  re-encodes each tag's payload down to just that descriptor, for
+  consumers that can't cope with more than one segmentation descriptor
+  per message; `grouped` collapses a coincident group into a single tag.
+- `--cue-tags {none,alongside,only}` (default `none`): whether to also
+  emit `#EXT-X-CUE-OUT:DURATION=…` / `#EXT-X-CUE-OUT-CONT:ELAPSED-TIME=…`
+  / `#EXT-X-CUE-IN` (no raw SCTE-35 payload) alongside `DATERANGE`, or
+  instead of it entirely (`only` — requires every marker in the source
+  `markers.json` to be a bare `splice_insert`; `bake.py` hard-fails
+  otherwise). Both modes only ever build these tags from bare
+  `splice_insert` markers — `alongside` still `DATERANGE`-tags every
+  marker regardless of `splice_type`, but silently produces no
+  `CUE-OUT`/`-IN` for a non-`splice_insert` one, since nested/overlapping
+  `time_signal` segmentation types (e.g. a Break containing a shorter
+  PPO containing a shorter Ad) have no single well-formed `CUE-OUT`/`-IN`
+  pair to become the way a flat `splice_insert` avail does — layering one
+  independent `CUE-OUT`/`-CONT`/`-IN` sequence per nested type instead
+  produces multiple simultaneously-open, differently-timed "avails" on
+  the same segments, which is a real signal but not one `CUE-OUT`/`-IN`
+  (as opposed to `DATERANGE`, which tags each independently) can
+  represent.
+- `--increment-event-ids` (default off): bump every marker's
+  `segmentation_event_id`/`splice_event_id` by `loop_number * step` each
+  iteration — re-encoding the actual SCTE-35 bytes, not just the
+  `DATERANGE`/DASH `<Event>` wrapper id. `step` is the smallest power of
+  10 above the channel's largest base event id (e.g. base ids 100-190 →
+  step 1000, so loop 1 emits 1100/1190, loop 2 emits 2100/2190, ...) —
+  a single step shared by every marker, so each one's original base id
+  stays recognizable as the low-order remainder of its incremented id,
+  and the id at any given moment is predictable purely from wall-clock
+  time against the channel's epoch (`loop_number` is itself always a
+  deterministic function of that, never a runtime counter — see
+  `compute_loop_position`), with no need to inspect a running process.
+  Wraps the loop-number component back to 0 (i.e. the id back to its
+  base) at the 32-bit SCTE-35 ceiling. Off by default (same id every
+  loop, easiest to test against); on is more spec-correct.
+
 ### Endpoints
 
 | Path | What it is |

@@ -23,6 +23,7 @@ never duplicated per video rendition.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime as _dt
 import json
 import logging
@@ -40,10 +41,18 @@ from loop_math import (
     ticks_to_wall_clock_seconds,
 )
 from scte35_signaling import (
+    SignalingMarker,
+    build_cue_breaks,
+    build_cue_in_tag,
+    build_cue_out_cont_tag,
+    build_cue_out_tag,
     build_daterange_tags,
+    build_event_id_map,
+    build_grouped_daterange_tags,
     is_instant_segmentation,
     is_out_marker,
     markers_to_signaling,
+    reencode_event_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,6 +91,31 @@ def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: in
         end = start + duration
         return seg_start_ticks < end and start < seg_end_ticks
     return seg_start_ticks <= start < seg_end_ticks
+
+
+def _remap_signaling_markers(
+    signaling_markers: list[SignalingMarker], all_markers: list[dict], loop_number: int
+) -> list[SignalingMarker]:
+    """[markers].increment_event_ids: return `signaling_markers` with their
+    `event_id`/`splice_command_b64` remapped to this loop iteration's
+    incremented ids (see scte35_signaling.compute_incremented_event_id).
+
+    The id map is built from `all_markers` (every marker in the package),
+    not just `signaling_markers` (the ones being rendered right now) --
+    a shared multi-descriptor SCTE-35 message can carry OTHER markers'
+    event ids too (see bake.py's decode_embedded_scte35 docstring), and
+    those must be remapped in lockstep for the re-encoded bytes to stay
+    internally consistent regardless of which marker triggered rendering.
+    """
+    id_map = build_event_id_map(all_markers, loop_number)
+    return [
+        dataclasses.replace(
+            m,
+            event_id=id_map[m.event_id],
+            splice_command_b64=reencode_event_ids(m.splice_command_b64, id_map),
+        )
+        for m in signaling_markers
+    ]
 
 
 def _numeric_segment_index(path: Path) -> int:
@@ -201,6 +235,20 @@ class LoopPackage:
             self.descriptor["segment_duration_seconds"]
         )
         self.markers: list[dict] = self.descriptor["markers"]
+
+        # [markers] settings (its-a-live/AGENTS.md) -- fixed shape of this
+        # package's HLS/DASH SCTE-35 signaling, recorded once at bake time
+        # (bake.py) and simply read back here; defaults match bake.py's own
+        # defaults, for loop packages baked before these settings existed.
+        self.daterange_mode: str = self.descriptor.get("daterange_mode", "shared")
+        self.cue_tags: str = self.descriptor.get("cue_tags", "none")
+        self.increment_event_ids: bool = self.descriptor.get("increment_event_ids", False)
+
+        # Precomputed once (not per-request): see build_cue_breaks for
+        # what this holds and why it's splice_insert-only.
+        self.cue_breaks: list[dict] = (
+            build_cue_breaks(self.markers) if self.cue_tags in ("alongside", "only") else []
+        )
 
         rendition_dicts = self.descriptor.get("video_renditions") or []
         if not rendition_dicts:
@@ -466,6 +514,12 @@ class Channel:
         # the single-occurrence rule without a separate pre-pass.
         already_emitted_markers: set[tuple[str, int]] = set()
 
+        # [markers].cue_tags: which cue_breaks (see LoopPackage.__init__)
+        # have already had their opening #EXT-X-CUE-OUT/-CONT emitted in
+        # this response -- same per-response, visited-in-increasing-order
+        # dedupe pattern as already_emitted_markers above.
+        seen_cue_event_ids: set[str] = set()
+
         # Never emit past `media_sequence` (the live edge) -- when
         # first_global_index was clamped to 0 above (only possible in the
         # first few seconds of this process's life), a plain
@@ -520,30 +574,71 @@ class Channel:
             # across every segment its interval overlaps, but must only be
             # emitted on the FIRST such segment still present in this window
             # -- not repeated on each one (see already_emitted_markers above).
-            matching_markers = [
-                m for m in pkg.markers
-                if (m["event_id"], m["pts_time_ticks"]) not in already_emitted_markers
-                and _marker_covers_segment(m, ref_seg_start_ticks, ref_seg_end_ticks)
-            ]
-            for m in matching_markers:
-                already_emitted_markers.add((m["event_id"], m["pts_time_ticks"]))
-            if matching_markers:
-                loop_start_ticks = program_date_time_ticks(
-                    local_loop_number, 0, pkg.total_loop_duration_ticks, self.epoch_ticks
-                )
-                loop_start_seconds = ticks_to_wall_clock_seconds(
-                    loop_start_ticks, pkg.timescale
-                )
-                loop_start_datetime = _dt.datetime.utcfromtimestamp(loop_start_seconds)
-                signaling_markers = markers_to_signaling(matching_markers)
-                lines.extend(
-                    build_daterange_tags(
-                        signaling_markers,
-                        pkg.timescale,
-                        loop_start_datetime,
-                        loop_number=local_loop_number,
+            # Skipped entirely when cue_tags="only" -- no DATERANGE fallback
+            # in that mode, #EXT-X-CUE-OUT/-IN below is the only signaling.
+            if pkg.cue_tags != "only":
+                matching_markers = [
+                    m for m in pkg.markers
+                    if (m["event_id"], m["pts_time_ticks"]) not in already_emitted_markers
+                    and _marker_covers_segment(m, ref_seg_start_ticks, ref_seg_end_ticks)
+                ]
+                for m in matching_markers:
+                    already_emitted_markers.add((m["event_id"], m["pts_time_ticks"]))
+                if matching_markers:
+                    loop_start_ticks = program_date_time_ticks(
+                        local_loop_number, 0, pkg.total_loop_duration_ticks, self.epoch_ticks
                     )
-                )
+                    loop_start_seconds = ticks_to_wall_clock_seconds(
+                        loop_start_ticks, pkg.timescale
+                    )
+                    loop_start_datetime = _dt.datetime.utcfromtimestamp(loop_start_seconds)
+                    signaling_markers = markers_to_signaling(matching_markers)
+                    if pkg.increment_event_ids:
+                        signaling_markers = _remap_signaling_markers(
+                            signaling_markers, pkg.markers, local_loop_number
+                        )
+                    daterange_builder = (
+                        build_grouped_daterange_tags
+                        if pkg.daterange_mode == "grouped"
+                        else build_daterange_tags
+                    )
+                    lines.extend(
+                        daterange_builder(
+                            signaling_markers,
+                            pkg.timescale,
+                            loop_start_datetime,
+                            loop_number=local_loop_number,
+                        )
+                    )
+
+            # [markers].cue_tags = "alongside" | "only": #EXT-X-CUE-OUT on
+            # the segment where a break opens (or, for a window that opens
+            # mid-break, #EXT-X-CUE-OUT-CONT with the correct ELAPSED-TIME
+            # right away), #EXT-X-CUE-OUT-CONT on every interior segment,
+            # #EXT-X-CUE-IN on the segment where it closes. No raw SCTE-35
+            # payload in any of these -- see LoopPackage.cue_breaks.
+            if pkg.cue_tags in ("alongside", "only"):
+                for brk in pkg.cue_breaks:
+                    start, end = brk["start_ticks"], brk["end_ticks"]
+                    if ref_seg_start_ticks <= end < ref_seg_end_ticks:
+                        # `end` lands exactly on this segment's own start,
+                        # by construction (see bake.py: GPAC splits
+                        # segments exactly at marker ticks) -- closes the
+                        # break regardless of the general overlap test
+                        # below, which a boundary-touching interval fails.
+                        lines.append(build_cue_in_tag())
+                        continue
+                    if not (ref_seg_start_ticks < end and start < ref_seg_end_ticks):
+                        continue
+                    elapsed_ticks = ref_seg_start_ticks - start
+                    if brk["event_id"] not in seen_cue_event_ids:
+                        seen_cue_event_ids.add(brk["event_id"])
+                        if ref_seg_start_ticks <= start < ref_seg_end_ticks:
+                            lines.append(build_cue_out_tag(brk["duration_ticks"], pkg.timescale))
+                            continue
+                    lines.append(
+                        build_cue_out_cont_tag(elapsed_ticks, brk["duration_ticks"], pkg.timescale)
+                    )
 
             program_date_ticks = program_date_time_ticks(
                 local_loop_number,
@@ -738,6 +833,12 @@ class Channel:
             # <EventStream> elements whose own `@value` differs per
             # (loop_number, start/end/instant) -- never by smuggling that
             # information into `id`.
+            # [markers].increment_event_ids: one id map per Period, keyed
+            # by that Period's own loop_number (same helper HLS uses, see
+            # _remap_signaling_markers) -- {} when the setting is off, so
+            # the lookups below become no-ops via dict.get() fallback.
+            event_id_map = build_event_id_map(pkg.markers, loop_number) if pkg.increment_event_ids else {}
+
             event_xml_by_stream: dict[str, list[str]] = {}
             for marker in pkg.markers:
                 # A single <Event> element describes the whole
@@ -761,7 +862,13 @@ class Channel:
                     if marker.get("segmentation_duration_ticks") is not None
                     else ""
                 )
-                event_id_dec = int(marker["event_id"], 16)
+                event_id_hex = event_id_map.get(marker["event_id"], marker["event_id"])
+                event_id_dec = int(event_id_hex, 16)
+                splice_command_b64 = (
+                    reencode_event_ids(marker["splice_command_b64"], event_id_map)
+                    if pkg.increment_event_ids
+                    else marker["splice_command_b64"]
+                )
                 if is_instant_segmentation(marker):
                     direction = "instant"
                 elif is_out_marker(marker):
@@ -773,7 +880,7 @@ class Channel:
                     f'    <Event presentationTime="{marker["pts_time_ticks"]}"'
                     f'{duration_attr} id="{event_id_dec}">\n'
                     f'      <Signal xmlns="urn:scte:scte35:2013:xml">\n'
-                    f'        <Binary>{marker["splice_command_b64"]}</Binary>\n'
+                    f'        <Binary>{splice_command_b64}</Binary>\n'
                     f"      </Signal>\n"
                     f"    </Event>"
                 )

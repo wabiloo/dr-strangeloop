@@ -12,7 +12,14 @@ content_folder = "its-a-live/content"
 [input]
 source_path = "../outputs/break-and-ppos-short.ts"
 
-[channel]
+[markers]
+daterange_mode      = "narrowed"
+cue_tags            = "alongside"
+increment_event_ids = true
+
+[packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30.0
-port               = 8092
+
+[docker]
+port = 8092

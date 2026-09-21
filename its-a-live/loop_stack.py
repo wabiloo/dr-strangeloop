@@ -67,11 +67,11 @@ class LoopStack(Stack):
 
         loop_package_folder = config.get("s3", {}).get("content_folder", "its-a-live/content").strip("/")
 
-        channel_cfg = config.get("channel", {})
-        dvr_window_seconds = str(channel_cfg.get("dvr_window_seconds", 30))
-        port = int(channel_cfg.get("port", 8080))
+        packaging_cfg = config.get("packaging", {})
+        dvr_window_seconds = str(packaging_cfg.get("dvr_window_seconds", 30))
 
         express_cfg = config.get("express", {})
+        port = int(express_cfg.get("port", 8080))
         # Same numeric codes as Fargate (256=0.25 vCPU, 512 MiB, etc.).
         serve_cpu = str(express_cfg.get("cpu", 256))
         serve_memory = str(express_cfg.get("memory", 512))

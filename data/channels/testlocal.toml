@@ -12,7 +12,9 @@ content_folder = "its-a-live/content"
 [input]
 source_path = "../outputs/short-loop-1min.ts"
 
-[channel]
+[packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30.0
-port               = 8090
+
+[docker]
+port = 8090
