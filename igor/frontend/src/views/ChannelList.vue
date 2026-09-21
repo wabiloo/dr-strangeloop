@@ -33,16 +33,26 @@ function statusSeverity(channel: ChannelListItem) {
   return phaseSeverity(listItemPhase(channel))
 }
 
-// Tag text leads with the resolved phase (what you actually came here to
-// know -- is it serving or not) and keeps the raw CloudFormation
-// stack_status alongside it in parentheses, since that's still useful for
-// debugging (e.g. a stuck ROLLBACK_COMPLETE). Raw stack_status ALONE used
-// to be the whole tag, which for ecs-express/aws-media reads as green
-// "CREATE_COMPLETE" even when the service is scaled to 0 / IDLE -- see
-// listItemPhase's doc comment.
-function statusLabel(channel: ChannelListItem) {
-  const label = PHASE_LABEL[listItemPhase(channel)]
-  return channel.stack_status ? `${label} (${channel.stack_status})` : label
+// Running-status tag: the resolved phase (what you actually came here to
+// know -- is it serving or not), independent of backend.
+function runningStatusLabel(channel: ChannelListItem) {
+  return PHASE_LABEL[listItemPhase(channel)]
+}
+
+// Stack status only makes sense for backends with a real CloudFormation
+// stack (aws-media/ecs-express). local-docker repurposes `stack_status` to
+// carry Docker's State.Status, which isn't a "stack" at all, so don't show
+// it in that column.
+function hasStack(channel: ChannelListItem) {
+  return channel.backend !== 'local-docker'
+}
+
+function stackSeverity(channel: ChannelListItem) {
+  if (!channel.stack_status) return 'secondary'
+  if (channel.stack_status.includes('ROLLBACK') || channel.stack_status.includes('FAILED')) return 'danger'
+  if (channel.stack_status.includes('IN_PROGRESS')) return 'info'
+  if (channel.stack_status.includes('COMPLETE')) return 'success'
+  return 'secondary'
 }
 
 onMounted(load)
@@ -79,9 +89,15 @@ onMounted(load)
           <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>
-      <Column header="Status">
+      <Column header="Running status">
         <template #body="{ data }">
-          <Tag :value="statusLabel(data)" :severity="statusSeverity(data)" />
+          <Tag :value="runningStatusLabel(data)" :severity="statusSeverity(data)" />
+        </template>
+      </Column>
+      <Column header="Stack status">
+        <template #body="{ data }">
+          <Tag v-if="hasStack(data) && data.stack_status" :value="data.stack_status" :severity="stackSeverity(data)" />
+          <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>
       <Column field="stack_name" header="CloudFormation stack" />
