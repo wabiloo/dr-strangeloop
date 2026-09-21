@@ -435,6 +435,20 @@ async function playDash() {
             if (!batch) return
             for (const { bytes: groupBytes, presentationTime: groupPresentationTime, ids } of batch.values()) {
               for (const groupId of ids) dashSeenEventKeys.add(groupId)
+              // dash.js's own internal position -- what
+              // `calculatedPresentationTime` is actually compared against
+              // -- can already be at the live edge before the DOM <video>
+              // element's `currentTime` has caught up to it (a brief
+              // startup race: dash.js starts dispatching its initial
+              // catch-up burst before the element has been seeked/started
+              // yet). Until `currentTime` is a real, populated value (same
+              // readiness check as the playhead-time updater below), we
+              // have nothing trustworthy to compare against, so default to
+              // treating it as backlog rather than risk mislabeling a
+              // whole startup burst as "just now" -- which is exactly what
+              // was happening: currentTime near 0 minus a real epoch-scale
+              // presentationTime is hugely negative, i.e. never "stale".
+              if (!Number.isFinite(video.currentTime) || video.currentTime <= 0) continue
               // Backlog, not a fresh activation (see
               // MARKER_STALE_THRESHOLD_SECONDS) -- still marked seen
               // above, so it never re-announces later.
@@ -855,13 +869,13 @@ async function copyUrl(url?: string | null) {
    * at removal. `--marker-toast-life` (set on .marker-toast-stack, see
    * MARKER_TOAST_LIFE_MS) is the single source of truth for how long the
    * toast stays mounted, so this animation's duration always matches the
-   * JS setTimeout that actually removes it. Held off for the first 1s
+   * JS setTimeout that actually removes it. Held off for the first 2s
    * (longer than the enter transition's own 0.2s below needs, so that
    * quick fade-IN isn't fought by this fade-OUT animation starting at the
    * same instant -- a CSS animation on a property always wins over a
    * transition on that same property -- and so the toast reads clearly
    * before it starts dimming at all). */
-  animation: marker-toast-fade calc(var(--marker-toast-life, 4s) - 1s) ease-in 1s forwards;
+  animation: marker-toast-fade calc(var(--marker-toast-life, 4s) - 2s) ease-in 2s forwards;
 }
 
 @keyframes marker-toast-fade {
