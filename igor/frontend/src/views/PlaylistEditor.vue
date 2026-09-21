@@ -15,10 +15,11 @@ import Tabs from 'primevue/tabs'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
-import { getPlaylist, resolveMarkers, savePlaylist } from '../api/client'
-import type { ResolvedMarker } from '../api/types'
+import { buildPlaylist, getPlaylist, resolveMarkers, savePlaylist } from '../api/client'
+import type { Job, ResolvedMarker } from '../api/types'
 import AssetTimeline from '../components/AssetTimeline.vue'
 import AssetFileField from '../components/AssetFileField.vue'
+import JobPanel from '../components/JobPanel.vue'
 import {
   SEGMENTATION_PAIR_OPTIONS,
   UPID_TYPE_OPTIONS,
@@ -580,6 +581,29 @@ async function save() {
 onMounted(load)
 watch(() => props.name, load)
 
+// --- Build (franken-ts, runs as a background job -- builds whatever's ----
+// currently saved on disk, NOT unsaved in-progress edits) ------------------
+const building = ref(false)
+const buildJobId = ref<string | null>(null)
+
+async function build() {
+  if (!props.name) return
+  building.value = true
+  error.value = ''
+  try {
+    const job = await buildPlaylist(props.name)
+    buildJobId.value = job.id
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    building.value = false
+  }
+}
+
+function onBuildFinished(job: Job) {
+  if (job.status !== 'succeeded') error.value = 'Build failed -- see log below.'
+}
+
 // --- ASCII <-> hex helper popover for the selected marker's upid_hex ------
 const hexPopover = ref<InstanceType<typeof Popover> | null>(null)
 const hexPopoverText = ref('')
@@ -616,6 +640,7 @@ function applyHexPopover() {
           Timeline
           <span class="asset-count-badge">{{ form.assets.length }}</span>
         </Tab>
+        <Tab value="build">Build</Tab>
       </TabList>
 
       <TabPanels>
@@ -938,6 +963,21 @@ function applyHexPopover() {
                 <span class="text-color-secondary text-sm">seg {{ span.segmentNum + 1 }}/{{ span.segmentsExpected }}</span>
               </div>
             </div>
+          </div>
+        </TabPanel>
+
+        <TabPanel value="build">
+          <div class="flex flex-column gap-3">
+            <p class="text-color-secondary m-0">
+              Runs franken-ts against the saved playlist and produces the <code>.ts</code> file its-a-live
+              channels stage via Spark. Builds whatever's currently saved on disk -- save first if you
+              have unsaved changes above.
+            </p>
+            <div class="flex align-items-center gap-2">
+              <Button label="Build" icon="pi pi-cog" :loading="building" :disabled="isNew" @click="build" />
+              <span v-if="isNew" class="text-color-secondary text-sm">Save the playlist first.</span>
+            </div>
+            <JobPanel v-if="buildJobId" :job-id="buildJobId" @finished="onBuildFinished" />
           </div>
         </TabPanel>
       </TabPanels>

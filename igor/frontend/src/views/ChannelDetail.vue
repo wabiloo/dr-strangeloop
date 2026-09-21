@@ -170,22 +170,37 @@ function effectiveOutlined(a: ActionDef) {
   return a.disabled() ? true : a.outlined
 }
 
+// Text below is written per-backend (not "X for ecs-express, Y for
+// aws-media", and not "(no AWS involved)" / other phrasing that only makes
+// sense as a contrast with a DIFFERENT backend) so it reads as a
+// self-contained description of THIS channel, not a reference sheet for
+// every backend its-a-live supports.
+const backend = computed(() => status.value?.backend)
+
+function byBackend(localDocker: string, ecsExpress: string, awsMedia: string): string {
+  if (backend.value === 'local-docker') return localDocker
+  if (backend.value === 'ecs-express') return ecsExpress
+  return awsMedia
+}
+
 const firstDeployAction = computed<ActionDef>(() => ({
   key: 'create',
   label: 'Create / deploy',
   icon: 'pi pi-cloud-upload',
-  description:
-    status.value?.backend === 'local-docker'
-      ? 'Bakes the content locally and starts the local-docker container (no AWS involved). Equivalent to Spark then Start below -- shown here too since local-docker has no separate "deploy" step to gate on.'
-      : 'One-time, first deploy of this channel: stages content to S3, deploys the AWS stack, then starts it. This is the only action available before the channel exists in AWS.',
-  eta:
-    status.value?.backend === 'local-docker'
-      ? '~10-60s -- local bake, plus a one-time docker build the first time (a few minutes).'
-      : '~5-10 min -- Docker image build + push, ECS task startup, and (ecs-express) a brand-new CloudFront distribution, which alone typically takes several minutes to propagate. This is normal AWS behavior, not a hang.',
+  description: byBackend(
+    'Bakes the content locally and starts the container. Equivalent to running Spark then Start below.',
+    'One-time, first deploy of this channel: bakes the content locally, stages it to S3, deploys the ECS/CloudFront stack, then starts it.',
+    'One-time, first deploy of this channel: uploads the content to S3, deploys the MediaLive/MediaPackage stack, then starts it.',
+  ),
+  eta: byBackend(
+    '~10-60s for the bake, plus a one-time Docker image build the first time (a few minutes).',
+    '~5-10 min -- Docker image build + push, ECS task startup, and a brand-new CloudFront distribution, which alone typically takes several minutes to propagate. This is normal, not a hang.',
+    '~5-10 min -- MediaLive channel provisioning and startup. This is normal, not a hang.',
+  ),
   fn: () => createChannel(props.name),
-  disabled: () => (status.value?.backend === 'local-docker' ? phase.value === 'running' : phase.value !== 'not-deployed'),
+  disabled: () => (backend.value === 'local-docker' ? phase.value === 'running' : phase.value !== 'not-deployed'),
   disabledReason: () =>
-    status.value?.backend === 'local-docker'
+    backend.value === 'local-docker'
       ? 'Already running -- use the actions on the right to manage it.'
       : 'Already deployed -- use the actions on the right to manage it, or Redeploy for stack/config changes.',
 }))
@@ -196,8 +211,11 @@ const lifecycleActions = computed<ActionDef[]>(() => [
     label: 'Spark',
     icon: 'pi pi-bolt',
     severity: 'secondary',
-    description:
-      'Stages the franken-ts output to S3 (bakes it locally first for ecs-express). Run this after building new content, before Start or Refresh content pick it up.',
+    description: byBackend(
+      'Bakes the franken-ts output locally into the loop package the container serves. Run this after building new content, before Start or Refresh content pick it up.',
+      'Bakes the franken-ts output locally, then stages the result to S3. Run this after building new content, before Start or Refresh content pick it up.',
+      'Uploads the franken-ts output to S3. Run this after building new content, before Start or Refresh content pick it up.',
+    ),
     eta: '~10-60s, depending on content size.',
     fn: () => sparkChannel(props.name),
     disabled: () => phase.value === 'not-deployed',
@@ -208,9 +226,16 @@ const lifecycleActions = computed<ActionDef[]>(() => [
     label: 'Start',
     icon: 'pi pi-play',
     severity: 'success',
-    description:
-      'Goes live: scales ecs-express to 1 task, or starts the MediaLive channel. Requires content to already be Sparked at least once.',
-    eta: '~30-60s for ecs-express (task startup + health check); a couple of minutes for aws-media (MediaLive channel start).',
+    description: byBackend(
+      'Goes live: starts the local-docker container. Requires content to already be Sparked at least once.',
+      'Goes live: scales the ECS Express service to 1 task. Requires content to already be Sparked at least once.',
+      'Goes live: starts the MediaLive channel. Requires content to already be Sparked at least once.',
+    ),
+    eta: byBackend(
+      '~10-30s (container startup + health check).',
+      '~30-60s (task startup + health check).',
+      'A couple of minutes (MediaLive channel start).',
+    ),
     fn: () => startChannel(props.name),
     disabled: () => phase.value !== 'stopped',
     disabledReason: () =>
@@ -221,9 +246,12 @@ const lifecycleActions = computed<ActionDef[]>(() => [
     label: 'Stop',
     icon: 'pi pi-stop',
     severity: 'danger',
-    description:
-      'Stops paying for compute: scales ecs-express to 0 tasks (ALB stays up for other channels), or stops the MediaLive channel.',
-    eta: '~10-30s for ecs-express; up to a couple of minutes for aws-media.',
+    description: byBackend(
+      'Stops and removes the local container.',
+      'Stops paying for compute: scales the ECS Express service to 0 tasks (the shared ALB stays up for other channels).',
+      'Stops the MediaLive channel.',
+    ),
+    eta: byBackend('~5-10s.', '~10-30s.', 'Up to a couple of minutes.'),
     fn: () => stopChannel(props.name),
     disabled: () => phase.value !== 'running',
     disabledReason: () =>
@@ -234,9 +262,12 @@ const lifecycleActions = computed<ActionDef[]>(() => [
     label: 'Refresh content',
     icon: 'pi pi-refresh',
     severity: 'secondary',
-    description:
-      'Picks up newly-Sparked content on an already-running channel: a fast re-sync for ecs-express, a full stop/start cycle (real interruption) for aws-media.',
-    eta: '~30-60s for ecs-express; a full stop/start cycle (a few minutes) for aws-media.',
+    description: byBackend(
+      'Picks up newly-Sparked content: recreates the local container from the latest baked package.',
+      'Picks up newly-Sparked content on an already-running channel: a fast re-sync, no interruption to the running task.',
+      'Picks up newly-Sparked content on an already-running channel: a full stop/start cycle -- a real interruption, since MediaLive has no partial-refresh option.',
+    ),
+    eta: byBackend('~10-30s.', '~30-60s.', 'A full stop/start cycle (a few minutes).'),
     fn: () => refreshChannel(props.name),
     disabled: () => phase.value !== 'running',
     disabledReason: () =>
@@ -248,9 +279,16 @@ const lifecycleActions = computed<ActionDef[]>(() => [
     icon: 'pi pi-wrench',
     severity: 'warn',
     outlined: true,
-    description:
+    description: byBackend(
+      'Recreates the local container from whatever was last Sparked (same as Refresh content).',
       'Deletes a broken/rolled-back stack if needed, then cdk deploys the current config again. Use this after editing the channel config, or to recover from a failed Create.',
-    eta: '~1-2 min for a small config change; ~5-10 min if the stack has to be deleted and recreated (e.g. after a failed Create), for the same CloudFront/ECS reasons as above.',
+      'Deletes a broken/rolled-back stack if needed, then cdk deploys the current config again. Use this after editing the channel config, or to recover from a failed Create.',
+    ),
+    eta: byBackend(
+      '~10-30s.',
+      '~1-2 min for a small config change; ~5-10 min if the stack has to be deleted and recreated (e.g. after a failed Create) -- CloudFront/ECS propagation, not a hang.',
+      '~1-2 min for a small config change; ~5-10 min if the stack has to be deleted and recreated (e.g. after a failed Create).',
+    ),
     fn: () => redeployChannel(props.name),
     disabled: () => phase.value === 'unknown' && !statusError.value,
     disabledReason: () => 'Status is still loading.',
@@ -514,9 +552,9 @@ watch(() => props.name, reload)
         </div>
 
         <div class="text-color-secondary text-xs mt-2">
-          Editing only rewrites configs/{{ name }}.toml -- it does not touch AWS or a running
-          container by itself. Redeploy (aws-media/ecs-express) or Refresh (local-docker) afterwards
-          to apply the change.
+          Editing only rewrites configs/{{ name }}.toml -- it does not
+          {{ byBackend('touch the running container', 'touch AWS', 'touch AWS') }} by itself.
+          {{ byBackend('Refresh', 'Redeploy', 'Redeploy') }} afterwards to apply the change.
         </div>
       </div>
     </div>
