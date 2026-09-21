@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
 import Checkbox from 'primevue/checkbox'
+import Dialog from 'primevue/dialog'
 import Divider from 'primevue/divider'
 import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Popover from 'primevue/popover'
+import RadioButton from 'primevue/radiobutton'
 import Select from 'primevue/select'
 import Tab from 'primevue/tab'
 import TabList from 'primevue/tablist'
@@ -213,6 +215,158 @@ function removeAsset(i: number) {
   if (form.assets.length === 0) selectedAssetIndex.value = null
   else if (selectedAssetIndex.value >= form.assets.length) selectedAssetIndex.value = form.assets.length - 1
 }
+
+// ── Reordering assets (move earlier/later by one slot) ─────────────────────
+// Markers reference assets by id, not position, so a plain swap never
+// dangles a reference -- the only thing that can break is the backend's
+// contiguity requirement (a marker's assets must occupy a contiguous run,
+// see franken_ts.config.Config.validate_markers). An adjacent-position swap
+// can only threaten that for a marker that has exactly one of the two
+// swapped assets as a member, and only when that member sits at the span's
+// boundary facing the swap (spans are already contiguous, so an interior
+// member can't be adjacent to a non-member).
+
+/** A marker's [lo, hi] asset-index span, or null if none of its assets
+ * exist in the current asset list (shouldn't normally happen). */
+function markerSpan(m: MarkerForm, idToIndex: Map<string, number>): { lo: number; hi: number } | null {
+  const indices = m.assets.map((id) => idToIndex.get(id)).filter((i): i is number => i !== undefined)
+  if (!indices.length) return null
+  return { lo: Math.min(...indices), hi: Math.max(...indices) }
+}
+
+interface PendingAssetMove {
+  index: number
+  direction: -1 | 1
+  /** Markers where the MOVING asset is the boundary member being displaced,
+   * innermost (smallest span) first -- the user gets to choose, per marker
+   * from the inside out, whether it detaches or grows to keep the asset. */
+  chain: MarkerForm[]
+  /** Markers on the other side where the swap pushes the moving asset INTO
+   * their boundary -- always grows to absorb it (no ambiguity: nothing else
+   * is being displaced from the user's point of view). */
+  neighborChain: MarkerForm[]
+  /** How many of `chain`, counting from the innermost, the user has chosen
+   * to detach the asset from; the rest grow to keep it. Only 0..chain.length
+   * are valid choices (detaching an outer marker while its inner one stays
+   * would itself be non-contiguous). */
+  detachCount: number
+}
+const pendingAssetMove = ref<PendingAssetMove | null>(null)
+
+function applyAssetMove(opts: {
+  index: number
+  direction: -1 | 1
+  detachFromMoving: MarkerForm[]
+  growWithOther: MarkerForm[]
+  growWithMoving: MarkerForm[]
+}) {
+  const { index, direction, detachFromMoving, growWithOther, growWithMoving } = opts
+  const otherIndex = index + direction
+  const movingId = form.assets[index].id
+  const otherId = form.assets[otherIndex].id
+
+  detachFromMoving.forEach((m) => {
+    m.assets = m.assets.filter((id) => id !== movingId)
+  })
+  growWithOther.forEach((m) => {
+    if (!m.assets.includes(otherId)) m.assets = [...m.assets, otherId]
+  })
+  growWithMoving.forEach((m) => {
+    if (!m.assets.includes(movingId)) m.assets = [...m.assets, movingId]
+  })
+
+  const tmp = form.assets[index]
+  form.assets[index] = form.assets[otherIndex]
+  form.assets[otherIndex] = tmp
+
+  if (selectedAssetIndex.value === index) selectedAssetIndex.value = otherIndex
+  else if (selectedAssetIndex.value === otherIndex) selectedAssetIndex.value = index
+}
+
+function moveAsset(index: number, direction: -1 | 1) {
+  const otherIndex = index + direction
+  if (otherIndex < 0 || otherIndex >= form.assets.length) return
+
+  const idToIndex = new Map(form.assets.map((a, i) => [a.id, i] as const))
+  const movingId = form.assets[index].id
+  const otherId = form.assets[otherIndex].id
+
+  const movingChain = form.markers
+    .filter((m) => {
+      if (m.assets.length <= 1) return false // single-asset markers just move with the asset
+      if (!m.assets.includes(movingId) || m.assets.includes(otherId)) return false
+      const span = markerSpan(m, idToIndex)
+      return span !== null && (direction === -1 ? span.lo === index : span.hi === index)
+    })
+    .sort((a, b) => {
+      const sa = markerSpan(a, idToIndex)!
+      const sb = markerSpan(b, idToIndex)!
+      return (sa.hi - sa.lo) - (sb.hi - sb.lo)
+    })
+
+  const neighborChain = form.markers.filter((m) => {
+    if (m.assets.length <= 1) return false
+    if (!m.assets.includes(otherId) || m.assets.includes(movingId)) return false
+    const span = markerSpan(m, idToIndex)
+    return span !== null && (direction === -1 ? span.hi === otherIndex : span.lo === otherIndex)
+  })
+
+  if (movingChain.length === 0) {
+    applyAssetMove({ index, direction, detachFromMoving: [], growWithOther: [], growWithMoving: neighborChain })
+    return
+  }
+
+  pendingAssetMove.value = { index, direction, chain: movingChain, neighborChain, detachCount: 0 }
+}
+
+function confirmPendingAssetMove() {
+  const p = pendingAssetMove.value
+  if (!p) return
+  applyAssetMove({
+    index: p.index,
+    direction: p.direction,
+    detachFromMoving: p.chain.slice(0, p.detachCount),
+    growWithOther: p.chain.slice(p.detachCount),
+    growWithMoving: p.neighborChain,
+  })
+  pendingAssetMove.value = null
+}
+
+function cancelPendingAssetMove() {
+  pendingAssetMove.value = null
+}
+
+function markerMoveLabel(m: MarkerForm): string {
+  return `${laneLabelForMarker(m)} #${m.event_id}`
+}
+
+/** Radio options for the pending-move dialog: 0 = keep the asset in every
+ * marker in the chain (all grow), N = detach it from the N innermost
+ * markers and keep/grow the rest -- the only choices that stay
+ * nesting-consistent (see PendingAssetMove.detachCount). */
+const pendingAssetMoveOptions = computed(() => {
+  const p = pendingAssetMove.value
+  if (!p) return []
+  const options: { value: number; label: string }[] = [
+    {
+      value: 0,
+      label:
+        p.chain.length === 1
+          ? `Grow "${markerMoveLabel(p.chain[0])}" to include the shifted asset`
+          : `Grow all ${p.chain.length} markers to include the shifted asset`,
+    },
+  ]
+  for (let i = 1; i <= p.chain.length; i++) {
+    const detached = p.chain.slice(0, i).map(markerMoveLabel).join(', ')
+    const rest = p.chain.length - i
+    options.push({
+      value: i,
+      label: rest > 0 ? `Detach from ${detached} (keep/grow the other ${rest})` : `Detach from ${detached}`,
+    })
+  }
+  return options
+})
+
 function addRendition() {
   form.renditions.push({ name: '', resolution: '1280x720', bitrate_kbps: 4500 })
 }
@@ -921,15 +1075,33 @@ function applyHexPopover() {
                   <Button
                     icon="pi pi-chevron-left"
                     text
+                    title="Select previous asset"
                     :disabled="selectedAssetIndex === 0"
                     @click="selectAsset(selectedAssetIndex - 1)"
                   />
                   <Button
                     icon="pi pi-chevron-right"
                     text
+                    title="Select next asset"
                     :disabled="selectedAssetIndex === form.assets.length - 1"
                     @click="selectAsset(selectedAssetIndex + 1)"
                   />
+                  <Divider layout="vertical" class="m-0" />
+                  <Button
+                    icon="pi pi-arrow-up"
+                    text
+                    title="Move earlier in the playlist"
+                    :disabled="selectedAssetIndex === 0"
+                    @click="moveAsset(selectedAssetIndex, -1)"
+                  />
+                  <Button
+                    icon="pi pi-arrow-down"
+                    text
+                    title="Move later in the playlist"
+                    :disabled="selectedAssetIndex === form.assets.length - 1"
+                    @click="moveAsset(selectedAssetIndex, 1)"
+                  />
+                  <Divider layout="vertical" class="m-0" />
                   <Button icon="pi pi-trash" severity="danger" text @click="removeAsset(selectedAssetIndex)" />
                 </div>
               </div>
@@ -1022,6 +1194,34 @@ function applyHexPopover() {
         </div>
       </div>
     </Popover>
+
+    <Dialog
+      :visible="pendingAssetMove !== null"
+      modal
+      header="This move crosses a marker boundary"
+      :style="{ width: '32rem' }"
+      @update:visible="cancelPendingAssetMove"
+    >
+      <div v-if="pendingAssetMove" class="flex flex-column gap-3">
+        <p class="text-sm text-color-secondary m-0">
+          The asset being moved is at the edge of {{ pendingAssetMove.chain.length > 1 ? 'nested markers' : 'a marker' }}
+          that {{ pendingAssetMove.chain.length > 1 ? "don't" : "doesn't" }} include its new neighbor. Choose how to
+          keep {{ pendingAssetMove.chain.length > 1 ? 'them' : 'it' }} contiguous.
+        </p>
+        <div v-for="opt in pendingAssetMoveOptions" :key="opt.value" class="flex align-items-center gap-2">
+          <RadioButton
+            v-model="pendingAssetMove.detachCount"
+            :input-id="`move-opt-${opt.value}`"
+            :value="opt.value"
+          />
+          <label :for="`move-opt-${opt.value}`" class="text-sm">{{ opt.label }}</label>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancel" text @click="cancelPendingAssetMove" />
+        <Button label="Move" @click="confirmPendingAssetMove" />
+      </template>
+    </Dialog>
   </div>
 </template>
 
