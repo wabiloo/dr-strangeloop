@@ -22,6 +22,7 @@ import {
   updateChannel,
 } from '../api/client'
 import type { ChannelCreatePayload, ChannelHealth, ChannelOutputs, ChannelStatus } from '../api/types'
+import { type Phase, PHASE_LABEL, liveStatusPhase, phaseSeverity } from '../utils/channelPhase'
 
 const props = defineProps<{ name: string }>()
 
@@ -134,31 +135,14 @@ const configRows = computed(() => {
 const statusErrorIsMissingStack = computed(() => /does not exist/.test(statusError.value))
 
 // Lifecycle phase inferred from the last successful /status call, used to
-// gate which actions make sense right now. `getChannelStatus` throws (and
-// `statusError` gets set) whenever the stack doesn't exist yet, so that's
-// our "not deployed" signal -- see igor/AGENTS.md's API surface table.
-type Phase = 'not-deployed' | 'stopped' | 'running' | 'unknown'
-
+// gate which actions make sense right now, and to color the status Tag
+// the same way ChannelList.vue does (see utils/channelPhase.ts).
+// `getChannelStatus` throws (and `statusError` gets set) whenever the
+// stack doesn't exist yet, so that's our "not deployed" signal -- see
+// igor/AGENTS.md's API surface table.
 const phase = computed<Phase>(() => {
   if (!status.value) return statusErrorIsMissingStack.value ? 'not-deployed' : 'unknown'
-  const s = status.value
-  if (s.backend === 'aws-media') {
-    if (s.status === 'IDLE' || s.status === 'DELETED') return 'stopped'
-    if (s.status === 'RUNNING' || s.status === 'STARTING') return 'running'
-    return 'unknown'
-  }
-  if (s.backend === 'local-docker') {
-    // No CloudFormation stack, so no real "not-deployed" state -- a
-    // container that was never created reads the same as "stopped": the
-    // Spark/Start actions are what create it, not a separate deploy step.
-    if (s.status === 'running') return 'running'
-    if (s.status === 'not created' || s.status === 'exited') return 'stopped'
-    return 'unknown'
-  }
-  // ecs-express: scaled to 0 tasks == stopped, otherwise running.
-  if (s.min_tasks === 0) return 'stopped'
-  if ((s.min_tasks ?? 0) > 0) return 'running'
-  return 'unknown'
+  return liveStatusPhase(status.value)
 })
 
 interface ActionDef {
@@ -362,8 +346,8 @@ watch(() => props.name, reload)
     <div class="flex align-items-center gap-2">
       <h2 class="m-0">{{ name }}</h2>
       <Tag v-if="status" :value="status.backend" />
-      <Tag v-if="status" :value="status.status" severity="info" />
-      <Tag v-else :value="phase === 'not-deployed' ? 'not deployed' : 'unknown'" severity="warn" />
+      <Tag v-if="status" :value="status.status" :severity="phaseSeverity(phase)" />
+      <Tag v-else :value="PHASE_LABEL[phase]" :severity="phaseSeverity(phase)" />
     </div>
 
     <Message v-if="statusError && !statusErrorIsMissingStack" severity="warn">

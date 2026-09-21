@@ -8,6 +8,7 @@ import { onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { listChannels } from '../api/client'
 import type { ChannelListItem } from '../api/types'
+import { listItemPhase, phaseSeverity } from '../utils/channelPhase'
 
 const router = useRouter()
 const channels = ref<ChannelListItem[]>([])
@@ -26,11 +27,11 @@ async function load() {
   }
 }
 
-function statusSeverity(status: string | null) {
-  if (!status) return 'secondary'
-  if (status.includes('COMPLETE') && !status.includes('ROLLBACK')) return 'success'
-  if (status.includes('FAILED') || status.includes('ROLLBACK')) return 'danger'
-  return 'info'
+// Badge color reflects the same running/stopped/failed/... phase across
+// backends (see utils/channelPhase.ts); the tag text keeps the raw
+// backend-specific status string, since that's still useful for debugging.
+function statusSeverity(channel: ChannelListItem) {
+  return phaseSeverity(listItemPhase(channel))
 }
 
 onMounted(load)
@@ -69,7 +70,7 @@ onMounted(load)
       </Column>
       <Column header="Stack status">
         <template #body="{ data }">
-          <Tag :value="data.stack_status || 'not deployed'" :severity="statusSeverity(data.stack_status)" />
+          <Tag :value="data.stack_status || 'not deployed'" :severity="statusSeverity(data)" />
         </template>
       </Column>
       <Column field="stack_name" header="CloudFormation stack" />
