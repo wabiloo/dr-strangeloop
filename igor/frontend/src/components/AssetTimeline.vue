@@ -521,6 +521,7 @@ watch(
 }
 
 .timeline-segment {
+  box-sizing: border-box;
   background: #38bdf8;
   border-right: 1px solid rgba(255, 255, 255, 0.6);
   display: flex;
@@ -592,32 +593,50 @@ watch(
   margin-top: 0.15rem;
 }
 
+/* width: 0 (not the default auto-sized flex column) is load-bearing: the
+ * div's `left: X%` is the one true anchor for the tick mark, and an
+ * auto-sized box would stretch to fit the label text, pulling the
+ * *line* off its intended position (align-items:center would center the
+ * 1px line inside a box as wide as e.g. "1:00", visibly offsetting it
+ * from the asset/marker boundary it's meant to mark). Keeping this box
+ * zero-width means the line renders exactly at the anchor regardless of
+ * label length; the label is positioned independently below so it can
+ * shift near the edges without dragging the line with it. */
 .timeline-tick {
   position: absolute;
   top: 0;
-  transform: translateX(-1px);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-/* Last tick's label would overflow the container to the right -- anchor
- * it to the right edge of the tick mark instead of centering. */
-.timeline-tick:last-child {
-  transform: translateX(-100%);
+  width: 0;
 }
 
 .timeline-tick-line {
+  display: block;
   width: 1px;
   height: 0.4rem;
   background: #94a3b8;
+  transform: translateX(-0.5px);
 }
 
 .timeline-tick-label {
+  position: absolute;
+  top: 0.5rem;
+  left: 0;
+  transform: translateX(-50%);
   font-size: 0.65rem;
   color: #64748b;
   white-space: nowrap;
-  margin-top: 0.1rem;
+}
+
+/* First/last labels would overflow the ruler's edge if centered under
+ * their (edge-anchored) tick line -- align to that edge instead. */
+.timeline-tick:first-child .timeline-tick-label {
+  left: 0;
+  transform: translateX(0);
+}
+
+.timeline-tick:last-child .timeline-tick-label {
+  left: auto;
+  right: 0;
+  transform: translateX(0.5px);
 }
 
 .timeline-legend {
