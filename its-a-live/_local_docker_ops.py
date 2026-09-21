@@ -15,6 +15,7 @@ outputs or a local state file.
 """
 
 import datetime
+import json
 import os
 import shutil
 import subprocess
@@ -73,12 +74,15 @@ def spark(cfg, session, channel_name, extra_args=None):
     source_path = os.path.abspath(source_path)
     local_output_dir = _local_output_dir(cfg, channel_name)
     segment_duration = str(cfg.get("channel", {}).get("segment_duration", 4.0))
+    narrow_scte35_descriptors = cfg.get("bake", {}).get("narrow_scte35_descriptors", False)
     os.makedirs(local_output_dir, exist_ok=True)
 
     python_cmd = _resolve_python_cmd()
     bake_script = os.path.join(_LOOP_DEE_LOOP_DIR, "bake.py")
     bake_args = python_cmd + [bake_script, source_path, "--output", local_output_dir,
                               "--segment-duration", segment_duration]
+    if narrow_scte35_descriptors:
+        bake_args.append("--narrow-scte35-descriptors")
 
     print(f"==> Baking locally: {source_path} -> {local_output_dir}")
     print(f"    {' '.join(bake_args)}")
@@ -91,21 +95,60 @@ def spark(cfg, session, channel_name, extra_args=None):
     print("Run `channel.py start` to (re)start the local container and serve it.")
 
 
-def _image_exists():
+def _image_id(tag):
     result = subprocess.run(
-        ["docker", "image", "inspect", _IMAGE_TAG],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ["docker", "image", "inspect", "-f", "{{.Id}}", tag],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
     )
-    return result.returncode == 0
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
-def _ensure_image_built():
-    if _image_exists():
-        return
-    print(f"==> Building {_IMAGE_TAG} from {_LOOP_DEE_LOOP_DIR} (first run only) ...")
+def _build_image():
+    """Always rebuild, never just build-if-missing: `docker build`'s own
+    layer cache makes this a fast no-op whenever loop-dee-loop's source
+    hasn't changed, and a real rebuild whenever it has -- so `start`
+    (and `refresh`) never again silently keep serving a container built
+    from stale source the way build-once-ever used to (that's exactly
+    what happened when serve.py's DASH signaling was fixed earlier today
+    -- the container kept running the OLD code across multiple
+    stop/start cycles because the image was only built on its very first
+    run). Returns the freshly built image's id, so callers can tell
+    whether a currently-running container is already using it."""
+    print(f"==> Building {_IMAGE_TAG} from {_LOOP_DEE_LOOP_DIR} ...")
     result = subprocess.run(["docker", "build", "-t", _IMAGE_TAG, _LOOP_DEE_LOOP_DIR])
     if result.returncode != 0:
         sys.exit(f"docker build failed (exit {result.returncode}) -- see output above.")
+    return _image_id(_IMAGE_TAG)
+
+
+def _running_image_id(name):
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{.Image}}", name],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _running_epoch(name):
+    """The --epoch-utc value a running container was actually launched
+    with, read back from its own launch command -- used to preserve
+    playback timing continuity across a rebuild-triggered recreate (see
+    `start`), rather than silently resetting to _DEFAULT_EPOCH."""
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{json .Config.Cmd}}", name],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        cmd = json.loads(result.stdout)
+    except ValueError:
+        return None
+    if "--epoch-utc" in cmd:
+        idx = cmd.index("--epoch-utc")
+        if idx + 1 < len(cmd):
+            return cmd[idx + 1]
+    return None
 
 
 def _container_status(name):
@@ -138,11 +181,18 @@ def _print_urls(port):
 
 def start(cfg, session, outputs, extra_args=None):
     """Start (or recreate) the local container serving the baked loop
-    package. Epoch defaults to the Unix epoch (matching ecs-express's
-    stack default) and is left untouched across a plain `start` of an
-    already-running container; pass `--epoch-utc now|<ISO8601>` to reset
-    it, which always recreates the container (fast locally -- no canary
-    deployment)."""
+    package. Always rebuilds the loop-dee-loop image first (see
+    _build_image -- cheap when source hasn't changed), so a plain `start`
+    can never again leave a channel silently serving stale code.
+
+    If a container is already running the freshly-built image and no
+    explicit epoch was requested, it's left alone untouched (unchanged
+    behavior). Otherwise it's recreated -- if that recreate is happening
+    ONLY because the image changed underneath it (not because of an
+    explicit --epoch-utc), the container's own currently-running epoch is
+    preserved rather than reset to _DEFAULT_EPOCH, so a rebuild-triggered
+    restart never visibly jumps the stream's playback position. Pass
+    `--epoch-utc now|<ISO8601>` to reset it explicitly."""
     _require_docker()
     channel_name = cfg.get("deploy", {}).get("name", "default")
     name = _container_name(channel_name)
@@ -160,20 +210,22 @@ def start(cfg, session, outputs, extra_args=None):
             sys.exit("Usage: channel.py start [--epoch-utc now|<ISO8601 UTC timestamp>]")
         epoch_arg = _resolve_epoch_arg(extra_args[1])
 
+    image_id = _build_image()
+
     status = _container_status(name)
-    if status == "running" and epoch_arg is None:
-        print(f"Container {name} is already running.")
+    if status == "running" and epoch_arg is None and _running_image_id(name) == image_id:
+        print(f"Container {name} is already running the current image.")
         _print_urls(port)
         return
+
+    preserved_epoch = _running_epoch(name) if status == "running" and epoch_arg is None else None
 
     if status is not None:
         print(f"Removing existing container {name} (status={status}) ...")
         subprocess.run(["docker", "rm", "-f", name],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    _ensure_image_built()
-
-    epoch = epoch_arg or _DEFAULT_EPOCH
+    epoch = epoch_arg or preserved_epoch or _DEFAULT_EPOCH
     run_args = [
         "docker", "run", "-d", "--name", name,
         "-p", f"{port}:{port}",
@@ -226,7 +278,7 @@ def refresh(cfg, session, outputs):
     print(f"Recreating container {name} to pick up latest spark ...")
     subprocess.run(["docker", "rm", "-f", name],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    _ensure_image_built()
+    _build_image()
 
     run_args = [
         "docker", "run", "-d", "--name", name,

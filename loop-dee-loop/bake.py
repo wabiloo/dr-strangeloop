@@ -105,12 +105,22 @@ def _pid_from_ffprobe_id(ffprobe_id: str) -> int:
     return int(ffprobe_id, 16)
 
 
-def decode_embedded_scte35(ts_file: Path) -> list[DecodedMarker]:
+def decode_embedded_scte35(ts_file: Path, *, narrow_descriptors: bool = False) -> list[DecodedMarker]:
     """Decode every SCTE-35 splice_info_section actually embedded in the
     .ts using threefive, independent of markers.json, for cross-validation.
 
     threefive is used here as recommended (SCOPE.md §4.1 step 1: "already
     proven to round-trip franken-ts's cues correctly in prototyping").
+
+    `narrow_descriptors` (default False, opt-in via `--narrow-scte35-descriptors`
+    / channel config `[bake] narrow_scte35_descriptors`): whether each
+    event's DecodedMarker gets the raw *shared* multi-descriptor message
+    (default -- the standard way coincident SCTE-35 events are signaled on
+    the wire, and what other systems such as MediaPackage do for
+    co-located DATERANGEs), or a re-encoded, single-descriptor payload
+    containing only that event's own descriptor. Narrowing is useful when
+    a downstream consumer can't cope with more than one segmentation
+    descriptor per message, but it is not the default behavior.
     """
     try:
         import threefive  # type: ignore
@@ -143,20 +153,30 @@ def decode_embedded_scte35(ts_file: Path) -> list[DecodedMarker]:
         # a nested PPO start + a nested Ad start, all at the same instant)
         # instead of emitting one message per event. Every descriptor's
         # event_id is therefore a real, independent marker that must be
-        # cross-validated -- NOT just the first one found. (The same raw
-        # `splice_command_b64` -- the whole message's bytes -- is correctly
+        # cross-validated -- NOT just the first one found. By default the
+        # same raw `splice_command_b64` -- the whole message's bytes -- is
         # shared by all events from that message: downstream SCTE35-OUT/IN
         # and DASH <Binary> signaling embed the full message regardless of
-        # which of its descriptors a given marker corresponds to.)
+        # which of its descriptors a given marker corresponds to, which is
+        # the standard way coincident events are signaled on the wire (and
+        # what other systems, e.g. MediaPackage, do for co-located
+        # DATERANGEs too). Passing `narrow_descriptors=True` instead
+        # re-encodes a single-descriptor splice_info_section per event_id,
+        # keeping only that event's own segmentation descriptor (plus any
+        # non-segmentation descriptors, e.g. the avail descriptor) -- an
+        # opt-in for downstream consumers that can't cope with more than
+        # one segmentation descriptor per message.
+        descriptors = list(getattr(cue, "descriptors", []))
         seg_event_ids = [
             getattr(descriptor, "segmentation_event_id", None)
-            for descriptor in getattr(cue, "descriptors", [])
+            for descriptor in descriptors
         ]
         seg_event_ids = [eid for eid in seg_event_ids if eid is not None]
 
         if not seg_event_ids:
             # splice_insert carries its own splice_event_id directly on the
-            # command (no segmentation descriptors at all).
+            # command (no segmentation descriptors at all) -- already a
+            # single-event message, nothing to split.
             event_id = getattr(cue.command, "splice_event_id", None)
             if event_id is None:
                 raise ValidationError(
@@ -165,6 +185,23 @@ def decode_embedded_scte35(ts_file: Path) -> list[DecodedMarker]:
                     "cross-validate against markers.json."
                 )
             seg_event_ids = [event_id]
+            per_event_b64 = {event_id: b64}
+        elif not narrow_descriptors or len(seg_event_ids) == 1:
+            # Default: every event sharing this message gets the same raw,
+            # shared bytes (or there's only one descriptor to begin with,
+            # so the shared message already is that event's own payload).
+            per_event_b64 = {eid: b64 for eid in seg_event_ids}
+        else:
+            per_event_b64 = {}
+            for eid in seg_event_ids:
+                narrowed = threefive.Cue(b64)
+                narrowed.decode()
+                narrowed.descriptors = [
+                    d
+                    for d in narrowed.descriptors
+                    if getattr(d, "segmentation_event_id", None) in (None, eid)
+                ]
+                per_event_b64[eid] = narrowed.encode()
 
         for event_id in seg_event_ids:
             event_id_str = (
@@ -179,7 +216,7 @@ def decode_embedded_scte35(ts_file: Path) -> list[DecodedMarker]:
                 DecodedMarker(
                     event_id=event_id_str,
                     pts_time_ticks=ticks,
-                    splice_command_b64=b64,
+                    splice_command_b64=per_event_b64[event_id],
                 )
             )
 
@@ -705,6 +742,7 @@ def bake_one_rendition(
     segment_duration_seconds: float,
     dry_run: bool,
     include_audio: bool,
+    narrow_scte35_descriptors: bool = False,
 ) -> dict | None:
     """Bake a single rendition's .ts into its own segment set under
     `<output_package_dir>/segments/<name>/`. Returns a rendition result
@@ -724,7 +762,7 @@ def bake_one_rendition(
     """
     logger.info("── Rendition '%s' (%s) ──", name, ts_file)
 
-    decoded = decode_embedded_scte35(ts_file)
+    decoded = decode_embedded_scte35(ts_file, narrow_descriptors=narrow_scte35_descriptors)
     validated_markers = validate_markers_against_ts(raw_markers, decoded)
 
     video_track_id, audio_track_id, audio_params = read_actual_track_params(ts_file)
@@ -755,6 +793,25 @@ def bake_one_rendition(
         audio_track_id=audio_track_id,
         audio_params=audio_params,
     )
+
+    # GPAC's dasher runs with profile=live, which is designed to
+    # incrementally APPEND into an existing output directory rather than
+    # start a fresh one -- and bake.py never otherwise clears
+    # `rendition_dir` between runs. Re-sparking the same channel with
+    # shorter content (fewer/smaller segments than a previous bake) would
+    # otherwise leave the previous, longer run's now-orphaned trailing
+    # segment files lying around, silently glob-picked-up as real data by
+    # read_segment_boundary_ticks/compute_total_loop_duration_ticks below
+    # (both just glob *every* `*track{id}_*.m4s` file present, with no way
+    # to tell "produced by this run" from "leftover from a previous one")
+    # -- inflating the reported total_loop_duration_ticks past the actual,
+    # current content's real length. Every bake is supposed to produce a
+    # self-contained, immutable loop package (SCOPE.md §4.1) -- starting
+    # from a genuinely empty directory every time is what actually makes
+    # that true, rather than an incremental accumulation GPAC's live
+    # profile would otherwise turn it into.
+    if rendition_dir.exists():
+        shutil.rmtree(rendition_dir)
 
     run_gpac_dasher(
         ts_file,
@@ -824,6 +881,7 @@ def bake(
     segment_duration_seconds: float = 4.0,
     dry_run: bool = False,
     markers_override: Path | None = None,
+    narrow_scte35_descriptors: bool = False,
 ) -> None:
     """Bake phase entrypoint (SCOPE.md §4.1), generalized to a rendition
     ladder auto-discovered from disk (see discover_renditions()).
@@ -850,6 +908,7 @@ def bake(
             segment_duration_seconds=segment_duration_seconds,
             dry_run=dry_run,
             include_audio=(i == 0),
+            narrow_scte35_descriptors=narrow_scte35_descriptors,
         )
         if dry_run:
             continue
@@ -926,6 +985,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", type=Path, required=True, help="Output loop package directory")
     parser.add_argument("--segment-duration", type=float, default=4.0)
+    parser.add_argument(
+        "--narrow-scte35-descriptors",
+        action="store_true",
+        help="Re-encode each event's DATERANGE/<Binary> SCTE-35 payload to carry "
+        "only that event's own segmentation descriptor, instead of the default "
+        "shared multi-descriptor message (the standard way coincident events "
+        "are signaled -- what MediaPackage does too). Opt-in for downstream "
+        "consumers that can't cope with more than one segmentation descriptor "
+        "per message.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -942,6 +1011,7 @@ def main(argv: list[str] | None = None) -> int:
             segment_duration_seconds=args.segment_duration,
             dry_run=args.dry_run,
             markers_override=args.markers,
+            narrow_scte35_descriptors=args.narrow_scte35_descriptors,
         )
     except ValidationError as exc:
         logger.error("VALIDATION FAILED: %s", exc)

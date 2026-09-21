@@ -39,6 +39,7 @@ def spark(cfg, session, channel_name, extra_args=None):
     local_output_dir = cfg.get("bake", {}).get(
         "local_output_dir", os.path.join(os.path.dirname(__file__), ".local-loop-package", channel_name)
     )
+    narrow_scte35_descriptors = cfg.get("bake", {}).get("narrow_scte35_descriptors", False)
 
     if not source_path or not bucket_name:
         sys.exit("input.source_path and s3.bucket_name must be set in the config")
@@ -51,6 +52,8 @@ def spark(cfg, session, channel_name, extra_args=None):
     bake_script = os.path.join(_LOOP_DEE_LOOP_DIR, "bake.py")
     bake_args = python_cmd + [bake_script, source_path, "--output", local_output_dir,
                               "--segment-duration", segment_duration]
+    if narrow_scte35_descriptors:
+        bake_args.append("--narrow-scte35-descriptors")
 
     print(f"==> Baking locally: {source_path} -> {local_output_dir}")
     print(f"    {' '.join(bake_args)}")

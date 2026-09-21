@@ -36,8 +36,13 @@ def fetch(url: str) -> str:
         return resp.read().decode("utf-8")
 
 
-def parse_hls_daterange_ids(body: str) -> list[str]:
-    return re.findall(r'#EXT-X-DATERANGE:ID="([^"]+)"', body)
+def parse_hls_daterange_ids(body: str) -> list[int]:
+    """Extract each DATERANGE tag's event_id as a plain decimal int, from
+    its `ID="<segmentation_type_id>-<event_id>-<loop_number>"` attribute
+    (see loop-dee-loop/scte35_signaling.py's build_daterange_tags) -- the
+    middle field, not the whole ID string."""
+    raw_ids = re.findall(r'#EXT-X-DATERANGE:ID="([^"]+)"', body)
+    return [int(raw_id.split("-")[1]) for raw_id in raw_ids]
 
 
 def parse_hls_daterange_and_next_pdt(body: str) -> list[tuple[str, str, str | None]]:
@@ -76,9 +81,13 @@ def parse_hls_media_sequence(body: str) -> int:
     return int(m.group(1))
 
 
-def parse_dash_event_ids_and_times(body: str) -> list[tuple[str, int]]:
+def parse_dash_event_ids_and_times(body: str) -> list[tuple[int, int]]:
+    """`id` is the real, plain event_id as a decimal int (see serve.py's
+    DASH <Event> authoring -- Start/End and loop-iteration disambiguation
+    live on the enclosing <EventStream>'s own `value` attribute, never in
+    `id` itself)."""
     return [
-        (event_id, int(pts))
+        (int(event_id), int(pts))
         for pts, event_id in re.findall(
             r'<Event presentationTime="(\d+)"[^>]*id="([^"]+)"', body
         )
@@ -142,7 +151,7 @@ def main() -> int:
         appear in a manifest whose sliding window starts at the given
         (loop_number, seg_index)."""
         media_sequence = loop_number * segments_per_loop + seg_index
-        expected: list[tuple[str, int]] = []
+        expected: list[tuple[int, int]] = []
         for i in range(window_segments):
             global_index = media_sequence + i
             local_index = global_index % segments_per_loop
@@ -157,7 +166,7 @@ def main() -> int:
                 if seg_start_local <= marker["pts_time_ticks"] < seg_end_local:
                     expected.append(
                         (
-                            marker["event_id"],
+                            int(marker["event_id"], 16),
                             local_loop_number * total_loop_duration_ticks
                             + marker["pts_time_ticks"],
                         )

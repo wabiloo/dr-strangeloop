@@ -5,7 +5,7 @@ import Button from 'primevue/button'
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import type { ChannelHealth } from '../api/types'
-import { describeMarkerLabel } from '../scte35Lite'
+import { bytesToHex, describeAllMarkers } from '../scte35Lite'
 
 const props = defineProps<{
   hlsUrl?: string | null
@@ -75,31 +75,41 @@ const hlsMarkerToasts = ref<MarkerToast[]>([])
 const dashMarkerToasts = ref<MarkerToast[]>([])
 const hlsSeenActivations = new Set<string>()
 const dashSeenEventKeys = new Set<string>()
+/** Coincident dash.js SCTE-35 events (same batch of `EventController`
+ * callback firings, see attachHls.../playDash's SCTE35_DASH_SCHEME
+ * listener) pending their queueMicrotask flush, grouped by payload bytes. */
+let dashPendingBatch: Map<string, { bytes: Uint8Array; ids: string[] }> | null = null
 
 function pushMarkerToast(list: typeof hlsMarkerToasts, label: string) {
   const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
   list.value.push({ key, label })
   setTimeout(() => {
     list.value = list.value.filter((t) => t.key !== key)
-  }, 3000)
+  }, 5000)
 }
 
-/** "<event_id>-loop<n>" (event_id a "0x..." hex string) -> the event_id as
- * a plain decimal number, matching how dash.js hands us its own event.id
- * (a plain number) -- so both players label the same marker identically. */
-function eventIdFromDateRangeId(id: string): number {
-  return parseInt(id.split('-')[0], 16)
-}
-
-/** Wire up hls.js's native "id3"/metadata TextTrack so SCTE35-OUT/IN cues
- * pop a toast exactly when the browser's own cue timing says they're
+/** Wire up hls.js's native "id3"/metadata TextTrack so SCTE35-OUT/IN/CMD
+ * cues pop a toast exactly when the browser's own cue timing says they're
  * active -- attaches immediately if the track already exists, and again
  * for any track hls.js adds later (it's created lazily on first fragment
- * with PROGRAM-DATE-TIME, which may be after this runs). The cue's
- * "SCTE35-OUT"/"SCTE35-IN" key is only used to know a marker fired at all
- * -- describeMarkerLabel() decodes the real Start/End (or no-suffix,
- * instant) wording from the actual segmentation_type_id, not from HLS's
- * own OUT/IN naming (which is CUE-OUT/CUE-IN terminology, not SCTE-35's). */
+ * with PROGRAM-DATE-TIME, which may be after this runs). The cue's own
+ * "SCTE35-OUT"/"SCTE35-IN"/"SCTE35-CMD" key is only used to know a marker
+ * fired at all -- describeAllMarkers() decodes the real Start/End (or
+ * no-suffix, instant) wording, and each descriptor's own event_id,
+ * straight from the SCTE-35 bytes -- never from the DATERANGE `ID`
+ * attribute's string shape, which is loop-dee-loop's own signaling
+ * convention (see scte35Lite.ts's module docstring) and not something
+ * this player needs to understand.
+ *
+ * By default, several coincident events' DATERANGE tags carry
+ * byte-identical SCTE-35 payloads (one shared wire message -- see
+ * bake.py's `narrow_scte35_descriptors`), so all not-yet-seen active cues
+ * are grouped by (key, payload bytes) first -- each unique payload is
+ * decoded, and its toasts pushed, exactly once per activation, no matter
+ * how many DATERANGE tags deliver it. `cue.id` (the DATERANGE ID) is only
+ * ever used as an opaque per-tag token here, to know whether a given tag
+ * has already been processed -- loop-dee-loop scopes it to the loop
+ * number, so the same marker's tags are treated as new again next loop. */
 function attachHlsMetadataCueListener(video: HTMLVideoElement) {
   const wired = new WeakSet<TextTrack>()
 
@@ -109,19 +119,27 @@ function attachHlsMetadataCueListener(video: HTMLVideoElement) {
     track.addEventListener('cuechange', () => {
       const active = track.activeCues
       if (!active) return
+
+      const groups = new Map<string, { key: string; bytes: Uint8Array; ids: string[] }>()
       for (let i = 0; i < active.length; i++) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const cue = active[i] as any
         const key = cue.value?.key
-        if (key !== 'SCTE35-OUT' && key !== 'SCTE35-IN') continue
+        if (key !== 'SCTE35-OUT' && key !== 'SCTE35-IN' && key !== 'SCTE35-CMD') continue
         const id = String(cue.id ?? 'unknown')
-        const activation = `${id}:${key}`
-        if (hlsSeenActivations.has(activation)) continue
-        hlsSeenActivations.add(activation)
-        const eventId = eventIdFromDateRangeId(id)
+        if (hlsSeenActivations.has(`${id}:${key}`)) continue
         const bytes = new Uint8Array(cue.value.data as ArrayBuffer)
-        const label = Number.isNaN(eventId) ? 'SCTE-35' : describeMarkerLabel(bytes, eventId)
-        pushMarkerToast(hlsMarkerToasts, `${label} · ${Number.isNaN(eventId) ? id : eventId}`)
+        const groupKey = `${key}:${bytesToHex(bytes)}`
+        const group = groups.get(groupKey) ?? { key, bytes, ids: [] as string[] }
+        group.ids.push(id)
+        groups.set(groupKey, group)
+      }
+
+      for (const { key, bytes, ids } of groups.values()) {
+        for (const id of ids) hlsSeenActivations.add(`${id}:${key}`)
+        for (const marker of describeAllMarkers(bytes)) {
+          pushMarkerToast(hlsMarkerToasts, `${marker.label} · ${marker.eventId ?? '?'}`)
+        }
       }
     })
   }
@@ -293,15 +311,58 @@ async function playDash() {
     dashInstance.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
       dashLoading.value = false
     })
-    dashInstance.on(SCTE35_DASH_SCHEME, (e: { event?: { id?: number; duration?: number; messageData?: Uint8Array } }) => {
-      const id = e.event?.id
-      if (id == null) return
-      const key = `${id}-${e.event?.duration ?? ''}`
-      if (dashSeenEventKeys.has(key)) return
-      dashSeenEventKeys.add(key)
-      const label = e.event?.messageData ? describeMarkerLabel(e.event.messageData, id) : 'SCTE-35'
-      pushMarkerToast(dashMarkerToasts, `${label} · ${id}`)
-    })
+    // `e.event.id` is serve.py's own DASH `<Event id>` -- the real, plain
+    // segmentation/splice event_id (a decimal int; never parsed here, only
+    // ever compared for equality). Start and End of the same break SHARE
+    // that event_id by design, and can both be due in the same manifest
+    // at once -- so `id` ALONE isn't a unique per-occurrence token here,
+    // unlike HLS's DATERANGE `ID`. dash.js also exposes the enclosing
+    // <EventStream>'s own `value` attribute on the event object
+    // (`e.event.eventStream.value`), which is exactly what serve.py sets
+    // to disambiguate Start/End/instant and loop iteration (see
+    // serve.py's DASH <Event> authoring) -- combining the two, the same
+    // way HLS combines its cue id with the SCTE35-OUT/IN/CMD key, gives a
+    // genuinely unique-per-occurrence opaque token.
+    //
+    // Coincident events (see scte35Lite.ts's module docstring) fire as
+    // separate dash.js callback invocations, but genuinely simultaneous
+    // ones (same presentationTime) are dispatched synchronously
+    // back-to-back within one JS turn (confirmed against dash.js's own
+    // EventController source) -- queueMicrotask collects everything
+    // dash.js fires in that turn into one batch, grouped by payload
+    // bytes, so each unique underlying SCTE-35 message is decoded and
+    // announced exactly once no matter how many <Event> elements deliver
+    // it.
+    dashInstance.on(
+      SCTE35_DASH_SCHEME,
+      (e: { event?: { id?: string; eventStream?: { value?: string }; messageData?: Uint8Array } }) => {
+        const rawId = e.event?.id
+        const streamValue = e.event?.eventStream?.value
+        const bytes = e.event?.messageData
+        if (rawId == null || !bytes) return
+        const id = `${rawId}:${streamValue ?? ''}`
+        if (dashSeenEventKeys.has(id)) return
+
+        if (!dashPendingBatch) {
+          dashPendingBatch = new Map()
+          queueMicrotask(() => {
+            const batch = dashPendingBatch
+            dashPendingBatch = null
+            if (!batch) return
+            for (const { bytes: groupBytes, ids } of batch.values()) {
+              for (const groupId of ids) dashSeenEventKeys.add(groupId)
+              for (const marker of describeAllMarkers(groupBytes)) {
+                pushMarkerToast(dashMarkerToasts, `${marker.label} · ${marker.eventId ?? '?'}`)
+              }
+            }
+          })
+        }
+        const groupKey = bytesToHex(bytes)
+        const group = dashPendingBatch.get(groupKey) ?? { bytes, ids: [] as string[] }
+        group.ids.push(id)
+        dashPendingBatch.set(groupKey, group)
+      },
+    )
   } catch (e) {
     dashError.value = e instanceof Error ? e.message : String(e)
     dashLoading.value = false
@@ -338,6 +399,7 @@ function destroyDash() {
   dashLoading.value = false
   dashError.value = ''
   dashSeenEventKeys.clear()
+  dashPendingBatch = null
   dashMarkerToasts.value = []
   dashPlayheadTime.value = ''
 }

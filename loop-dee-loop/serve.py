@@ -39,7 +39,12 @@ from loop_math import (
     segment_index_for_position,
     ticks_to_wall_clock_seconds,
 )
-from scte35_signaling import build_daterange_tags, is_out_marker, markers_to_signaling
+from scte35_signaling import (
+    build_daterange_tags,
+    is_instant_segmentation,
+    is_out_marker,
+    markers_to_signaling,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +69,16 @@ def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: in
     field it happens to carry (that field describes the segmentation
     interval that just elapsed, not an instruction to keep signaling
     forward from here).
+
+    Standalone/instant markers (`is_instant_segmentation`, e.g. 0x02 Call
+    Ad Server) are always point-in-time too, even though their even
+    `segmentation_type_id` would otherwise satisfy `is_out_marker` -- there
+    is no matching CUE-IN that will ever close them, so they must never be
+    treated as an open forward-looking interval.
     """
     start = marker["pts_time_ticks"]
     duration = marker.get("segmentation_duration_ticks")
-    if duration and is_out_marker(marker):
+    if duration and is_out_marker(marker) and not is_instant_segmentation(marker):
         end = start + duration
         return seg_start_ticks < end and start < seg_end_ticks
     return seg_start_ticks <= start < seg_end_ticks
@@ -700,7 +711,34 @@ class Channel:
             # its own start.
             reference_entries = _period_entries(pkg.segment_boundary_ticks, local_indices)
 
-            event_xml_parts = []
+            # `id` is the real, plain event_id (as an actual int, matching
+            # SCTE-35's own segmentation_event_id / the channel config's
+            # `event_id` -- never a compound string): a player decodes the
+            # <Binary> payload itself (via the `scte35` npm package, same
+            # as HLS -- see igor's scte35Lite.ts describeAllMarkers()) to
+            # get the segmentation/splice type, rather than us encoding it
+            # into `id`.
+            #
+            # A Start/End pair SHARES one event_id by design (see the
+            # module docstring on event_id reuse), and once enough of a
+            # loop iteration has played out that BOTH halves sit inside the
+            # currently-open Period's never-pruned segment range (see the
+            # comment above `periods_plan`), they're both due in the SAME
+            # <EventStream> -- if `id` alone had to disambiguate them,
+            # dash.js's EventController (confirmed against its own source)
+            # would see the second one as a duplicate of the first
+            # (same id) and silently drop it, so the End marker would
+            # never fire. Likewise the exact same marker recurring next
+            # loop, with the exact same id, needs to be recognized as a
+            # NEW occurrence, not a dup of the one already scheduled --
+            # EventController's dedupe key isn't `id` alone though, it's
+            # `(EventStream@value, id)` (`(!value || eventStream.value ===
+            # value) && e.id === id`), so both problems are solved the
+            # DASH-native way: by grouping Events into separate
+            # <EventStream> elements whose own `@value` differs per
+            # (loop_number, start/end/instant) -- never by smuggling that
+            # information into `id`.
+            event_xml_by_stream: dict[str, list[str]] = {}
             for marker in pkg.markers:
                 # A single <Event> element describes the whole
                 # [presentationTime, presentationTime+duration) interval on
@@ -723,9 +761,17 @@ class Channel:
                     if marker.get("segmentation_duration_ticks") is not None
                     else ""
                 )
-                event_xml_parts.append(
+                event_id_dec = int(marker["event_id"], 16)
+                if is_instant_segmentation(marker):
+                    direction = "instant"
+                elif is_out_marker(marker):
+                    direction = "out"
+                else:
+                    direction = "in"
+                stream_value = f"{loop_number}-{direction}"
+                event_xml_by_stream.setdefault(stream_value, []).append(
                     f'    <Event presentationTime="{marker["pts_time_ticks"]}"'
-                    f'{duration_attr} id="{marker["event_id"]}-loop{loop_number}">\n'
+                    f'{duration_attr} id="{event_id_dec}">\n'
                     f'      <Signal xmlns="urn:scte:scte35:2013:xml">\n'
                     f'        <Binary>{marker["splice_command_b64"]}</Binary>\n'
                     f"      </Signal>\n"
@@ -769,10 +815,16 @@ class Channel:
       </Representation>
     </AdaptationSet>'''
 
+            event_streams_xml = "\n".join(
+                f'    <EventStream schemeIdUri="urn:scte:scte35:2014:xml+bin" '
+                f'timescale="{pkg.timescale}" value="{stream_value}">\n'
+                + "\n".join(events)
+                + "\n    </EventStream>"
+                for stream_value, events in event_xml_by_stream.items()
+            )
+
             period_xml_parts.append(f'''  <Period id="loop{loop_number}" start="PT{period_start_seconds}S">
-    <EventStream schemeIdUri="urn:scte:scte35:2014:xml+bin" timescale="{pkg.timescale}">
-{chr(10).join(event_xml_parts)}
-    </EventStream>
+{event_streams_xml}
     <AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
 {chr(10).join(video_representations)}
     </AdaptationSet>{audio_adaptation_set}

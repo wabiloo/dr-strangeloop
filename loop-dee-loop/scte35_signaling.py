@@ -38,6 +38,7 @@ class SignalingMarker:
     segmentation_duration_ticks: int | None
     splice_command_b64: str
     is_out: bool  # True = CUE-OUT / splice-out, False = CUE-IN / splice-in
+    is_instant: bool = False  # True = standalone signal, no OUT/IN pairing
 
 
 def _splice_command_base64_from_marker(marker: dict) -> str:
@@ -61,6 +62,44 @@ def _splice_command_base64_from_marker(marker: dict) -> str:
     )
 
 
+# SCTE-35 Table 22 segmentation_type_id values that are standalone/instant
+# signals -- NOT part of a Start/End pair (e.g. 0x02 "Call Ad Server"; there
+# is no "+1" partner the way there is for 0x30/0x31 Ad Start/End). Mirrors
+# franken-ts's own `INSTANT_SEGMENTATION_TYPE_IDS` (franken_ts/config.py) --
+# duplicated here rather than imported since loop-dee-loop and franken-ts
+# are separate tools/venvs by design (see repo-root AGENTS.md), consuming
+# only the `.markers.json` contract between them, never each other's code.
+INSTANT_SEGMENTATION_TYPE_IDS: frozenset[str] = frozenset({
+    "0x00",  # Not Indicated
+    "0x01",  # Content Identification
+    "0x02",  # Call Ad Server
+    "0x12",  # Program Early Termination
+    "0x13",  # Program Breakaway
+    "0x14",  # Program Resumption
+    "0x15",  # Program Runover Planned
+    "0x16",  # Program Runover Unplanned
+    "0x17",  # Program Overlap Start
+    "0x18",  # Program Blackout Override
+    "0x19",  # Program Start -- In Progress
+})
+
+
+def is_instant_segmentation(m: dict) -> bool:
+    """Whether a raw `.markers.json` entry is a standalone/instant signal
+    (see `INSTANT_SEGMENTATION_TYPE_IDS`) rather than one half of a
+    Start/End pair. franken-ts only ever emits ONE marker entry for these
+    (no matching stop event with `segmentation_type_id + 1`), so they must
+    never be treated as an open-ended CUE-OUT interval that some later
+    CUE-IN will close -- there is no such CUE-IN coming, on this loop or
+    any other.
+    """
+    seg_type_id = m.get("segmentation_type_id")
+    if seg_type_id is None:
+        return False
+    type_id_int = int(seg_type_id, 16) if isinstance(seg_type_id, str) else seg_type_id
+    return f"0x{type_id_int:02X}" in INSTANT_SEGMENTATION_TYPE_IDS
+
+
 def is_out_marker(m: dict) -> bool:
     """Whether a raw `.markers.json` entry is a CUE-OUT (ad-break start) as
     opposed to a CUE-IN (ad-break end). Shared between `markers_to_signaling`
@@ -72,6 +111,11 @@ def is_out_marker(m: dict) -> bool:
     Even `segmentation_type_id` -> "start" (e.g. 0x34 Program Start, 0x30
     Distributor placement opportunity start), odd -> "end" pair, matching
     franken-ts's own start/start+1 convention (scte35.py).
+
+    NOT meaningful for standalone/instant signals (see
+    `is_instant_segmentation`) -- callers must check that first: an instant
+    marker's even/odd type_id happens to satisfy this function's rule too
+    (e.g. 0x02 is even), but it is never actually a CUE-OUT half of a pair.
     """
     splice_type = m.get("splice_type")
     seg_type_id = m.get("segmentation_type_id")
@@ -96,6 +140,7 @@ def markers_to_signaling(
     for m in markers:
         seg_type_id = m.get("segmentation_type_id")
         is_out = is_out_marker(m)
+        is_instant = is_instant_segmentation(m)
 
         result.append(
             SignalingMarker(
@@ -105,6 +150,7 @@ def markers_to_signaling(
                 segmentation_duration_ticks=m.get("segmentation_duration_ticks"),
                 splice_command_b64=_splice_command_base64_from_marker(m),
                 is_out=is_out,
+                is_instant=is_instant,
             )
         )
     return result
@@ -129,26 +175,28 @@ def build_daterange_tags(
     as a final display step (SCOPE.md §4.2 "Hard rule").
 
     Follows the standard SCTE-35-in-HLS mapping: CUE-OUT markers get
-    SCTE35-OUT + PLANNED-DURATION, CUE-IN markers get SCTE35-IN.
-    SCTE35-CMD is intentionally never emitted here -- it's the fallback
-    attribute for a splice command with no resolvable CUE-OUT/CUE-IN
-    direction, which never happens for markers that reach this function
-    (`is_out_marker` always resolves one or the other, defaulting to
-    CUE-OUT). Emitting SCTE35-CMD alongside SCTE35-OUT/-IN would just be
-    redundant duplication of the same encoded command under a second
-    attribute name.
+    SCTE35-OUT + PLANNED-DURATION, CUE-IN markers get SCTE35-IN. The one
+    exception is standalone/instant markers (see `is_instant_segmentation`,
+    e.g. 0x02 Call Ad Server) -- these carry no real avail interval and no
+    future CUE-IN will ever close them, so they get the generic SCTE35-CMD
+    attribute instead, with no PLANNED-DURATION.
 
-    `loop_number` is folded into the emitted DATERANGE `ID` (e.g.
-    "0x00000001" -> "0x00000001-loop3"). Per RFC 8216 §4.4.5.1, an `ID`
-    that reappears across playlist reloads must carry byte-for-byte
-    identical attributes every time -- but a looping channel legitimately
-    re-signals the *same* underlying `event_id` every iteration with a new
-    START-DATE (real wall-clock time), which would otherwise violate that
-    rule. hls.js/most compliant clients detect the mismatch and silently
-    drop the tag (observed: "DATERANGE tag attribute: START-DATE does not
-    match for tags with ID..."), so downstream ad-signaling silently stops
-    working after the first loop. Scoping the ID to the loop number gives
-    each occurrence a genuinely unique, internally-consistent ID.
+    `loop_number` is folded into the emitted DATERANGE `ID`, whose format is
+    `<segmentation_type_id>-<event_id>-<loop_number>` (all decimal, e.g.
+    segmentation_type_id 0x22 + event_id 0x64 + loop 3 -> "34-100-3").
+    `segmentation_type_id` comes first so tags naturally group/sort by
+    signal kind (break/ppo/ad/... per SCTE-35 Table 22) before event
+    identity. Markers with no segmentation (bare `splice_insert`) use `0`
+    for the type-id component. Per RFC 8216 §4.4.5.1, an `ID` that
+    reappears across playlist reloads must carry byte-for-byte identical
+    attributes every time -- but a looping channel legitimately re-signals
+    the *same* underlying `event_id` every iteration with a new START-DATE
+    (real wall-clock time), which would otherwise violate that rule.
+    hls.js/most compliant clients detect the mismatch and silently drop the
+    tag (observed: "DATERANGE tag attribute: START-DATE does not match for
+    tags with ID..."), so downstream ad-signaling silently stops working
+    after the first loop. Scoping the ID to the loop number gives each
+    occurrence a genuinely unique, internally-consistent ID.
     """
     tags: list[str] = []
     for marker in markers:
@@ -156,22 +204,38 @@ def build_daterange_tags(
         start_date = program_start_datetime + _dt.timedelta(seconds=offset_seconds)
         start_date_str = start_date.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
+        event_id_dec = int(marker.event_id, 16)
+        seg_type_id_dec = (
+            int(marker.segmentation_type_id, 16)
+            if marker.segmentation_type_id is not None
+            else 0
+        )
+
         attrs = [
-            f'ID="{marker.event_id}-loop{loop_number}"',
+            f'ID="{seg_type_id_dec}-{event_id_dec}-{loop_number}"',
             f'START-DATE="{start_date_str}"',
             'CLASS="com.scte35"',
         ]
 
-        if marker.segmentation_duration_ticks is not None:
-            duration_seconds = _iso8601_duration_seconds(
-                marker.segmentation_duration_ticks, timescale
-            )
-            attrs.append(f'PLANNED-DURATION={duration_seconds:.3f}')
-
-        if marker.is_out:
-            attrs.append(f'SCTE35-OUT=0x{_b64_to_hex(marker.splice_command_b64)}')
+        if marker.is_instant:
+            # Standalone signal (e.g. Call Ad Server) -- there is no
+            # matching CUE-IN closing it, ever, so it must not be tagged as
+            # an open CUE-OUT avail (PLANNED-DURATION + SCTE35-OUT), which
+            # would leave every player thinking an ad break started and
+            # never ended. Use the generic SCTE35-CMD attribute instead,
+            # with no PLANNED-DURATION (there is no avail interval).
+            attrs.append(f'SCTE35-CMD=0x{_b64_to_hex(marker.splice_command_b64)}')
         else:
-            attrs.append(f'SCTE35-IN=0x{_b64_to_hex(marker.splice_command_b64)}')
+            if marker.segmentation_duration_ticks is not None:
+                duration_seconds = _iso8601_duration_seconds(
+                    marker.segmentation_duration_ticks, timescale
+                )
+                attrs.append(f'PLANNED-DURATION={duration_seconds:.3f}')
+
+            if marker.is_out:
+                attrs.append(f'SCTE35-OUT=0x{_b64_to_hex(marker.splice_command_b64)}')
+            else:
+                attrs.append(f'SCTE35-IN=0x{_b64_to_hex(marker.splice_command_b64)}')
 
         tags.append("#EXT-X-DATERANGE:" + ",".join(attrs))
 
