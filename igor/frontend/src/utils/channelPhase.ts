@@ -94,10 +94,31 @@ function awsMediaLivePhase(status: string): Phase {
   }
 }
 
-/** Phase for a row from the channel list endpoint (`stack_status` only). */
-export function listItemPhase(channel: Pick<ChannelListItem, 'backend' | 'stack_status'>): Phase {
+/** Phase for a row from the channel list endpoint. `stack_status` alone
+ * only says whether the CloudFormation stack is deployed -- for
+ * ecs-express/aws-media it stays COMPLETE (-> cfnStackPhase 'running')
+ * whether or not the service is actually serving (scaled to 0 / IDLE).
+ * `channel.py list` additionally fetches min_tasks/max_tasks or
+ * live_status once the stack has settled (see channelPhase.ts's callers
+ * and its-a-live/channel.py's cmd_list) -- prefer that real signal
+ * whenever it's present, and only fall back to the stack-only phase when
+ * it isn't (stack still transitioning/broken/not deployed, or the live
+ * fetch failed). */
+export function listItemPhase(
+  channel: Pick<ChannelListItem, 'backend' | 'stack_status' | 'live_status' | 'min_tasks'>,
+): Phase {
   if (channel.backend === 'local-docker') return localDockerPhase(channel.stack_status)
-  return cfnStackPhase(channel.stack_status)
+
+  const stackPhase = cfnStackPhase(channel.stack_status)
+  if (stackPhase !== 'running') return stackPhase
+
+  if (channel.backend === 'ecs-express' && channel.min_tasks != null) {
+    return channel.min_tasks === 0 ? 'stopped' : 'running'
+  }
+  if (channel.backend === 'aws-media' && channel.live_status) {
+    return awsMediaLivePhase(channel.live_status)
+  }
+  return stackPhase
 }
 
 /** Phase for a channel's live `/status` response. */

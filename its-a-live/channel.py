@@ -40,7 +40,11 @@ config file selects "aws-media" (MediaLive + MediaPackage v1) or
             intended for programmatic callers (e.g. a management UI).
   list      List channels found under a directory of TOML configs
             (default: the directory containing --config), each with its
-            CloudFormation stack status if deployed.
+            CloudFormation stack status if deployed, plus a live
+            running/stopped signal (min_tasks/max_tasks for ecs-express,
+            live_status for aws-media) once the stack has settled --
+            stack_status alone can't tell "deployed" apart from "deployed
+            but scaled to 0 / IDLE".
 
 Global flag --json (before or after the command) makes `status`,
 `outputs`, and `list` print a single JSON document instead of
@@ -200,6 +204,14 @@ def _stack_status(cf, stack_name):
         return None
 
 
+def _stack_status_is_settled(status):
+    """True for a stack_status where describe_stacks's Outputs (needed for
+    a live status() call) are actually populated and trustworthy: not
+    mid-transition (*_IN_PROGRESS), not broken (*_FAILED, *ROLLBACK*), and
+    not gone (DELETE_COMPLETE)."""
+    return not any(bad in status for bad in ("IN_PROGRESS", "FAILED", "ROLLBACK")) and status != "DELETE_COMPLETE"
+
+
 def cmd_list(config_path, extra_args, as_json=False):
     """List channels found from TOML configs in the same directory as
     --config (or the directory given as the sole extra arg), each paired
@@ -231,13 +243,34 @@ def cmd_list(config_path, extra_args, as_json=False):
             continue
         stack_name = _stack_name(cfg)
         cf = _session(cfg).client("cloudformation")
-        channels.append({
+        status_value = _stack_status(cf, stack_name)
+        entry = {
             "config_path": path,
             "name": name,
             "backend": backend,
             "stack_name": stack_name,
-            "stack_status": _stack_status(cf, stack_name),
-        })
+            "stack_status": status_value,
+        }
+        # A healthy stack_status only means the stack is deployed -- it says
+        # nothing about whether the service behind it is actually serving
+        # (ecs-express scaled to 0, aws-media IDLE) or not, unlike
+        # local-docker above (whose Docker status already IS the live
+        # signal). Fetch the cheap live status too, so the list -- like
+        # local-docker's -- reflects the real running/stopped state, not
+        # just "stack exists". Best-effort: swallow failures (e.g. a
+        # missing output on a freshly-created stack) and fall back to
+        # stack_status alone.
+        if status_value and _stack_status_is_settled(status_value):
+            try:
+                outputs = _cf_outputs(cfg, stack_name)
+                live = _ops(cfg).status(cfg, _session(cfg), outputs)
+                entry["live_status"] = live.get("status")
+                if backend == "ecs-express":
+                    entry["min_tasks"] = live.get("min_tasks")
+                    entry["max_tasks"] = live.get("max_tasks")
+            except Exception:
+                pass
+        channels.append(entry)
 
     if as_json:
         print(json.dumps(channels))
@@ -246,8 +279,13 @@ def cmd_list(config_path, extra_args, as_json=False):
         print(f"No *.toml configs found in {directory}")
         return
     for c in channels:
+        live = ""
+        if c["backend"] == "ecs-express" and c.get("min_tasks") is not None:
+            live = f" tasks={c['min_tasks']}/{c['max_tasks']}"
+        elif c.get("live_status"):
+            live = f" live={c['live_status']}"
         print(f"  {c['name']:<20} backend={c['backend']:<12} "
-              f"stack_status={c['stack_status'] or 'not deployed':<20} {c['config_path']}")
+              f"stack_status={c['stack_status'] or 'not deployed':<20}{live} {c['config_path']}")
 
 
 def _ensure_shared_stack_if_needed(cfg, config_path):

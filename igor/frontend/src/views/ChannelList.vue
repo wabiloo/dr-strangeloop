@@ -8,7 +8,7 @@ import { onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { listChannels } from '../api/client'
 import type { ChannelListItem } from '../api/types'
-import { listItemPhase, phaseSeverity } from '../utils/channelPhase'
+import { PHASE_LABEL, listItemPhase, phaseSeverity } from '../utils/channelPhase'
 
 const router = useRouter()
 const channels = ref<ChannelListItem[]>([])
@@ -28,10 +28,21 @@ async function load() {
 }
 
 // Badge color reflects the same running/stopped/failed/... phase across
-// backends (see utils/channelPhase.ts); the tag text keeps the raw
-// backend-specific status string, since that's still useful for debugging.
+// backends (see utils/channelPhase.ts).
 function statusSeverity(channel: ChannelListItem) {
   return phaseSeverity(listItemPhase(channel))
+}
+
+// Tag text leads with the resolved phase (what you actually came here to
+// know -- is it serving or not) and keeps the raw CloudFormation
+// stack_status alongside it in parentheses, since that's still useful for
+// debugging (e.g. a stuck ROLLBACK_COMPLETE). Raw stack_status ALONE used
+// to be the whole tag, which for ecs-express/aws-media reads as green
+// "CREATE_COMPLETE" even when the service is scaled to 0 / IDLE -- see
+// listItemPhase's doc comment.
+function statusLabel(channel: ChannelListItem) {
+  const label = PHASE_LABEL[listItemPhase(channel)]
+  return channel.stack_status ? `${label} (${channel.stack_status})` : label
 }
 
 onMounted(load)
@@ -68,9 +79,9 @@ onMounted(load)
           <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>
-      <Column header="Stack status">
+      <Column header="Status">
         <template #body="{ data }">
-          <Tag :value="data.stack_status || 'not deployed'" :severity="statusSeverity(data)" />
+          <Tag :value="statusLabel(data)" :severity="statusSeverity(data)" />
         </template>
       </Column>
       <Column field="stack_name" header="CloudFormation stack" />

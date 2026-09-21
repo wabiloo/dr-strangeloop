@@ -304,6 +304,17 @@ const playbackDashUrl = computed(() =>
   status.value?.backend === 'local-docker' ? status.value.dash_url : outputs.value?.DashPlaybackUrl,
 )
 
+// CloudFormation stack outputs (and hence playbackHlsUrl/playbackDashUrl)
+// stay populated whether or not the channel is actually serving -- a
+// stopped ecs-express service (scaled to 0) or an IDLE MediaLive channel
+// both still have an HlsPlaybackUrl/DashPlaybackUrl output. Gating on the
+// live phase too (not just URL presence) means Stop actually tears the
+// players down (PlaybackPanel's onBeforeUnmount destroys both) instead of
+// leaving them mounted and auto-playing/erroring against a dead stream.
+const showPlayback = computed(
+  () => (playbackHlsUrl.value || playbackDashUrl.value) && phase.value !== 'stopped' && phase.value !== 'not-deployed',
+)
+
 async function loadConfig() {
   try {
     config.value = await getChannel(props.name)
@@ -397,7 +408,7 @@ watch(() => props.name, reload)
     </Message>
 
     <PlaybackPanel
-      v-if="playbackHlsUrl || playbackDashUrl"
+      v-if="showPlayback"
       :hls-url="playbackHlsUrl"
       :dash-url="playbackDashUrl"
       :health="health"
