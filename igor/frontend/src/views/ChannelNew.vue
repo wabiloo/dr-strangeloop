@@ -144,6 +144,7 @@ async function submit() {
 
     <Message v-if="error" severity="error">{{ error }}</Message>
 
+    <h4 class="mb-0">Channel</h4>
     <div class="flex flex-column gap-1">
       <label for="name">Channel name</label>
       <InputText id="name" v-model="form.name" placeholder="my-channel" :invalid="Boolean(form.name) && Boolean(nameError)" />
@@ -155,24 +156,25 @@ async function submit() {
       <Select id="backend" v-model="form.backend" :options="backendOptions" option-label="label" option-value="value" />
     </div>
 
-    <div class="flex flex-column gap-1">
-      <label for="region">AWS region</label>
-      <InputText id="region" v-model="form.region" placeholder="eu-west-1" :disabled="isLocalDocker" />
-      <div v-if="isLocalDocker" class="text-color-secondary text-xs">Ignored by local-docker (no AWS resources involved).</div>
-    </div>
+    <template v-if="!isLocalDocker">
+      <h4 class="mb-0 mt-2">AWS / S3</h4>
+      <div class="flex flex-column gap-1">
+        <label for="region">AWS region</label>
+        <InputText id="region" v-model="form.region" placeholder="eu-west-1" />
+      </div>
 
-    <div class="flex flex-column gap-1">
-      <label for="bucket">Existing S3 bucket name</label>
-      <InputText id="bucket" v-model="form.bucket_name" placeholder="my-existing-bucket" :disabled="isLocalDocker" />
-      <div v-if="isLocalDocker" class="text-color-secondary text-xs">Ignored by local-docker.</div>
-    </div>
+      <div class="flex flex-column gap-1">
+        <label for="bucket">Existing S3 bucket name</label>
+        <InputText id="bucket" v-model="form.bucket_name" placeholder="my-existing-bucket" />
+      </div>
 
-    <div class="flex flex-column gap-1">
-      <label for="folder">S3 content folder (prefix)</label>
-      <InputText id="folder" v-model="form.content_folder" placeholder="its-a-live/content" :disabled="isLocalDocker" />
-      <div v-if="isLocalDocker" class="text-color-secondary text-xs">Ignored by local-docker.</div>
-    </div>
+      <div class="flex flex-column gap-1">
+        <label for="folder">S3 content folder (prefix)</label>
+        <InputText id="folder" v-model="form.content_folder" placeholder="its-a-live/content" />
+      </div>
+    </template>
 
+    <h4 class="mb-0 mt-2">Content</h4>
     <div class="flex flex-column gap-1">
       <label for="source-playlist">Playlist</label>
       <Select
@@ -198,6 +200,7 @@ async function submit() {
     </div>
 
     <template v-if="usesChannelSection">
+      <h4 class="mb-0 mt-2">Packaging</h4>
       <div class="grid">
         <div class="col-6 flex flex-column gap-1">
           <label for="segdur">Segment duration (s)</label>
