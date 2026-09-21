@@ -43,11 +43,6 @@ let dashInstance: any = null
 
 const scriptPromises: Record<string, Promise<void> | undefined> = {}
 
-// Set at the start of each playHls()/playDash() -- see
-// HLS_MARKER_JOIN_SUPPRESS_MS / DASH_MARKER_JOIN_SUPPRESS_MS.
-let hlsJoinedAt = 0
-let dashJoinedAt = 0
-
 // --- SCTE-35 marker toast overlay -------------------------------------------
 //
 // hls.js: EXT-X-DATERANGE tags are exposed as real, natively-timed
@@ -77,16 +72,30 @@ const SCTE35_DASH_SCHEME = 'urn:scte:scte35:2014:xml+bin'
 // Neither is "wrong" -- those markers genuinely already happened within
 // the window -- but announcing that whole backlog as if it just occurred
 // is misleading (and was the literal complaint: opening the page showed
-// toasts for markers from loops ago). Anything landing within this
-// suppression window of a fresh join is recorded as seen (so it doesn't
-// re-announce once its real recurrence comes around) but never toasted;
-// this only needs to outlast the initial catch-up burst, not overlap with
-// how soon a genuinely new marker could plausibly occur. HLS's window is
-// longer than DASH's -- hls.js's DVR window (several segments' worth of
-// backlog, plus its own manifest-parsing/cue-population latency) settles
-// slower than dash.js's per-<Event> catch-up loop, in practice.
-const HLS_MARKER_JOIN_SUPPRESS_MS = 5000
-const DASH_MARKER_JOIN_SUPPRESS_MS = 2000
+// toasts for markers from loops ago).
+//
+// Rather than guess how long that initial catch-up takes (a fixed
+// "suppress everything for N seconds after join" window -- tried first,
+// but that either cuts a slow join's backlog short or wrongly swallows a
+// genuinely new marker landing early), compare the marker's OWN
+// presentation time against the player's actual current position, on
+// BOTH players' native timelines:
+//   - hls.js: `cue.startTime` is already the real media-timeline position
+//     hls.js computed for this DATERANGE (that's what drives the
+//     browser's own native cue-timing in the first place) -- directly
+//     comparable to `video.currentTime`.
+//   - dash.js: `event.calculatedPresentationTime` is what dash.js's own
+//     EventController compares against its internal "current video time"
+//     before ever dispatching a listener (confirmed against its source:
+//     `event.calculatedPresentationTime <= currentVideoTime`) -- equally
+//     directly comparable to `video.currentTime` here.
+// A marker whose own position is more than this far behind the current
+// position is backlog (it already happened before we started watching,
+// however recently); anything closer is a genuine just-now activation.
+// One shared constant since both comparisons land on the same kind of
+// timeline -- no need for the two guessed, player-specific numbers a
+// join-time window required.
+const MARKER_STALE_THRESHOLD_SECONDS = 2
 
 // Single source of truth for how long a toast stays mounted -- also drives
 // its CSS fade-out (see the `--marker-toast-life` custom property below and
@@ -107,7 +116,7 @@ const dashSeenEventKeys = new Set<string>()
 /** Coincident dash.js SCTE-35 events (same batch of `EventController`
  * callback firings, see attachHls.../playDash's SCTE35_DASH_SCHEME
  * listener) pending their queueMicrotask flush, grouped by payload bytes. */
-let dashPendingBatch: Map<string, { bytes: Uint8Array; ids: string[] }> | null = null
+let dashPendingBatch: Map<string, { bytes: Uint8Array; presentationTime: number; ids: string[] }> | null = null
 
 /** Icon per Scte35MarkerKind -- Start/End/Other get visually distinct
  * treatment (not just wording) so a run of toasts is scannable at a
@@ -177,7 +186,10 @@ function attachHlsMetadataCueListener(video: HTMLVideoElement) {
       // sharing that payload, and each group independently re-announced
       // every event in it: a payload shared across OUT+IN+CMD got
       // announced 3 times over, not once.
-      const groups = new Map<string, { bytes: Uint8Array; idKeys: { id: string; key: string }[] }>()
+      const groups = new Map<
+        string,
+        { bytes: Uint8Array; startTime: number; idKeys: { id: string; key: string }[] }
+      >()
       for (let i = 0; i < active.length; i++) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const cue = active[i] as any
@@ -187,17 +199,20 @@ function attachHlsMetadataCueListener(video: HTMLVideoElement) {
         if (hlsSeenActivations.has(`${id}:${key}`)) continue
         const bytes = new Uint8Array(cue.value.data as ArrayBuffer)
         const groupKey = bytesToHex(bytes)
-        const group = groups.get(groupKey) ?? { bytes, idKeys: [] as { id: string; key: string }[] }
+        const group = groups.get(groupKey) ?? {
+          bytes,
+          startTime: cue.startTime as number,
+          idKeys: [] as { id: string; key: string }[],
+        }
         group.idKeys.push({ id, key })
         groups.set(groupKey, group)
       }
 
-      for (const { bytes, idKeys } of groups.values()) {
+      for (const { bytes, startTime, idKeys } of groups.values()) {
         for (const { id, key } of idKeys) hlsSeenActivations.add(`${id}:${key}`)
-        // Suppress the initial catch-up burst (see
-        // HLS_MARKER_JOIN_SUPPRESS_MS) -- still marked seen above, so it
-        // never re-announces later.
-        if (Date.now() - hlsJoinedAt < HLS_MARKER_JOIN_SUPPRESS_MS) continue
+        // Backlog, not a fresh activation (see MARKER_STALE_THRESHOLD_SECONDS)
+        // -- still marked seen above, so it never re-announces later.
+        if (video.currentTime - startTime > MARKER_STALE_THRESHOLD_SECONDS) continue
         for (const marker of describeAllMarkers(bytes)) {
           pushMarkerToast(hlsMarkerToasts, `${marker.label} · ${marker.eventId ?? '?'}`, marker.kind)
         }
@@ -270,7 +285,6 @@ async function playHls() {
       })
       hlsInstance.loadSource(url)
       hlsInstance.attachMedia(video)
-      hlsJoinedAt = Date.now()
       attachHlsMetadataCueListener(video)
       hlsInstance.on(Hls.Events.ERROR, (_evt: unknown, data: { fatal?: boolean; details?: string }) => {
         if (data?.fatal) hlsError.value = `hls.js fatal error: ${data.details ?? 'unknown'}`
@@ -366,7 +380,6 @@ async function playDash() {
         },
       },
     })
-    dashJoinedAt = Date.now()
     dashInstance.initialize(video, url, true)
     dashInstance.on(dashjs.MediaPlayer.events.ERROR, (e: { error?: { message?: string } }) => {
       dashError.value = `dash.js error: ${e?.error?.message ?? 'unknown'}`
@@ -398,11 +411,19 @@ async function playDash() {
     // it.
     dashInstance.on(
       SCTE35_DASH_SCHEME,
-      (e: { event?: { id?: string; eventStream?: { value?: string }; messageData?: Uint8Array } }) => {
+      (e: {
+        event?: {
+          id?: string
+          eventStream?: { value?: string }
+          messageData?: Uint8Array
+          calculatedPresentationTime?: number
+        }
+      }) => {
         const rawId = e.event?.id
         const streamValue = e.event?.eventStream?.value
         const bytes = e.event?.messageData
-        if (rawId == null || !bytes) return
+        const presentationTime = e.event?.calculatedPresentationTime
+        if (rawId == null || !bytes || presentationTime == null) return
         const id = `${rawId}:${streamValue ?? ''}`
         if (dashSeenEventKeys.has(id)) return
 
@@ -412,12 +433,12 @@ async function playDash() {
             const batch = dashPendingBatch
             dashPendingBatch = null
             if (!batch) return
-            for (const { bytes: groupBytes, ids } of batch.values()) {
+            for (const { bytes: groupBytes, presentationTime: groupPresentationTime, ids } of batch.values()) {
               for (const groupId of ids) dashSeenEventKeys.add(groupId)
-              // Suppress the initial catch-up burst (see
-              // DASH_MARKER_JOIN_SUPPRESS_MS) -- still marked seen above,
-              // so it never re-announces later.
-              if (Date.now() - dashJoinedAt < DASH_MARKER_JOIN_SUPPRESS_MS) continue
+              // Backlog, not a fresh activation (see
+              // MARKER_STALE_THRESHOLD_SECONDS) -- still marked seen
+              // above, so it never re-announces later.
+              if (video.currentTime - groupPresentationTime > MARKER_STALE_THRESHOLD_SECONDS) continue
               for (const marker of describeAllMarkers(groupBytes)) {
                 pushMarkerToast(dashMarkerToasts, `${marker.label} · ${marker.eventId ?? '?'}`, marker.kind)
               }
@@ -425,7 +446,7 @@ async function playDash() {
           })
         }
         const groupKey = bytesToHex(bytes)
-        const group = dashPendingBatch.get(groupKey) ?? { bytes, ids: [] as string[] }
+        const group = dashPendingBatch.get(groupKey) ?? { bytes, presentationTime, ids: [] as string[] }
         group.ids.push(id)
         dashPendingBatch.set(groupKey, group)
       },
