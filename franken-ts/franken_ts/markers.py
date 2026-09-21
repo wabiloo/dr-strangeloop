@@ -42,6 +42,10 @@ def build_markers(
             "pts_time_ticks": pts,
             "pts_time_seconds": pts / PTS_CLOCK,
             "assets": list(ab.assets),
+            # loop-dee-loop's scte35_signaling.is_out_marker() falls back to
+            # this for splice_insert markers, which carry no
+            # segmentation_type_id parity to distinguish start/stop.
+            "is_out": boundary.is_start,
         }
 
         if ab.splice_type == "time_signal" and ab.segmentation is not None:
