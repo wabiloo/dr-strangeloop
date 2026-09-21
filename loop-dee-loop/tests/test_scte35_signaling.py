@@ -35,7 +35,7 @@ def test_daterange_id_is_segtype_event_loop_decimal():
     assert 'ID="34-100-3"' in tags[0]
 
 
-def test_daterange_id_uses_zero_type_id_when_no_segmentation():
+def test_daterange_id_uses_splice_out_prefix_when_no_segmentation():
     marker = SignalingMarker(
         event_id="0x00000001",
         pts_time_ticks=0,
@@ -47,7 +47,40 @@ def test_daterange_id_uses_zero_type_id_when_no_segmentation():
 
     tags = build_daterange_tags([marker], timescale=90_000, program_start_datetime=_START, loop_number=0)
 
-    assert 'ID="0-1-0"' in tags[0]
+    assert 'ID="splice-out-1-0"' in tags[0]
+
+
+def test_daterange_id_differs_for_splice_insert_out_vs_in():
+    """A splice_insert cue-out and its explicit (non-auto_return) cue-in
+    land in the same loop iteration with the same event_id -- with no
+    segmentation_type_id parity to lean on (unlike time_signal), their IDs
+    must still differ, or hls.js treats the second tag as an update to the
+    same DateRange (whose START-DATE then mismatches per RFC 8216 4.3.2.7)
+    instead of a second, independently-timed cue -- the cue-in's own
+    cuechange activation silently never fires."""
+    out_marker = SignalingMarker(
+        event_id="0x00000001",
+        pts_time_ticks=0,
+        segmentation_type_id=None,
+        segmentation_duration_ticks=450_000,
+        splice_command_b64="AAAA",
+        is_out=True,
+    )
+    in_marker = SignalingMarker(
+        event_id="0x00000001",
+        pts_time_ticks=450_000,
+        segmentation_type_id=None,
+        segmentation_duration_ticks=None,
+        splice_command_b64="BBBB",
+        is_out=False,
+    )
+
+    tags = build_daterange_tags(
+        [out_marker, in_marker], timescale=90_000, program_start_datetime=_START, loop_number=0,
+    )
+
+    assert 'ID="splice-out-1-0"' in tags[0]
+    assert 'ID="splice-in-1-0"' in tags[1]
 
 
 def test_instant_marker_has_no_planned_duration():

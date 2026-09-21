@@ -181,13 +181,20 @@ def build_daterange_tags(
     future CUE-IN will ever close them, so they get the generic SCTE35-CMD
     attribute instead, with no PLANNED-DURATION.
 
-    `loop_number` is folded into the emitted DATERANGE `ID`, whose format is
+    `loop_number` is folded into the emitted DATERANGE `ID`. For a
+    `time_signal` marker (real `segmentation_type_id`) the format is
     `<segmentation_type_id>-<event_id>-<loop_number>` (all decimal, e.g.
-    segmentation_type_id 0x22 + event_id 0x64 + loop 3 -> "34-100-3").
+    segmentation_type_id 0x22 + event_id 0x64 + loop 3 -> "34-100-3") --
     `segmentation_type_id` comes first so tags naturally group/sort by
     signal kind (break/ppo/ad/... per SCTE-35 Table 22) before event
-    identity. Markers with no segmentation (bare `splice_insert`) use `0`
-    for the type-id component. Per RFC 8216 §4.4.5.1, an `ID` that
+    identity. A bare `splice_insert` marker carries no segmentation_type_id
+    to lean on, so it instead gets `splice-out-<event_id>-<loop_number>` /
+    `splice-in-<event_id>-<loop_number>` -- unlike time_signal's even/odd
+    Start/End type_id pair, splice_insert has nothing else to make the two
+    tags' IDs differ, and an explicit (non-auto_return) pair landing in the
+    same loop iteration otherwise collides on identical
+    `event_id`+`loop_number` too (see the ID-collision note below). Per
+    RFC 8216 §4.4.5.1, an `ID` that
     reappears across playlist reloads must carry byte-for-byte identical
     attributes every time -- but a looping channel legitimately re-signals
     the *same* underlying `event_id` every iteration with a new START-DATE
@@ -205,14 +212,32 @@ def build_daterange_tags(
         start_date_str = start_date.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
         event_id_dec = int(marker.event_id, 16)
-        seg_type_id_dec = (
-            int(marker.segmentation_type_id, 16)
-            if marker.segmentation_type_id is not None
-            else 0
-        )
+        if marker.segmentation_type_id is not None:
+            seg_type_id_dec = int(marker.segmentation_type_id, 16)
+            marker_id = f'{seg_type_id_dec}-{event_id_dec}-{loop_number}'
+        else:
+            # splice_insert carries no segmentation_type_id, so (unlike
+            # time_signal's even/odd Start/End pair) there's nothing here to
+            # naturally make a cue-out and its cue-in produce different IDs.
+            # Without this, an explicit (non-auto_return) pair shares the
+            # exact same ID for both tags -- same event_id, same
+            # loop_number, both landing in one loop iteration -- which
+            # collides with RFC 8216 4.3.2.7 ("any AttributeName in both
+            # tags MUST have the same AttributeValue") since their
+            # START-DATEs genuinely differ. hls.js treats same-ID tags as
+            # updates to one DateRange rather than two independent cues, so
+            # the cue-in's own cuechange activation never fires -- its
+            # SCTE35-IN tag is in the manifest text but never becomes a
+            # distinct on-screen event. "splice-out"/"splice-in" (spelled
+            # out, rather than reusing the numeric segmentation_type_id
+            # slot) makes it obvious at a glance which half of the pair a
+            # given ID belongs to, without colliding with any real
+            # segmentation_type_id-based ID from a time_signal marker.
+            direction = 'splice-out' if marker.is_out else 'splice-in'
+            marker_id = f'{direction}-{event_id_dec}-{loop_number}'
 
         attrs = [
-            f'ID="{seg_type_id_dec}-{event_id_dec}-{loop_number}"',
+            f'ID="{marker_id}"',
             f'START-DATE="{start_date_str}"',
             'CLASS="com.scte35"',
         ]
