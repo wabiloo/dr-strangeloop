@@ -21,6 +21,15 @@ const building = ref(false)
 
 const selectedPlaylist = computed(() => playlists.value.find((c) => c.name === selectedPlaylistName.value) ?? null)
 
+const NAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
+const nameError = computed(() => {
+  if (!form.name) return 'Required.'
+  if (!NAME_RE.test(form.name)) {
+    return 'Lowercase letters, digits, and hyphens only; cannot start or end with a hyphen.'
+  }
+  return ''
+})
+
 const playlistOptions = computed(() =>
   playlists.value.map((c) => ({
     label: c.error
@@ -93,6 +102,7 @@ const isLocalDocker = computed(() => form.backend === 'local-docker')
 const usesChannelSection = computed(() => isEcsExpress.value || isLocalDocker.value)
 
 async function submit() {
+  if (nameError.value) return
   saving.value = true
   error.value = ''
   try {
@@ -119,7 +129,8 @@ async function submit() {
 
     <div class="flex flex-column gap-1">
       <label for="name">Channel name</label>
-      <InputText id="name" v-model="form.name" placeholder="my-channel" />
+      <InputText id="name" v-model="form.name" placeholder="my-channel" :invalid="Boolean(form.name) && Boolean(nameError)" />
+      <div v-if="form.name && nameError" class="text-red-500 text-xs">{{ nameError }}</div>
     </div>
 
     <div class="flex flex-column gap-1">
@@ -197,7 +208,7 @@ async function submit() {
     </template>
 
     <div>
-      <Button label="Save channel definition" icon="pi pi-check" :loading="saving" @click="submit" />
+      <Button label="Save channel definition" icon="pi pi-check" :loading="saving" :disabled="Boolean(nameError)" @click="submit" />
     </div>
   </div>
 </template>

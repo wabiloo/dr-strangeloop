@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import re
+
 import httpx
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from igor.integrations import franken_ts, its_a_live
 from igor.store import channels as channel_store
 
 router = APIRouter()
+
+# Channel name becomes a CloudFormation stack name component
+# (ItsALiveStack-{name}-{backend}, see its-a-live/app.py), a bare TOML
+# filename (data/channels/{name}.toml), and -- for local-docker/ecs-express
+# -- a container/service name, so it needs to be a safe DNS-label-like
+# token rather than just "non-empty".
+_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 class ChannelCreatePayload(BaseModel):
@@ -24,6 +33,16 @@ class ChannelCreatePayload(BaseModel):
     port: int = 8080
     cpu: int = 256
     memory: int = 512
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        if not _NAME_RE.match(v):
+            raise ValueError(
+                "name must be 1-63 lowercase letters, digits, or hyphens, "
+                "and cannot start or end with a hyphen"
+            )
+        return v
 
 
 @router.get("/")
