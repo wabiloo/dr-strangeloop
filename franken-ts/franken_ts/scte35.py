@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Optional
 from xml.etree import ElementTree as ET
 
 from .pts import PTS_CLOCK
@@ -21,8 +22,12 @@ def _splice_insert_pair(
     root: ET.Element,
     boundary_start: AdBoundary,
     start_pts: int,
-    end_pts: int,
+    end_pts: Optional[int],
 ) -> None:
+    """Emit the splice-out message, and -- unless `ab.auto_return` -- the
+    paired splice-in message. `end_pts` is None exactly when `auto_return`
+    is set (no stop boundary was resolved for this marker -- see
+    `timeline.resolve_markers`)."""
     ab = boundary_start.marker
     break_duration_pts = round(boundary_start.break_duration * PTS_CLOCK)
     event_hex = f"0x{ab.event_id:08X}"
@@ -42,11 +47,16 @@ def _splice_insert_pair(
                            avails_expected=str(ab.avails_expected),
                            pts_time=format_pts(start_pts))
     ET.SubElement(si_out, "break_duration",
-                  auto_return="false",
+                  auto_return=str(ab.auto_return).lower(),
                   duration=format_pts(break_duration_pts))
-    _avail_descriptor(sit_out, ab.provider_avail_id)
+    if ab.descriptors:
+        _avail_descriptor(sit_out, ab.provider_avail_id)
+
+    if ab.auto_return:
+        return
 
     # Splice-in (end of ad break)
+    assert end_pts is not None
     sit_in = ET.SubElement(root, "splice_information_table",
                            protocol_version="0",
                            pts_adjustment="0",
@@ -60,7 +70,8 @@ def _splice_insert_pair(
                   avail_num=str(ab.avail_num),
                   avails_expected=str(ab.avails_expected),
                   pts_time=format_pts(end_pts))
-    _avail_descriptor(sit_in, ab.provider_avail_id)
+    if ab.descriptors:
+        _avail_descriptor(sit_in, ab.provider_avail_id)
 
 
 def _time_signal_message(
@@ -82,9 +93,6 @@ def _time_signal_message(
                          pts_adjustment="0",
                          tier="0x0FFF")
     ET.SubElement(sit, "time_signal", pts_time=format_pts(pts))
-
-    # One avail descriptor is enough per message; reuse the first boundary's.
-    _avail_descriptor(sit, boundaries_at_pts[0].marker.provider_avail_id)
 
     for boundary in boundaries_at_pts:
         ab = boundary.marker
@@ -145,7 +153,7 @@ def generate_xml(
         seen.add(eid)
 
         start_pts = pts_map[(eid, True)]
-        end_pts = pts_map[(eid, False)]
+        end_pts = pts_map.get((eid, False))  # None when auto_return (no stop boundary)
 
         root.append(ET.Comment(f" Event {eid} "))
         _splice_insert_pair(root, boundary, start_pts, end_pts)

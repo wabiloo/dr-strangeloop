@@ -279,8 +279,14 @@ def resolve_markers(
         # e.g. 0x13 Program Breakaway is its own distinct type, not "0x12
         # End" -- so only one boundary is emitted, at the marker's span
         # start. Start/End pairs (the common case: break/ppo/ad/etc.) keep
-        # emitting both.
-        if not is_instant_segmentation(marker.segmentation):
+        # emitting both. `splice_insert` with `auto_return` similarly has no
+        # stop boundary -- the receiver returns on its own once
+        # `break_duration` elapses, so there's no explicit cue-in to inject.
+        needs_stop_boundary = (
+            not marker.auto_return if marker.splice_type == "splice_insert"
+            else not is_instant_segmentation(marker.segmentation)
+        )
+        if needs_stop_boundary:
             boundaries.append(AdBoundary(
                 output_time=end_time,
                 event_id=marker.event_id,

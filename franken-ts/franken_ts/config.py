@@ -150,6 +150,17 @@ class SpliceConfig(BaseModel):
     avail_num: int = 18
     avails_expected: int = 255
     provider_avail_id: str = "0x00000012"
+    # `splice_insert` only: whether to attach the legacy splice_avail_descriptor
+    # (tag 0) to each splice_insert message. Set false for a bare splice_insert
+    # with no descriptor loop at all.
+    descriptors: bool = True
+    # `splice_insert` only: whether the receiver should return to network on
+    # its own once `break_duration` elapses (SCTE-35 `auto_return`), vs. an
+    # explicit second `splice_insert` (out_of_network=false) marking the real
+    # return point. `True` (the default) emits a single message and no
+    # cue-in; `False` emits the out/in pair, matching `time_signal`'s
+    # start/stop signaling.
+    auto_return: bool = True
     segmentation: Optional[SegmentationConfig] = None
 
     @model_validator(mode="after")
