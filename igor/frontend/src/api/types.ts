@@ -36,6 +36,8 @@ export interface MarkerEntry {
     segment_num?: number | null
     segments_expected?: number | null
   }
+  /** `splice_insert` only, default true -- see franken_ts.config.SpliceConfig.auto_return. */
+  auto_return?: boolean
 }
 
 /** One resolved entry from POST /playlists/{name}/resolve-markers -- real

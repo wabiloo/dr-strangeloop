@@ -101,6 +101,23 @@ function segmentationLabel(typeId: number): { label: string; kind: Scte35MarkerK
   return { label: `${name} ${kind === 'start' ? 'Start' : 'End'}`, kind }
 }
 
+/** Splice Insert label wording distinguishes three cases -- see
+ * franken-ts/franken_ts/config.py's `auto_return` field and scte35.py's
+ * `_splice_insert_pair` for the encoder side of this:
+ *   - 'end' (outOfNetworkIndicator false): an explicit cue-in, always
+ *     paired with a preceding cue-out (auto_return=false encoder-side --
+ *     an auto-return break never gets one of these).
+ *   - 'start' with breakDuration.autoReturn true: a single self-contained
+ *     message, no cue-in will ever follow.
+ *   - 'start' otherwise (autoReturn false, or no break_duration signaled
+ *     at all): a cue-out that expects an explicit cue-in later.
+ *   - 'other' (outOfNetworkIndicator absent): no resolvable direction. */
+function spliceInsertLabel(kind: Scte35MarkerKind, autoReturn: boolean | undefined): string {
+  if (kind === 'other') return 'Splice Insert'
+  if (kind === 'end') return 'Splice Insert (Cue-In)'
+  return autoReturn === true ? 'Splice Insert (Auto-Return)' : 'Splice Insert (Cue-Out)'
+}
+
 /** Decode `bytes` (a full splice_info_section) into one label per event it
  * describes -- see module docstring for why this never takes an
  * externally-supplied event_id. Returns [] if the bytes don't parse as
@@ -131,7 +148,7 @@ export function describeAllMarkers(bytes: Uint8Array): Scte35MarkerLabel[] {
     const insert = section.spliceCommand as ISpliceInsertEvent | undefined
     const kind: Scte35MarkerKind =
       insert?.outOfNetworkIndicator == null ? 'other' : insert.outOfNetworkIndicator ? 'start' : 'end'
-    const label = kind === 'other' ? 'Splice Insert' : `Splice Insert ${kind === 'start' ? 'Start' : 'End'}`
+    const label = spliceInsertLabel(kind, insert?.breakDuration?.autoReturn)
     return [{ eventId: insert?.spliceEventId ?? null, label, kind }]
   }
 

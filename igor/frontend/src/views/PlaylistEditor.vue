@@ -73,6 +73,10 @@ interface MarkerForm {
   splice_type: 'splice_insert' | 'time_signal'
   assets: string[]
   segmentation: SegmentationForm
+  /** `splice_insert` only: true (default) emits a single self-contained
+   * message with no cue-in (SCTE-35 auto_return); false emits an explicit
+   * cue-out/cue-in pair. Ignored for `time_signal`. */
+  auto_return: boolean
 }
 
 /** A marker being created or edited, not yet committed to `form.markers`.
@@ -232,6 +236,7 @@ function tagRange({ startIndex, endIndex }: { startIndex: number; endIndex: numb
     splice_type: 'time_signal',
     assets: assetIds,
     segmentation: newSegmentation(),
+    auto_return: true,
   }
   selectedMarkerEventId.value = markerDraft.value.event_id
   selectedAssetIndex.value = null
@@ -246,6 +251,7 @@ function editMarker(eventId: number) {
     splice_type: existing.splice_type,
     assets: [...existing.assets],
     segmentation: { ...existing.segmentation },
+    auto_return: existing.auto_return,
   }
   selectedMarkerEventId.value = eventId
   selectedAssetIndex.value = null
@@ -316,6 +322,7 @@ function commitDraft() {
         splice_type: d.splice_type,
         assets: [assetId],
         segmentation: { ...d.segmentation },
+        auto_return: d.auto_return,
       }
     })
     form.markers.push(...newMarkers)
@@ -325,6 +332,7 @@ function commitDraft() {
       splice_type: d.splice_type,
       assets: [...d.assets],
       segmentation: { ...d.segmentation },
+      auto_return: d.auto_return,
     })
   }
 
@@ -408,6 +416,7 @@ const draftPreviewSpan = computed(() => {
     splice_type: d.splice_type,
     assets: isDraftInstant.value ? d.assets.slice(0, 1) : [...d.assets],
     segmentation: { ...d.segmentation },
+    auto_return: d.auto_return,
   }
   const idToIndex = new Map(form.assets.map((a, i) => [a.id, i] as const))
   const preview = layoutMarkers([...withoutEditing, draftAsMarker], idToIndex)
@@ -470,6 +479,11 @@ function toYamlPlaylist(): Record<string, unknown> {
       }
       if (m.splice_type === 'time_signal') {
         marker.segmentation = { ...m.segmentation }
+      } else if (!m.auto_return) {
+        // Default (true) is left implicit -- only write the field when it
+        // diverges from franken-ts's own default, same convention as the
+        // other optional marker/asset fields above.
+        marker.auto_return = false
       }
       return marker
     })
@@ -525,6 +539,7 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
         archive_allowed: Boolean(seg.archive_allowed),
         device_restrictions: Number(seg.device_restrictions ?? 1),
       },
+      auto_return: m.auto_return !== false,
     }
   })
   resolvedMarkers.value = null
@@ -851,6 +866,20 @@ function applyHexPopover() {
                   <div class="col-3 flex align-items-center gap-2"><Checkbox v-model="markerDraft.segmentation.no_regional_blackout" binary /><label>No regional blackout</label></div>
                   <div class="col-3 flex align-items-center gap-2"><Checkbox v-model="markerDraft.segmentation.archive_allowed" binary /><label>Archive allowed</label></div>
                   <div class="col-3 flex flex-column gap-1"><label>Device restrictions</label><InputNumber v-model="markerDraft.segmentation.device_restrictions" :use-grouping="false" /></div>
+                </template>
+
+                <template v-else-if="markerDraft.splice_type === 'splice_insert'">
+                  <div class="col-12"><Divider /></div>
+                  <div class="col-12 flex align-items-center gap-2">
+                    <Checkbox v-model="markerDraft.auto_return" binary />
+                    <label>
+                      Auto-return
+                      <span
+                        class="text-color-secondary text-sm font-normal"
+                        title="Auto-return (default): one splice_insert message covers the whole break -- the player returns to content on its own once break_duration elapses, no cue-in is sent. Off: an explicit splice_insert cue-in is sent at the break's real end, in addition to the cue-out -- matching time_signal's Start/End pairing."
+                      >({{ markerDraft.auto_return ? 'single message, no cue-in' : 'explicit cue-out + cue-in pair' }})</span>
+                    </label>
+                  </div>
                 </template>
               </div>
 
