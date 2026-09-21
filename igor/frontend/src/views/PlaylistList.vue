@@ -45,6 +45,10 @@ async function build(name: string) {
   }
 }
 
+function outputBasename(path: string) {
+  return path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || path
+}
+
 function confirmDelete(event: MouseEvent, name: string) {
   confirm.require({
     target: event.currentTarget as HTMLElement,
@@ -71,15 +75,32 @@ onMounted(load)
 
     <Message v-if="error" severity="error">{{ error }}</Message>
 
-    <DataTable :value="playlists" :loading="loading" data-key="name">
+    <DataTable
+      :value="playlists"
+      :loading="loading"
+      data-key="name"
+      row-hover
+      class="cursor-pointer"
+      @row-click="({ data }) => router.push(`/playlists/${data.name}`)"
+    >
       <Column field="name" header="Name" />
-      <Column field="output_file" header="Output file" />
-      <Column field="output_dir" header="Output dir (ladder)" />
+      <Column header="Output">
+        <template #body="{ data }">
+          <div v-if="data.output_file || data.output_dir" class="flex align-items-center gap-2" :title="data.output_file || data.output_dir">
+            <i
+              :class="data.output_dir ? 'pi pi-folder' : 'pi pi-file'"
+              :title="data.output_dir ? 'Rendition ladder' : 'Single rendition'"
+            />
+            <span>{{ outputBasename(data.output_file || data.output_dir) }}</span>
+          </div>
+        </template>
+      </Column>
+      <Column field="rendition_count" header="Renditions" />
       <Column field="asset_count" header="Assets" />
       <Column field="marker_count" header="Markers" />
       <Column header="Actions">
         <template #body="{ data }">
-          <div class="flex gap-2">
+          <div class="flex gap-2" @click.stop>
             <Button icon="pi pi-pencil" severity="secondary" text @click="router.push(`/playlists/${data.name}`)" />
             <Button icon="pi pi-play" severity="success" text @click="build(data.name)" title="Build .ts" />
             <Button icon="pi pi-trash" severity="danger" text @click="confirmDelete($event, data.name)" />

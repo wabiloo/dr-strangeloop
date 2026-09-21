@@ -13,7 +13,7 @@ own module and Pydantic model names are unchanged.
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import yaml
 from franken_ts.config import Config
@@ -44,15 +44,36 @@ def list_playlists() -> list[dict]:
         output = raw.get("output", {}) or {}
         assets = raw.get("assets", []) or []
         markers = raw.get("markers", []) or []
+        renditions = output.get("renditions") or []
         out.append({
             "name": path.stem,
             "path": str(path),
-            "output_file": output.get("file"),
-            "output_dir": output.get("dir"),
+            "output_file": _resolve_output_path(output.get("file")),
+            "output_dir": _resolve_output_path(output.get("dir")),
             "asset_count": len(assets),
             "marker_count": len(markers),
+            # Single-rendition playlists (`output.file`) produce exactly one
+            # .ts, so they count as 1 rather than 0 -- matches the file/folder
+            # icon distinction the playlist list UI already makes.
+            "rendition_count": len(renditions) if renditions else (1 if output.get("file") else 0),
         })
     return out
+
+
+def _resolve_output_path(raw: str | None) -> str | None:
+    """A playlist's `output.file`/`output.dir` is authored relative to
+    wherever franken-ts is invoked from, which spawn_build_job always sets
+    to REPO_ROOT -- but its-a-live's channel bake resolves a channel's
+    [input].source_path relative to its *own* directory (its-a-live/), not
+    REPO_ROOT (see _local_docker_ops.py's `os.path.abspath(source_path)`
+    with cwd=its-a-live/). Returning an absolute path here means whatever
+    consumes it (e.g. ChannelNew.vue's playlist-autofill) can't land a
+    source_path that resolves against the wrong directory and 404s the
+    markers.json sidecar at bake time."""
+    if not raw:
+        return raw
+    p = Path(raw)
+    return str(p if p.is_absolute() else (paths.REPO_ROOT / p).resolve())
 
 
 def get_playlist(name: str) -> dict:

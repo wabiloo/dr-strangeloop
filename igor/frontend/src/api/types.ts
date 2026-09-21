@@ -11,6 +11,7 @@ export interface PlaylistListItem {
   output_dir?: string | null
   asset_count?: number
   marker_count?: number
+  rendition_count?: number
   error?: string
 }
 
