@@ -43,7 +43,8 @@ let dashInstance: any = null
 
 const scriptPromises: Record<string, Promise<void> | undefined> = {}
 
-// Set at the start of each playHls()/playDash() -- see MARKER_JOIN_SUPPRESS_MS.
+// Set at the start of each playHls()/playDash() -- see
+// HLS_MARKER_JOIN_SUPPRESS_MS / DASH_MARKER_JOIN_SUPPRESS_MS.
 let hlsJoinedAt = 0
 let dashJoinedAt = 0
 
@@ -80,8 +81,12 @@ const SCTE35_DASH_SCHEME = 'urn:scte:scte35:2014:xml+bin'
 // suppression window of a fresh join is recorded as seen (so it doesn't
 // re-announce once its real recurrence comes around) but never toasted;
 // this only needs to outlast the initial catch-up burst, not overlap with
-// how soon a genuinely new marker could plausibly occur.
-const MARKER_JOIN_SUPPRESS_MS = 2000
+// how soon a genuinely new marker could plausibly occur. HLS's window is
+// longer than DASH's -- hls.js's DVR window (several segments' worth of
+// backlog, plus its own manifest-parsing/cue-population latency) settles
+// slower than dash.js's per-<Event> catch-up loop, in practice.
+const HLS_MARKER_JOIN_SUPPRESS_MS = 5000
+const DASH_MARKER_JOIN_SUPPRESS_MS = 2000
 
 // Single source of truth for how long a toast stays mounted -- also drives
 // its CSS fade-out (see the `--marker-toast-life` custom property below and
@@ -189,9 +194,10 @@ function attachHlsMetadataCueListener(video: HTMLVideoElement) {
 
       for (const { bytes, idKeys } of groups.values()) {
         for (const { id, key } of idKeys) hlsSeenActivations.add(`${id}:${key}`)
-        // Suppress the initial catch-up burst (see MARKER_JOIN_SUPPRESS_MS)
-        // -- still marked seen above, so it never re-announces later.
-        if (Date.now() - hlsJoinedAt < MARKER_JOIN_SUPPRESS_MS) continue
+        // Suppress the initial catch-up burst (see
+        // HLS_MARKER_JOIN_SUPPRESS_MS) -- still marked seen above, so it
+        // never re-announces later.
+        if (Date.now() - hlsJoinedAt < HLS_MARKER_JOIN_SUPPRESS_MS) continue
         for (const marker of describeAllMarkers(bytes)) {
           pushMarkerToast(hlsMarkerToasts, `${marker.label} · ${marker.eventId ?? '?'}`, marker.kind)
         }
@@ -409,9 +415,9 @@ async function playDash() {
             for (const { bytes: groupBytes, ids } of batch.values()) {
               for (const groupId of ids) dashSeenEventKeys.add(groupId)
               // Suppress the initial catch-up burst (see
-              // MARKER_JOIN_SUPPRESS_MS) -- still marked seen above, so it
-              // never re-announces later.
-              if (Date.now() - dashJoinedAt < MARKER_JOIN_SUPPRESS_MS) continue
+              // DASH_MARKER_JOIN_SUPPRESS_MS) -- still marked seen above,
+              // so it never re-announces later.
+              if (Date.now() - dashJoinedAt < DASH_MARKER_JOIN_SUPPRESS_MS) continue
               for (const marker of describeAllMarkers(groupBytes)) {
                 pushMarkerToast(dashMarkerToasts, `${marker.label} · ${marker.eventId ?? '?'}`, marker.kind)
               }
