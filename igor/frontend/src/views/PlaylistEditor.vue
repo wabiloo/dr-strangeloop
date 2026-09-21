@@ -182,6 +182,7 @@ const graphScrollTarget = computed(() =>
 function selectAsset(i: number) {
   selectedAssetIndex.value = i
   selectedMarkerEventId.value = null
+  markerDraft.value = null
 }
 
 function addAsset() {
@@ -610,9 +611,9 @@ function applyHexPopover() {
 
     <Tabs v-model:value="activeTab">
       <TabList>
-        <Tab value="settings">Channel settings</Tab>
+        <Tab value="settings">Settings</Tab>
         <Tab value="assets">
-          Timeline &amp; assets
+          Timeline
           <span class="asset-count-badge">{{ form.assets.length }}</span>
         </Tab>
       </TabList>
@@ -700,16 +701,6 @@ function applyHexPopover() {
 
         <TabPanel value="assets">
           <div class="flex flex-column gap-3">
-            <div class="flex justify-content-end">
-              <Button
-                label="Resolve real durations & marker spans"
-                icon="pi pi-refresh"
-                size="small"
-                text
-                :loading="resolvingMarkers"
-                @click="previewMarkerResolution"
-              />
-            </div>
             <div class="timeline-sticky">
               <AssetTimeline
                 :assets="form.assets"
@@ -724,7 +715,18 @@ function applyHexPopover() {
                 @tag-range="tagRange"
                 @edit-marker="editMarker"
                 @hover-marker="hoverMarkerFromGraph"
-              />
+              >
+                <template #header-actions>
+                  <Button
+                    label="Resolve estimated durations"
+                    icon="pi pi-refresh"
+                    size="small"
+                    text
+                    :loading="resolvingMarkers"
+                    @click="previewMarkerResolution"
+                  />
+                </template>
+              </AssetTimeline>
             </div>
 
             <div v-if="selectedAssetIndex === null && markerDraft === null" class="asset-empty-state">

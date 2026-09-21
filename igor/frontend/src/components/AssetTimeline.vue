@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { parseApproxSeconds } from '../utils/duration'
 import { layoutMarkers, type MarkerLike, type MarkerSpan } from '../markerLayout'
 import { colorForLaneKey, laneKeyForMarker, laneLabelForMarker } from '../segmentationPresets'
@@ -219,6 +219,38 @@ const boundaryPercents = computed(() => {
   return Array.from(percents)
 })
 
+// ── Add-asset button vertical alignment ────────────────────────────────────
+// The button lives OUTSIDE .timeline-scale (a flex sibling of
+// .timeline-viewport, see template) so it (a) never eats into the
+// percentage budget the marker lanes/track/ruler assume is 100% of the
+// scale -- adding it as a real row member there desyncs segment widths from
+// the marker lanes/ruler above/below, since they'd stop agreeing on what
+// 100% means -- and (b) stays put while the scale scrolls under zoom.
+// Because it's outside, it can't line up with .timeline-track (whose
+// vertical offset varies with the marker lane count) via percentage/flex
+// math either -- so its position is measured directly off the real DOM
+// node instead of duplicated as CSS constants that would drift out of sync.
+// A ResizeObserver (not a markerLanes watch) drives the remeasure: this
+// component can mount while its tab is inactive (PrimeVue keeps inactive
+// TabPanels in the DOM, just display:none'd) -- offsetTop reads 0 in that
+// state, and only a genuine size change (e.g. the tab becoming visible,
+// not just a marker-lanes count change) is guaranteed to catch that.
+const scaleRowEl = ref<HTMLElement | null>(null)
+const trackEl = ref<HTMLElement | null>(null)
+const trackOffsetTop = ref(0)
+
+function measureTrackOffset() {
+  if (trackEl.value) trackOffsetTop.value = trackEl.value.offsetTop
+}
+
+let trackResizeObserver: ResizeObserver | null = null
+onMounted(() => {
+  measureTrackOffset()
+  trackResizeObserver = new ResizeObserver(measureTrackOffset)
+  if (scaleRowEl.value) trackResizeObserver.observe(scaleRowEl.value)
+})
+onBeforeUnmount(() => trackResizeObserver?.disconnect())
+
 // ── Cross-highlight with the parent's marker list (hover + click) ─────────
 // The parent owns the actual hover/selection state (it also needs to drive
 // the list side); this component only renders the highlight classes and,
@@ -245,6 +277,7 @@ watch(
     <div class="timeline-header">
       <span class="font-semibold">Total duration: {{ formatDuration(totalSeconds) }}</span>
       <span v-if="hasApproxSegments" class="text-color-secondary text-sm">(approximate -- see ~ below)</span>
+      <slot name="header-actions" />
       <span class="flex-1" />
       <div class="zoom-controls">
         <button type="button" class="zoom-btn" title="Zoom out" :disabled="zoomIndex === 0" @click="zoomOut">
@@ -285,10 +318,10 @@ watch(
     <!-- Everything inside .timeline-scale shares the exact same rendered
          width (the "scale"), so percentage-based positioning stays
          consistent across rows. The add-asset button lives OUTSIDE the
-         scrolling viewport, as a flex sibling, so it (a) never eats into
-         the percentage budget the marker lanes/ruler assume is 100% of
-         the scale, and (b) stays put while the scale scrolls under zoom. -->
-    <div class="timeline-scale-row">
+         scrolling viewport (see script comment on trackOffsetTop for why),
+         so it never eats into that percentage budget and stays put while
+         the scale scrolls under zoom. -->
+    <div ref="scaleRowEl" class="timeline-scale-row">
       <div class="timeline-viewport">
         <div class="timeline-scale" :style="{ width: zoom * 100 + '%' }">
           <!-- Vertical guide lines at every marker boundary, spanning the
@@ -335,7 +368,7 @@ watch(
             </div>
           </div>
 
-          <div class="timeline-track">
+          <div ref="trackEl" class="timeline-track">
             <div
               v-for="(seg, i) in segments"
               :key="i"
@@ -370,13 +403,21 @@ watch(
         </div>
       </div>
 
-      <button type="button" class="timeline-add-segment" title="Add asset" @click="emit('add')">
+      <!-- margin-top mirrors .timeline-track's measured offset (see
+           trackOffsetTop in the script) so this lines up with the asset
+           row itself, not the top of the marker lanes above it. -->
+      <button
+        type="button"
+        class="timeline-add-segment"
+        title="Add asset"
+        :style="{ marginTop: trackOffsetTop + 'px' }"
+        @click="emit('add')"
+      >
         <i class="pi pi-plus" />
       </button>
     </div>
 
     <div class="timeline-legend">
-      <span class="timeline-legend-item"><span class="timeline-swatch timeline-swatch-content" /> Content</span>
       <span class="timeline-legend-item text-color-secondary">~ = duration not resolved -- placeholder weight ({{ formatDuration(FALLBACK_SECONDS) }}); click "Resolve" to ffprobe real durations</span>
     </div>
   </div>
@@ -507,6 +548,9 @@ watch(
   z-index: 1;
 }
 
+/* Its own row, outside .timeline-scale -- see trackOffsetTop in the script
+ * for why (must not eat into the percentage budget segments/markers share)
+ * and how its margin-top keeps it level with .timeline-track despite that. */
 .timeline-add-segment {
   flex: 0 0 2.75rem;
   width: 2.75rem;
@@ -589,17 +633,6 @@ watch(
   gap: 0.35rem;
 }
 
-.timeline-swatch {
-  display: inline-block;
-  width: 0.8rem;
-  height: 0.8rem;
-  border-radius: 3px;
-}
-
-.timeline-swatch-content {
-  background: #38bdf8;
-}
-
 .range-toolbar {
   display: flex;
   align-items: center;
@@ -633,8 +666,13 @@ watch(
   padding: 0.2rem 0.4rem;
 }
 
-.timeline-segment-in-range {
-  box-shadow: inset 0 0 0 2px #7c3aed;
+.timeline-segment.timeline-segment-in-range {
+  background: #1e3a8a;
+}
+
+.timeline-segment-in-range .timeline-segment-label,
+.timeline-segment-in-range .timeline-segment-duration {
+  color: #fff;
 }
 
 .timeline-marker-lanes {
