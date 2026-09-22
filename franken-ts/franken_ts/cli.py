@@ -236,7 +236,7 @@ def _build_clip_table(assets, infos, entries, framerate):
         title_style="bold",
     )
     t.add_column("#",             justify="right", style="dim", width=3)
-    t.add_column("File",          no_wrap=False, max_width=28, overflow="ellipsis")
+    t.add_column("Asset",         no_wrap=False, max_width=28, overflow="ellipsis")
     t.add_column("YAML start",    justify="right")
     t.add_column("YAML duration", justify="right")
     t.add_column("Source dur.",   justify="right")
@@ -251,8 +251,11 @@ def _build_clip_table(assets, infos, entries, framerate):
         return f"{int(h):02d}:{int(m):02d}:{sec:06.3f}"
 
     for idx, (asset, entry) in enumerate(zip(assets, entries), 1):
-        # Use the normalized file's info (entry.source_file) for accurate duration,
-        # but show the original filename (asset.file.name) for readability.
+        # Use the normalized file's info (entry.source_file) for accurate
+        # duration. The "Asset" column shows the YAML `id` (what `markers`
+        # entries reference) when set; falls back to the filename -- dimmed,
+        # to visually flag it as a stand-in -- for assets with no id (e.g.
+        # plain content clips markers never point at).
         info: VideoInfo = infos[entry.source_file]
         yaml_start = asset.start_seconds() or 0.0
         yaml_dur = asset.duration_seconds()
@@ -282,9 +285,11 @@ def _build_clip_table(assets, infos, entries, framerate):
                 snapped.append(f"out {entry.outpoint_raw:.4f}→{entry.outpoint:.4f}")
             acc = _Text("⚠ snapped\n" + "  ".join(snapped), style="yellow")
 
+        asset_label = asset.id if asset.id else f"[dim]{asset.file.name}[/dim]"
+
         t.add_row(
             str(idx),
-            asset.file.name,
+            asset_label,
             yaml_start_s,
             yaml_dur_s,
             src_dur_s,
