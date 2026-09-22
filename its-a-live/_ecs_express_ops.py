@@ -18,11 +18,10 @@ _LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loo
 
 
 def _resolve_python_cmd():
-    """Same resolution order as loop-dee-loop/run.sh: prefer a local .venv
-    next to loop-dee-loop, then `uv run`, then plain python3."""
-    venv_python = os.path.join(_LOOP_DEE_LOOP_DIR, ".venv", "bin", "python")
-    if os.path.isfile(venv_python) and os.access(venv_python, os.X_OK):
-        return [venv_python]
+    """Same resolution order as loop-dee-loop/run.sh: loop-dee-loop is a
+    workspace member of the repo-root uv project (shares its .venv, not
+    its own), so `uv run --project` resolves its deps without a manually
+    created venv. Falls back to plain python3 if uv itself isn't on PATH."""
     if shutil.which("uv"):
         return ["uv", "run", "--project", _LOOP_DEE_LOOP_DIR, "python"]
     return ["python3"]

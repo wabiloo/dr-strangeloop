@@ -31,7 +31,14 @@ franken-ts output (.ts + .markers.json)
   release has it yet — see `Dockerfile` for the pinned-commit build with the
   confirmed configure flags; **do not** pass `--disable-svg`).
 - `ffmpeg`/`ffprobe` on `PATH`.
-- Python deps: `pip install -r requirements.txt` (`threefive`, `flask`).
+- Python deps (`threefive`, `flask`): this package is a member of the
+  repo-root uv workspace, not a standalone install -- from the repo root,
+  `uv sync --all-packages` (see top-level README.md) gives you everything.
+  `run.sh`/`bake.py`/`serve.py` invoked directly from this directory also
+  resolve their deps via `uv run --project .` automatically if `uv` is on
+  `PATH` (see `run.sh --python`'s default). `requirements.txt` exists only
+  for the Docker image's plain `pip install` (see `Dockerfile`) -- keep it
+  in sync with `pyproject.toml` by hand if you add a dependency.
 
 ## Usage
 
@@ -196,8 +203,11 @@ load, and Fargate/EC2 sizing recommendations derived from it.
 ## Testing
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
-.venv/bin/python -m pytest tests/ -q
+# From the repo root (recommended -- uses the shared uv workspace venv):
+uv run --directory loop-dee-loop pytest tests/ -q
+
+# Or from this directory:
+uv run --project . pytest tests/ -q
 ```
 
 `tests/test_loop_math.py` is the required drift regression test from

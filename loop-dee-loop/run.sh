@@ -36,9 +36,11 @@
 #                          manifest response. Overrides --dvr-window-seconds.
 #   --skip-bake            Skip the bake step and serve an existing
 #                          --output package directory as-is.
-#   --python PATH           Python interpreter to use (default: python3, or
-#                          .venv/bin/python if a .venv exists next to this
-#                          script).
+#   --python PATH           Python interpreter to use (default: `uv run
+#                          --project` this directory, so the repo-root uv
+#                          workspace's deps resolve without a manually
+#                          created venv; falls back to plain python3 if
+#                          uv itself isn't on PATH).
 #   -v, --verbose           Passed through to bake.py.
 #   -h, --help              Show this message.
 #
@@ -71,7 +73,7 @@ VERBOSE="0"
 PYTHON=""
 
 usage() {
-    sed -n '2,54p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,56p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -108,9 +110,7 @@ if [[ "$SKIP_BAKE" != "1" && -z "$INPUT_PATH" ]]; then
 fi
 
 if [[ -z "$PYTHON" ]]; then
-    if [[ -x "${SCRIPT_DIR}/.venv/bin/python" ]]; then
-        PYTHON_CMD=("${SCRIPT_DIR}/.venv/bin/python")
-    elif command -v uv >/dev/null 2>&1; then
+    if command -v uv >/dev/null 2>&1; then
         # This package is part of the repo-root uv workspace (see
         # ../pyproject.toml); `uv run` resolves its deps (threefive, flask)
         # without needing a manually-created venv.

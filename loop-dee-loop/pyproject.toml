@@ -9,5 +9,10 @@ dependencies = [
     "gunicorn>=21.2",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+]
+
 [tool.uv]
 package = false
