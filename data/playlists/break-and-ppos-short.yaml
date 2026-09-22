@@ -23,6 +23,22 @@ assets:
   id: content2
   duration: 20
 normalize: true
+osd:
+  enabled: true
+  countdown:
+    enabled: true
+    height_pct: 2
+  text_size_pct: 3
+  text_color: '#FFFFFF'
+  ad_break_label: ad break
+  corner_box:
+    enabled: true
+    color: '#F7A239'
+  corners:
+    top_left: time
+    top_right: is_adbreak
+    bottom_left: asset_id
+    bottom_right: next_asset_id
 markers:
 - event_id: 100
   splice_type: time_signal

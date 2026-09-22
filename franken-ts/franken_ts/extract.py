@@ -141,12 +141,10 @@ def _extract_video(
       [norm/fi] fade=in               → [fi]      (if fade_in, no slate)
       [current] [slate] xfade(fo)     → [fo]      (if fade_out + slate_image)
       [current] fade=out              → [fo]      (if fade_out, no slate)
-      [current] osd(bar)              → [ov0]     (if OSD, see osd.py)
-      [ov0]     osd(corner text...)   → [out]     (if OSD)
+      [current] osd(bar, corners...)  → [out]     (if OSD, see osd.py)
     """
     src_is_image = is_image(src)
     clip_dur = n_frames / output.framerate
-    osd_filters = build_osd_filters(entry, output, osd) if entry is not None else []
     has_slate = slate_image is not None
 
     graph: list[str] = []
@@ -241,18 +239,13 @@ def _extract_video(
         current = "[fo]"
 
     # ── OSD (countdown bar + corner text) ─────────────────────────────────────
-    if osd_filters:
-        graph.append(f"{current} {osd_filters[0]} [ov0]")
-        for k in range(1, len(osd_filters)):
-            graph.append(f"[ov{k-1}] {osd_filters[k]} [ov{k}]")
-        last = graph[-1]
-        bracket = last.rfind("[")
-        graph[-1] = last[:bracket] + "[out]"
-    else:
-        # Rename the last stream to [out] for the -map argument.
-        last = graph[-1]
-        bracket = last.rfind("[")
-        graph[-1] = last[:bracket] + "[out]"
+    osd_lines, current = build_osd_filters(entry, output, osd, current) if entry is not None else ([], current)
+    graph.extend(osd_lines)
+
+    # Rename the last stream to [out] for the -map argument.
+    last = graph[-1]
+    bracket = last.rfind("[")
+    graph[-1] = last[:bracket] + "[out]"
 
     filter_complex = "; ".join(graph)
 

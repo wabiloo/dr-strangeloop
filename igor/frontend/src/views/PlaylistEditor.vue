@@ -224,13 +224,31 @@ function previewTextFor(corner: 'top_left' | 'top_right' | 'bottom_left' | 'bott
   return CORNER_PREVIEW_TEXT[content] ?? ''
 }
 
-/** Style shared by all 4 preview-text elements in the frame mockup -- same
- * text color and (optional) box background for every corner, mirroring
- * how osd.text_color/osd.corner_box apply uniformly on the real overlay. */
-const osdPreviewTextStyle = computed(() => ({
-  color: form.osd.text_color,
-  background: form.osd.corner_box.enabled ? hexToRgba(form.osd.corner_box.color, 0.6) : 'transparent',
-}))
+/** Fixed corner-box fill color, matching osd.py's non-configurable
+ * `_CORNER_BOX_FILL_COLOR` -- corner_box.color no longer sets the fill,
+ * only the border accent stripe (see below). */
+const OSD_CORNER_BOX_FILL = '#262626'
+
+/** Style for one preview-text element in the frame mockup -- same text
+ * color for every corner (mirroring osd.text_color applying uniformly),
+ * plus, when the corner box is enabled: a fixed, semi-transparent dark fill
+ * and a semi-transparent border accent in corner_box.color flush with the
+ * box's outer edge (left edge for left corners, right for right), mirroring
+ * osd.py's build_corner_text_filter/build_corner_accent_stripe_graph. The
+ * `.osd-preview-text` rule's `background-clip: padding-box` keeps these two
+ * alpha layers from double-blending in the border's own area -- see that
+ * rule's comment. */
+function osdPreviewTextStyle(side: 'left' | 'right') {
+  if (!form.osd.corner_box.enabled) {
+    return { color: form.osd.text_color, background: 'transparent' }
+  }
+  const borderSide = side === 'left' ? 'borderLeft' : 'borderRight'
+  return {
+    color: form.osd.text_color,
+    background: hexToRgba(OSD_CORNER_BOX_FILL, 0.6),
+    [borderSide]: `4px solid ${hexToRgba(form.osd.corner_box.color, 0.9)}`,
+  }
+}
 
 /** Bottom preview text needs to clear the countdown bar preview, which is
  * sized as a percentage of the mockup's own height. */
@@ -1127,22 +1145,22 @@ function applyHexPopover() {
                   <div
                     v-if="form.osd.corners.top_left"
                     class="osd-preview-text osd-preview-tl"
-                    :style="osdPreviewTextStyle"
+                    :style="osdPreviewTextStyle('left')"
                   >{{ previewTextFor('top_left') }}</div>
                   <div
                     v-if="form.osd.corners.top_right"
                     class="osd-preview-text osd-preview-tr"
-                    :style="osdPreviewTextStyle"
+                    :style="osdPreviewTextStyle('right')"
                   >{{ previewTextFor('top_right') }}</div>
                   <div
                     v-if="form.osd.corners.bottom_left"
                     class="osd-preview-text osd-preview-bl"
-                    :style="{ ...osdPreviewTextStyle, bottom: osdPreviewBottomOffset }"
+                    :style="{ ...osdPreviewTextStyle('left'), bottom: osdPreviewBottomOffset }"
                   >{{ previewTextFor('bottom_left') }}</div>
                   <div
                     v-if="form.osd.corners.bottom_right"
                     class="osd-preview-text osd-preview-br"
-                    :style="{ ...osdPreviewTextStyle, bottom: osdPreviewBottomOffset }"
+                    :style="{ ...osdPreviewTextStyle('right'), bottom: osdPreviewBottomOffset }"
                   >{{ previewTextFor('bottom_right') }}</div>
 
                   <div
@@ -1199,7 +1217,7 @@ function applyHexPopover() {
 
                 <label class="osd-option-label" for="osd-corner-box-enabled">Box background</label>
                 <Checkbox v-model="form.osd.corner_box.enabled" binary input-id="osd-corner-box-enabled" :disabled="!form.osd.enabled" />
-                <label class="osd-option-label-secondary">Box color</label>
+                <label class="osd-option-label-secondary">Border color</label>
                 <div class="flex align-items-center gap-2">
                   <ColorPicker v-model="osdBoxColorHex" :disabled="!form.osd.enabled || !form.osd.corner_box.enabled" />
                   <InputText v-model="form.osd.corner_box.color" :disabled="!form.osd.enabled || !form.osd.corner_box.enabled" class="osd-narrow-hex" />
@@ -1607,6 +1625,15 @@ function applyHexPopover() {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Without this, the semi-transparent background (background-clip's
+   * default is border-box) would paint UNDER the semi-transparent border
+   * too, so the border's own color would blend twice -- once against the
+   * mockup behind it, once against the background already painted there --
+   * tinting the border differently than the flat corner_box.color picked.
+   * Clipping the background to the padding box keeps the two independent,
+   * mirroring osd.py's crop-based fix for the same issue in real ffmpeg
+   * output (see build_corner_accent_stripe_graph's docstring). */
+  background-clip: padding-box;
 }
 
 .osd-preview-tl { top: 0.5rem; left: 0.5rem; }

@@ -401,15 +401,18 @@ class OsdCornersConfig(BaseModel):
 
 
 class OsdCornerBoxConfig(BaseModel):
-    """An optional semi-transparent background box drawn behind each
-    corner's text, uniformly (same color for all 4 corners). Sized
-    automatically from the rendered text extent plus padding -- see
-    osd.py's build_corner_text_filter, which relies on ffmpeg drawtext's
-    own `box`/`boxborderw` options rather than computing text metrics
-    itself."""
+    """An optional background box drawn behind each corner's text, uniform
+    across all 4 corners. The fill itself is a fixed dark gray (not
+    configurable -- see osd.py's `_CORNER_BOX_FILL_COLOR`); `color` here
+    instead sets a thin vertical border accent flush with the box's outer
+    edge (left edge for left corners, right edge for right corners). Sized
+    automatically from the rendered text extent plus padding -- see osd.py's
+    build_corner_text_filter/build_corner_accent_stripe_graph, which rely
+    on ffmpeg drawtext's own `box`/`boxborderw` options rather than
+    computing text metrics itself."""
 
     enabled: bool = False
-    color: str = Field(default="#000000", pattern=_HEX_COLOR_RE.pattern)
+    color: str = Field(default="#FFFFFF", pattern=_HEX_COLOR_RE.pattern)
 
 
 class OsdConfig(BaseModel):

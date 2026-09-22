@@ -11,9 +11,10 @@ from franken_ts.cache import entry_cache_key
 from franken_ts.config import AssetConfig, Config, MarkerConfig, OsdConfig, to_ffmpeg_color
 from franken_ts.osd import (
     abbreviation_for_marker,
+    build_corner_accent_stripe_graph,
     build_corner_text_filter,
     build_osd_filters,
-    build_progress_bar_filter,
+    build_progress_bar_graph,
 )
 from franken_ts.timeline import TimelineEntry, build_timeline
 
@@ -45,7 +46,7 @@ def test_osd_config_defaults():
     assert osd.corners.bottom_left == "asset_id"
     assert osd.corners.bottom_right == "time"
     assert osd.corner_box.enabled is False
-    assert osd.corner_box.color == "#000000"
+    assert osd.corner_box.color == "#FFFFFF"
 
 
 def test_osd_config_invalid_corner_value_rejected():
@@ -246,12 +247,25 @@ def test_abbreviation_provider_advertisement():
 
 # ── Filter construction (pure functions, no ffmpeg invocation) ────────────
 
-def test_build_progress_bar_filter_scales_with_output_height():
-    f_1080 = build_progress_bar_filter(10.0, _output(height=1080), height_pct=5.0)
-    f_360 = build_progress_bar_filter(10.0, _output(height=360), height_pct=5.0)
-    assert "h=54" in f_1080    # round(1080 * 0.05)
-    assert "h=18" in f_360     # round(360 * 0.05)
-    assert "\\," in f_1080     # internal comma in the w= expression is escaped
+def test_build_progress_bar_graph_scales_with_output_height():
+    lines_1080 = build_progress_bar_graph(
+        "[in]", "barout", 10.0, _output(height=1080), height_pct=5.0, label_prefix="b_"
+    )
+    lines_360 = build_progress_bar_graph(
+        "[in]", "barout", 10.0, _output(height=360), height_pct=5.0, label_prefix="b_"
+    )
+    graph_1080 = "; ".join(lines_1080)
+    graph_360 = "; ".join(lines_360)
+    assert "s=1920x54" in graph_1080  # round(1080 * 0.05)
+    assert "s=1920x18" in graph_360   # round(360 * 0.05)
+    assert "y=1026" in graph_1080     # 1080 - 54
+    assert "y=342" in graph_360       # 360 - 18
+    assert "\\," in graph_1080        # internal comma in the overlay x= expression is escaped
+    assert lines_1080[0].startswith("color=")
+    assert lines_1080[1].startswith("[in]")
+    assert lines_1080[-1].rstrip().endswith("[barout]")
+    assert "colorchannelmixer=aa=0.5" in graph_1080
+    assert "overlay=" in graph_1080
 
 
 def _entry(
@@ -319,24 +333,17 @@ def test_build_corner_text_filter_box_disabled_by_default():
     assert "box=1" not in f
 
 
-def test_build_corner_text_filter_box_enabled_uses_configured_color():
-    osd = OsdConfig(corner_box={"enabled": True, "color": "#112233"})
-    output = _output()
-    f = build_corner_text_filter("asset_id", _entry(asset_id="a1"), output, osd, "bottom_left", 10.0)
-    assert "box=1:boxcolor=0x112233@0.6:boxborderw=" in f
-
-
-def test_build_corner_text_filter_box_always_semi_transparent_regardless_of_color():
-    """The box's alpha is a fixed constant (0.6), never derived from or
-    overridable by the chosen color -- so no matter which color is picked,
-    the ffmpeg boxcolor value always carries the same '@0.6' suffix. The
-    hex color schema (^#[0-9A-Fa-f]{6}$) also rejects any 8-digit RRGGBBAA
-    value, so alpha can't sneak in through the color field either."""
+def test_build_corner_text_filter_box_fill_is_fixed_dark_gray():
+    """The box's fill is a fixed, semi-transparent dark gray, never the
+    configured corner_box.color -- that field now controls only the border
+    accent stripe (build_corner_accent_stripe_graph), not the fill."""
     output = _output()
     for color in ("#FFFFFF", "#000000", "#112233", "#ABCDEF"):
         osd = OsdConfig(corner_box={"enabled": True, "color": color})
         f = build_corner_text_filter("asset_id", _entry(asset_id="a1"), output, osd, "bottom_left", 10.0)
-        assert f"boxcolor={to_ffmpeg_color(color)}@0.6:" in f
+        assert f is not None
+        assert "box=1:boxcolor=0x262626@0.6:boxborderw=" in f
+        assert f"boxcolor={to_ffmpeg_color(color)}" not in f
 
 
 def test_build_corner_text_filter_box_padding_scales_with_fontsize():
@@ -362,23 +369,231 @@ def test_build_corner_text_filter_bottom_offset_accounts_for_bar():
     assert f_with_bar != f_without_bar
 
 
+def test_build_corner_text_filter_bottom_gap_matches_top_margin():
+    """A bottom corner's clearance above the countdown bar must equal a top
+    corner's clearance from the frame's top edge -- not double it."""
+    output = _output(height=1080)
+    entry = _entry(asset_id="a1")
+    osd = OsdConfig()  # countdown.enabled defaults True, height_pct=5.0
+
+    margin = round(1080 * 0.03)
+    bar_h = round(1080 * 0.05)
+
+    top = build_corner_text_filter("asset_id", entry, output, osd, "top_left", 10.0)
+    bottom = build_corner_text_filter("asset_id", entry, output, osd, "bottom_left", 10.0)
+    assert top is not None and bottom is not None
+    assert f"y={margin}" in top
+    assert f"y=h-th-{margin + bar_h}" in bottom
+
+
+def test_build_corner_accent_stripe_graph_disabled_cases():
+    output = _output()
+    osd_no_box = OsdConfig(corner_box={"enabled": False})
+    osd_with_box = OsdConfig(corner_box={"enabled": True})
+
+    assert (
+        build_corner_accent_stripe_graph(
+            "[in]", "out", "asset_id", _entry(asset_id="a1"), output, osd_no_box, "bottom_left", 10.0, "p_"
+        )
+        is None
+    )
+    assert (
+        build_corner_accent_stripe_graph(
+            "[in]", "out", "asset_id", _entry(asset_id=None), output, osd_with_box, "bottom_left", 10.0, "p_"
+        )
+        is None
+    )
+
+
+def test_build_corner_accent_stripe_graph_uses_border_color_and_alpha():
+    output = _output()
+    osd = OsdConfig(corner_box={"enabled": True, "color": "#112233"})
+    lines = build_corner_accent_stripe_graph(
+        "[in]", "out", "asset_id", _entry(asset_id="a1"), output, osd, "bottom_left", 10.0, "p_"
+    )
+    assert lines is not None
+    graph = "; ".join(lines)
+    assert f"boxcolor={to_ffmpeg_color('#112233')}@1.0:" in graph
+    # Its own text is invisible -- only the box is wanted (see docstring).
+    assert "fontcolor=black@0.0" in graph
+    assert lines[0].startswith("[in]")
+    assert "split=2" in lines[0]
+    assert lines[-1].rstrip().endswith("[out]")
+
+
+def test_corner_box_fill_stays_semi_transparent_and_stripe_is_opaque():
+    """The fill stays genuinely semi-transparent (0.6) -- video content
+    should remain partially visible through it. The border stripe, by
+    contrast, is deliberately fully opaque (1.0) and overlaps the fill's
+    own footprint (see build_corner_accent_stripe_graph's docstring): this
+    guarantees the stripe masks any residual rounding mismatch between the
+    two independently-positioned elements instead of exposing a gap."""
+    output = _output()
+    osd = OsdConfig(corner_box={"enabled": True, "color": "#F7A239"})
+    entry = _entry(asset_id="a1")
+
+    fill = build_corner_text_filter("asset_id", entry, output, osd, "bottom_left", 10.0)
+    stripe_lines = build_corner_accent_stripe_graph(
+        "[in]", "out", "asset_id", entry, output, osd, "bottom_left", 10.0, "p_"
+    )
+    assert fill is not None and stripe_lines is not None
+    graph = "; ".join(stripe_lines)
+    assert "boxcolor=0x262626@0.6:" in fill
+    assert f"boxcolor={to_ffmpeg_color('#F7A239')}@1.0:" in graph
+
+
+def test_build_corner_accent_stripe_graph_matches_real_box_height_exactly():
+    """The duplicate box drawn inside the stripe graph uses the SAME
+    text/fontsize/boxborderw as the real corner text, so ffmpeg computes an
+    identical box height for both -- no independent height estimate that
+    could drift from the real box, which was the original bug here."""
+    output = _output()
+    osd = OsdConfig(corner_box={"enabled": True}, text_size_pct=10.0)
+    entry = _entry(asset_id="a1")
+
+    stripe_lines = build_corner_accent_stripe_graph(
+        "[in]", "out", "asset_id", entry, output, osd, "bottom_left", 10.0, "p_"
+    )
+    real = build_corner_text_filter("asset_id", entry, output, osd, "bottom_left", 10.0)
+    assert stripe_lines is not None and real is not None
+    stripe_drawtext = stripe_lines[1]
+
+    def field(f: str, name: str) -> str:
+        return f.split(f"{name}=")[1].split(":")[0].split()[0]
+
+    assert field(stripe_drawtext, "fontsize") == field(real, "fontsize")
+    assert field(stripe_drawtext, "boxborderw") == field(real, "boxborderw")
+    assert field(stripe_drawtext, "y") == field(real, "y")
+
+
+def test_build_corner_accent_stripe_graph_side_matches_corner():
+    output = _output()
+    osd = OsdConfig(corner_box={"enabled": True})
+    entry = _entry(asset_id="a1")
+
+    left_lines = build_corner_accent_stripe_graph(
+        "[in]", "out", "asset_id", entry, output, osd, "bottom_left", 10.0, "p_"
+    )
+    right_lines = build_corner_accent_stripe_graph(
+        "[in]", "out", "asset_id", entry, output, osd, "bottom_right", 10.0, "p_"
+    )
+    assert left_lines is not None and right_lines is not None
+    left = "; ".join(left_lines)
+    right = "; ".join(right_lines)
+
+    margin = round(output.height * 0.03)
+    fontsize = round(output.height * osd.text_size_pct / 100)
+    padding = round(fontsize * 0.3)
+    stripe_w = max(2, round(fontsize * 0.22))
+    overlap = 2
+    crop_w = stripe_w + overlap
+
+    # Left corners: duplicate box shifted stripe_w further left than the
+    # real text's own x=margin, cropped at the real box's known left edge
+    # minus stripe_w, with the crop window widened by `overlap` pixels so
+    # it extends into the real box's footprint rather than stopping flush
+    # at its edge. Right corners: shifted stripe_w further right than
+    # the real text's own x=w-tw-margin, cropped starting `overlap` pixels
+    # inside the real box's known right edge (output.width - margin +
+    # padding), for the same reason.
+    assert f"x={margin - stripe_w}:" in left
+    assert f"x=w-tw-{margin - stripe_w}:" in right
+    assert f"crop=w={crop_w}:h=ih:x={margin - padding - stripe_w}:y=0:exact=1" in left
+    assert f"crop=w={crop_w}:h=ih:x={output.width - margin + padding - overlap}:y=0:exact=1" in right
+
+
+def test_build_corner_accent_stripe_graph_overlaps_fill_deliberately():
+    """The crop window (the border's visible extent) must extend a small,
+    deliberate amount INTO the real fill box's horizontal footprint on the
+    side facing it -- this is what guarantees the stripe visually connects
+    to the fill with no gap even if the two independently-positioned
+    elements are off by a pixel or two (e.g. due to crop rounding)."""
+    output = _output()
+    osd = OsdConfig(corner_box={"enabled": True}, text_size_pct=8.0)
+    entry = _entry(asset_id="a1")
+
+    fontsize = round(output.height * osd.text_size_pct / 100)
+    padding = round(fontsize * 0.3)
+    margin = round(output.height * 0.03)
+    stripe_w = max(2, round(fontsize * 0.22))
+    overlap = 2
+
+    left_lines = build_corner_accent_stripe_graph(
+        "[in]", "out", "asset_id", entry, output, osd, "bottom_left", 10.0, "p_"
+    )
+    assert left_lines is not None
+    left = "; ".join(left_lines)
+    crop_x = margin - padding - stripe_w
+    crop_w = stripe_w + overlap
+    fill_left_edge = margin - padding
+    # The crop's right edge (crop_x + crop_w) must extend `overlap` pixels
+    # past the fill's left edge -- i.e. the two regions deliberately
+    # overlap rather than merely landing flush.
+    assert crop_x + crop_w == fill_left_edge + overlap
+    assert f"x={crop_x}:y=0" in left
+
+
+def test_build_corner_accent_stripe_graph_crop_is_exact():
+    """Regression test: the crop MUST use exact=1. Without it, ffmpeg's
+    default 4:2:0 chroma-subsampling rounding silently shrinks the
+    requested crop width by a pixel or two, opening a visible gap of
+    untouched background between the stripe and the fill (which sits at
+    its own, unrounded exact coordinate) -- confirmed in real h264/yuv420p
+    ffmpeg output, not just a hypothetical."""
+    output = _output()
+    osd = OsdConfig(corner_box={"enabled": True})
+    entry = _entry(asset_id="a1")
+    lines = build_corner_accent_stripe_graph(
+        "[in]", "out", "asset_id", entry, output, osd, "bottom_left", 10.0, "p_"
+    )
+    assert lines is not None
+    crop_line = next(ln for ln in lines if ln.strip().startswith("[") and "crop=" in ln)
+    assert ":exact=1" in crop_line
+
+
 def test_build_osd_filters_empty_cases():
     output = _output()
     entry = _entry()
 
-    assert build_osd_filters(entry, output, None) == []
-    assert build_osd_filters(entry, output, OsdConfig(enabled=False)) == []
-    assert build_osd_filters(_entry(no_osd=True), output, OsdConfig(enabled=True)) == []
+    assert build_osd_filters(entry, output, None, "[in]") == ([], "[in]")
+    assert build_osd_filters(entry, output, OsdConfig(enabled=False), "[in]") == ([], "[in]")
+    assert build_osd_filters(_entry(no_osd=True), output, OsdConfig(enabled=True), "[in]") == ([], "[in]")
 
 
 def test_build_osd_filters_produces_bar_and_corners():
     output = _output()
     entry = _entry(asset_id="a1")
     osd = OsdConfig(enabled=True)
-    filters = build_osd_filters(entry, output, osd)
-    # bar + bottom_left (asset_id) + bottom_right (time) by default
-    assert len(filters) == 3
-    assert filters[0].startswith("drawbox")
+    lines, final_label = build_osd_filters(entry, output, osd, "[in]")
+    # bar (2 graph lines: color source + overlay) + bottom_left (asset_id) +
+    # bottom_right (time), one graph line each, by default.
+    assert len(lines) == 4
+    assert lines[0].startswith("color=")
+    assert lines[1].startswith("[in]")
+    assert "overlay=" in lines[1]
+    assert "drawtext" in lines[2]
+    assert "drawtext" in lines[3]
+    assert lines[-1].rstrip().endswith(f"[{final_label.strip('[]')}]")
+
+
+def test_build_osd_filters_inserts_accent_stripe_before_each_corner_with_box_enabled():
+    output = _output()
+    entry = _entry(asset_id="a1")
+    osd = OsdConfig(enabled=True, corner_box={"enabled": True})
+    lines, final_label = build_osd_filters(entry, output, osd, "[in]")
+    # bar (2 lines) + [stripe graph (4 lines) + real text (1 line)] for
+    # bottom_left + the same 5-line group for bottom_right.
+    assert len(lines) == 2 + 5 + 5
+    bottom_left_stripe = lines[2:6]
+    bottom_left_text = lines[6]
+    bottom_right_stripe = lines[7:11]
+    bottom_right_text = lines[11]
+
+    assert any("fontcolor=black@0.0" in ln for ln in bottom_left_stripe)
+    assert "fontcolor=black@0.0" not in bottom_left_text
+    assert any("fontcolor=black@0.0" in ln for ln in bottom_right_stripe)
+    assert "fontcolor=black@0.0" not in bottom_right_text
+    assert lines[-1].rstrip().endswith(f"[{final_label.strip('[]')}]")
 
 
 # ── Cache key sensitivity ────────────────────────────────────────────────

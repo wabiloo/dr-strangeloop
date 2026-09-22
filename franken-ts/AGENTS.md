@@ -83,8 +83,9 @@ outermost-first, e.g. `b / ppo / pa`)/`is_adbreak` (`ad_break_label` text
 when covered by a break/ppo/ad-lane span)/`osd_label` (the asset's own
 `osd_label` free text, nothing if unset). `text_size_pct`/`text_color`
 apply uniformly to all corner text. `corner_box` (`enabled`/`color`,
-default off) draws a same-color semi-transparent box behind each
-corner's text, auto-sized from the rendered text plus padding.
+default off) draws a fixed dark-gray box behind each corner's text plus a
+`color`-accented vertical border on the box's outer edge, auto-sized from
+the rendered text plus padding.
 
 ### `markers` — top-level list (sibling of `assets`), the only way to signal ad breaks
 

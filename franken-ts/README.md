@@ -6,7 +6,8 @@ Stitch video assets together, bolt in ad breaks, and inject SCTE-35 markers — 
 
 ## Prerequisites
 
-- `ffmpeg` + `ffprobe` on your `PATH`
+- `ffmpeg` + `ffprobe` on your `PATH` — for the OSD overlay's `drawtext` filter,
+  this must be a build with `--enable-libfreetype`; see [OSD](#on-screen-display-osd) below
 - `tsp` (tsduck) on your `PATH`
 - Python environment set up from the repo root (`uv sync --all-packages`)
 
@@ -83,9 +84,9 @@ osd:                            # optional — on-screen display, see "On-screen
   text_size_pct: 4               # default: 4 (% of transcoded output height)
   text_color: "#FFFFFF"          # default: "#FFFFFF"
   ad_break_label: "ad break"     # default: "ad break"
-  corner_box:                    # optional — semi-transparent box behind each corner's text
+  corner_box:                    # optional — dark box behind each corner's text
     enabled: true                # default: false
-    color: "#000000"             # default: "#000000"
+    color: "#FFFFFF"             # default: "#FFFFFF" — border accent color only, not the fill (see below)
   corners:
     top_left: asset_id           # default: null
     top_right: scte35_spans      # default: null
@@ -263,9 +264,9 @@ osd:
   text_size_pct: 4               # default: 4 — applies to all 4 corners
   text_color: "#FFFFFF"          # default: "#FFFFFF" — applies to all corner text
   ad_break_label: "ad break"     # default: "ad break" — text for the is_adbreak corner
-  corner_box:                    # optional semi-transparent box behind each corner's text
+  corner_box:                    # optional dark box behind each corner's text
     enabled: true                # default: false
-    color: "#000000"             # default: "#000000" — same box color for all 4 corners
+    color: "#FFFFFF"             # default: "#FFFFFF" — border accent color only (see below), same for all 4 corners
   corners:
     top_left: asset_id
     top_right: scte35_spans
@@ -295,13 +296,19 @@ bar, no corner text), regardless of the playlist-level `osd` settings.
 `osd_label` is a free-text per-asset field with no effect unless a corner
 is configured to show `osd_label`.
 
-`corner_box` draws a semi-transparent background box behind each corner's
-text (same color for all 4 corners) — only where a corner actually has
+`corner_box` draws a dark background box (fixed color, not configurable)
+behind each corner's text, plus a thin vertical border accent in
+`corner_box.color` flush with the box's outer edge — left edge for left
+corners, right edge for right corners — only where a corner actually has
 something to show. Its size is derived automatically from the rendered
 text plus a small padding, so there's nothing to size by hand.
 
-The overlay requires ffmpeg to be built with `--enable-libfreetype` (the default
-on macOS via Homebrew and on standard Linux builds).
+The overlay requires ffmpeg to be built with `--enable-libfreetype` (for the
+`drawtext` filter). Homebrew's default `ffmpeg` formula on macOS does **not**
+include this — install `ffmpeg-full` instead (`brew install ffmpeg-full`,
+bottled, no compile needed) and `brew link --force ffmpeg-full` so `ffmpeg`
+on `PATH` resolves to it; standard Linux distro builds (e.g. `apt install
+ffmpeg`) do include it.
 
 #### Fade in / fade out
 
