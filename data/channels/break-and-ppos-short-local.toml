@@ -13,8 +13,8 @@ content_folder = "its-a-live/content"
 source_path = "../outputs/break-and-ppos-short.ts"
 
 [markers]
-daterange_mode      = "narrowed"
-cue_tags            = "alongside"
+daterange_mode      = "shared"
+cue_tags            = "none"
 increment_event_ids = true
 
 [packaging]
