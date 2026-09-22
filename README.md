@@ -1,6 +1,6 @@
 # dr-strangeloop
 
-A suite of tools for building broadcast-ready MPEG-TS files with SCTE-35 ad markers, inspecting them frame-by-frame, and deploying them as live looping streams on AWS.
+A suite of tools for building broadcast-ready MPEG-TS files with SCTE-35 ad markers, inspecting them frame-by-frame, and deploying them as live looping streams on AWS or locally.
 
 ## Tools
 
@@ -8,7 +8,7 @@ A suite of tools for building broadcast-ready MPEG-TS files with SCTE-35 ad mark
 |---|---|
 | [`franken-ts/`](./franken-ts/README.md) | Stitch MP4 assets together and inject SCTE-35 markers from a YAML config |
 | [`frame-extractor/`](./frame-extractor/README.md) | Extract every frame from a video and build an interactive HTML timeline viewer |
-| [`its-a-live/`](./its-a-live/README.md) | Deploy a live looping HLS/DASH stream to AWS, on either of two backends selected per-channel: **MediaLive + MediaPackage** (`aws-media`) or **loop-dee-loop on ECS Express Mode + CloudFront** (`ecs-express`) |
+| [`its-a-live/`](./its-a-live/README.md) | Deploy a live looping HLS/DASH stream on one of three backends selected per-channel: **MediaLive + MediaPackage** (`aws-media`), **loop-dee-loop on ECS Express Mode + CloudFront** (`ecs-express`) -- both AWS -- or **loop-dee-loop in a local Docker container** (`local-docker`), no AWS resources at all, good for dev/demo before spending anything on AWS |
 | [`igor/`](./igor/README.md) | Web UI (branded "Dr. Strangeloop", codenamed Igor) to define channels, launch them, and monitor them -- a UI on top of the tools above |
 
 Outputs from all three tools — `.ts` files, HTML reports, frame timeline directories — land in [`outputs/`](./outputs/).
@@ -75,6 +75,11 @@ Steps performed:
 
 At the end it prints the exact commands to update content, stop the channel, and destroy the stack.
 
+`galvanise.py` only drives the two AWS backends. For `local-docker` (no AWS
+resources, no CloudFormation stack -- good for dev/demo before spending
+anything on AWS), use `its-a-live/channel.py` directly; see
+[`its-a-live/README.md`](./its-a-live/README.md#configure).
+
 ### Step by step
 
 #### Build a TS file
@@ -120,6 +125,18 @@ uv run --project its-a-live python its-a-live/channel.py -c configs/my-stream.to
 # Tear down (stops billing)
 cd its-a-live
 cdk destroy ItsALiveStack-my-stream-aws-media -c config=../configs/my-stream.toml
+```
+
+#### Run locally instead (no AWS)
+
+Set `[deploy].backend = "local-docker"` in the config and skip every `cdk`
+step above -- `local-docker` has no CloudFormation stack. `spark`/`start`/
+`stop`/`refresh` work the same way, running a `docker run` container on
+your own machine instead:
+
+```bash
+uv run --project its-a-live python its-a-live/channel.py -c configs/my-stream.toml spark
+uv run --project its-a-live python its-a-live/channel.py -c configs/my-stream.toml start
 ```
 
 See each tool's README for full details.

@@ -37,23 +37,30 @@ data/playlists/*.yaml
    data/channels/<name>.toml   (its-a-live channel config: backend, S3, AWS region)
         │
         ▼
-   its-a-live/channel.py + cdk  →  spark (stage input) → deploy → start
+   its-a-live/channel.py        →  spark (stage input) → deploy → start
         │
-        ├── backend = "aws-media"    → MediaLive + MediaPackage v1 (real live transcoding)
+        ├── backend = "aws-media"     → cdk deploy → MediaLive + MediaPackage v1
+        │                               (real live transcoding)
         │
-        └── backend = "ecs-express"  → loop-dee-loop/bake.py (GPAC remux, no transcode)
-                                        → ECS Express Mode + CloudFront
+        ├── backend = "ecs-express"   → cdk deploy → loop-dee-loop/bake.py
+        │                               (GPAC remux, no transcode)
+        │                               → ECS Express Mode + CloudFront
+        │
+        └── backend = "local-docker"  → no cdk, no AWS at all →
+                                        loop-dee-loop/bake.py → `docker run`
+                                        on your own machine
 ```
 
-Two backends exist for phase 3, chosen per-channel via
-`[deploy].backend` in the its-a-live TOML config — **not** two different
+Three backends exist for phase 3, chosen per-channel via
+`[deploy].backend` in the its-a-live TOML config — **not** different
 tools an agent needs to pick between at the code level; `its-a-live`
-exposes one CLI (`channel.py`) regardless of backend. `loop-dee-loop` is
-only directly relevant if the backend is `ecs-express`, and even then
-its `bake.py`/`serve.py` are normally invoked *by* `its-a-live`
-(`channel.py spark` / the deployed ECS task), not by hand — see
-`loop-dee-loop/AGENTS.md` for when running it directly is actually
-appropriate (local dev/testing).
+exposes one CLI (`channel.py`) regardless of backend. Only `aws-media`/
+`ecs-express` involve `cdk`/CloudFormation; `local-docker` has no stack at
+all. `loop-dee-loop` is only directly relevant if the backend is
+`ecs-express` or `local-docker`, and even then its `bake.py`/`serve.py` are
+normally invoked *by* `its-a-live` (`channel.py spark`/`start` / the
+deployed ECS task), not by hand — see `loop-dee-loop/AGENTS.md` for when
+running it directly is actually appropriate (local dev/testing).
 
 ## Orchestration
 
