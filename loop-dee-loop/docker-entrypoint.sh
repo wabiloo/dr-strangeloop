@@ -13,6 +13,12 @@
 #     LOOP_PACKAGE_S3_URI   s3://bucket/prefix/<channel>  (required)
 #     CMD:  serve.py --epoch-utc ... --port 8080 [other flags]
 #     (no package-dir positional argument)
+#     When LOOP_PACKAGE_S3_URI is set, this is the production path: after
+#     syncing, the flags are parsed here and handed to gunicorn (wsgi:app)
+#     instead of Flask's single-threaded dev server (see PERFS.md) --
+#     serve.py's own argparse remains the source of truth for flag names,
+#     this just extracts the handful gunicorn/wsgi.py need. GUNICORN_WORKERS
+#     overrides the default worker count.
 #
 #   bake.py:
 #     FRANKEN_TS_S3_URI     s3://bucket/prefix/<channel>-input  (required)
@@ -54,7 +60,35 @@ case "$SUBCOMMAND" in
         shift
         if [[ -n "${LOOP_PACKAGE_S3_URI:-}" ]]; then
             sync_down "$LOOP_PACKAGE_S3_URI" "$LOOP_PACKAGE_LOCAL_DIR"
-            exec python3 serve.py "$LOOP_PACKAGE_LOCAL_DIR" "$@"
+
+            HOST="0.0.0.0"
+            PORT="8080"
+            EPOCH_UTC=""
+            DVR_WINDOW_SECONDS=""
+            WINDOW_SEGMENTS=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --host) HOST="$2"; shift 2 ;;
+                    --port) PORT="$2"; shift 2 ;;
+                    --epoch-utc) EPOCH_UTC="$2"; shift 2 ;;
+                    --dvr-window-seconds) DVR_WINDOW_SECONDS="$2"; shift 2 ;;
+                    --window-segments) WINDOW_SEGMENTS="$2"; shift 2 ;;
+                    *)
+                        log "ERROR: unrecognized serve.py flag in production mode: $1"
+                        exit 2
+                        ;;
+                esac
+            done
+            if [[ -z "$EPOCH_UTC" ]]; then
+                log "ERROR: --epoch-utc is required"
+                exit 2
+            fi
+
+            export LOOP_PACKAGE_DIR="$LOOP_PACKAGE_LOCAL_DIR"
+            export EPOCH_UTC DVR_WINDOW_SECONDS WINDOW_SEGMENTS
+            WORKERS="${GUNICORN_WORKERS:-4}"
+            log "starting gunicorn (${WORKERS} workers) on ${HOST}:${PORT}"
+            exec gunicorn --bind "${HOST}:${PORT}" --workers "$WORKERS" wsgi:app
         else
             log "LOOP_PACKAGE_S3_URI not set — running serve.py as given (local/dev mode)"
             exec python3 serve.py "$@"

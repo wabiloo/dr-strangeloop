@@ -1064,6 +1064,34 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
     return app
 
 
+def read_package_descriptor(package_dir: Path) -> dict:
+    return json.loads((package_dir / "loop_descriptor.json").read_text())
+
+
+def resolve_epoch_ticks(epoch_utc: str, timescale: int) -> int:
+    """Convert an ISO8601 UTC epoch string to an integer tick count --
+    callers should do this exactly once and feed the result into every
+    subsequent request's arithmetic, never recompute it via accumulation."""
+    epoch_dt = _dt.datetime.strptime(epoch_utc, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=_dt.timezone.utc
+    )
+    return round(epoch_dt.timestamp() * timescale)
+
+
+def resolve_window_segments(
+    package_descriptor: dict,
+    *,
+    dvr_window_seconds: float = 30.0,
+    window_segments: int | None = None,
+) -> int:
+    """Exact segment count if given, else derived from a DVR-window target
+    using the package's nominal segment duration from bake time."""
+    if window_segments is not None:
+        return window_segments
+    nominal_segment_duration_seconds = float(package_descriptor["segment_duration_seconds"])
+    return max(1, math.ceil(dvr_window_seconds / nominal_segment_duration_seconds))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Serve a loop package as live HLS/DASH")
     parser.add_argument("package_dir", type=Path, help="Path to a baked loop package directory")
@@ -1096,27 +1124,14 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-    epoch_dt = _dt.datetime.strptime(args.epoch_utc, "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=_dt.timezone.utc
-    )
-
-    package_descriptor = json.loads(
-        (args.package_dir / "loop_descriptor.json").read_text()
-    )
+    package_descriptor = read_package_descriptor(args.package_dir)
     timescale = int(package_descriptor["timescale"])
-    # One-shot conversion of the configured epoch wall-clock time to an
-    # integer tick count -- this is the *only* place this conversion
-    # happens; the result (an int) is then used for every subsequent
-    # request's arithmetic, never recomputed via accumulation.
-    epoch_ticks = round(epoch_dt.timestamp() * timescale)
-
-    if args.window_segments is not None:
-        window_segments = args.window_segments
-    else:
-        nominal_segment_duration_seconds = float(package_descriptor["segment_duration_seconds"])
-        window_segments = max(
-            1, math.ceil(args.dvr_window_seconds / nominal_segment_duration_seconds)
-        )
+    epoch_ticks = resolve_epoch_ticks(args.epoch_utc, timescale)
+    window_segments = resolve_window_segments(
+        package_descriptor,
+        dvr_window_seconds=args.dvr_window_seconds,
+        window_segments=args.window_segments,
+    )
 
     logger.info(
         "DVR window: %d segment(s) (~%.1fs nominal, requested %.1fs)",
@@ -1125,6 +1140,12 @@ def main() -> int:
         args.dvr_window_seconds,
     )
 
+    logger.warning(
+        "Running Flask's built-in dev server -- single-threaded, serializes "
+        "concurrent requests. Fine for local dev/testing and local-docker; "
+        "the ecs-express Docker image's production path fronts this app "
+        "with gunicorn instead (see wsgi.py, docker-entrypoint.sh, PERFS.md)."
+    )
     app = create_app(args.package_dir, epoch_ticks, window_segments=window_segments)
     app.run(host=args.host, port=args.port)
     return 0

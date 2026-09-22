@@ -23,7 +23,8 @@ original (informational, not measured) sizing expectations this confirms.
 - **Server**: `serve.py`'s built-in Flask **development** server (single
   process, single thread) — i.e. these numbers are a *conservative floor*
   for a naive deployment, not a tuned production server (see caveats
-  below).
+  below). The deployed Docker image no longer runs this in production —
+  see "Update" below.
 
 ## Results: 3-minute run, 10 concurrent simulated viewers
 
@@ -75,15 +76,24 @@ decode/encode/remux at request time.
   Fargate task size).
 - Caveat: the built-in Flask dev server is single-threaded and explicitly
   not production-grade (it says so in its own startup banner). It
-  serializes concurrent requests. For real viewer counts:
-  - front it with **gunicorn/uwsgi** with a handful of worker processes
-    (still cheap — this is I/O-bound work, not CPU-bound, so a handful of
-    workers goes a long way);
-  - put a **CDN in front of `/seg/*` and `/audio/seg/*`** (SCOPE.md §8's
-    existing recommendation) so the origin only needs to sustain the
-    CDN's cache-fill rate, not full audience traffic.
+  serializes concurrent requests. Put a **CDN in front of `/seg/*` and
+  `/audio/seg/*`** (SCOPE.md §8's existing recommendation) so the origin
+  only needs to sustain the CDN's cache-fill rate, not full audience
+  traffic.
 - Even with a few gunicorn workers, **0.5–1 vCPU / 1 GB** should comfortably
   cover a single channel.
+
+### Update: gunicorn in production
+
+The Docker image's production path (`docker-entrypoint.sh`, when
+`LOOP_PACKAGE_S3_URI` is set — i.e. the actual `ecs-express` Fargate
+deployment) now fronts `serve.py`'s Flask app with **gunicorn** (`wsgi.py`,
+default 4 workers, override via `GUNICORN_WORKERS`) instead of the dev
+server measured above. `local-docker` and plain `python3 serve.py ...`
+(local dev/testing, `run.sh`) are unaffected — they still use the dev
+server, which is fine for that use case. The numbers above remain valid as
+a conservative single-worker floor; gunicorn with N workers multiplies
+available concurrency roughly linearly for this I/O-bound workload.
 
 ### Fargate — `bake` task (one-shot, run per schedule change)
 
