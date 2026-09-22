@@ -1446,19 +1446,19 @@ function applyHexPopover() {
                   <label>Asset ID (for tagging markers)</label>
                   <InputText v-model="form.assets[selectedAssetIndex].id" />
                 </div>
-                <div class="col-6 flex flex-column gap-1">
+                <div class="col-3 flex flex-column gap-1">
                   <label>Start</label>
                   <InputText v-model="form.assets[selectedAssetIndex].start" placeholder="00:00:00 / 10 min" />
                 </div>
-                <div class="col-6 flex flex-column gap-1">
+                <div class="col-3 flex flex-column gap-1">
                   <label>Duration</label>
                   <InputText v-model="form.assets[selectedAssetIndex].duration" placeholder="10 min" />
                 </div>
-                <div class="col-6 flex flex-column gap-1">
+                <div class="col-3 flex flex-column gap-1">
                   <label>Fade in (s)</label>
                   <InputText v-model="form.assets[selectedAssetIndex].fade_in" placeholder="1.5" />
                 </div>
-                <div class="col-6 flex flex-column gap-1">
+                <div class="col-3 flex flex-column gap-1">
                   <label>Fade out (s)</label>
                   <InputText v-model="form.assets[selectedAssetIndex].fade_out" placeholder="1.5" />
                 </div>
@@ -1466,13 +1466,19 @@ function applyHexPopover() {
                   <label>Per-asset slate image (overrides global)</label>
                   <AssetFileField v-model="form.assets[selectedAssetIndex].slate_image" />
                 </div>
-                <div class="col-12 flex flex-column gap-1">
-                  <label>OSD label (free text, shown by an "OSD label" corner)</label>
-                  <InputText v-model="form.assets[selectedAssetIndex].osd_label" placeholder="e.g. Weather" />
-                </div>
-                <div class="col-12 flex align-items-center gap-2">
-                  <Checkbox v-model="form.assets[selectedAssetIndex].no_osd" binary input-id="asset-no-osd" />
-                  <label for="asset-no-osd">No OSD (suppress the on-screen display entirely for this asset)</label>
+                <div class="col-12 flex align-items-center gap-4">
+                  <div class="flex align-items-center gap-2 flex-shrink-0">
+                    <Checkbox v-model="form.assets[selectedAssetIndex].no_osd" binary input-id="asset-no-osd" />
+                    <label for="asset-no-osd" class="white-space-nowrap">No OSD (suppress the on-screen display entirely for this asset)</label>
+                  </div>
+                  <div class="flex flex-column gap-1 flex-grow-1">
+                    <label>OSD label (free text, shown by an "OSD label" corner)</label>
+                    <InputText
+                      v-model="form.assets[selectedAssetIndex].osd_label"
+                      placeholder="e.g. Weather"
+                      :disabled="form.assets[selectedAssetIndex].no_osd"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
