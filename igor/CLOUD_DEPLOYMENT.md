@@ -7,6 +7,38 @@ before it's safe/durable to run somewhere shared (a cloud VM, ECS/Fargate,
 etc.) instead. It's a scoping pass, not a plan that's been agreed to yet --
 each numbered item below is a real workstream, not a checkbox.
 
+This doc is specifically the AWS-hosted shape. For running igor on a
+colleague's own Kubernetes cluster instead (no AWS account involved at
+all), see [`K8S_DEPLOYMENT.md`](./K8S_DEPLOYMENT.md) -- same underlying
+concerns (auth, persistent state, toolchain, splitting build execution
+out), Kubernetes-native answers throughout.
+
+## Local dev and cloud deliberately use different container shapes
+
+For local Docker use (a single operator on one machine), bundle igor +
+franken-ts + the ffmpeg/tsduck toolchain into one image: CPU is shared and
+effectively free on your own box, builds are interactive, and the added
+complexity of a second image buys nothing there (see the "Would I gain
+from doing that?" reasoning: igor's build dispatch already runs a build as
+an isolated OS subprocess, not a thread, so bundling doesn't cost you
+crash-isolation either). `loop-dee-loop` stays a separate container even
+locally, but only because `local-docker` launches it as a sibling
+container via the Docker socket -- that split is forced by the existing
+design, not chosen for resource isolation.
+
+In the cloud, the calculus flips, because you pay for provisioned capacity
+continuously rather than sharing a box's idle CPU: igor's own FastAPI+SPA
+backend needs about what `loop-dee-loop`'s `serve.py` needs (~0.25 vCPU /
+0.5 GB, see `PERFS.md`), but a real `ffmpeg` build can spike to 1+ vCPU and
+several GB depending on source resolution/duration. Sizing one always-on
+container for ffmpeg's worst case just to serve a small web app 24/7 is
+wasted spend. Workstream 5 below splits build execution out for this
+reason -- the same "one-shot heavy task, separate from the steady-state
+service" pattern `its-a-live`'s `ecs-express` backend already uses for
+`bake.py` vs `serve.py`. **Don't try to make the local and cloud shapes
+match** -- they're solving different problems (interactivity vs.
+continuous billing).
+
 ## Why this isn't just "put the container somewhere"
 
 The FastAPI app + built SPA is trivially containerizable. What makes this
@@ -59,7 +91,10 @@ Service actions (`_ecs_express_ops.py`), `medialive:*Channel*`
 `cdk deploy`/`cdk bootstrap` needs (CFN execution role, staging bucket,
 ECR). Prefer CDK's own bootstrap-role pattern (igor's identity only needs
 `sts:AssumeRole` into the CDK deploy role) over granting igor's identity
-broad IAM directly.
+broad IAM directly. If franken-ts build execution moves to a separate
+`RunTask` (workstream 5), igor's role also needs `ecs:RunTask`,
+`ecs:DescribeTasks`, and `iam:PassRole` scoped to just the assembler task's
+own execution/task roles -- not broad `ecs:*`.
 
 ### 4. Persistent state
 `data/channels/*.toml`, `data/playlists/*.yaml`, `outputs/`, and
@@ -73,17 +108,56 @@ explicitly documented as in-memory-only and already flags its own fix
 jobs on restart are tolerable for a shared deployment or whether that
 durability work needs to happen first.
 
-### 5. Toolchain / base image
-Needs `aws` CLI v2, `cdk` CLI v2 (Node.js), GPAC/ffmpeg/tsduck, igor's own
-`.venv` (`uv sync --all-packages`), and its-a-live's separate `.venv`
-(`cd its-a-live && uv sync`) baked into a custom image -- none of this can
-be "assumed already there" the way local dev does. **Docker itself is the
-odd one out**: the `local-docker` its-a-live backend shells out to `docker
-run`, which needs a real Docker daemon/socket -- not available on Fargate
-without privileged mode. Recommendation: drop `local-docker` from the cloud
-deployment (keep it dev-machine-only; it's also redundant with
-`ecs-express` for anything that isn't local iteration) rather than solve
-Docker-in-Docker for one backend option.
+### 5. Toolchain / base image, and splitting build execution out
+
+Needs `aws` CLI v2, `cdk` CLI v2 (Node.js), igor's own `.venv` (`uv sync
+--all-packages`), and its-a-live's separate `.venv` (`cd its-a-live && uv
+sync`) baked into a custom image -- none of this can be "assumed already
+there" the way local dev does. **Docker itself is the odd one out**: the
+`local-docker` its-a-live backend shells out to `docker run`, which needs a
+real Docker daemon/socket -- not available on Fargate without privileged
+mode. Recommendation: drop `local-docker` from the cloud deployment (keep
+it dev-machine-only; it's also redundant with `ecs-express` for anything
+that isn't local iteration) rather than solve Docker-in-Docker for one
+backend option.
+
+**ffmpeg/tsduck do NOT belong in igor's own image for a cloud deployment**
+(unlike the local Docker shape, which does bundle them -- see above).
+igor's in-process use of `franken_ts` (schema generation, config
+validation, marker/timeline preview -- `igor/src/igor/integrations/
+franken_ts.py`) only needs `ffprobe`, which is cheap; keep that in igor's
+image. The actual build (`franken-ts <playlist>`, today dispatched by
+`spawn_build_job` as a local subprocess) is the rare, heavy step that uses
+`ffmpeg` + `tsp`/tsduck, and belongs in its own image + ECS task
+definition instead, sized like `bake.py` (`PERFS.md`: ~1 vCPU / 2 GB,
+one-shot, run only when triggered):
+
+- A second image (`franken-ts-assembler`, or similar): `ffmpeg`, `tsp`
+  (tsduck), and the `franken_ts` package -- nothing else. Built from this
+  repo's `franken-ts/` alongside igor's own image, not assembled by hand.
+- `spawn_build_job` changes from "run a local subprocess" to "call
+  `ecs:RunTask` against the assembler task definition, then poll
+  `ecs:DescribeTasks`/read a completion marker" -- a real change to
+  `igor/src/igor/integrations/franken_ts.py` and `igor/src/igor/jobs/
+  runner.py`, not just infra. Expect real cold-start latency (tens of
+  seconds for a fresh Fargate task to launch) that doesn't exist locally.
+- The assembler task needs the same shared storage as igor for
+  `data/playlists/*.yaml` (input) and `outputs/` (result) -- see
+  workstream 4; this is the same S3/EFS migration that workstream needs
+  anyway, not new scope.
+
+**GPAC is the same problem, smaller.** `channel.py spark` for `ecs-express`
+channels also runs a subprocess (`loop-dee-loop/bake.py`, GPAC-based) --
+dispatched by igor exactly like a franken-ts build (`igor/src/igor/
+integrations/its_a_live.py`'s `spark` job), so it would also run inside
+igor's own cloud container unless treated the same way. Per `PERFS.md`'s
+own measurements, `bake.py` is small and fast (~288 MB peak RSS, ~3.5s for
+a 204s clip) -- much lighter than a real `ffmpeg` transcode -- so it's a
+reasonable, deliberate call to leave GPAC in igor's own image rather than
+split it too; that's a judgment call based on today's measured numbers,
+not a hard rule. If a fully build-work-free igor container is wanted
+later, the exact same `RunTask` treatment applies to `spark` as to
+franken-ts builds.
 
 ### 6. Account/network placement
 `cdk deploy`/`channel.py create`/`redeploy` need outbound AWS API access
@@ -109,17 +183,28 @@ drop into the CLI locally.
 For a small-team internal tool (not a multi-tenant product), the
 proportionate version of all this is:
 
-- one container (FastAPI + built SPA, same as `Running (prod)` in
-  `README.md`) on Fargate or a small EC2 box, behind Tailscale/VPN-only
-  ingress or an authenticating proxy -- no app-level auth built
+- one steady-state container (FastAPI + built SPA, `aws` CLI v2, `cdk`
+  CLI v2, `ffprobe`, GPAC, igor's + its-a-live's `.venv`s -- **not**
+  `ffmpeg`/tsduck) on Fargate sized like `loop-dee-loop/serve.py`
+  (~0.25 vCPU / 0.5 GB), behind Tailscale/VPN-only ingress or an
+  authenticating proxy -- no app-level auth built
+- a second image/task definition (`ffmpeg` + `tsp`/tsduck + the
+  `franken_ts` package, nothing else) that igor dispatches franken-ts
+  builds to via `ecs:RunTask`, sized like `bake.py`'s recommendation
+  (~1 vCPU / 2 GB) but only billed while a build actually runs -- see
+  workstream 5
 - `local-docker` backend dropped from this deployment; `ecs-express`/
   `aws-media` only
-- an EFS mount (or S3 migration) for `data/` and `outputs/`
+- an EFS mount (or S3 migration) for `data/` and `outputs/`, shared
+  between the steady-state container and the on-demand assembler task
 - a scoped IAM task role instead of an ambient profile, using CDK's
-  bootstrap-role pattern for the deploy step
+  bootstrap-role pattern for the deploy step, plus `ecs:RunTask`/
+  `ecs:DescribeTasks`/scoped `iam:PassRole` for dispatching builds
 - `/api/v1/files/browse` restricted to a configured asset root
-- a custom image with the full toolchain baked in, built from this repo
-  rather than assembled by hand on the host
+- both images built from this repo (not assembled by hand on the host);
+  this is a deliberate departure from the local Docker Compose shape,
+  which bundles everything with igor into one image for simplicity -- see
+  "Local dev and cloud deliberately use different container shapes" above
 
 ## Explicitly out of scope here
 

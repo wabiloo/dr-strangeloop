@@ -14,6 +14,13 @@ you pick:
   your own machine. No AWS resources at all, no CloudFormation stack —
   good for local dev/demo/testing before spending anything on AWS.
 
+> A fourth backend, `k8s` — `local-docker`'s idea (no AWS, no
+> CloudFormation) retargeted at a generic Kubernetes cluster instead of a
+> local Docker daemon, so this can be self-hosted by a colleague/another
+> team on their own cluster — is scoped in
+> [`K8S_BACKEND.md`](./K8S_BACKEND.md) as future work. It is not currently
+> wired up.
+
 > This tool was formerly two separate projects (`push-to-aws-media` and
 > `push-to-aws-loop`); they're merged here under one CLI so you don't have
 > to learn two different command sets for two different ways of putting
