@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import Menu from 'primevue/menu'
+import type { MenuItem } from 'primevue/menuitem'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { parseApproxSeconds } from '../utils/duration'
 import { layoutMarkers, type MarkerLike, type MarkerSpan } from '../markerLayout'
@@ -35,10 +37,21 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [index: number]
   add: []
+  bootstrap: []
   tagRange: [range: { startIndex: number; endIndex: number }]
   editMarker: [eventId: number]
   hoverMarker: [eventId: number | null]
 }>()
+
+// ── Add-asset "+" button: single asset vs bootstrap-from-files popup menu ──
+const addMenuRef = ref<InstanceType<typeof Menu> | null>(null)
+const addMenuItems: MenuItem[] = [
+  { label: 'Add single asset', icon: 'pi pi-plus', command: () => emit('add') },
+  { label: 'Bootstrap from files...', icon: 'pi pi-list', command: () => emit('bootstrap') },
+]
+function toggleAddMenu(event: Event) {
+  addMenuRef.value?.toggle(event)
+}
 
 const FALLBACK_SECONDS = 15 // weight used for assets with no known/parseable duration
 
@@ -411,10 +424,11 @@ watch(
         class="timeline-add-segment"
         title="Add asset"
         :style="{ marginTop: trackOffsetTop + 'px' }"
-        @click="emit('add')"
+        @click="toggleAddMenu"
       >
         <i class="pi pi-plus" />
       </button>
+      <Menu ref="addMenuRef" :model="addMenuItems" :popup="true" />
     </div>
 
     <div class="timeline-legend">

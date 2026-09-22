@@ -17,14 +17,16 @@ import TabList from 'primevue/tablist'
 import TabPanel from 'primevue/tabpanel'
 import TabPanels from 'primevue/tabpanels'
 import Tabs from 'primevue/tabs'
+import Textarea from 'primevue/textarea'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
-import { buildPlaylist, getPlaylist, resolveMarkers, savePlaylist } from '../api/client'
+import { buildPlaylist, getPlaylist, probeMedia, resolveMarkers, savePlaylist } from '../api/client'
 import type { Job, ResolvedMarker } from '../api/types'
 import AssetTimeline from '../components/AssetTimeline.vue'
 import AssetFileField from '../components/AssetFileField.vue'
 import JobPanel from '../components/JobPanel.vue'
+import { parseApproxSeconds } from '../utils/duration'
 import {
   SEGMENTATION_PAIR_OPTIONS,
   UPID_TYPE_OPTIONS,
@@ -339,6 +341,128 @@ function selectAsset(i: number) {
 function addAsset() {
   form.assets.push(newAsset())
   selectAsset(form.assets.length - 1)
+}
+
+// ── Bootstrap timeline from a flat list of files/URLs ──────────────────────
+// Lets a user paste an ordered list of local paths/URLs instead of adding
+// assets one at a time. Every source is probed (reusing the same
+// /files/probe endpoint as the per-asset "probe" button) for its duration;
+// anything at or under the configured threshold is classified as an ad, and
+// every *consecutive* run of ads is folded into one splice_insert `break`
+// marker spanning them -- mirrors franken-ts-bootstrap's CLI counterpart
+// (see franken-ts/franken_ts/bootstrap.py) but scoped to this form instead
+// of a standalone YAML file.
+interface BootstrapRow {
+  source: string
+  duration: number | null
+  error: string | null
+}
+
+const bootstrapOpen = ref(false)
+const bootstrapText = ref('')
+const bootstrapThreshold = ref('1 min')
+const bootstrapRows = ref<BootstrapRow[]>([])
+const bootstrapProbing = ref(false)
+const bootstrapProgress = ref(0)
+
+function openBootstrap() {
+  bootstrapText.value = ''
+  bootstrapRows.value = []
+  bootstrapProgress.value = 0
+  bootstrapOpen.value = true
+}
+
+function parseBootstrapSources(): string[] {
+  return bootstrapText.value
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#'))
+}
+
+const bootstrapThresholdSeconds = computed(() => parseApproxSeconds(bootstrapThreshold.value))
+
+async function probeBootstrapSources() {
+  const sources = parseBootstrapSources()
+  if (sources.length === 0) return
+  bootstrapProbing.value = true
+  bootstrapRows.value = []
+  bootstrapProgress.value = 0
+  for (const source of sources) {
+    try {
+      const result = await probeMedia(source)
+      bootstrapRows.value.push({ source, duration: result.duration_seconds, error: null })
+    } catch (e) {
+      bootstrapRows.value.push({ source, duration: null, error: e instanceof Error ? e.message : String(e) })
+    }
+    bootstrapProgress.value += 1
+  }
+  bootstrapProbing.value = false
+}
+
+function bootstrapLabelFor(source: string): string {
+  try {
+    const withoutQuery = source.split('?')[0]
+    return withoutQuery.split('/').pop() || source
+  } catch {
+    return source
+  }
+}
+
+function isBootstrapAd(row: BootstrapRow): boolean {
+  const threshold = bootstrapThresholdSeconds.value
+  return row.duration !== null && threshold !== null && row.duration <= threshold
+}
+
+const bootstrapHasErrors = computed(() => bootstrapRows.value.some((r) => r.error !== null))
+const bootstrapAdCount = computed(() => bootstrapRows.value.filter(isBootstrapAd).length)
+const bootstrapCanCommit = computed(
+  () => bootstrapRows.value.length > 0 && !bootstrapHasErrors.value && !bootstrapProbing.value,
+)
+
+/** Appends the probed rows as new assets at the end of the current
+ * timeline, and folds every consecutive run of ads (within this newly
+ * added batch only -- pre-existing assets are left untouched) into one
+ * `break` marker each. */
+function commitBootstrap() {
+  if (!bootstrapCanCommit.value) return
+
+  const usedSoFar = [...usedEventIds.value]
+  let adRun: string[] = []
+
+  function flushRun() {
+    if (adRun.length === 0) return
+    const eventId = nextEventId(usedSoFar)
+    usedSoFar.push(eventId)
+    form.markers.push({
+      event_id: eventId,
+      splice_type: 'splice_insert',
+      assets: [...adRun],
+      segmentation: newSegmentation(),
+      auto_return: true,
+    })
+    adRun = []
+  }
+
+  for (const row of bootstrapRows.value) {
+    const asset = newAsset()
+    asset.file = row.source
+    // Already probed above -- set duration explicitly so the timeline
+    // renders at its real width immediately, without a separate "Resolve
+    // estimated durations" round-trip.
+    if (row.duration !== null) asset.duration = String(Number(row.duration.toFixed(3)))
+    const isAd = isBootstrapAd(row)
+    if (isAd) {
+      asset.osd_label = bootstrapLabelFor(row.source)
+      adRun.push(asset.id)
+    } else {
+      flushRun()
+    }
+    form.assets.push(asset)
+  }
+  flushRun()
+
+  selectAsset(form.assets.length - 1)
+  bootstrapOpen.value = false
 }
 
 function removeAsset(i: number) {
@@ -1256,6 +1380,7 @@ function applyHexPopover() {
                 :scroll-to-marker-event-id="graphScrollTarget"
                 @select="selectAsset"
                 @add="addAsset"
+                @bootstrap="openBootstrap"
                 @tag-range="tagRange"
                 @edit-marker="editMarker"
                 @hover-marker="hoverMarkerFromGraph"
@@ -1276,7 +1401,10 @@ function applyHexPopover() {
             <div v-if="selectedAssetIndex === null && markerDraft === null" class="asset-empty-state">
               <i class="pi pi-images" style="font-size: 1.5rem" />
               <span>{{ form.assets.length === 0 ? 'No assets yet.' : 'Select an asset above to edit it, or shift-click a range of assets to tag a marker.' }}</span>
-              <Button label="Add asset" icon="pi pi-plus" outlined @click="addAsset" />
+              <div class="flex gap-2">
+                <Button label="Add asset" icon="pi pi-plus" outlined @click="addAsset" />
+                <Button label="Bootstrap from files" icon="pi pi-list" outlined severity="secondary" @click="openBootstrap" />
+              </div>
             </div>
 
             <div v-else-if="markerDraft" class="p-3 border-1 surface-border border-round flex flex-column gap-2 detail-panel">
@@ -1583,10 +1711,117 @@ function applyHexPopover() {
         <Button label="Move" @click="confirmPendingAssetMove" />
       </template>
     </Dialog>
+
+    <Dialog
+      v-model:visible="bootstrapOpen"
+      modal
+      header="Bootstrap timeline from files"
+      :style="{ width: '46rem' }"
+    >
+      <div class="flex flex-column gap-3">
+        <p class="text-sm text-color-secondary m-0">
+          Paste an ordered list of local file paths or URLs (one per line, blank lines and
+          <code>#</code> comments ignored). Each is probed for duration; anything at or under the
+          threshold below is classified as an ad and every consecutive run of ads is folded into
+          one break marker. Assets are appended to the end of the current timeline -- review the
+          result before saving/building.
+        </p>
+
+        <div class="flex flex-column gap-1">
+          <label>Sources</label>
+          <Textarea
+            v-model="bootstrapText"
+            rows="8"
+            auto-resize
+            placeholder="/path/to/content1.mp4&#10;/path/to/ad1.mp4&#10;https://cdn.example.com/ad2.mp4&#10;/path/to/content2.mp4"
+          />
+        </div>
+
+        <div class="flex align-items-end gap-2">
+          <div class="flex flex-column gap-1">
+            <label>Ad threshold (assets at or under this duration are ads)</label>
+            <InputText v-model="bootstrapThreshold" placeholder="2 min" style="width: 14rem" />
+          </div>
+          <Button
+            label="Probe sources"
+            icon="pi pi-search"
+            :loading="bootstrapProbing"
+            :disabled="parseBootstrapSources().length === 0"
+            @click="probeBootstrapSources"
+          />
+        </div>
+        <Message v-if="bootstrapThresholdSeconds === null" severity="warn" class="text-sm">
+          Couldn't parse the ad threshold -- try "2 min", "00:02:00", or a plain number of seconds.
+        </Message>
+
+        <div v-if="bootstrapProbing" class="text-sm text-color-secondary">
+          Probing {{ bootstrapProgress }} / {{ parseBootstrapSources().length }}...
+        </div>
+
+        <table v-if="bootstrapRows.length" class="bootstrap-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Source</th>
+              <th>Duration</th>
+              <th>Classified as</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, i) in bootstrapRows" :key="i">
+              <td>{{ i + 1 }}</td>
+              <td style="word-break: break-all">{{ row.source }}</td>
+              <td>
+                <span v-if="row.error" class="text-red-500">error</span>
+                <span v-else-if="row.duration !== null">{{ row.duration.toFixed(1) }}s</span>
+                <span v-else class="text-color-secondary">?</span>
+              </td>
+              <td>
+                <Message v-if="row.error" severity="error" class="text-xs m-0">{{ row.error }}</Message>
+                <span v-else-if="isBootstrapAd(row)" class="text-orange-500">ad</span>
+                <span v-else class="text-green-500">content</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div v-if="bootstrapRows.length && !bootstrapHasErrors" class="text-sm text-color-secondary">
+          {{ bootstrapRows.length }} asset(s), {{ bootstrapAdCount }} classified as ads.
+        </div>
+      </div>
+
+      <template #footer>
+        <Button label="Cancel" text @click="bootstrapOpen = false" />
+        <Button
+          label="Add to timeline"
+          icon="pi pi-plus"
+          :disabled="!bootstrapCanCommit"
+          @click="commitBootstrap"
+        />
+      </template>
+    </Dialog>
   </div>
 </template>
 
 <style scoped>
+.bootstrap-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.bootstrap-table th {
+  text-align: left;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--p-surface-300, #cbd5e1);
+  color: var(--p-text-muted-color, #64748b);
+  font-weight: 600;
+}
+.bootstrap-table td {
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
+  vertical-align: top;
+}
+
 /* A stand-in for the video frame: fixed 16:9. The corner pickers live
  * OUTSIDE this box (in flex rows above/below it) so they never cover the
  * preview text; only the simulated corner text and the countdown-bar

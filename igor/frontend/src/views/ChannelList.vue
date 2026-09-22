@@ -1,16 +1,21 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
 import Column from 'primevue/column'
+import ConfirmPopup from 'primevue/confirmpopup'
 import DataTable from 'primevue/datatable'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
+import { useConfirm } from 'primevue/useconfirm'
+import { useToast } from 'primevue/usetoast'
 import { onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { listChannels } from '../api/client'
+import { deleteChannel, listChannels } from '../api/client'
 import type { ChannelListItem } from '../api/types'
 import { PHASE_LABEL, listItemPhase, phaseSeverity } from '../utils/channelPhase'
 
 const router = useRouter()
+const confirm = useConfirm()
+const toast = useToast()
 const channels = ref<ChannelListItem[]>([])
 const loading = ref(true)
 const error = ref('')
@@ -53,6 +58,40 @@ function stackSeverity(channel: ChannelListItem) {
   if (channel.stack_status.includes('IN_PROGRESS')) return 'info'
   if (channel.stack_status.includes('COMPLETE')) return 'success'
   return 'secondary'
+}
+
+// Deleting only removes igor's local TOML config, never touches AWS/Docker
+// (see routes/channels.py's delete_channel) -- restrict it in the UI to
+// channels with no deployed stack/container at all, so it can't be used to
+// orphan a running or stopped-but-still-deployed resource. "not deployed"
+// is the one Phase where there's nothing left to tear down.
+function isDeletable(channel: ChannelListItem) {
+  return listItemPhase(channel) === 'not-deployed'
+}
+
+function deleteDisabledReason(channel: ChannelListItem) {
+  if (isDeletable(channel)) return undefined
+  return 'Only channels with no deployed stack/container can be deleted here -- destroy the deployment first.'
+}
+
+async function confirmDelete(event: MouseEvent, channel: ChannelListItem) {
+  confirm.require({
+    target: event.currentTarget as HTMLElement,
+    message: `Delete channel "${channel.name}"? This only removes its local config -- there is nothing deployed to tear down.`,
+    accept: async () => {
+      try {
+        await deleteChannel(channel.name)
+        await load()
+      } catch (e) {
+        toast.add({
+          severity: 'error',
+          summary: 'Delete failed',
+          detail: e instanceof Error ? e.message : String(e),
+          life: 6000,
+        })
+      }
+    },
+  })
 }
 
 onMounted(load)
@@ -101,10 +140,25 @@ onMounted(load)
         </template>
       </Column>
       <Column field="stack_name" header="CloudFormation stack" />
+      <Column header="Actions">
+        <template #body="{ data }">
+          <div class="flex gap-2" @click.stop>
+            <Button
+              icon="pi pi-trash"
+              severity="danger"
+              text
+              :disabled="!isDeletable(data)"
+              :title="deleteDisabledReason(data) ?? 'Delete channel'"
+              @click="confirmDelete($event, data)"
+            />
+          </div>
+        </template>
+      </Column>
       <template #empty>
         No channels defined yet. Click "New channel" to define one from a franken-ts output.
       </template>
     </DataTable>
+    <ConfirmPopup />
   </div>
 </template>
 

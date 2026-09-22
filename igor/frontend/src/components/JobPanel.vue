@@ -2,7 +2,7 @@
 import Message from 'primevue/message'
 import ProgressSpinner from 'primevue/progressspinner'
 import Tag from 'primevue/tag'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { getJob } from '../api/client'
 import type { Job } from '../api/types'
 
@@ -15,6 +15,23 @@ const elapsedSeconds = ref(0)
 let timer: ReturnType<typeof setInterval> | null = null
 let elapsedTimer: ReturnType<typeof setInterval> | null = null
 let startedAtMs = 0
+
+// ── Auto-scroll the log to the latest line ─────────────────────────────────
+// Only when the user hasn't scrolled up to read earlier output -- otherwise
+// every poll tick would yank them back to the bottom mid-read.
+const logEl = ref<HTMLPreElement | null>(null)
+const NEAR_BOTTOM_PX = 24
+
+function isNearBottom(): boolean {
+  const el = logEl.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX
+}
+
+function scrollToBottom() {
+  const el = logEl.value
+  if (el) el.scrollTop = el.scrollHeight
+}
 
 const elapsedLabel = computed(() => {
   const m = Math.floor(elapsedSeconds.value / 60)
@@ -37,6 +54,7 @@ function statusSeverity(status?: string) {
 
 async function poll() {
   if (!props.jobId) return
+  const wasNearBottom = isNearBottom()
   try {
     const offset = job.value?.log_length ?? 0
     const update = await getJob(props.jobId, offset)
@@ -46,6 +64,7 @@ async function poll() {
       job.value = update
     }
     error.value = ''
+    if (wasNearBottom) await nextTick().then(scrollToBottom)
     if (update.status === 'succeeded' || update.status === 'failed') {
       stop()
       emit('finished', job.value)
@@ -95,6 +114,6 @@ onBeforeUnmount(stop)
       <i class="pi pi-clock mr-1" />Still running -- this is expected: {{ etaHint }}
     </Message>
     <Message v-if="error" severity="error">{{ error }}</Message>
-    <pre v-if="job" class="job-log">{{ job.log.join('\n') || '(no output yet)' }}</pre>
+    <pre v-if="job" ref="logEl" class="job-log">{{ job.log.join('\n') || '(no output yet)' }}</pre>
   </div>
 </template>
