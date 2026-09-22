@@ -10,13 +10,11 @@ normalize: true
 assets:
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
   duration: 20s
-  countdown: 5
 - file: /Users/fabrelambeau/Broadpeak/Resources/Video Idents/broadpeakio-promo-1080p_5000k.mp4
   id: ad1
   duration: 10s
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
   duration: 20s
-  countdown: 5
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
   start: 20s
   duration: 10s
@@ -33,3 +31,7 @@ markers:
     no_regional_blackout: false
     archive_allowed: false
     device_restrictions: 1
+osd:
+  enabled: true
+  corners:
+    top_right: next_asset_id

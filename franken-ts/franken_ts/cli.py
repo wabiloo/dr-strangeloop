@@ -490,7 +490,7 @@ def _run_pipeline_single(
             # Use the same key as the persistent cache so both caches are
             # always consistent — two entries are identical iff they produce
             # the same extracted segments (same source, cut, overlays, etc).
-            key = entry_cache_key(entry, cfg.output)
+            key = entry_cache_key(entry, cfg.output, cfg.osd)
             prefix = f"  [[bold]{idx + 1}/{n_total}[/bold]] [cyan]{entry.source_file.name}[/cyan]"
 
             if key in run_cache:
@@ -502,7 +502,7 @@ def _run_pipeline_single(
                 disk_hit = False
                 if cache_dir is not None and not dry_run:
                     from . import cache as _cache
-                    cached = _cache.lookup(entry, cfg.output, cache_dir)
+                    cached = _cache.lookup(entry, cfg.output, cfg.osd, cache_dir)
                     if cached is not None:
                         v, a = cached.video, cached.audio
                         disk_hit = True
@@ -513,7 +513,7 @@ def _run_pipeline_single(
                     with console.status(f"{prefix}  [dim]extracting...[/dim]", spinner="dots"):
                         result = extract_clip(
                             entry, cfg.output, temp_dir, idx,
-                            cache_dir=cache_dir, dry_run=dry_run,
+                            osd=cfg.osd, cache_dir=cache_dir, dry_run=dry_run,
                         )
                     v, a = result.segments.video, result.segments.audio
                     console.print(f"{prefix}  [dim]done[/dim]")

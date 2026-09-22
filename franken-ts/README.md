@@ -75,19 +75,36 @@ output:
 normalize: false               # set true to auto-fix mismatched inputs
 slate_image: /path/to/slate.png  # optional — global cross-dissolve image for all fades
 
+osd:                            # optional — on-screen display, see "On-screen display (OSD)" below
+  enabled: true                 # default: false
+  countdown:
+    enabled: true                # default: true
+    height_pct: 5                 # default: 5 (% of transcoded output height)
+  text_size_pct: 4               # default: 4 (% of transcoded output height)
+  text_color: "#FFFFFF"          # default: "#FFFFFF"
+  ad_break_label: "ad break"     # default: "ad break"
+  corner_box:                    # optional — semi-transparent box behind each corner's text
+    enabled: true                # default: false
+    color: "#000000"             # default: "#000000"
+  corners:
+    top_left: asset_id           # default: null
+    top_right: scte35_spans      # default: null
+    bottom_left: asset_id        # default: asset_id
+    bottom_right: time           # default: time
+
 assets:
   - file: content.mp4
     start: "00:00:00"          # optional — start offset within the file
     duration: "10 min"         # optional — how much of the file to use
-    countdown: 5               # optional — countdown overlay in the last 5s
     fade_in: 1.5               # optional — fade in from black (or slate) for 1.5s
     fade_out: 2                # optional — fade out to black (or slate) for 2s
     slate_image: /path/to/slate.png  # optional — cross-dissolve image for fades
+    no_osd: false               # optional — suppress the OSD entirely for this asset
+    osd_label: "Weather"        # optional — free text shown by the osd_label corner content
 
   - file: ad.mp4
     id: ad1                    # required if referenced by a `markers` entry
     duration: "2 min"
-    countdown: 3               # optional — countdown in the last 3s of this ad
 
   - file: ad2.mp4
     id: ad2
@@ -229,24 +246,59 @@ use exactly one.
 - `duration` only → from the beginning of the file.
 - Neither → use the full file.
 
-#### Countdown overlay
+#### On-screen display (OSD)
 
-Any asset can have a `countdown` field. When set, a corner bug is burned into
-the top-right of the video in the last N seconds of that clip, showing a
-whole-second ceiling countdown and a label for the next element in the sequence:
+`osd` (top-level, playlist-wide — not per-asset) configures a burned-in
+overlay shown on every asset in the playlist, except those with `no_osd:
+true`. It has two independent parts: a countdown progress bar, and up to 4
+corner text slots. Both are sized as a percentage of the transcoded output
+height, so they scale correctly across a multi-rendition ABR ladder.
 
+```yaml
+osd:
+  enabled: true                 # master on/off switch — default: false
+  countdown:
+    enabled: true                # default: true
+    height_pct: 5                 # default: 5
+  text_size_pct: 4               # default: 4 — applies to all 4 corners
+  text_color: "#FFFFFF"          # default: "#FFFFFF" — applies to all corner text
+  ad_break_label: "ad break"     # default: "ad break" — text for the is_adbreak corner
+  corner_box:                    # optional semi-transparent box behind each corner's text
+    enabled: true                # default: false
+    color: "#000000"             # default: "#000000" — same box color for all 4 corners
+  corners:
+    top_left: asset_id
+    top_right: scte35_spans
+    bottom_left: asset_id        # default: asset_id
+    bottom_right: time           # default: time
 ```
-next: AD        ← label line (ASSET | AD | END)
-5               ← ticking countdown below
-```
 
-| Value | Behaviour |
+**Countdown bar**: a semi-transparent black horizontal bar at the bottom of
+the frame, growing from 0% to 100% width over the current asset's playback
+(it resets at the start of each asset).
+
+**Corner text**: each of `top_left`/`top_right`/`bottom_left`/`bottom_right`
+can independently show one of:
+
+| Value | Shows |
 |---|---|
-| `5` (positive number) | Overlay in the last 5 seconds; clamped to clip duration if the clip is shorter |
-| `-1` | Overlay for the entire clip duration |
-| absent / `null` | No overlay |
+| `asset_id` | the current asset's `id` |
+| `time` | elapsed/total seconds within the current asset, sub-second with 2 decimal places, e.g. `12.32/34.60` |
+| `next_asset_id` | `next: {id}` — the next real (non-still-image) asset; the playlist loops, so this always resolves to something |
+| `scte35_spans` | the non-instant SCTE-35 spans currently covering this asset, abbreviated and `/`-joined outermost-first, e.g. `b / ppo / pa` |
+| `is_adbreak` | `osd.ad_break_label` when the asset is covered by an ad-related SCTE-35 span (break/placement-opportunity/advertisement/promo/ad-block lanes), otherwise nothing |
+| `osd_label` | the asset's own `osd_label` free-text field, or nothing if unset |
+| `null` (or omitted) | nothing shown in that corner |
 
-`countdown` accepts the same time formats as `start` and `duration` (see table above).
+`no_osd: true` on an asset suppresses the OSD entirely for that asset (no
+bar, no corner text), regardless of the playlist-level `osd` settings.
+`osd_label` is a free-text per-asset field with no effect unless a corner
+is configured to show `osd_label`.
+
+`corner_box` draws a semi-transparent background box behind each corner's
+text (same color for all 4 corners) — only where a corner actually has
+something to show. Its size is derived automatically from the rendered
+text plus a small padding, so there's nothing to size by hand.
 
 The overlay requires ffmpeg to be built with `--enable-libfreetype` (the default
 on macOS via Homebrew and on standard Linux builds).
@@ -297,8 +349,8 @@ markers:
 - Values are clamped to the clip duration.
 - If `fade_in + fade_out` would exceed the clip duration, both are scaled
   proportionally so they share the available time without overlapping.
-- When combined with `countdown`, the countdown text renders on top of the
-  fading video (the text fades out along with the picture during a fade-out).
+- When combined with `osd`, the OSD renders on top of the fading video (it
+  fades out along with the picture during a fade-out).
 - `fade_in` / `fade_out` accept the same time formats as `start` and `duration`.
 
 #### SCTE-35 marker types

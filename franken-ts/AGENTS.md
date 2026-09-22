@@ -62,9 +62,29 @@ offset), `duration` (optional length) — omit both to use the whole file.
 Time values accept `HH:MM:SS[.mmm]`, plain seconds, or human phrases like
 `"10 min"` / `"1 hour 30 min"`.
 
-Optional per-asset: `countdown` (seconds of corner-bug overlay before the
-next element, or `-1` for the whole clip), `fade_in`/`fade_out`
-(seconds), `slate_image` (per-asset override).
+Optional per-asset: `fade_in`/`fade_out` (seconds), `slate_image`
+(per-asset override), `no_osd` (bool, suppresses the OSD entirely for
+this asset regardless of the playlist-level `osd` settings), `osd_label`
+(free text, shown by a corner configured with the `osd_label` content
+type; nothing shown if unset).
+
+### `osd` — top-level (playlist-wide, not per-asset), on-screen display
+
+`enabled` (bool, default `false`) is the master switch. When on: an
+optional `countdown` progress bar (`enabled`/`height_pct`, % of output
+height, grows 0→100% width over each asset's playback) plus up to 4
+`corners` (`top_left`/`top_right`/`bottom_left`/`bottom_right`, default
+`bottom_left: asset_id`/`bottom_right: time`, others unset), each one of
+`asset_id`/`time` (elapsed/total seconds in the current asset, sub-second
+with 2 decimal places, e.g. `12.32/34.60`)/
+`next_asset_id` (`next: {id}`, always resolves — playlist loops)/
+`scte35_spans` (non-instant covering spans, abbreviated and `/`-joined
+outermost-first, e.g. `b / ppo / pa`)/`is_adbreak` (`ad_break_label` text
+when covered by a break/ppo/ad-lane span)/`osd_label` (the asset's own
+`osd_label` free text, nothing if unset). `text_size_pct`/`text_color`
+apply uniformly to all corner text. `corner_box` (`enabled`/`color`,
+default off) draws a same-color semi-transparent box behind each
+corner's text, auto-sized from the rendered text plus padding.
 
 ### `markers` — top-level list (sibling of `assets`), the only way to signal ad breaks
 
@@ -124,8 +144,8 @@ markers:
    live in `data/playlists/`, `franken-ts` is invoked from the repo root);
    confirm if the user wants a specific name/path (this feeds
    `its-a-live`'s `[input].source_path`).
-4. **Visual polish** — countdowns, fades, slates: only ask if the user
-   mentioned wanting them; otherwise omit (no defaults imposed).
+4. **Visual polish** — OSD overlays, fades, slates: only ask if the user
+   mentioned wanting them; otherwise omit (`osd.enabled` defaults `false`).
 5. **`normalize`** — only needed if source assets have mismatched
    resolution/framerate/codec; leave `false` by default.
 

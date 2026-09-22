@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from .config import OutputConfig
+from .config import OsdConfig, OutputConfig
+from .osd import abbreviation_for_marker
 from .utils import is_url, source_str
 
 if TYPE_CHECKING:
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 # Bump this whenever the extraction recipe changes in a way that makes old
 # cache artifacts incompatible (filters, codec params, stream layout, …) so
 # stale entries are not silently reused.
-_RECIPE_VERSION = "extract_v6_vonly+aonly+countdown+fade+slate+image"
+_RECIPE_VERSION = "extract_v7_vonly+aonly+osd+fade+slate+image"
 
 
 @dataclass(frozen=True)
@@ -33,8 +34,8 @@ class ClipSegments:
     audio: Path   # audio-only file covering the same clip range
 
 
-def entry_cache_key(entry: TimelineEntry, output: OutputConfig) -> str:
-    """Compute the cache key for a TimelineEntry + OutputConfig pair.
+def entry_cache_key(entry: TimelineEntry, output: OutputConfig, osd: Optional[OsdConfig]) -> str:
+    """Compute the cache key for a TimelineEntry + OutputConfig + OsdConfig triple.
 
     This is the single source of truth for cache identity.  It is also used
     by the within-run dedup dict in cli.py so that both caches are consistent:
@@ -48,7 +49,9 @@ def entry_cache_key(entry: TimelineEntry, output: OutputConfig) -> str:
       these immutable ad-placeholder assets)
     - Output spec: resolution, framerate, gop, bitrate
     - Cut range: frame-snapped inpoint + outpoint
-    - Overlay params: countdown window, next_label, fade_in, fade_out
+    - OSD: resolved per-entry OSD data (no_osd, is_adbreak, next_asset_id,
+      osd_label, covering span abbreviations) plus the full OsdConfig itself
+    - Overlay params: fade_in, fade_out
     - Slate image identity: resolved path + mtime + size (if set)
     - Recipe version: invalidates stale cache entries after pipeline changes
     """
@@ -60,7 +63,14 @@ def entry_cache_key(entry: TimelineEntry, output: OutputConfig) -> str:
         source_part = f"{source.resolve()}|{stat.st_mtime}|{stat.st_size}"
 
     fade_part = f"{entry.fade_in}:{entry.fade_out}"
-    countdown_part = f"{entry.countdown}:{entry.next_label}"
+
+    span_abbrevs = ",".join(abbreviation_for_marker(m) for m in entry.covering_spans)
+    osd_entry_part = (
+        f"{entry.no_osd}:{entry.is_adbreak}:{entry.next_asset_id}:"
+        f"{entry.osd_label}:{span_abbrevs}"
+    )
+    osd_cfg_part = osd.model_dump_json() if osd is not None else "none"
+    osd_part = f"{osd_entry_part}:{osd_cfg_part}"
 
     if entry.slate_image is not None:
         if is_url(entry.slate_image):
@@ -75,7 +85,7 @@ def entry_cache_key(entry: TimelineEntry, output: OutputConfig) -> str:
         f"{source_part}"
         f"|{output.resolution}|{output.framerate}|{output.gop}|{output.bitrate_kbps}|48000"
         f"|in={entry.inpoint:.6f}|out={entry.outpoint:.6f}"
-        f"|countdown={countdown_part}"
+        f"|osd={osd_part}"
         f"|fade={fade_part}"
         f"|slate={slate_part}"
         f"|{_RECIPE_VERSION}"
@@ -93,10 +103,11 @@ def _paths(cache_dir: Path, key: str) -> ClipSegments:
 def lookup(
     entry: TimelineEntry,
     output: OutputConfig,
+    osd: Optional[OsdConfig],
     cache_dir: Path,
 ) -> Optional[ClipSegments]:
     """Return cached clip segments if BOTH artifacts exist, otherwise None."""
-    key = entry_cache_key(entry, output)
+    key = entry_cache_key(entry, output, osd)
     segs = _paths(cache_dir, key)
     if segs.video.exists() and segs.audio.exists():
         logger.info("Cache hit for %s [%.3f–%.3f] → %s",
@@ -110,11 +121,12 @@ def store(
     audio_src: Path,
     entry: TimelineEntry,
     output: OutputConfig,
+    osd: Optional[OsdConfig],
     cache_dir: Path,
 ) -> ClipSegments:
     """Copy freshly-extracted clip segments into the cache. Returns cache paths."""
     cache_dir.mkdir(parents=True, exist_ok=True)
-    key = entry_cache_key(entry, output)
+    key = entry_cache_key(entry, output, osd)
     segs = _paths(cache_dir, key)
     shutil.copy2(video_src, segs.video)
     shutil.copy2(audio_src, segs.audio)

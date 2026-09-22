@@ -9,7 +9,6 @@ output:
 assets:
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
   duration: 10s
-  countdown: 5
 - file: /Users/fabrelambeau/Broadpeak/Resources/Video Idents/broadpeakio-promo-1080p_5000k.mp4
   id: ad1
   duration: 5s
@@ -30,3 +29,7 @@ markers:
     archive_allowed: false
     device_restrictions: 1
 normalize: true
+osd:
+  enabled: true
+  corners:
+    top_right: next_asset_id

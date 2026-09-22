@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Literal, Optional, Union
 
@@ -192,6 +193,46 @@ LANE_FOR_SEGMENTATION_TYPE_ID: dict[str, str] = {
 }
 
 
+# SCTE-35 Table 22 segmentation_type_id (Start value) -> bare name (no
+# "Start"/"End" wording). Mirrors igor/frontend/src/segmentationPresets.ts's
+# SEGMENTATION_PAIR_OPTIONS[].name exactly, so the CLI-burned-in OSD
+# abbreviations (see osd.py's abbreviation_for_marker) and igor's UI never
+# describe the same type_id differently. Used only for OSD display -- not a
+# source of truth for `type`/lane grouping (that's LANE_FOR_SEGMENTATION_TYPE_ID
+# above).
+SEGMENTATION_TYPE_NAME: dict[str, str] = {
+    "0x00": "Not Indicated",
+    "0x01": "Content Identification",
+    "0x02": "Call Ad Server",
+    "0x10": "Program",
+    "0x12": "Program Early Termination",
+    "0x13": "Program Breakaway",
+    "0x14": "Program Resumption",
+    "0x15": "Program Runover Planned",
+    "0x16": "Program Runover Unplanned",
+    "0x17": "Program Overlap Start",
+    "0x18": "Program Blackout Override",
+    "0x19": "Program Start -- In Progress",
+    "0x20": "Chapter",
+    "0x22": "Break",
+    "0x24": "Opening Credit",
+    "0x26": "Closing Credit",
+    "0x30": "Provider Advertisement",
+    "0x32": "Distributor Advertisement",
+    "0x34": "Provider Placement Opportunity",
+    "0x36": "Distributor Placement Opportunity",
+    "0x38": "Provider Overlay Placement Opportunity",
+    "0x3A": "Distributor Overlay Placement Opportunity",
+    "0x3C": "Provider Promo",
+    "0x3E": "Distributor Promo",
+    "0x40": "Unscheduled Event",
+    "0x42": "Alternate Content Opportunity",
+    "0x44": "Provider Ad Block",
+    "0x46": "Distributor Ad Block",
+    "0x50": "Network",
+}
+
+
 def lane_for_type_id(type_id: str | int) -> str:
     """The `type` lane (break/ppo/ad/custom) a segmentation_type_id belongs
     to -- "custom" for anything not in LANE_FOR_SEGMENTATION_TYPE_ID (e.g.
@@ -285,10 +326,16 @@ class AssetConfig(BaseModel):
     id: Optional[str] = None
     start: Optional[TimeValue] = None
     duration: Optional[TimeValue] = None
-    countdown: Optional[TimeValue] = None
     fade_in: Optional[TimeValue] = None
     fade_out: Optional[TimeValue] = None
     slate_image: Optional[Path] = None
+    # Suppresses the playlist-level OSD entirely for this asset (no bar, no
+    # corner text), regardless of the global `Config.osd` settings.
+    no_osd: bool = False
+    # Free-text label for this asset, shown by the `osd_label` corner
+    # content (a corner configured with it shows nothing for assets that
+    # leave this unset).
+    osd_label: Optional[str] = None
 
     @field_validator("file", mode="before")
     @classmethod
@@ -310,21 +357,6 @@ class AssetConfig(BaseModel):
             return None
         return parse_time(self.duration)
 
-    def countdown_seconds(self) -> Optional[float]:
-        """Return the countdown window in seconds, or None if not set.
-
-        Returns -1.0 as a sentinel meaning "full clip duration" when the
-        configured value is negative.  Callers must clamp this to the actual
-        clip duration themselves.
-        """
-        if self.countdown is None:
-            return None
-        v = self.countdown
-        # Allow -1 (integer or float) as a sentinel for "full clip duration".
-        if isinstance(v, (int, float)) and float(v) < 0:
-            return -1.0
-        return parse_time(v)
-
     def fade_in_seconds(self) -> Optional[float]:
         if self.fade_in is None:
             return None
@@ -336,12 +368,82 @@ class AssetConfig(BaseModel):
         return parse_time(self.fade_out)
 
 
+# The six things a corner text slot can show. See osd.py's
+# build_corner_text_filter for exactly how each resolves to display text.
+CornerContent = Literal[
+    "asset_id", "time", "next_asset_id", "scte35_spans", "is_adbreak", "osd_label"
+]
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def to_ffmpeg_color(hex_color: str) -> str:
+    """'#RRGGBB' -> '0xRRGGBB', the format ffmpeg's drawtext fontcolor/
+    boxcolor options expect."""
+    return "0x" + hex_color.lstrip("#")
+
+
+class OsdCountdownConfig(BaseModel):
+    """A semi-transparent black horizontal bar at the bottom of the frame,
+    growing from 0% to 100% width over the current asset's playback."""
+
+    enabled: bool = True
+    height_pct: float = Field(default=5.0, ge=0, le=100)
+
+
+class OsdCornersConfig(BaseModel):
+    """Up to 4 independent corner text slots. `None` = nothing shown there."""
+
+    top_left: Optional[CornerContent] = None
+    top_right: Optional[CornerContent] = None
+    bottom_left: Optional[CornerContent] = "asset_id"
+    bottom_right: Optional[CornerContent] = "time"
+
+
+class OsdCornerBoxConfig(BaseModel):
+    """An optional semi-transparent background box drawn behind each
+    corner's text, uniformly (same color for all 4 corners). Sized
+    automatically from the rendered text extent plus padding -- see
+    osd.py's build_corner_text_filter, which relies on ffmpeg drawtext's
+    own `box`/`boxborderw` options rather than computing text metrics
+    itself."""
+
+    enabled: bool = False
+    color: str = Field(default="#000000", pattern=_HEX_COLOR_RE.pattern)
+
+
+class OsdConfig(BaseModel):
+    """Playlist-level on-screen display: an optional countdown bar plus up
+    to 4 corner text slots, applied to every asset in the playlist except
+    those with `AssetConfig.no_osd` set. See `enabled` for the master
+    on/off switch -- off by default."""
+
+    enabled: bool = False
+    countdown: OsdCountdownConfig = Field(default_factory=OsdCountdownConfig)
+    corners: OsdCornersConfig = Field(default_factory=OsdCornersConfig)
+    corner_box: OsdCornerBoxConfig = Field(default_factory=OsdCornerBoxConfig)
+    # Percentage of the transcoded (rendition) output height, applied
+    # uniformly to all 4 corners.
+    text_size_pct: float = Field(default=4.0, ge=0, le=100)
+    # Applies to all corner text (not the countdown bar, which is always
+    # semi-transparent black per spec).
+    text_color: str = Field(default="#FFFFFF", pattern=_HEX_COLOR_RE.pattern)
+    # Text shown for the `is_adbreak` corner content when true.
+    ad_break_label: str = "ad break"
+
+    def ffmpeg_color(self) -> str:
+        """'#RRGGBB' -> '0xRRGGBB', the format ffmpeg's drawtext fontcolor
+        option expects."""
+        return to_ffmpeg_color(self.text_color)
+
+
 class Config(BaseModel):
     output: OutputConfig
     assets: list[AssetConfig] = Field(min_length=1)
     markers: list[MarkerConfig] = Field(default_factory=list)
     normalize: bool = False
     slate_image: Optional[Path] = None
+    osd: OsdConfig = Field(default_factory=OsdConfig)
 
     @field_validator("slate_image", mode="before")
     @classmethod

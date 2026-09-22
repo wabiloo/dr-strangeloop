@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
 import Checkbox from 'primevue/checkbox'
+import ColorPicker from 'primevue/colorpicker'
 import Dialog from 'primevue/dialog'
 import Divider from 'primevue/divider'
+import InputGroup from 'primevue/inputgroup'
+import InputGroupAddon from 'primevue/inputgroupaddon'
 import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
@@ -64,10 +67,68 @@ interface AssetForm {
   file: string
   start: string
   duration: string
-  countdown: string
   fade_in: string
   fade_out: string
   slate_image: string
+  no_osd: boolean
+  osd_label: string
+}
+
+/** Mirrors franken_ts.config.CornerContent -- '' means "nothing shown". */
+type CornerContent =
+  | ''
+  | 'asset_id'
+  | 'time'
+  | 'next_asset_id'
+  | 'scte35_spans'
+  | 'is_adbreak'
+  | 'osd_label'
+
+const CORNER_CONTENT_OPTIONS: { label: string; value: CornerContent }[] = [
+  { label: 'None', value: '' },
+  { label: 'Asset ID', value: 'asset_id' },
+  { label: 'Time', value: 'time' },
+  { label: 'Next asset', value: 'next_asset_id' },
+  { label: 'SCTE-35 spans', value: 'scte35_spans' },
+  { label: 'Ad break indicator', value: 'is_adbreak' },
+  { label: 'OSD label', value: 'osd_label' },
+]
+
+interface OsdForm {
+  enabled: boolean
+  countdown: { enabled: boolean; height_pct: number }
+  text_size_pct: number
+  text_color: string
+  ad_break_label: string
+  corner_box: { enabled: boolean; color: string }
+  corners: {
+    top_left: CornerContent
+    top_right: CornerContent
+    bottom_left: CornerContent
+    bottom_right: CornerContent
+  }
+}
+
+/** Representative placeholder text for the OSD frame preview -- not tied to
+ * real asset/timeline data (the editor has no "current playback position"),
+ * just enough to show roughly what each corner content type will look
+ * like. `is_adbreak` is handled separately in previewTextFor() since its
+ * display text is itself configurable (osd.ad_break_label). */
+const CORNER_PREVIEW_TEXT: Partial<Record<CornerContent, string>> = {
+  asset_id: 'asset-1',
+  time: '12.32/34.60',
+  next_asset_id: 'next: asset-2',
+  scte35_spans: 'b / ppo / pa',
+  osd_label: 'Weather',
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.replace('#', '')
+  const value = parseInt(clean, 16) || 0
+  const r = (value >> 16) & 255
+  const g = (value >> 8) & 255
+  const b = value & 255
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
 interface MarkerForm {
@@ -113,10 +174,23 @@ function newAsset(): AssetForm {
     file: '',
     start: '',
     duration: '',
-    countdown: '',
     fade_in: '',
     fade_out: '',
     slate_image: '',
+    no_osd: false,
+    osd_label: '',
+  }
+}
+
+function defaultOsd(): OsdForm {
+  return {
+    enabled: false,
+    countdown: { enabled: true, height_pct: 5 },
+    text_size_pct: 4,
+    text_color: '#FFFFFF',
+    ad_break_label: 'ad break',
+    corner_box: { enabled: false, color: '#000000' },
+    corners: { top_left: '', top_right: '', bottom_left: 'asset_id', bottom_right: 'time' },
   }
 }
 
@@ -138,9 +212,31 @@ const form = reactive({
   renditions: [] as RenditionForm[],
   normalize: false,
   slate_image: '',
+  osd: defaultOsd(),
   assets: [] as AssetForm[],
   markers: [] as MarkerForm[],
 })
+
+function previewTextFor(corner: 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right'): string {
+  const content = form.osd.corners[corner]
+  if (!content) return ''
+  if (content === 'is_adbreak') return form.osd.ad_break_label.trim() || 'ad break'
+  return CORNER_PREVIEW_TEXT[content] ?? ''
+}
+
+/** Style shared by all 4 preview-text elements in the frame mockup -- same
+ * text color and (optional) box background for every corner, mirroring
+ * how osd.text_color/osd.corner_box apply uniformly on the real overlay. */
+const osdPreviewTextStyle = computed(() => ({
+  color: form.osd.text_color,
+  background: form.osd.corner_box.enabled ? hexToRgba(form.osd.corner_box.color, 0.6) : 'transparent',
+}))
+
+/** Bottom preview text needs to clear the countdown bar preview, which is
+ * sized as a percentage of the mockup's own height. */
+const osdPreviewBottomOffset = computed(() =>
+  form.osd.countdown.enabled ? `calc(${form.osd.countdown.height_pct}% + 0.5rem)` : '0.5rem',
+)
 
 /** Resets the form to its blank-new-playlist state -- needed because vue-router
  * reuses this component instance when navigating between /playlists/new and
@@ -151,12 +247,30 @@ function resetForm() {
   form.renditions = []
   form.normalize = false
   form.slate_image = ''
+  Object.assign(form.osd, defaultOsd())
   form.assets = []
   form.markers = []
   assetIdCounter = 1
   markerDraft.value = null
   selectedMarkerEventId.value = null
 }
+
+// PrimeVue's <ColorPicker> (format="hex", the default) reads/writes a bare
+// "RRGGBB" string, but franken_ts.config.OsdConfig.text_color is "#RRGGBB"
+// -- this bridges the two so form.osd.text_color stays in the schema's format.
+const osdTextColorHex = computed({
+  get: () => form.osd.text_color.replace(/^#/, ''),
+  set: (v: string) => {
+    form.osd.text_color = `#${v.replace(/^#/, '').toUpperCase()}`
+  },
+})
+
+const osdBoxColorHex = computed({
+  get: () => form.osd.corner_box.color.replace(/^#/, ''),
+  set: (v: string) => {
+    form.osd.corner_box.color = `#${v.replace(/^#/, '').toUpperCase()}`
+  },
+})
 
 const isNew = computed(() => props.name === null)
 const activeTab = ref('settings')
@@ -614,16 +728,36 @@ function toYamlPlaylist(): Record<string, unknown> {
       if (a.id.trim()) asset.id = a.id
       if (a.start.trim()) asset.start = timeOrUndefined(a.start)
       if (a.duration.trim()) asset.duration = timeOrUndefined(a.duration)
-      if (a.countdown.trim()) asset.countdown = timeOrUndefined(a.countdown)
       if (a.fade_in.trim()) asset.fade_in = timeOrUndefined(a.fade_in)
       if (a.fade_out.trim()) asset.fade_out = timeOrUndefined(a.fade_out)
       if (a.slate_image.trim()) asset.slate_image = a.slate_image
+      if (a.no_osd) asset.no_osd = true
+      if (a.osd_label.trim()) asset.osd_label = a.osd_label
       return asset
     })
 
   const cfg: Record<string, unknown> = { output, assets }
   if (form.normalize) cfg.normalize = true
   if (form.slate_image.trim()) cfg.slate_image = form.slate_image
+  if (form.osd.enabled) {
+    // Every corner key is written explicitly (null for "none") rather than
+    // omitted when empty -- franken_ts.config.OsdCornersConfig defaults
+    // bottom_left/bottom_right to non-null, so omitting a key the user
+    // deliberately cleared would silently revert it to that default on load.
+    const corners: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(form.osd.corners)) {
+      corners[key] = value || null
+    }
+    cfg.osd = {
+      enabled: true,
+      countdown: { ...form.osd.countdown },
+      text_size_pct: form.osd.text_size_pct,
+      text_color: form.osd.text_color,
+      ad_break_label: form.osd.ad_break_label,
+      corner_box: { ...form.osd.corner_box },
+      corners,
+    }
+  }
   if (form.markers.length) {
     cfg.markers = form.markers.map((m) => {
       const marker: Record<string, unknown> = {
@@ -662,6 +796,36 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
   form.normalize = Boolean(data.normalize)
   form.slate_image = (data.slate_image as string) ?? ''
 
+  const rawOsd = (data.osd as Record<string, unknown>) ?? {}
+  const rawOsdCountdown = (rawOsd.countdown as Record<string, unknown>) ?? {}
+  const rawOsdCornerBox = (rawOsd.corner_box as Record<string, unknown>) ?? {}
+  const rawOsdCorners = (rawOsd.corners as Record<string, unknown>) ?? {}
+  form.osd = {
+    enabled: Boolean(rawOsd.enabled),
+    countdown: {
+      enabled: rawOsdCountdown.enabled !== undefined ? Boolean(rawOsdCountdown.enabled) : true,
+      height_pct: (rawOsdCountdown.height_pct as number) ?? 5,
+    },
+    text_size_pct: (rawOsd.text_size_pct as number) ?? 4,
+    text_color: (rawOsd.text_color as string) ?? '#FFFFFF',
+    ad_break_label: (rawOsd.ad_break_label as string) ?? 'ad break',
+    corner_box: {
+      enabled: Boolean(rawOsdCornerBox.enabled),
+      color: (rawOsdCornerBox.color as string) ?? '#000000',
+    },
+    corners: {
+      // Matches franken_ts.config.OsdCornersConfig's per-field defaults --
+      // these apply only when the corner key is ABSENT (not when it's
+      // explicitly null, which means the user deliberately cleared it).
+      top_left: rawOsdCorners.top_left !== undefined ? ((rawOsdCorners.top_left as CornerContent) ?? '') : '',
+      top_right: rawOsdCorners.top_right !== undefined ? ((rawOsdCorners.top_right as CornerContent) ?? '') : '',
+      bottom_left:
+        rawOsdCorners.bottom_left !== undefined ? ((rawOsdCorners.bottom_left as CornerContent) ?? '') : 'asset_id',
+      bottom_right:
+        rawOsdCorners.bottom_right !== undefined ? ((rawOsdCorners.bottom_right as CornerContent) ?? '') : 'time',
+    },
+  }
+
   const rawAssets = (data.assets as Record<string, unknown>[]) ?? []
   form.assets = rawAssets.map((a) => ({
     // Playlists saved before this field existed won't have an id --
@@ -671,10 +835,11 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
     file: String(a.file ?? ''),
     start: a.start !== undefined ? String(a.start) : '',
     duration: a.duration !== undefined ? String(a.duration) : '',
-    countdown: a.countdown !== undefined ? String(a.countdown) : '',
     fade_in: a.fade_in !== undefined ? String(a.fade_in) : '',
     fade_out: a.fade_out !== undefined ? String(a.fade_out) : '',
     slate_image: String(a.slate_image ?? ''),
+    no_osd: Boolean(a.no_osd),
+    osd_label: a.osd_label !== undefined ? String(a.osd_label) : '',
   }))
 
   const rawMarkers = (data.markers as Record<string, unknown>[]) ?? []
@@ -805,6 +970,7 @@ function applyHexPopover() {
     <Tabs v-model:value="activeTab">
       <TabList>
         <Tab value="settings">Settings</Tab>
+        <Tab value="osd">OSD</Tab>
         <Tab value="assets">
           Timeline
           <span class="asset-count-badge">{{ form.assets.length }}</span>
@@ -889,6 +1055,138 @@ function applyHexPopover() {
             <div class="flex flex-column gap-1">
               <label>Global slate image (optional, used by fade_in/fade_out cross-dissolves)</label>
               <AssetFileField v-model="form.slate_image" placeholder="/path/to/slate.png" />
+            </div>
+          </div>
+        </TabPanel>
+
+        <TabPanel value="osd">
+          <div class="flex flex-column gap-4">
+            <div class="flex align-items-center gap-2">
+              <Checkbox v-model="form.osd.enabled" binary input-id="osd-enabled" />
+              <label for="osd-enabled">Enabled (applies to every asset except those with "no OSD" set)</label>
+            </div>
+
+            <div class="flex gap-5 flex-wrap">
+              <div class="flex flex-column gap-2" style="width: 32rem; max-width: 100%">
+                <!-- Corner pickers sit outside the frame (so they never cover the
+                     preview), but left/right-align with the frame's own corners. -->
+                <div class="flex justify-content-between gap-2">
+                  <Select
+                    v-model="form.osd.corners.top_left"
+                    :options="CORNER_CONTENT_OPTIONS"
+                    option-label="label"
+                    option-value="value"
+                    :disabled="!form.osd.enabled"
+                    size="small"
+                  />
+                  <Select
+                    v-model="form.osd.corners.top_right"
+                    :options="CORNER_CONTENT_OPTIONS"
+                    option-label="label"
+                    option-value="value"
+                    :disabled="!form.osd.enabled"
+                    size="small"
+                  />
+                </div>
+
+                <div class="osd-frame-mockup" :class="{ 'osd-frame-disabled': !form.osd.enabled }">
+                  <div
+                    v-if="form.osd.corners.top_left"
+                    class="osd-preview-text osd-preview-tl"
+                    :style="osdPreviewTextStyle"
+                  >{{ previewTextFor('top_left') }}</div>
+                  <div
+                    v-if="form.osd.corners.top_right"
+                    class="osd-preview-text osd-preview-tr"
+                    :style="osdPreviewTextStyle"
+                  >{{ previewTextFor('top_right') }}</div>
+                  <div
+                    v-if="form.osd.corners.bottom_left"
+                    class="osd-preview-text osd-preview-bl"
+                    :style="{ ...osdPreviewTextStyle, bottom: osdPreviewBottomOffset }"
+                  >{{ previewTextFor('bottom_left') }}</div>
+                  <div
+                    v-if="form.osd.corners.bottom_right"
+                    class="osd-preview-text osd-preview-br"
+                    :style="{ ...osdPreviewTextStyle, bottom: osdPreviewBottomOffset }"
+                  >{{ previewTextFor('bottom_right') }}</div>
+
+                  <div
+                    v-if="form.osd.countdown.enabled"
+                    class="osd-bar-preview"
+                    :style="{ height: form.osd.countdown.height_pct + '%' }"
+                  />
+                </div>
+
+                <div class="flex justify-content-between gap-2">
+                  <Select
+                    v-model="form.osd.corners.bottom_left"
+                    :options="CORNER_CONTENT_OPTIONS"
+                    option-label="label"
+                    option-value="value"
+                    :disabled="!form.osd.enabled"
+                    size="small"
+                  />
+                  <Select
+                    v-model="form.osd.corners.bottom_right"
+                    :options="CORNER_CONTENT_OPTIONS"
+                    option-label="label"
+                    option-value="value"
+                    :disabled="!form.osd.enabled"
+                    size="small"
+                  />
+                </div>
+              </div>
+
+              <!-- Global options: a real 4-column CSS grid (label, control,
+                   secondary label, secondary control), not flexbox rows --
+                   flex rows let each row's control stretch to whatever
+                   space its own siblings left over, which is what made
+                   "Text size" balloon while paired rows stayed narrow.
+                   Every row always emits all 4 cells (empty <span>s for
+                   rows with nothing in columns 3/4) so grid auto-flow
+                   places exactly one logical row per 4 cells, and
+                   `justify-items: start` stops every cell from stretching
+                   to fill its column. -->
+              <div class="osd-options-grid">
+                <label class="osd-option-label">Text size</label>
+                <InputGroup class="osd-narrow-pct">
+                  <InputNumber v-model="form.osd.text_size_pct" :min="0" :max="100" :disabled="!form.osd.enabled" />
+                  <InputGroupAddon>%</InputGroupAddon>
+                </InputGroup>
+                <span /><span />
+
+                <label class="osd-option-label">Text color</label>
+                <div class="flex align-items-center gap-2">
+                  <ColorPicker v-model="osdTextColorHex" :disabled="!form.osd.enabled" />
+                  <InputText v-model="form.osd.text_color" :disabled="!form.osd.enabled" class="osd-narrow-hex" />
+                </div>
+                <span /><span />
+
+                <label class="osd-option-label" for="osd-corner-box-enabled">Box background</label>
+                <Checkbox v-model="form.osd.corner_box.enabled" binary input-id="osd-corner-box-enabled" :disabled="!form.osd.enabled" />
+                <label class="osd-option-label-secondary">Box color</label>
+                <div class="flex align-items-center gap-2">
+                  <ColorPicker v-model="osdBoxColorHex" :disabled="!form.osd.enabled || !form.osd.corner_box.enabled" />
+                  <InputText v-model="form.osd.corner_box.color" :disabled="!form.osd.enabled || !form.osd.corner_box.enabled" class="osd-narrow-hex" />
+                </div>
+
+                <label class="osd-option-label">Ad break label</label>
+                <InputText v-model="form.osd.ad_break_label" :disabled="!form.osd.enabled" placeholder="ad break" class="osd-narrow-hex" />
+                <span /><span />
+
+                <label class="osd-option-label" for="osd-countdown-enabled">Countdown bar</label>
+                <Checkbox v-model="form.osd.countdown.enabled" binary input-id="osd-countdown-enabled" :disabled="!form.osd.enabled" />
+                <label class="osd-option-label-secondary">Bar height</label>
+                <InputGroup class="osd-narrow-pct">
+                  <InputNumber
+                    v-model="form.osd.countdown.height_pct"
+                    :min="0" :max="100"
+                    :disabled="!form.osd.enabled || !form.osd.countdown.enabled"
+                  />
+                  <InputGroupAddon>%</InputGroupAddon>
+                </InputGroup>
+              </div>
             </div>
           </div>
         </TabPanel>
@@ -1122,21 +1420,25 @@ function applyHexPopover() {
                   <label>Duration</label>
                   <InputText v-model="form.assets[selectedAssetIndex].duration" placeholder="10 min" />
                 </div>
-                <div class="col-4 flex flex-column gap-1">
-                  <label>Countdown</label>
-                  <InputText v-model="form.assets[selectedAssetIndex].countdown" placeholder="5 or -1" />
-                </div>
-                <div class="col-4 flex flex-column gap-1">
+                <div class="col-6 flex flex-column gap-1">
                   <label>Fade in (s)</label>
                   <InputText v-model="form.assets[selectedAssetIndex].fade_in" placeholder="1.5" />
                 </div>
-                <div class="col-4 flex flex-column gap-1">
+                <div class="col-6 flex flex-column gap-1">
                   <label>Fade out (s)</label>
                   <InputText v-model="form.assets[selectedAssetIndex].fade_out" placeholder="1.5" />
                 </div>
                 <div class="col-12 flex flex-column gap-1">
                   <label>Per-asset slate image (overrides global)</label>
                   <AssetFileField v-model="form.assets[selectedAssetIndex].slate_image" />
+                </div>
+                <div class="col-12 flex flex-column gap-1">
+                  <label>OSD label (free text, shown by an "OSD label" corner)</label>
+                  <InputText v-model="form.assets[selectedAssetIndex].osd_label" placeholder="e.g. Weather" />
+                </div>
+                <div class="col-12 flex align-items-center gap-2">
+                  <Checkbox v-model="form.assets[selectedAssetIndex].no_osd" binary input-id="asset-no-osd" />
+                  <label for="asset-no-osd">No OSD (suppress the on-screen display entirely for this asset)</label>
                 </div>
               </div>
             </div>
@@ -1226,6 +1528,117 @@ function applyHexPopover() {
 </template>
 
 <style scoped>
+/* A stand-in for the video frame: fixed 16:9. The corner pickers live
+ * OUTSIDE this box (in flex rows above/below it) so they never cover the
+ * preview text; only the simulated corner text and the countdown-bar
+ * preview render inside it, at the same percent-of-height sizing the real
+ * overlay uses. */
+.osd-frame-mockup {
+  position: relative;
+  width: 100%;
+  max-width: 32rem;
+  aspect-ratio: 16 / 9;
+  /* A mid-tone gradient standing in for video content -- a near-black
+   * background here would make the semi-transparent black bar preview
+   * below all but invisible against it. */
+  background: linear-gradient(135deg, #64748b, #1e293b);
+  border: 1px solid var(--p-surface-300, #cbd5e1);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: opacity 0.15s ease;
+}
+
+.osd-frame-disabled {
+  opacity: 0.45;
+}
+
+/* Simulated corner text -- represents what the real drawtext overlay will
+ * roughly look like, including the optional box background. Box sizing is
+ * automatic (padding via CSS here; the real overlay's box is auto-sized by
+ * ffmpeg's own drawtext `box`/`boxborderw`, not measured by hand). */
+.osd-preview-text {
+  position: absolute;
+  max-width: 45%;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.osd-preview-tl { top: 0.5rem; left: 0.5rem; }
+.osd-preview-tr { top: 0.5rem; right: 0.5rem; }
+.osd-preview-bl { left: 0.5rem; }
+.osd-preview-br { right: 0.5rem; }
+
+/* PrimeVue's ColorPicker preview swatch has no border by default -- with
+ * a white (the schema default) or other light color selected, it
+ * disappears entirely against the page background. */
+:deep(.p-colorpicker-preview) {
+  border: 1px solid var(--p-surface-300, #cbd5e1) !important;
+  border-radius: 4px;
+}
+
+.osd-bar-preview {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 40%;
+  min-height: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* Percentage fields (bar height, text size) are at most 2 digits (0-100)
+ * -- just wide enough for "100", nothing more. */
+.osd-narrow-pct :deep(input) {
+  width: 2rem;
+}
+
+/* Hex color / short label fields -- "#RRGGBB" or "ad break" don't need a
+ * full-width InputText either. */
+.osd-narrow-hex {
+  width: 6rem;
+}
+
+/* Global OSD options list: a REAL 4-column grid (label, control, secondary
+ * label, secondary control) -- not flexbox rows. Flexbox rows let each
+ * row's control stretch to fill whatever space its own siblings left
+ * over, which is what made a 2-cell row's control balloon while a
+ * 4-cell row's stayed narrow: same class, different rendered width.
+ * `justify-items: start` is the other half of the fix -- grid items
+ * stretch to fill their cell by default, so without it every control
+ * would still expand to its (possibly wide) column's full width. */
+.osd-options-grid {
+  display: grid;
+  grid-template-columns: repeat(4, auto);
+  column-gap: 0.75rem;
+  row-gap: 0.6rem;
+  align-items: center;
+  justify-items: start;
+  /* The outer flex row (frame column + this column) defaults to
+   * align-items: stretch, which stretches this grid to match the much
+   * taller frame column's height. Grid's `align-content: normal` then
+   * behaves like `stretch` for `auto` row tracks, spreading that extra
+   * height evenly across every row -- the actual cause of the huge gaps
+   * between rows. Both properties below independently prevent that:
+   * align-self stops the stretch from happening at all; align-content is
+   * a defensive fallback so rows still pack tightly even if something
+   * else forces this container taller in the future. */
+  align-self: flex-start;
+  align-content: start;
+}
+
+.osd-option-label {
+  font-weight: 500;
+}
+
+.osd-option-label-secondary {
+  color: var(--p-text-muted-color, #64748b);
+}
+
 .editor-header {
   display: flex;
   justify-content: space-between;

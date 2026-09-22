@@ -75,7 +75,8 @@ from pathlib import Path
 from typing import Optional
 
 from .cache import ClipSegments
-from .config import OutputConfig
+from .config import OsdConfig, OutputConfig
+from .osd import build_osd_filters
 from .timeline import TimelineEntry
 from .utils import is_image, run_cmd, source_str
 
@@ -110,69 +111,11 @@ def _probe_video_frame_count(path: Path) -> int:
     return int(text[0]) if text and text[0].isdigit() else 0
 
 
-def _build_drawtext_filters(
-    clip_dur: float,
-    countdown_seconds: float,
-    next_label: str,
-) -> list[str]:
-    """Return filters for the countdown overlay bug.
-
-    Layout: a semi-transparent dark box that bleeds off the right edge of the
-    frame (giving a "coming from the side" look), containing a single line:
-      - left: "next: LABEL" in white at fontsize 40
-      - right: countdown digit in smaller grey (fontsize 28)
-
-    Returns 4 filter strings in draw order:
-      [0] drawbox fill  — dark semi-transparent background
-      [1] drawbox border — white border on the visible (left) side only
-      [2] drawtext label — "next: LABEL"
-      [3] drawtext digits — ticking countdown
-    All four carry an enable= gate so they only appear during the countdown
-    window.
-    """
-    start_t = clip_dur - countdown_seconds
-    label_escaped = next_label.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
-    enable = f"enable='gte(t,{start_t:.6f})'"
-
-    # Box geometry: left edge 360px from right, width 400px (40px off-screen).
-    # Sized for "next: ASSET" (widest label) at fontsize 40 with padding.
-    bx = "iw-360"
-    by = 14
-    bw = 400
-    bh = 62
-
-    box_fill   = f"drawbox=x={bx}:y={by}:w={bw}:h={bh}:color=0x222222@0.80:t=fill:{enable}"
-    box_border = f"drawbox=x={bx}:y={by}:w={bw}:h={bh}:color=0xFFFFFF@0.90:t=2:{enable}"
-
-    label_filter = (
-        f"drawtext="
-        f"text='next\\: {label_escaped}':"
-        f"fontsize=40:"
-        f"fontcolor=white:"
-        f"x=w-348:"
-        f"y=28:"
-        f"{enable}"
-    )
-
-    digits_text = f"%{{eif\\:ceil(max(0\\,({clip_dur:.6f}-t)))\\:d}}"
-    digits_filter = (
-        f"drawtext="
-        f"text='{digits_text}':"
-        f"fontsize=28:"
-        f"fontcolor=0xAAAAAA:"
-        f"x=w-tw-16:"
-        f"y=35:"
-        f"{enable}"
-    )
-
-    return [box_fill, box_border, label_filter, digits_filter]
-
-
 def _extract_video(
     src: Path, out: Path, inpoint: float, n_frames: int, output: OutputConfig,
     dry_run: bool,
-    countdown_seconds: Optional[float] = None,
-    next_label: Optional[str] = None,
+    entry: Optional[TimelineEntry] = None,
+    osd: Optional[OsdConfig] = None,
     fade_in: Optional[float] = None,
     fade_out: Optional[float] = None,
     slate_image: Optional[Path] = None,
@@ -198,12 +141,12 @@ def _extract_video(
       [norm/fi] fade=in               → [fi]      (if fade_in, no slate)
       [current] [slate] xfade(fo)     → [fo]      (if fade_out + slate_image)
       [current] fade=out              → [fo]      (if fade_out, no slate)
-      [current] drawtext(label)       → [dt1]     (if countdown)
-      [dt1]     drawtext(digits)      → [out]     (if countdown)
+      [current] osd(bar)              → [ov0]     (if OSD, see osd.py)
+      [ov0]     osd(corner text...)   → [out]     (if OSD)
     """
     src_is_image = is_image(src)
     clip_dur = n_frames / output.framerate
-    has_countdown = countdown_seconds is not None and next_label is not None
+    osd_filters = build_osd_filters(entry, output, osd) if entry is not None else []
     has_slate = slate_image is not None
 
     graph: list[str] = []
@@ -297,14 +240,14 @@ def _extract_video(
             )
         current = "[fo]"
 
-    # ── Countdown overlay ──────────────────────────────────────────────────────
-    if has_countdown:
-        dt = _build_drawtext_filters(clip_dur, countdown_seconds, next_label)
-        # dt = [box_fill, box_border, label, digits] — 4 chained nodes.
-        graph.append(f"{current} {dt[0]} [ov0]")
-        graph.append(f"[ov0] {dt[1]} [ov1]")
-        graph.append(f"[ov1] {dt[2]} [ov2]")
-        graph.append(f"[ov2] {dt[3]} [out]")
+    # ── OSD (countdown bar + corner text) ─────────────────────────────────────
+    if osd_filters:
+        graph.append(f"{current} {osd_filters[0]} [ov0]")
+        for k in range(1, len(osd_filters)):
+            graph.append(f"[ov{k-1}] {osd_filters[k]} [ov{k}]")
+        last = graph[-1]
+        bracket = last.rfind("[")
+        graph[-1] = last[:bracket] + "[out]"
     else:
         # Rename the last stream to [out] for the -map argument.
         last = graph[-1]
@@ -405,6 +348,7 @@ def extract_clip(
     temp_dir: Path,
     index: int,
     *,
+    osd: Optional[OsdConfig] = None,
     cache_dir: Optional[Path] = None,
     dry_run: bool = False,
 ) -> ExtractResult:
@@ -430,8 +374,8 @@ def extract_clip(
     )
     _extract_video(
         src, video_tmp, inpoint, n_frames, output, dry_run,
-        countdown_seconds=entry.countdown,
-        next_label=entry.next_label,
+        entry=entry,
+        osd=osd,
         fade_in=entry.fade_in,
         fade_out=entry.fade_out,
         slate_image=entry.slate_image,
@@ -457,6 +401,6 @@ def extract_clip(
     segments = ClipSegments(video_tmp, audio_tmp)
     if cache_dir is not None:
         from . import cache as _cache
-        segments = _cache.store(video_tmp, audio_tmp, entry, output, cache_dir)
+        segments = _cache.store(video_tmp, audio_tmp, entry, output, osd, cache_dir)
 
     return ExtractResult(segments, actual)

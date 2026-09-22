@@ -23,9 +23,15 @@ class TimelineEntry:
     inpoint_raw: float     # as computed before frame-snapping
     outpoint_raw: float    # as computed before frame-snapping
     asset_id: Optional[str] = field(default=None)  # AssetConfig.id, for `markers` resolution
-    # Countdown overlay fields — resolved in build_timeline().
-    countdown: Optional[float] = field(default=None)  # window in seconds (already clamped)
-    next_label: Optional[str] = field(default=None)   # "ASSET", "AD", or "END"
+    # OSD fields — resolved in build_timeline().
+    next_asset_id: Optional[str] = field(default=None)  # id of the next real (non-image) asset;
+                                                          # the playlist loops, so this wraps
+                                                          # around to the start when needed
+    covering_spans: list[MarkerConfig] = field(default_factory=list)  # non-instant spans
+                                                          # covering this entry, outermost first
+    is_adbreak: bool = field(default=False)  # any covering span with a non-"custom" lane
+    no_osd: bool = field(default=False)      # copied from AssetConfig.no_osd
+    osd_label: Optional[str] = field(default=None)  # copied from AssetConfig.osd_label
     # Fade fields — resolved and clamped in build_timeline().
     fade_in: Optional[float] = field(default=None)    # seconds, or None
     fade_out: Optional[float] = field(default=None)   # seconds, or None
@@ -132,43 +138,28 @@ def build_timeline(
 
         cursor += clip_dur
 
-    # Asset ids covered by a leaf (single-asset) "ad"-type marker -- used
-    # below to label the countdown overlay's "next up" element as an ad
-    # vs. plain content. Computed once, ahead of the countdown pass, since
-    # full marker resolution (incl. segment_num, below) isn't needed for
-    # this — just which single assets a "ad" marker points at.
-    id_to_index = {e.asset_id: i for i, e in enumerate(entries) if e.asset_id is not None}
-    ad_entry_indices: set[int] = set()
-    for m in (markers or []):
-        indices = [id_to_index[aid] for aid in m.assets if aid in id_to_index]
-        if indices and m.type == "ad" and min(indices) == max(indices):
-            ad_entry_indices.add(indices[0])
-
-    # ── Countdown overlay resolution ──────────────────────────────────────────
+    # ── Per-entry OSD/fade resolution ───────────────────────────────────────────
     # Done in a second pass so every entry's clip_duration is already known.
+    n_assets = len(assets)
     for i, (asset, entry) in enumerate(zip(assets, entries)):
         clip_dur = entry.clip_duration
 
-        # ── Countdown ──────────────────────────────────────────────────────────
-        raw = asset.countdown_seconds()
-        if raw is not None:
-            # Determine next-element label by looking ahead in the asset list,
-            # skipping over any still-image assets (they are invisible to the
-            # viewer as a distinct "next" item — we want the first non-image
-            # successor instead).
-            label = "END"
-            for j in range(i + 1, len(assets)):
-                if not is_image(assets[j].file):
-                    label = "AD" if j in ad_entry_indices else "ASSET"
-                    break
-
-            if raw < 0:
-                resolved = clip_dur          # -1 sentinel → full clip
-            else:
-                resolved = min(raw, clip_dur)
-
-            entry.countdown = resolved
-            entry.next_label = label
+        # ── Next asset id ──────────────────────────────────────────────────────
+        # The playlist loops, so there is always a "next" asset: scan forward,
+        # wrapping around to the start, skipping still images (they're
+        # invisible to the viewer as a distinct "next" item). Falls back to
+        # the source file's stem if the found asset has no id. Only resolves
+        # to None if every other asset is a still image.
+        next_id = None
+        for step in range(1, n_assets):
+            j = (i + step) % n_assets
+            if not is_image(assets[j].file):
+                a = assets[j]
+                next_id = a.id if a.id is not None else a.file.stem
+                break
+        entry.next_asset_id = next_id
+        entry.no_osd = asset.no_osd
+        entry.osd_label = asset.osd_label
 
         # ── Fade in / out ──────────────────────────────────────────────────────
         fi = asset.fade_in_seconds()
@@ -191,14 +182,112 @@ def build_timeline(
         # Per-asset slate_image takes precedence over the global fallback.
         entry.slate_image = asset.slate_image if asset.slate_image is not None else global_slate_image
 
-    boundaries.extend(resolve_markers(markers or [], entries))
+    # ── SCTE-35 span coverage (for the scte35_spans/is_adbreak OSD corners) ────
+    # Computed once here and threaded into resolve_markers so both the OSD
+    # text and the actual splice boundaries agree on the exact same nesting.
+    spans = compute_marker_spans(markers or [], entries)
+    for i, entry in enumerate(entries):
+        covering = spans_covering(i, spans)
+        entry.covering_spans = [s.marker for s in covering]
+        entry.is_adbreak = any(m.type != "custom" for m in entry.covering_spans)
+
+    boundaries.extend(resolve_markers(markers or [], entries, spans=spans))
 
     return entries, boundaries
+
+
+@dataclass
+class MarkerSpan:
+    """One marker's span, resolved to timeline-entry indices, with its
+    nesting depth (0 = top-level/outermost, increasing with nesting)."""
+    lo: int
+    hi: int
+    marker: MarkerConfig
+    depth: int
+
+
+def compute_marker_spans(
+    markers: list[MarkerConfig],
+    entries: list[TimelineEntry],
+) -> list[MarkerSpan]:
+    """Resolve each marker's `assets` id list to a (lo, hi) index range over
+    `entries`, plus its nesting depth via span containment (see
+    `resolve_markers`'s docstring for the containment/parent/sibling
+    definitions this mirrors). `Config.validate_markers` already guarantees
+    every pair of spans is nested or disjoint, so this is safe without
+    re-checking here."""
+    if not markers:
+        return []
+
+    id_to_index: dict[str, int] = {}
+    for i, entry in enumerate(entries):
+        if entry.asset_id is not None:
+            id_to_index[entry.asset_id] = i
+
+    raw_spans: list[tuple[int, int, MarkerConfig]] = []
+    for marker in markers:
+        indices = [id_to_index[aid] for aid in marker.assets]
+        raw_spans.append((min(indices), max(indices), marker))
+
+    def contains(outer: tuple[int, int, MarkerConfig], inner: tuple[int, int, MarkerConfig]) -> bool:
+        lo_o, hi_o, _ = outer
+        lo_i, hi_i, _ = inner
+        return lo_o <= lo_i and hi_i <= hi_o and (lo_o, hi_o) != (lo_i, hi_i)
+
+    # Immediate parent = smallest span that strictly contains this one.
+    parent_of: dict[int, Optional[int]] = {}
+    for i, span in enumerate(raw_spans):
+        candidates = [j for j, other in enumerate(raw_spans) if j != i and contains(other, span)]
+        parent_of[i] = min(candidates, key=lambda j: raw_spans[j][1] - raw_spans[j][0]) if candidates else None
+
+    # Siblings = spans sharing the same immediate parent, ordered by position.
+    siblings_by_parent: dict[Optional[int], list[int]] = {}
+    for i, p in parent_of.items():
+        siblings_by_parent.setdefault(p, []).append(i)
+    for group in siblings_by_parent.values():
+        group.sort(key=lambda i: raw_spans[i][0])
+
+    for group in siblings_by_parent.values():
+        n = len(group)
+        for position, i in enumerate(group):
+            marker = raw_spans[i][2]
+            seg = marker.segmentation
+            if seg is None:
+                continue
+            if seg.segment_num is None:
+                seg.segment_num = position
+            if seg.segments_expected is None:
+                seg.segments_expected = n
+
+    def depth_of(i: int) -> int:
+        d = 0
+        p = parent_of[i]
+        while p is not None:
+            d += 1
+            p = parent_of[p]
+        return d
+
+    return [
+        MarkerSpan(lo=lo, hi=hi, marker=marker, depth=depth_of(i))
+        for i, (lo, hi, marker) in enumerate(raw_spans)
+    ]
+
+
+def spans_covering(index: int, spans: list[MarkerSpan]) -> list[MarkerSpan]:
+    """Non-instant spans covering `entries[index]`, outermost (depth 0)
+    first -- e.g. for an asset nested Break > PPO > Ad, returns
+    [break_span, ppo_span, ad_span] in that order."""
+    covering = [
+        s for s in spans
+        if s.lo <= index <= s.hi and not is_instant_segmentation(s.marker.segmentation)
+    ]
+    return sorted(covering, key=lambda s: s.depth)
 
 
 def resolve_markers(
     markers: list[MarkerConfig],
     entries: list[TimelineEntry],
+    spans: Optional[list[MarkerSpan]] = None,
 ) -> list[AdBoundary]:
     """Resolve the flat `markers` list into `AdBoundary` splice points.
 
@@ -209,61 +298,22 @@ def resolve_markers(
     and ends exactly where `ad2`'s entry ends, however those durations were
     computed upstream (trims, normalization, frame-snapping, ...).
 
-    Containment (not an authored tree) determines nesting: a marker's
-    "immediate parent" is the smallest other marker span that strictly
-    contains it, and "siblings" are markers sharing that same immediate
-    parent. `segmentation.segment_num`/`segments_expected` are auto-filled
-    from sibling position/count when left unset by the user (explicit
-    values always win). `Config.validate_markers` already guarantees every
-    pair of spans is either nested or disjoint, so this is safe to compute
-    without re-checking here.
+    Containment (not an authored tree) determines nesting -- see
+    `compute_marker_spans` for the parent/sibling/segment_num-autofill
+    logic. Pass `spans` when the caller (`build_timeline`) has already
+    computed it, so the OSD's `covering_spans`/`is_adbreak` and these
+    boundaries are guaranteed to agree; otherwise it's computed fresh here
+    (e.g. when calling this function directly, as existing tests do).
     """
     if not markers:
         return []
 
-    id_to_index: dict[str, int] = {}
-    for i, entry in enumerate(entries):
-        if entry.asset_id is not None:
-            id_to_index[entry.asset_id] = i
-
-    # (start_idx, end_idx, marker) per marker, in input order.
-    spans: list[tuple[int, int, MarkerConfig]] = []
-    for marker in markers:
-        indices = [id_to_index[aid] for aid in marker.assets]
-        spans.append((min(indices), max(indices), marker))
-
-    def contains(outer: tuple[int, int, MarkerConfig], inner: tuple[int, int, MarkerConfig]) -> bool:
-        lo_o, hi_o, _ = outer
-        lo_i, hi_i, _ = inner
-        return lo_o <= lo_i and hi_i <= hi_o and (lo_o, hi_o) != (lo_i, hi_i)
-
-    # Immediate parent = smallest span that strictly contains this one.
-    parent_of: dict[int, Optional[int]] = {}  # span index -> parent span index (or None = top-level)
-    for i, span in enumerate(spans):
-        candidates = [j for j, other in enumerate(spans) if j != i and contains(other, span)]
-        parent_of[i] = min(candidates, key=lambda j: spans[j][1] - spans[j][0]) if candidates else None
-
-    # Siblings = spans sharing the same immediate parent, ordered by position.
-    siblings_by_parent: dict[Optional[int], list[int]] = {}
-    for i, p in parent_of.items():
-        siblings_by_parent.setdefault(p, []).append(i)
-    for group in siblings_by_parent.values():
-        group.sort(key=lambda i: spans[i][0])
-
-    for group in siblings_by_parent.values():
-        n = len(group)
-        for position, i in enumerate(group):
-            marker = spans[i][2]
-            seg = marker.segmentation
-            if seg is None:
-                continue
-            if seg.segment_num is None:
-                seg.segment_num = position
-            if seg.segments_expected is None:
-                seg.segments_expected = n
+    if spans is None:
+        spans = compute_marker_spans(markers, entries)
 
     boundaries: list[AdBoundary] = []
-    for lo, hi, marker in spans:
+    for span in spans:
+        lo, hi, marker = span.lo, span.hi, span.marker
         start_time = entries[lo].output_start
         end_time = entries[hi].output_end
         break_duration = end_time - start_time

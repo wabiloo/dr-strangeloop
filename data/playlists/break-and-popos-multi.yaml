@@ -19,35 +19,31 @@ slate_image: /Users/fabrelambeau/Broadpeak/Resources/Backgrounds/testing-slate.p
 assets:
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
   duration: 1 min
-  countdown: 10
   fade_out: 1.6
 - file: /Users/fabrelambeau/Broadpeak/Resources/Backgrounds/Ad-slate-out.png
   duration: 2s
+  no_osd: true
 - file: /Users/fabrelambeau/Broadpeak/Resources/Video Idents/broadpeakio-promo-1080p_5000k.mp4
   id: ad1
   duration: 30s
-  countdown: 10
 - file: /Users/fabrelambeau/Broadpeak/Resources/Backgrounds/Ad-slate-in.png
   duration: 2s
+  no_osd: true
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
   start: 60s
   duration: 30s
-  countdown: 10
   fade_in: 1.5
   fade_out: 1.5
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
   fade_in: 1
   duration: 30s
-  countdown: 10
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
   id: ad2
   start: 30s
   duration: 20s
-  countdown: 10
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
   start: 50s
   duration: 30s
-  countdown: 10
   fade_out: 2
 markers:
 - event_id: 1
@@ -74,3 +70,14 @@ markers:
     no_regional_blackout: false
     archive_allowed: false
     device_restrictions: 1
+osd:
+  enabled: true
+  countdown:
+    enabled: true
+    height_pct: 5
+  text_size_pct: 4
+  corners:
+    top_left: asset_id
+    top_right: scte35_spans
+    bottom_left: is_adbreak
+    bottom_right: next_asset_id
