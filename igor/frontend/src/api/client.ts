@@ -87,6 +87,24 @@ export function resolveMarkers(name: string, data?: FrankenTsPlaylist): Promise<
   return postJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/resolve-markers`, data ? { data } : undefined)
 }
 
+/** URL for the quick 540p preview .mp4 franken-ts writes as the last step
+ * of a successful build (see franken-ts's generate_preview_mp4) -- used
+ * directly as a <video> src, not fetched via JSON. `cacheBust`, if given,
+ * is appended as a query param so the <video> element re-fetches after a
+ * rebuild instead of replaying a browser-cached copy of the old preview. */
+export function playlistPreviewUrl(name: string, cacheBust?: string | number): string {
+  const url = `${PLAYLISTS_BASE}/${encodeURIComponent(name)}/preview`
+  return cacheBust === undefined ? url : `${url}?v=${encodeURIComponent(String(cacheBust))}`
+}
+
+/** Whether a preview .mp4 exists and whether it's stale (rendered from a
+ * playlist version older than the current saved YAML) -- computed
+ * server-side by comparing file mtimes, so it stays correct across page
+ * reloads and other browser tabs/clients, not just this session's state. */
+export function getPreviewStatus(name: string): Promise<{ exists: boolean; stale: boolean }> {
+  return getJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/preview/status`)
+}
+
 // ---------------------------------------------------------------------------
 // its-a-live channels
 // ---------------------------------------------------------------------------

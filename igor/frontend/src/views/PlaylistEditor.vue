@@ -21,7 +21,7 @@ import Textarea from 'primevue/textarea'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
-import { buildPlaylist, getPlaylist, probeMedia, resolveMarkers, savePlaylist } from '../api/client'
+import { buildPlaylist, getPlaylist, getPreviewStatus, playlistPreviewUrl, probeMedia, resolveMarkers, savePlaylist } from '../api/client'
 import type { Job, ResolvedMarker } from '../api/types'
 import AssetTimeline from '../components/AssetTimeline.vue'
 import AssetFileField from '../components/AssetFileField.vue'
@@ -1026,6 +1026,9 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
 async function load() {
   nameInput.value = props.name ?? ''
   selectedAssetIndex.value = null
+  previewError.value = false
+  previewVersion.value = Date.now()
+  refreshPreviewStatus()
   if (!props.name) {
     resetForm()
     savedSnapshot.value = currentSnapshot()
@@ -1055,6 +1058,10 @@ async function save() {
     const savedName = nameInput.value.trim()
     await savePlaylist(savedName, toYamlPlaylist())
     savedSnapshot.value = currentSnapshot()
+    // The save just bumped the playlist YAML's mtime past any existing
+    // preview .mp4's -- re-check server-side status so a stale preview
+    // (rendered from the pre-save version) gets hidden.
+    refreshPreviewStatus()
     toast.add({ severity: 'success', summary: 'Saved', life: 3000 })
     if (isNew.value) {
       // Was creating a new playlist -- move to its edit route (in place,
@@ -1083,23 +1090,66 @@ async function revertChanges() {
 // currently saved on disk, NOT unsaved in-progress edits) ------------------
 const building = ref(false)
 const buildJobId = ref<string | null>(null)
+// True from the moment a build job is spawned until it finishes -- the
+// preview player is removed for this whole window (not just while the
+// POST is in flight, unlike `building`) since the .ts/.preview.mp4 files
+// it points at are being overwritten mid-build.
+const buildRunning = ref(false)
+// Server-computed (mtime-based, see igor's preview_status) rather than
+// tracked purely client-side -- stays correct across page reloads and
+// other browser tabs/clients editing the same playlist, not just this
+// session's save/build actions.
+const previewStatus = ref<{ exists: boolean; stale: boolean } | null>(null)
+async function refreshPreviewStatus() {
+  if (!props.name) {
+    previewStatus.value = null
+    return
+  }
+  try {
+    previewStatus.value = await getPreviewStatus(props.name)
+  } catch {
+    previewStatus.value = null
+  }
+}
+// Bumped whenever a build finishes successfully, and appended to the
+// preview <video>'s src as a cache-busting query param -- otherwise the
+// browser happily keeps showing a stale cached preview after a rebuild
+// (the URL itself never changes across builds).
+const previewVersion = ref(Date.now())
+const previewUrl = computed(() =>
+  props.name ? playlistPreviewUrl(props.name, previewVersion.value) : null,
+)
 
 async function build() {
   if (!props.name) return
   building.value = true
+  buildRunning.value = true
   error.value = ''
   try {
     const job = await buildPlaylist(props.name)
     buildJobId.value = job.id
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+    buildRunning.value = false
   } finally {
     building.value = false
   }
 }
 
 function onBuildFinished(job: Job) {
-  if (job.status !== 'succeeded') error.value = 'Assemble failed -- see log below.'
+  buildRunning.value = false
+  if (job.status !== 'succeeded') {
+    error.value = 'Assemble failed -- see log below.'
+  } else {
+    previewError.value = false
+    previewVersion.value = Date.now()
+    refreshPreviewStatus()
+  }
+}
+
+const previewError = ref(false)
+function onPreviewError() {
+  previewError.value = true
 }
 
 // --- ASCII <-> hex helper popover for the selected marker's upid_hex ------
@@ -1668,6 +1718,31 @@ function applyHexPopover() {
               <span v-else-if="isDirty" class="text-color-secondary text-sm">Save your changes first.</span>
             </div>
             <JobPanel v-if="buildJobId" :job-id="buildJobId" @finished="onBuildFinished" />
+
+            <span v-if="previewStatus?.exists && previewStatus.stale && !buildRunning" class="text-color-secondary text-sm">
+              Preview is out of date with your saved changes -- Assemble to refresh it.
+            </span>
+
+            <div
+              v-if="previewStatus?.exists && !previewStatus.stale && previewUrl && !previewError && !buildRunning"
+              class="flex flex-column gap-2"
+            >
+              <span class="font-bold">Preview</span>
+              <video
+                :key="previewUrl"
+                :src="previewUrl"
+                controls
+                autoplay
+                muted
+                preload="metadata"
+                class="preview-video"
+                @error="onPreviewError"
+              />
+              <span class="text-color-secondary text-sm">
+                Quick 540p sanity-check render (fast preset, low quality) -- not representative of the
+                real output's bitrate/quality.
+              </span>
+            </div>
           </div>
         </TabPanel>
       </TabPanels>
@@ -1882,6 +1957,13 @@ function applyHexPopover() {
 :deep(.p-colorpicker-preview) {
   border: 1px solid var(--p-surface-300, #cbd5e1) !important;
   border-radius: 4px;
+}
+
+.preview-video {
+  max-width: 640px;
+  width: 100%;
+  border-radius: 4px;
+  background: #000;
 }
 
 .osd-bar-preview {

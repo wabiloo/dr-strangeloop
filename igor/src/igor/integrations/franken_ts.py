@@ -184,6 +184,41 @@ def _resolve_path(name: str, must_exist: bool = True):
     return path
 
 
+def preview_status(name: str) -> dict:
+    """Whether the preview .mp4 exists and is newer than the playlist YAML
+    it was built from -- compares mtimes rather than tracking build state
+    client-side, so staleness survives page reloads/other browser tabs/
+    other clients editing the same playlist. A save always bumps the
+    YAML's mtime, so any preview older than that reflects a since-edited
+    (possibly since-saved-again) version of the playlist."""
+    playlist_path = _resolve_path(name)
+    preview_path = preview_mp4_path(name)
+    exists = preview_path.is_file()
+    stale = (not exists) or (preview_path.stat().st_mtime < playlist_path.stat().st_mtime)
+    return {"exists": exists, "stale": stale}
+
+
+def preview_mp4_path(name: str) -> Path:
+    """Resolve the on-disk path of the quick 540p preview .mp4 franken-ts
+    generates as its last build step (see franken-ts/franken_ts/cli.py),
+    for the Assemble tab's player. Mirrors franken-ts's own naming:
+    `<output.file>.preview.mp4` for single-rendition, or
+    `<output.dir>/preview.mp4` for a multi-rendition ladder (built once,
+    from the reference rendition) -- does not check existence, callers
+    decide how to handle a missing file (e.g. "not built yet")."""
+    data = get_playlist(name)
+    output = data.get("output", {}) or {}
+    if output.get("file"):
+        p = Path(output["file"])
+        p = p if p.is_absolute() else (paths.REPO_ROOT / p)
+        return p.with_suffix(".preview.mp4")
+    if output.get("dir"):
+        d = Path(output["dir"])
+        d = d if d.is_absolute() else (paths.REPO_ROOT / d)
+        return d / "preview.mp4"
+    raise ValueError(f"Playlist {name!r} has no output.file or output.dir configured")
+
+
 def spawn_build_job(name: str, extra_args: list[str] | None = None) -> Job:
     playlist_path = _resolve_path(name)
     cmd = paths.franken_ts_python() + [str(playlist_path), *(extra_args or [])]

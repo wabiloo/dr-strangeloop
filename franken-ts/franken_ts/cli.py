@@ -17,7 +17,7 @@ from rich.text import Text
 from .config import load_config
 from .diagnostics import build_diag_rows, render_terminal_table, render_html_table
 from .extract import extract_clip
-from .ffmpeg import assemble_ts, write_concat_playlist
+from .ffmpeg import assemble_ts, generate_preview_mp4, write_concat_playlist
 from .markers import write_markers_sidecar
 from .pts import find_idr_pts
 from .report import generate_report
@@ -351,6 +351,7 @@ def _run_pipeline_multi_rendition(
     reference_name: Optional[str] = None
     reference_pts_map: Optional[dict] = None
     reference_boundaries = None
+    reference_ts_path: Optional[Path] = None
 
     for i, rendition in enumerate(cfg.output.renditions):
         console.print()
@@ -370,6 +371,7 @@ def _run_pipeline_multi_rendition(
             rendition_cfg, rendition_temp_dir, cache_dir, dry_run,
             skip_transcode, skip_inject, verify,
             write_markers_json=False,  # shared markers.json written once, below
+            generate_preview=False,    # one preview generated once, below
         )
 
         if skip_inject or dry_run:
@@ -379,6 +381,7 @@ def _run_pipeline_multi_rendition(
             reference_name = rendition.name
             reference_pts_map = pts_map
             reference_boundaries = boundaries
+            reference_ts_path = rendition_cfg.output.file
         elif pts_map != reference_pts_map:
             mismatches = {
                 k: (reference_pts_map[k], pts_map[k])
@@ -407,6 +410,19 @@ def _run_pipeline_multi_rendition(
         f"verified byte-identical PTS)[/dim]"
     )
 
+    # ── Preview MP4 (one, from the reference rendition, shared across the ──
+    # ladder -- last step, after everything above has succeeded).
+    assert reference_ts_path is not None
+    preview_path = output_dir / "preview.mp4"
+    t0 = time.monotonic()
+    with console.status("  Generating preview MP4...", spinner="dots"):
+        generate_preview_mp4(reference_ts_path, preview_path, dry_run=dry_run)
+    _ok(
+        f"Preview MP4 → [bold]{preview_path}[/bold]  "
+        f"[dim]({_fmt_elapsed(time.monotonic() - t0)}, from reference "
+        f"rendition '{reference_name}')[/dim]"
+    )
+
 
 def _run_pipeline_single(
     cfg,
@@ -417,6 +433,7 @@ def _run_pipeline_single(
     skip_inject: bool,
     verify: bool,
     write_markers_json: bool = True,
+    generate_preview: bool = True,
 ):
     """Run the single-output pipeline. Returns (pts_map, boundaries) so
     multi-rendition callers can cross-validate PTS consistency across
@@ -625,6 +642,21 @@ def _run_pipeline_single(
                 dry_run=dry_run,
             )
         _ok(f"Report → [bold]{report_path}[/bold]")
+
+    # ── Step 8: preview MP4 (always last, after the .ts is fully finalized) ──
+    # Fast/low-quality 540p mp4 for igor's Assemble-tab player -- not a
+    # broadcast artifact, just a quick sanity-check preview. Skipped for
+    # individual renditions in a multi-rendition build; the wrapper
+    # generates exactly one preview from the reference rendition instead.
+    if generate_preview:
+        preview_path = cfg.output.file.with_suffix(".preview.mp4")
+        t0 = time.monotonic()
+        with console.status("  Generating preview MP4...", spinner="dots"):
+            generate_preview_mp4(cfg.output.file, preview_path, dry_run=dry_run)
+        _ok(
+            f"Preview MP4 → [bold]{preview_path}[/bold]  "
+            f"[dim]({_fmt_elapsed(time.monotonic() - t0)})[/dim]"
+        )
 
     return pts_map, boundaries
 

@@ -108,3 +108,39 @@ def assemble_ts(
     logger.info("Assembling final TS → %s (%d forced keyframes)",
                 output_path, len(forced_keyframe_times))
     run_cmd(cmd, dry_run=dry_run)
+
+
+def generate_preview_mp4(
+    source_path: Path,
+    output_path: Path,
+    dry_run: bool = False,
+) -> None:
+    """Transcode the final .ts (or any rendition of it) into a tiny, fast,
+    browser-playable .mp4 for the igor "Assemble" tab's preview player.
+
+    This is NOT a broadcast artifact -- no SCTE-35, no bitrate fidelity, no
+    care about GOP/keyframe alignment. It exists purely so a human can
+    eyeball the assembled programme (fades, OSD, ad-break placement) without
+    downloading/opening the multi-GB .ts in an external player. Optimized
+    entirely for turnaround speed:
+      - downscaled to 540p (quality doesn't matter for a sanity-check preview)
+      - `-preset ultrafast` (fastest x264 preset; quality/size are irrelevant here)
+      - `-crf 32` (deliberately low quality to keep encode time and file size down)
+      - faststart so the browser can start playback before the full file
+        downloads
+    """
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(source_path),
+        "-vf", "scale=-2:540",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "32",
+        "-c:a", "aac",
+        "-b:a", "96k",
+        "-movflags", "+faststart",
+        str(output_path),
+    ]
+
+    logger.info("Generating preview MP4 → %s", output_path)
+    run_cmd(cmd, dry_run=dry_run)

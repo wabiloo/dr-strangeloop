@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from igor.integrations import franken_ts
@@ -87,3 +88,32 @@ def build_playlist(name: str) -> dict:
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return job.to_dict()
+
+
+@router.get("/{name}/preview/status")
+def get_preview_status(name: str) -> dict:
+    """Whether a preview .mp4 exists and whether it's stale (older than
+    the playlist YAML's mtime, i.e. rendered from a prior saved version)
+    -- lets the Assemble tab hide the player after an edit+save without
+    a fresh Assemble, without tracking that state client-side."""
+    try:
+        return franken_ts.preview_status(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{name}/preview")
+def get_preview(name: str) -> FileResponse:
+    """Serves the quick 540p preview .mp4 franken-ts writes as the last
+    step of a successful build, for the Assemble tab's <video> player.
+    404s if the playlist has never been built (or was built before this
+    feature existed)."""
+    try:
+        path = franken_ts.preview_mp4_path(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Preview not built yet -- run Assemble first.")
+    return FileResponse(path, media_type="video/mp4")
