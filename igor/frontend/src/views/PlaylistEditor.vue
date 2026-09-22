@@ -273,6 +273,18 @@ const osdBoxColorHex = computed({
 })
 
 const isNew = computed(() => props.name === null)
+
+/** Serialized snapshot of everything `save()` persists (the playlist name
+ * plus toYamlPlaylist()'s output), captured right after a load/reset and
+ * again after every successful save. `isDirty` just diffs the current form
+ * against that snapshot -- reuses toYamlPlaylist() as the single source of
+ * truth for "what save() would send" instead of hand-tracking which fields
+ * count as a change. */
+function currentSnapshot(): string {
+  return JSON.stringify({ name: nameInput.value.trim(), cfg: toYamlPlaylist() })
+}
+const savedSnapshot = ref('')
+const isDirty = computed(() => currentSnapshot() !== savedSnapshot.value)
 const activeTab = ref('settings')
 const selectedAssetIndex = ref<number | null>(null)
 const selectedMarkerEventId = ref<number | null>(null)
@@ -874,6 +886,7 @@ async function load() {
   selectedAssetIndex.value = null
   if (!props.name) {
     resetForm()
+    savedSnapshot.value = currentSnapshot()
     return
   }
   loading.value = true
@@ -881,6 +894,7 @@ async function load() {
   try {
     const data = await getPlaylist(props.name)
     fromYamlPlaylist(data)
+    savedSnapshot.value = currentSnapshot()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -898,6 +912,7 @@ async function save() {
   try {
     const savedName = nameInput.value.trim()
     await savePlaylist(savedName, toYamlPlaylist())
+    savedSnapshot.value = currentSnapshot()
     toast.add({ severity: 'success', summary: 'Saved', life: 3000 })
     if (isNew.value) {
       // Was creating a new playlist -- move to its edit route (in place,
@@ -914,6 +929,13 @@ async function save() {
 
 onMounted(load)
 watch(() => props.name, load)
+
+/** Discards unsaved edits by re-running the same load path used on mount --
+ * re-fetches from the server for an existing playlist, or resets to blank
+ * for a new one -- so this always lands back on exactly the saved state. */
+async function revertChanges() {
+  await load()
+}
 
 // --- Build (franken-ts, runs as a background job -- builds whatever's ----
 // currently saved on disk, NOT unsaved in-progress edits) ------------------
@@ -935,7 +957,7 @@ async function build() {
 }
 
 function onBuildFinished(job: Job) {
-  if (job.status !== 'succeeded') error.value = 'Build failed -- see log below.'
+  if (job.status !== 'succeeded') error.value = 'Assemble failed -- see log below.'
 }
 
 // --- ASCII <-> hex helper popover for the selected marker's upid_hex ------
@@ -962,7 +984,19 @@ function applyHexPopover() {
         <RouterLink to="/playlists" class="editor-back"><i class="pi pi-arrow-left" /> Playlists</RouterLink>
         <h2 class="m-0">{{ isNew ? 'New playlist' : `Edit: ${name}` }}</h2>
       </div>
-      <Button label="Save playlist" icon="pi pi-check" :loading="saving" @click="save" />
+      <div class="flex align-items-center gap-2">
+        <span v-if="isDirty" class="text-color-secondary text-sm">Unsaved changes</span>
+        <Button
+          label="Revert changes"
+          icon="pi pi-undo"
+          severity="secondary"
+          outlined
+          :loading="loading"
+          :disabled="!isDirty"
+          @click="revertChanges"
+        />
+        <Button label="Save playlist" icon="pi pi-check" :loading="saving" :disabled="!isDirty" @click="save" />
+      </div>
     </div>
 
     <Message v-if="error" severity="error">{{ error }}</Message>
@@ -975,7 +1009,7 @@ function applyHexPopover() {
           Timeline
           <span class="asset-count-badge">{{ form.assets.length }}</span>
         </Tab>
-        <Tab value="build">Build</Tab>
+        <Tab value="build">Assemble</Tab>
       </TabList>
 
       <TabPanels>
@@ -1473,12 +1507,13 @@ function applyHexPopover() {
           <div class="flex flex-column gap-3">
             <p class="text-color-secondary m-0">
               Runs franken-ts against the saved playlist and produces the <code>.ts</code> file its-a-live
-              channels stage via Spark. Builds whatever's currently saved on disk -- save first if you
+              channels stage via Spark. Assembles whatever's currently saved on disk -- save first if you
               have unsaved changes above.
             </p>
             <div class="flex align-items-center gap-2">
-              <Button label="Build" icon="pi pi-cog" :loading="building" :disabled="isNew" @click="build" />
+              <Button label="Assemble" icon="pi pi-cog" :loading="building" :disabled="isNew || isDirty" @click="build" />
               <span v-if="isNew" class="text-color-secondary text-sm">Save the playlist first.</span>
+              <span v-else-if="isDirty" class="text-color-secondary text-sm">Save your changes first.</span>
             </div>
             <JobPanel v-if="buildJobId" :job-id="buildJobId" @finished="onBuildFinished" />
           </div>
