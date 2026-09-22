@@ -40,6 +40,29 @@ def test_get_missing_playlist_is_404():
     assert resp.status_code == 404
 
 
+def test_duplicate_playlist_creates_a_copy_and_cleans_up():
+    new_name = "short-loop-duplicate-test"
+    resp = client.post(f"/api/v1/playlists/short-loop/duplicate", json={"new_name": new_name})
+    try:
+        assert resp.status_code == 200
+        original = client.get("/api/v1/playlists/short-loop").json()
+        copy = client.get(f"/api/v1/playlists/{new_name}").json()
+        assert copy == original
+    finally:
+        client.delete(f"/api/v1/playlists/{new_name}")
+    assert client.get(f"/api/v1/playlists/{new_name}").status_code == 404
+
+
+def test_duplicate_playlist_conflict_when_target_exists():
+    resp = client.post("/api/v1/playlists/short-loop/duplicate", json={"new_name": "short-loop"})
+    assert resp.status_code == 409
+
+
+def test_duplicate_missing_playlist_is_404():
+    resp = client.post("/api/v1/playlists/does-not-exist/duplicate", json={"new_name": "whatever"})
+    assert resp.status_code == 404
+
+
 def test_browse_files_lists_a_real_directory():
     resp = client.get("/api/v1/files/browse", params={"path": str(REPO_ROOT / "data" / "playlists")})
     assert resp.status_code == 200

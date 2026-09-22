@@ -75,6 +75,10 @@ export async function deletePlaylist(name: string): Promise<void> {
   await handle(await fetch(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}`, { method: 'DELETE' }))
 }
 
+export function duplicatePlaylist(name: string, newName: string): Promise<{ path: string }> {
+  return postJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/duplicate`, { new_name: newName })
+}
+
 export function buildPlaylist(name: string): Promise<Job> {
   return postJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/build`)
 }

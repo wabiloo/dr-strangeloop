@@ -14,6 +14,10 @@ class PlaylistPayload(BaseModel):
     data: dict
 
 
+class DuplicatePlaylistPayload(BaseModel):
+    new_name: str
+
+
 @router.get("/schema")
 def get_schema() -> dict:
     return franken_ts.playlist_schema()
@@ -47,6 +51,19 @@ def delete_playlist(name: str) -> None:
         franken_ts.delete_playlist(name)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{name}/duplicate")
+def duplicate_playlist(name: str, payload: DuplicatePlaylistPayload) -> dict:
+    try:
+        path = franken_ts.duplicate_playlist(name, payload.new_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 -- surface Pydantic validation / bad-name errors to the client
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"path": path}
 
 
 @router.post("/{name}/resolve-markers")

@@ -95,6 +95,19 @@ def delete_playlist(name: str) -> None:
     _resolve_path(name).unlink()
 
 
+def duplicate_playlist(name: str, new_name: str) -> str:
+    """Copy an existing playlist's YAML verbatim under a new name. Reuses
+    `get_playlist`/`save_playlist` (rather than a raw file copy) so the
+    copy still goes through Config validation and the same YAML dump
+    formatting as any other save -- and so a bogus/corrupt source name
+    surfaces the same FileNotFoundError as get_playlist."""
+    data = get_playlist(name)
+    dest = _resolve_path(new_name, must_exist=False)
+    if dest.is_file():
+        raise FileExistsError(f"Playlist already exists: {new_name}")
+    return save_playlist(new_name, data)
+
+
 def resolve_markers_preview(name: str, data: dict | None = None) -> dict:
     """Probe the playlist's real source files and resolve every `markers`
     entry to concrete (start_seconds, end_seconds) plus its auto-filled

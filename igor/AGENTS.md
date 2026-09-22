@@ -32,7 +32,7 @@ another agent unless you're specifically building on its HTTP API.
 
 | Prefix | Purpose |
 |---|---|
-| `GET/PUT/DELETE /api/v1/playlists/*` | franken-ts YAML playlist CRUD + `/schema` (JSON Schema) + `/build` (spawns a job) |
+| `GET/PUT/DELETE /api/v1/playlists/*` | franken-ts YAML playlist CRUD + `/schema` (JSON Schema) + `/duplicate` (copy under a new name) + `/build` (spawns a job) |
 | `GET/POST/DELETE /api/v1/channels/*` | its-a-live TOML CRUD, `/status`, `/outputs`, `/health` (ecs-express), and job-spawning `/create`, `/spark`, `/start`, `/stop`, `/refresh`, `/redeploy` |
 | `GET /api/v1/jobs/*` | poll job status/log (`?log_offset=` for incremental tailing) |
 
