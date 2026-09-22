@@ -91,6 +91,12 @@ class JobRunner:
         job.started_at = time.time()
         try:
             full_env = {**os.environ, **(env or {})}
+            # franken-ts uses `rich` for its console output; when stdout is a
+            # pipe (not a real TTY, as it always is here), rich falls back to
+            # a hardcoded 80-column width, causing tables/lines to wrap and
+            # truncate ("..."). Set a wider COLUMNS so output is legible in
+            # igor's log panel.
+            full_env.setdefault("COLUMNS", "145")
             proc = subprocess.Popen(
                 job.command,
                 cwd=job.cwd,
