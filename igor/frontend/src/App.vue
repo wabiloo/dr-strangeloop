@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import ConfirmDialog from 'primevue/confirmdialog'
 import Toast from 'primevue/toast'
 import { computed } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
@@ -72,7 +71,6 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
     </main>
 
     <Toast />
-    <ConfirmDialog />
   </div>
 </template>
 

@@ -440,7 +440,7 @@ const infrastructureActions = computed<ActionDef[]>(() => {
       disabledReason: () => {
         if (phase.value === 'not-deployed') return 'Nothing to terminate -- channel is not deployed.'
         if (isUpButMaybeUnreachable(phase.value)) return 'Stop the channel before terminating its stack.'
-        if (phase.value === 'transitioning') return 'Status is transitioning -- wait for it to settle.'
+        if (phase.value === 'transitioning' || phase.value === 'deleting') return 'Status is transitioning -- wait for it to settle.'
         return 'Status is still loading.'
       },
       confirmMessage: `Permanently delete the deployed stack for "${props.name}"? Uploaded content in S3 is kept, but the channel will need a fresh Galvanise to run again.`,

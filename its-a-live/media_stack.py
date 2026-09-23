@@ -48,11 +48,11 @@ class MediaStack(Stack):
 
         # Resource names are all scoped to `name` so multiple deployments
         # (different config files / names) can coexist in the same account.
-        mp_channel_id  = f"scte-loop-{name}-channel"
-        hls_ep_id      = f"scte-loop-{name}-hls"
-        dash_ep_id     = f"scte-loop-{name}-dash"
-        ml_input_name  = f"scte-loop-{name}-input"
-        ml_channel_name = f"scte-loop-{name}-channel"
+        mp_channel_id  = f"itsalive-{name}-channel"
+        hls_ep_id      = f"itsalive-{name}-hls"
+        dash_ep_id     = f"itsalive-{name}-dash"
+        ml_input_name  = f"itsalive-{name}-input"
+        ml_channel_name = f"itsalive-{name}-channel"
 
         # ── S3 (existing bucket, referenced only — upload via channel.py upload) ──
         bucket = s3.Bucket.from_bucket_name(self, "ExistingBucket", bucket_name)

@@ -18,12 +18,21 @@ import type { ChannelListItem, ChannelStatus } from '../api/types'
 // pointed at the wrong channel, an empty ECS target group, or a
 // CloudFront distribution still propagating (see its-a-live's
 // _reachability.py, which produces the `reachable` field this reads).
-export type Phase = 'not-deployed' | 'stopped' | 'alive' | 'unreachable' | 'transitioning' | 'failed' | 'unknown'
+export type Phase =
+  | 'not-deployed'
+  | 'stopped'
+  | 'alive'
+  | 'unreachable'
+  | 'transitioning'
+  | 'deleting'
+  | 'failed'
+  | 'unknown'
 
 const PHASE_SEVERITY: Record<Phase, 'success' | 'danger' | 'warn' | 'info' | 'secondary'> = {
   alive: 'success',
   unreachable: 'danger',
   transitioning: 'info',
+  deleting: 'warn',
   stopped: 'warn',
   failed: 'danger',
   'not-deployed': 'secondary',
@@ -45,6 +54,10 @@ export const PHASE_LABEL: Record<Phase, string> = {
   // not actually alive/responsive.
   unreachable: 'Undead',
   transitioning: 'Reanimating',
+  // Being torn down specifically -- distinct from 'transitioning' so the
+  // label doesn't imply coming to life while the stack is actually being
+  // deleted (see cfnStackPhase/awsMediaLivePhase).
+  deleting: 'Dismantling',
   stopped: 'Dormant',
   failed: 'Flatlined',
   // Not yet deployed at all -- parts laid out before the experiment even
@@ -80,6 +93,7 @@ function withReachability(phase: Phase, reachable?: boolean | null): Phase {
 function cfnStackPhase(stackStatus: string | null): Phase {
   if (!stackStatus || stackStatus === 'DELETE_COMPLETE') return 'not-deployed'
   if (stackStatus.includes('ROLLBACK') || stackStatus.includes('FAILED')) return 'failed'
+  if (stackStatus.startsWith('DELETE_') && stackStatus.includes('IN_PROGRESS')) return 'deleting'
   if (stackStatus.includes('IN_PROGRESS')) return 'transitioning'
   if (stackStatus.includes('COMPLETE')) return 'alive'
   return 'unknown'
@@ -100,8 +114,9 @@ function localDockerPhase(status: string | null, reachable?: boolean | null): Ph
     case 'created':
     case 'paused':
     case 'restarting':
-    case 'removing':
       return 'transitioning'
+    case 'removing':
+      return 'deleting'
     default:
       return status ? 'unknown' : 'not-deployed'
   }
@@ -116,9 +131,10 @@ function awsMediaLivePhase(status: string, reachable?: boolean | null): Phase {
     case 'CREATING':
     case 'STARTING':
     case 'STOPPING':
-    case 'DELETING':
     case 'UPDATING':
       return 'transitioning'
+    case 'DELETING':
+      return 'deleting'
     case 'IDLE':
       return 'stopped'
     case 'DELETED':
@@ -129,6 +145,19 @@ function awsMediaLivePhase(status: string, reachable?: boolean | null): Phase {
     default:
       return 'unknown'
   }
+}
+
+// ECS service status (Express Gateway), as returned by ecs-express's live
+// status() op (`service["status"]["statusCode"]`) -- e.g. "ACTIVE",
+// "DRAINING" (service scaled down but tasks still terminating -- not
+// fully stopped yet, despite minTaskCount already reading 0), "INACTIVE".
+// `minTasks` alone can't tell "settled at 0" apart from "still draining
+// down to 0", so DRAINING takes priority over the minTasks-based verdict.
+function ecsExpressPhase(liveStatus: string | null | undefined, minTasks: number | null | undefined, reachable?: boolean | null): Phase {
+  if (liveStatus === 'DRAINING') return 'transitioning'
+  if (minTasks === 0) return 'stopped'
+  if ((minTasks ?? 0) > 0) return withReachability('alive', reachable)
+  return 'unknown'
 }
 
 /** Phase for a row from the channel list endpoint. `stack_status` alone
@@ -150,7 +179,7 @@ export function listItemPhase(
   if (stackPhase !== 'alive') return stackPhase
 
   if (channel.backend === 'ecs-express' && channel.min_tasks != null) {
-    return channel.min_tasks === 0 ? 'stopped' : withReachability('alive', channel.reachable)
+    return ecsExpressPhase(channel.live_status, channel.min_tasks, channel.reachable)
   }
   if (channel.backend === 'aws-media' && channel.live_status) {
     return awsMediaLivePhase(channel.live_status, channel.reachable)
@@ -162,9 +191,8 @@ export function listItemPhase(
 export function liveStatusPhase(status: ChannelStatus): Phase {
   if (status.backend === 'aws-media') return awsMediaLivePhase(status.status, status.reachable)
   if (status.backend === 'local-docker') return localDockerPhase(status.status, status.reachable)
-  // ecs-express: the statusCode enum doesn't map cleanly to running/stopped;
-  // desired task count is the reliable signal (0 == scaled down/stopped).
-  if (status.min_tasks === 0) return 'stopped'
-  if ((status.min_tasks ?? 0) > 0) return withReachability('alive', status.reachable)
-  return 'unknown'
+  // ecs-express: `status.status` here IS the raw statusCode (see
+  // ecsExpressPhase) -- desired task count is otherwise the reliable
+  // running/stopped signal, but DRAINING overrides it.
+  return ecsExpressPhase(status.status, status.min_tasks, status.reachable)
 }
