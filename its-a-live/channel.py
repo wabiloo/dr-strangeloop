@@ -29,9 +29,17 @@ config file selects "aws-media" (MediaLive + MediaPackage v1) or
               ecs-express -- force a new task launch (re-syncs S3)
               aws-media   -- no hot-reload exists; this is a full
                               stop -> start cycle (real interruption)
+  update    `spark` then `refresh` -- the routine "ship new content to a
+            running channel" combo (see README.md's "Updating content on
+            a running channel"). `spark` and `refresh` remain available
+            separately for finer-grained control.
   status    Print the channel's current status
   outputs   Print all CloudFormation stack outputs
   redeploy  Delete a broken stack if needed, then run cdk deploy
+  terminate Tear the channel down for good: `cdk destroy` the stack.
+            Not available for local-docker (no stack) -- `stop` alone is
+            sufficient teardown there. Content staged in S3 is NOT
+            deleted (the stack doesn't own the bucket) -- see README.md.
   create    First-time, non-interactive setup: (ecs-express only) ensure
             the shared ECS cluster stack is deployed, `spark` (content
             MUST be staged before the channel stack exists), `cdk deploy`
@@ -170,6 +178,17 @@ def cmd_refresh(cfg, extra_args):
         sys.exit("`refresh` does not take extra arguments")
     outputs = _outputs_if_needed(cfg)
     _ops(cfg).refresh(cfg, _session(cfg), outputs)
+
+
+def cmd_update(cfg, extra_args):
+    """`spark` then `refresh`: the routine way to ship new content to an
+    already-running channel in one step. Requires the channel to already
+    be running -- same precondition as `refresh` alone (see its
+    docstring/README.md's "Updating content on a running channel")."""
+    if extra_args:
+        sys.exit("`update` does not take extra arguments")
+    cmd_spark(cfg, [])
+    cmd_refresh(cfg, [])
 
 
 def cmd_status(cfg, extra_args, as_json=False):
@@ -433,11 +452,38 @@ def cmd_redeploy(cfg, config_path, extra_args):
     sys.exit(result.returncode)
 
 
+def cmd_terminate(cfg, config_path, extra_args):
+    """Tear the channel down for good: `cdk destroy` the stack. The
+    inverse of `create`'s `cdk deploy` -- unlike `redeploy`, this doesn't
+    bring anything back up afterward. Content staged in S3 is NOT deleted
+    (the stack doesn't own the bucket, see README.md's Notes/gotchas);
+    clean that up separately if needed.
+
+    Not available for local-docker: there's no CloudFormation stack, so
+    `stop` (which removes the container) is already complete teardown."""
+    if extra_args:
+        sys.exit("`terminate` does not take extra arguments")
+
+    if _backend(cfg) in _NO_STACK_BACKENDS:
+        sys.exit("`terminate` has no meaning for local-docker (no CloudFormation stack) "
+                  "-- use `stop` instead.")
+
+    import subprocess
+
+    stack_name = _stack_name(cfg)
+    cdk_cmd = ["cdk", "destroy", "--force",
+               "-c", f"config={config_path}", stack_name]
+    print(f"Running: {' '.join(cdk_cmd)}")
+    result = subprocess.run(cdk_cmd, check=False)
+    sys.exit(result.returncode)
+
+
 COMMANDS = {
     "spark": cmd_spark,
     "start": cmd_start,
     "stop": cmd_stop,
     "refresh": cmd_refresh,
+    "update": cmd_update,
 }
 
 # Commands taking (cfg, extra_args, as_json) instead of just (cfg, extra_args).
@@ -450,6 +496,7 @@ JSON_COMMANDS = {
 CONFIG_PATH_COMMANDS = {
     "redeploy": cmd_redeploy,
     "create": cmd_create,
+    "terminate": cmd_terminate,
 }
 
 if __name__ == "__main__":

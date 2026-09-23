@@ -88,19 +88,44 @@ memory = 512   # MB
 
 ## Commands (identical across all three backends)
 
+Split into two groups: **Infrastructure** (does the stack/container exist
+at all) and **Stream** (is content actually playing).
+
+Infrastructure:
+
 ```bash
 uv sync                                        # once, its-a-live has its own venv
 cdk bootstrap                                  # once per account/region -- N/A for local-docker
 cdk deploy ItsALiveSharedStack-ecs-express      # once per account/region, ecs-express only
 
+uv run python channel.py -c <config.toml> create      # first-time bootstrap: spark + deploy + start (spark + start only for local-docker)
+# ...or the manual equivalent, for finer-grained control:
 uv run python channel.py -c <config.toml> spark    # stage input (bake or upload) -- do this BEFORE first deploy
 cdk deploy ItsALiveStack-<name>-<backend> -c config=<config.toml>   # N/A for local-docker (no stack)
 uv run python channel.py -c <config.toml> start    # go live, prints playback URLs
 
-uv run python channel.py -c <config.toml> stop     # stop paying for compute (or stop the local container)
-cdk destroy ItsALiveStack-<name>-<backend> -c config=<config.toml>   # N/A for local-docker
+uv run python channel.py -c <config.toml> redeploy    # apply a config change, or recover a broken stack -- N/A for local-docker (aliases refresh)
+uv run python channel.py -c <config.toml> outputs     # print stack outputs -- N/A for local-docker
+uv run python channel.py -c <config.toml> list        # list channels + stack status under a config directory
 
-# updating content on a running channel:
+uv run python channel.py -c <config.toml> stop     # stop paying for compute (or stop the local container)
+uv run python channel.py -c <config.toml> terminate   # tear the stack down for good -- N/A for local-docker
+# ...or the manual equivalent:
+cdk destroy ItsALiveStack-<name>-<backend> -c config=<config.toml>   # N/A for local-docker
+```
+
+Stream:
+
+```bash
+uv run python channel.py -c <config.toml> spark    # stage input (bake or upload)
+uv run python channel.py -c <config.toml> start    # go live, prints playback URLs
+uv run python channel.py -c <config.toml> stop     # stop paying for compute (or stop the local container)
+uv run python channel.py -c <config.toml> refresh  # pick up newly-sparked content on a running channel
+uv run python channel.py -c <config.toml> status   # current status
+
+# updating content on a running channel, in one step:
+uv run python channel.py -c <config.toml> update   # spark, then refresh
+# ...or the two steps separately, for finer-grained control:
 uv run python channel.py -c <config.toml> spark
 uv run python channel.py -c <config.toml> refresh
 ```
@@ -116,8 +141,12 @@ container recreate — a few seconds — for `local-docker`) — see
 hot reload.
 
 `local-docker` has **no CloudFormation stack**: `channel.py outputs` and
-`cdk deploy`/`cdk destroy` don't apply to it — use `channel.py status`
-instead, and `stop` alone is sufficient teardown (removes the container;
-nothing else was created). State across separate `channel.py` invocations
-is tracked via a deterministic container name (`its-a-live-<name>`), not
-stack outputs.
+`cdk deploy`/`cdk destroy` (and hence `channel.py terminate`) don't apply
+to it — use `channel.py status` instead, and `stop` alone is sufficient
+teardown (removes the container; nothing else was created). `redeploy` is
+a pure alias for `refresh` on this backend (there's no stack to repair),
+not an error. State across separate `channel.py` invocations is tracked
+via a deterministic container name (`its-a-live-<name>`), not stack
+outputs. igor's UI reflects all of this by hiding the Redeploy and
+Terminate actions and the stack-outputs panel entirely for local-docker
+channels, rather than showing an inapplicable/erroring control.

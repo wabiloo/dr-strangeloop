@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
 import Checkbox from 'primevue/checkbox'
+import ConfirmPopup from 'primevue/confirmpopup'
 import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
+import ItsAliveBanner from '../components/ItsAliveBanner.vue'
 import JobPanel from '../components/JobPanel.vue'
 import PlaybackPanel from '../components/PlaybackPanel.vue'
 import {
@@ -17,13 +20,14 @@ import {
   getChannelOutputs,
   getChannelStatus,
   redeployChannel,
-  refreshChannel,
   sparkChannel,
   startChannel,
   stopChannel,
+  terminateChannel,
   updateChannel,
+  updateChannelContent,
 } from '../api/client'
-import type { ChannelCreatePayload, ChannelHealth, ChannelOutputs, ChannelStatus } from '../api/types'
+import type { ChannelCreatePayload, ChannelHealth, ChannelOutputs, ChannelStatus, Job } from '../api/types'
 import { type Phase, PHASE_LABEL, liveStatusPhase, phaseSeverity } from '../utils/channelPhase'
 
 const props = defineProps<{ name: string }>()
@@ -38,6 +42,11 @@ const loading = ref(false)
 const activeJobId = ref<string | null>(null)
 const activeAction = ref('')
 const activeActionEta = ref('')
+// Phase captured right as an action starts, so onJobFinished can tell a
+// genuine not-running -> running transition (worth celebrating) apart from
+// e.g. Update content on an already-running channel.
+const phaseBeforeAction = ref<Phase | null>(null)
+const itsAliveBanner = ref<InstanceType<typeof ItsAliveBanner> | null>(null)
 
 const editing = ref(false)
 const editSaving = ref(false)
@@ -74,6 +83,7 @@ const cueTagsOptions = [
 ]
 
 const toast = useToast()
+const confirm = useConfirm()
 let healthTimer: ReturnType<typeof setInterval> | null = null
 
 function section(key: string): Record<string, unknown> {
@@ -209,6 +219,10 @@ interface ActionDef {
   fn: () => Promise<{ id: string }>
   disabled: () => boolean
   disabledReason: () => string
+  // When set, clicking the button shows a confirm popup with this message
+  // before actually invoking `fn` -- reserved for actions that are costly
+  // to reverse (see Terminate), matching ChannelList.vue's Delete pattern.
+  confirmMessage?: string
 }
 
 // Buttons keep their "live" color (green Start, red Stop, ...) only while
@@ -238,8 +252,8 @@ function byBackend(localDocker: string, ecsExpress: string, awsMedia: string): s
 
 const firstDeployAction = computed<ActionDef>(() => ({
   key: 'create',
-  label: 'Create / deploy',
-  icon: 'pi pi-cloud-upload',
+  label: 'Galvanise',
+  icon: 'pi pi-bolt',
   description: byBackend(
     'Bakes the content locally and starts the container. Equivalent to running Spark then Start below.',
     'One-time, first deploy of this channel: bakes the content locally, stages it to S3, deploys the ECS/CloudFront stack, then starts it.',
@@ -258,22 +272,54 @@ const firstDeployAction = computed<ActionDef>(() => ({
       : 'Already deployed -- use the actions on the right to manage it, or Redeploy for stack/config changes.',
 }))
 
-const lifecycleActions = computed<ActionDef[]>(() => [
-  {
+// The "ship content" action: while the channel is running, staging new
+// content is only useful paired with picking it up, so this is Spark+
+// Refresh combined into one "Update content" job (channel.py's `update`
+// command) -- the docs never show one without the other for a running
+// channel anyway. Before first deploy (or while stopped), there's nothing
+// to refresh yet, so this is plain Spark instead -- still never disabled
+// by phase, since staging content has never depended on the stack/
+// container existing (see channel.py's docstring: "content MUST be staged
+// before the channel stack is deployed").
+const contentAction = computed<ActionDef>(() => {
+  if (phase.value === 'running') {
+    return {
+      key: 'update',
+      label: 'Update content',
+      icon: 'pi pi-refresh',
+      severity: 'secondary',
+      description: byBackend(
+        'Bakes the franken-ts output locally and recreates the container from it, in one step -- the routine way to ship new content to a running channel.',
+        'Bakes the franken-ts output locally, stages it to S3, then re-syncs the running channel -- the routine way to ship new content, in one step.',
+        'Uploads the franken-ts output to S3, then cycles the channel to pick it up -- the routine way to ship new content, in one step.',
+      ),
+      eta: byBackend('~15-90s.', '~40-90s.', 'A full stop/start cycle (a few minutes) on top of the bake/upload.'),
+      fn: () => updateChannelContent(props.name),
+      disabled: () => false,
+      disabledReason: () => '',
+    }
+  }
+  return {
     key: 'spark',
     label: 'Spark',
-    icon: 'pi pi-bolt',
+    icon: 'pi pi-sparkles',
     severity: 'secondary',
     description: byBackend(
-      'Bakes the franken-ts output locally into the loop package the container serves. Run this after building new content, before Start or Refresh content pick it up.',
-      'Bakes the franken-ts output locally, then stages the result to S3. Run this after building new content, before Start or Refresh content pick it up.',
-      'Uploads the franken-ts output to S3. Run this after building new content, before Start or Refresh content pick it up.',
+      'Bakes the franken-ts output locally into the loop package the container serves. Run this after building new content, before Start picks it up.',
+      'Bakes the franken-ts output locally, then stages the result to S3. Run this after building new content, before Start picks it up.',
+      'Uploads the franken-ts output to S3. Run this after building new content, before Start picks it up.',
     ),
     eta: '~10-60s, depending on content size.',
     fn: () => sparkChannel(props.name),
-    disabled: () => phase.value === 'not-deployed',
-    disabledReason: () => 'Requires the channel to be deployed first -- there is no stack to stage content for yet.',
-  },
+    disabled: () => false,
+    disabledReason: () => '',
+  }
+})
+
+// Stream: is content actually playing right now. Available for every
+// backend -- these buttons never need to be hidden.
+const streamActions = computed<ActionDef[]>(() => [
+  contentAction.value,
   {
     key: 'start',
     label: 'Start',
@@ -290,9 +336,19 @@ const lifecycleActions = computed<ActionDef[]>(() => [
       'A couple of minutes (MediaLive channel start).',
     ),
     fn: () => startChannel(props.name),
-    disabled: () => phase.value !== 'stopped',
+    // aws-media/ecs-express: `start` reads CloudFormation stack outputs, so
+    // it genuinely requires the stack to already be deployed (Galvanise
+    // or `cdk deploy` first) -- 'not-deployed' stays disabled.
+    // local-docker: `start` IS `docker run` -- it creates the container
+    // fresh, so it works straight from 'not-deployed' too, same as the
+    // Galvanise button above already allows for this backend.
+    disabled: () => (backend.value === 'local-docker' ? phase.value === 'running' : phase.value !== 'stopped'),
     disabledReason: () =>
-      phase.value === 'not-deployed' ? 'Requires the channel to be deployed first.' : 'Channel is already running.',
+      backend.value === 'local-docker'
+        ? 'Channel is already running.'
+        : phase.value === 'not-deployed'
+          ? 'Requires the channel to be deployed first.'
+          : 'Channel is already running.',
   },
   {
     key: 'stop',
@@ -310,43 +366,64 @@ const lifecycleActions = computed<ActionDef[]>(() => [
     disabledReason: () =>
       phase.value === 'not-deployed' ? 'Requires the channel to be deployed first.' : 'Channel is already stopped.',
   },
-  {
-    key: 'refresh',
-    label: 'Refresh content',
-    icon: 'pi pi-refresh',
-    severity: 'secondary',
-    description: byBackend(
-      'Picks up newly-Sparked content: recreates the local container from the latest baked package.',
-      'Picks up newly-Sparked content on an already-running channel: a fast re-sync, no interruption to the running task.',
-      'Picks up newly-Sparked content on an already-running channel: a full stop/start cycle -- a real interruption, since MediaLive has no partial-refresh option.',
-    ),
-    eta: byBackend('~10-30s.', '~30-60s.', 'A full stop/start cycle (a few minutes).'),
-    fn: () => refreshChannel(props.name),
-    disabled: () => phase.value !== 'running',
-    disabledReason: () =>
-      phase.value === 'not-deployed' ? 'Requires the channel to be deployed first.' : 'Start the channel before refreshing its content.',
-  },
-  {
-    key: 'redeploy',
-    label: 'Redeploy',
-    icon: 'pi pi-wrench',
-    severity: 'warn',
-    outlined: true,
-    description: byBackend(
-      'Recreates the local container from whatever was last Sparked (same as Refresh content).',
-      'Deletes a broken/rolled-back stack if needed, then cdk deploys the current config again. Use this after editing the channel config, or to recover from a failed Create.',
-      'Deletes a broken/rolled-back stack if needed, then cdk deploys the current config again. Use this after editing the channel config, or to recover from a failed Create.',
-    ),
-    eta: byBackend(
-      '~10-30s.',
-      '~1-2 min for a small config change; ~5-10 min if the stack has to be deleted and recreated (e.g. after a failed Create) -- CloudFront/ECS propagation, not a hang.',
-      '~1-2 min for a small config change; ~5-10 min if the stack has to be deleted and recreated (e.g. after a failed Create).',
-    ),
-    fn: () => redeployChannel(props.name),
-    disabled: () => phase.value === 'unknown' && !statusError.value,
-    disabledReason: () => 'Status is still loading.',
-  },
 ])
+
+// Infrastructure: does the stack/container exist at all. `redeploy` only
+// means anything where there's a CloudFormation stack to repair/reapply --
+// for local-docker it's a pure alias of Refresh content server-side
+// (channel.py's cmd_redeploy calls cmd_refresh verbatim), so it's omitted
+// entirely rather than shown as a redundant/confusing button.
+const infrastructureActions = computed<ActionDef[]>(() => {
+  if (backend.value === 'local-docker') return []
+  return [
+    {
+      key: 'redeploy',
+      label: 'Redeploy',
+      icon: 'pi pi-wrench',
+      severity: 'warn',
+      outlined: true,
+      description: byBackend(
+        'Recreates the local container from whatever was last Sparked (same as the content-update action above).',
+        'Deletes a broken/rolled-back stack if needed, then cdk deploys the current config again. Use this after editing the channel config, or to recover from a failed Galvanise.',
+        'Deletes a broken/rolled-back stack if needed, then cdk deploys the current config again. Use this after editing the channel config, or to recover from a failed Galvanise.',
+      ),
+      eta: byBackend(
+        '~10-30s.',
+        '~1-2 min for a small config change; ~5-10 min if the stack has to be deleted and recreated (e.g. after a failed Galvanise) -- CloudFront/ECS propagation, not a hang.',
+        '~1-2 min for a small config change; ~5-10 min if the stack has to be deleted and recreated (e.g. after a failed Galvanise).',
+      ),
+      fn: () => redeployChannel(props.name),
+      disabled: () => phase.value === 'unknown' && !statusError.value,
+      disabledReason: () => 'Status is still loading.',
+    },
+    {
+      key: 'terminate',
+      label: 'Terminate',
+      icon: 'pi pi-trash',
+      severity: 'danger',
+      outlined: true,
+      description: byBackend(
+        '', // never rendered -- local-docker has no infrastructureActions at all
+        'Deletes the CloudFormation stack for good (ECS service, CloudFront distribution, load balancer, ...) -- stops billing. Uploaded content in S3 is not deleted. Use Galvanise above to bring it back.',
+        'Deletes the CloudFormation stack for good (MediaLive channel, MediaPackage channel/endpoints) -- stops billing. Uploaded content in S3 is not deleted. Use Galvanise above to bring it back.',
+      ),
+      eta: byBackend(
+        '',
+        '~1-2 min, though CloudFront can take 15+ min to finish deleting its distribution in the background after this returns.',
+        '~1-5 min for MediaLive/MediaPackage resource deletion.',
+      ),
+      fn: () => terminateChannel(props.name),
+      disabled: () => phase.value !== 'stopped' && phase.value !== 'failed',
+      disabledReason: () => {
+        if (phase.value === 'not-deployed') return 'Nothing to terminate -- channel is not deployed.'
+        if (phase.value === 'running') return 'Stop the channel before terminating its stack.'
+        if (phase.value === 'transitioning') return 'Status is transitioning -- wait for it to settle.'
+        return 'Status is still loading.'
+      },
+      confirmMessage: `Permanently delete the deployed stack for "${props.name}"? Uploaded content in S3 is kept, but the channel will need a fresh Galvanise to run again.`,
+    },
+  ]
+})
 
 // local-docker has no stack outputs (see /outputs route) -- its playback
 // URLs come straight from /status instead (http://localhost:<port>/...).
@@ -398,10 +475,27 @@ async function loadHealth() {
   }
 }
 
+// Actions with a `confirmMessage` (currently just Terminate) show a
+// confirm popup before running -- everything else runs immediately on
+// click, same as before this existed.
+function onActionClick(event: MouseEvent, a: ActionDef) {
+  if (!a.confirmMessage) {
+    run(a.key, a.fn, a.eta)
+    return
+  }
+  confirm.require({
+    target: event.currentTarget as HTMLElement,
+    message: a.confirmMessage,
+    acceptClass: 'p-button-danger',
+    accept: () => run(a.key, a.fn, a.eta),
+  })
+}
+
 async function run(action: string, fn: () => Promise<{ id: string }>, eta = '') {
   loading.value = true
   activeAction.value = action
   activeActionEta.value = eta
+  phaseBeforeAction.value = phase.value
   try {
     const job = await fn()
     activeJobId.value = job.id
@@ -412,14 +506,18 @@ async function run(action: string, fn: () => Promise<{ id: string }>, eta = '') 
   }
 }
 
-function onJobFinished() {
+async function onJobFinished(job: Job) {
   toast.add({
     severity: 'info',
     summary: `${activeAction.value} finished`,
     detail: `See the job log above for details.`,
     life: 4000,
   })
-  loadStatus()
+  const wasRunning = phaseBeforeAction.value === 'running'
+  await loadStatus()
+  if (job.status === 'succeeded' && !wasRunning && phase.value === 'running') {
+    itsAliveBanner.value?.trigger()
+  }
 }
 
 function reload() {
@@ -471,7 +569,7 @@ watch(() => props.name, reload)
     <div class="flex gap-4 flex-wrap align-items-start">
       <div class="flex flex-column gap-4" style="flex: 2 1 40rem; min-width: 28rem">
         <div class="flex flex-column gap-2">
-          <h3 class="m-0 text-sm text-color-secondary uppercase">Step 1 -- first deploy</h3>
+          <h3 class="m-0 text-sm text-color-secondary uppercase">First deploy</h3>
           <div
             class="flex align-items-start gap-3 p-3 border-round"
             :class="firstDeployAction.disabled() ? 'surface-100' : 'surface-card'"
@@ -496,12 +594,18 @@ watch(() => props.name, reload)
         </div>
 
         <div class="flex flex-column gap-2">
-          <h3 class="m-0 text-sm text-color-secondary uppercase">Manage the deployed channel</h3>
+          <h3 class="m-0 text-sm text-color-secondary uppercase">Stream</h3>
           <Message v-if="phase === 'not-deployed'" severity="secondary" :closable="false">
-            These require the channel to be deployed -- run Step 1 above first.
+            {{
+              byBackend(
+                'Spark and Start can both run now -- Start builds/launches the container directly, no separate deploy step for this backend.',
+                'Spark can run now to stage content ahead of the first deploy. Start/Stop need the channel deployed first -- run Galvanise above.',
+                'Spark can run now to stage content ahead of the first deploy. Start/Stop need the channel deployed first -- run Galvanise above.',
+              )
+            }}
           </Message>
           <div
-            v-for="a in lifecycleActions"
+            v-for="a in streamActions"
             :key="a.key"
             class="flex align-items-start gap-3 p-3 border-round"
             :class="a.disabled() ? 'surface-100' : 'surface-card'"
@@ -523,6 +627,37 @@ watch(() => props.name, reload)
               <div v-if="a.disabled()" class="text-color-secondary font-italic">{{ a.disabledReason() }}</div>
             </div>
           </div>
+        </div>
+
+        <div v-if="infrastructureActions.length" class="flex flex-column gap-2">
+          <h3 class="m-0 text-sm text-color-secondary uppercase">Infrastructure</h3>
+          <div
+            v-for="a in infrastructureActions"
+            :key="a.key"
+            class="flex align-items-start gap-3 p-3 border-round"
+            :class="a.disabled() ? 'surface-100' : 'surface-card'"
+            style="border: 1px solid var(--surface-border)"
+          >
+            <Button
+              :label="a.label"
+              :icon="a.icon"
+              :severity="effectiveSeverity(a)"
+              :outlined="effectiveOutlined(a)"
+              :disabled="a.disabled()"
+              :loading="loading && activeAction === a.key"
+              style="min-width: 11rem"
+              @click="onActionClick($event, a)"
+            />
+            <div class="flex flex-column gap-1 text-sm">
+              <div :class="a.disabled() ? 'text-color-secondary' : 'text-color'">{{ a.description }}</div>
+              <div class="text-color-secondary text-xs"><i class="pi pi-clock mr-1" />{{ a.eta }}</div>
+              <div v-if="a.disabled()" class="text-color-secondary font-italic">{{ a.disabledReason() }}</div>
+            </div>
+          </div>
+          <details v-if="outputs" class="text-sm">
+            <summary class="cursor-pointer text-color-secondary">Stack outputs (raw)</summary>
+            <pre class="job-log mt-2">{{ JSON.stringify(outputs, null, 2) }}</pre>
+          </details>
         </div>
       </div>
 
@@ -642,10 +777,7 @@ watch(() => props.name, reload)
     </div>
 
     <JobPanel :job-id="activeJobId" :eta-hint="activeActionEta" @finished="onJobFinished" />
-
-    <details v-if="outputs" class="text-sm">
-      <summary class="cursor-pointer text-color-secondary">Stack outputs (raw)</summary>
-      <pre class="job-log mt-2">{{ JSON.stringify(outputs, null, 2) }}</pre>
-    </details>
+    <ConfirmPopup />
+    <ItsAliveBanner ref="itsAliveBanner" />
   </div>
 </template>

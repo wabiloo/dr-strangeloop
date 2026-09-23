@@ -170,8 +170,16 @@ export function refreshChannel(name: string): Promise<Job> {
   return postJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/refresh`)
 }
 
+export function updateChannelContent(name: string): Promise<Job> {
+  return postJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/update`)
+}
+
 export function redeployChannel(name: string): Promise<Job> {
   return postJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/redeploy`)
+}
+
+export function terminateChannel(name: string): Promise<Job> {
+  return postJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/terminate`)
 }
 
 // ---------------------------------------------------------------------------

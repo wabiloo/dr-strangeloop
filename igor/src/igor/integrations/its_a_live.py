@@ -9,8 +9,9 @@ Two kinds of operations:
 - Fast, read-only ones (`list_channels`, `get_status`, `get_outputs`) are
   run synchronously (single AWS API call, <1s) and return parsed JSON.
 - Long-running ones (`create`, `spark`, `start`, `stop`, `refresh`,
-  `redeploy`) are dispatched as background Jobs (see jobs/runner.py) since
-  they can block for minutes (cdk deploy, ECS Express canary, etc).
+  `update`, `redeploy`, `terminate`) are dispatched as background Jobs
+  (see jobs/runner.py) since they can block for minutes (cdk
+  deploy/destroy, ECS Express canary, etc).
 """
 
 from __future__ import annotations
@@ -158,8 +159,9 @@ def get_outputs(config_path: str) -> dict:
 
 def spawn_job(job_type: str, config_path: str, channel_name: str, extra_args: list[str] | None = None) -> Job:
     """Dispatches one of the long-running channel.py subcommands
-    (create/spark/start/stop/refresh/redeploy) as a background Job."""
-    if job_type not in ("create", "spark", "start", "stop", "refresh", "redeploy"):
+    (create/spark/start/stop/refresh/update/redeploy/terminate) as a
+    background Job."""
+    if job_type not in ("create", "spark", "start", "stop", "refresh", "update", "redeploy", "terminate"):
         raise ValueError(f"Unsupported job_type: {job_type!r}")
     cmd = _channel_py_cmd([job_type, *(extra_args or [])], config_path=config_path, as_json=False)
     return runner.spawn(job_type, cmd, cwd=paths.ITS_A_LIVE_DIR, channel_name=channel_name)

@@ -18,7 +18,7 @@ Outputs from all three tools — `.ts` files, HTML reports, frame timeline direc
 ```
 1. franken-ts        →  build outputs/my_stream.ts  (with SCTE-35 markers)
 2. frame-extractor   →  inspect outputs/my_stream.ts frame-by-frame
-3. its-a-live        →  spark (upload/bake), deploy, start, verify playback
+3. its-a-live        →  deploy (Infrastructure, one-time) → spark, start (Stream), verify playback
 ```
 
 ## Prerequisites

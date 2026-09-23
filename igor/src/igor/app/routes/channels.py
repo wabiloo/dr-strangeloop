@@ -256,6 +256,21 @@ def refresh_channel(name: str) -> dict:
     return _spawn("refresh", name)
 
 
+@router.post("/{name}/update")
+def update_channel_content(name: str) -> dict:
+    """Spark then refresh in one step -- the routine "ship new content to
+    a running channel" action (see channel.py's `update` command)."""
+    return _spawn("update", name)
+
+
 @router.post("/{name}/redeploy")
 def redeploy_channel(name: str) -> dict:
     return _spawn("redeploy", name)
+
+
+@router.post("/{name}/terminate")
+def terminate_channel(name: str) -> dict:
+    """Tears the CloudFormation stack down for good (`cdk destroy`) --
+    see channel.py's `terminate` command. Not available for local-docker
+    (no stack); `stop` alone is complete teardown there."""
+    return _spawn("terminate", name)

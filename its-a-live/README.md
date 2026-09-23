@@ -138,11 +138,14 @@ uv run python channel.py start      # go live, prints playback URLs
 
 uv run python channel.py stop       # stop paying for compute
 cdk destroy ItsALiveStack-<name>-<backend>
+# ...or, equivalently: uv run python channel.py terminate
 ```
 
 ## Updating content on a running channel
 
 ```bash
+uv run python channel.py update     # spark, then refresh, in one step
+# ...or the two steps separately, for finer-grained control:
 uv run python channel.py spark      # re-bake/re-upload new content to S3
 uv run python channel.py refresh    # pick it up on the running channel
 ```
@@ -158,7 +161,21 @@ uv run python channel.py refresh    # pick it up on the running channel
 ## `channel.py` reference
 
 Every command works the same way regardless of backend — `[deploy].backend`
-in your config file picks the implementation.
+in your config file picks the implementation. Commands split into two
+groups: **Infrastructure** (does the stack/container exist at all) and
+**Stream** (is content actually playing right now).
+
+### Infrastructure
+
+| Command | `ecs-express` | `aws-media` | `local-docker` |
+|---|---|---|---|
+| `create` | First-time bootstrap: ensure the shared cluster stack, `spark`, `cdk deploy`, `start` | First-time bootstrap: `spark`, `cdk deploy`, `start` | First-time bootstrap: `spark`, `start` (no cdk) |
+| `redeploy` | Delete a broken stack if needed (and ensure the shared cluster stack is deployed), then `cdk deploy` | Delete a broken stack if needed, then `cdk deploy` | No stack to redeploy — pure alias for `refresh` |
+| `terminate` | `cdk destroy` the stack for good — stops billing, does not bring anything back | `cdk destroy` the stack for good — stops billing, does not bring anything back | Errors — no stack; `stop` alone is complete teardown (igor's UI hides this action for local-docker rather than showing an error) |
+| `outputs` | CloudFormation stack outputs | CloudFormation stack outputs | Errors — no stack; use `status` instead (igor's UI hides this action for local-docker rather than showing an error) |
+| `list` | List channels + stack status found under a directory of TOML configs | (same) | (same, using Docker container status in place of stack status) |
+
+### Stream
 
 | Command | `ecs-express` | `aws-media` | `local-docker` |
 |---|---|---|---|
@@ -166,12 +183,13 @@ in your config file picks the implementation.
 | `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Start the MediaLive channel, wait for `RUNNING` | `docker run` a container bind-mounting the baked package (building the image on first use); epoch defaults to the Unix epoch, `--epoch-utc` works the same as `ecs-express` |
 | `stop` | Scale ECS to 0 tasks (shared ALB keeps running for other channels) | Stop the MediaLive channel, wait for `IDLE` | `docker rm -f` the container |
 | `refresh` | Force a new ECS task launch to re-sync S3 content | Full stop→start cycle (no hot-reload exists) | Recreate the container (seconds, no canary) |
+| `update` | `spark` then `refresh` in one step — the routine "ship new content to a running channel" combo | (same) | (same) |
 | `status` | ECS service scaling/status | MediaLive channel state | Docker container status |
-| `outputs` | CloudFormation stack outputs | CloudFormation stack outputs | N/A — no stack; use `status` |
-| `redeploy` | Delete a broken stack if needed (and ensure the shared cluster stack is deployed), then `cdk deploy` | Delete a broken stack if needed, then `cdk deploy` | N/A — no stack; equivalent to `refresh` |
 
 `local-docker` has no CloudFormation/CDK involvement whatsoever: no
-`cdk deploy`/`cdk destroy` step exists for it, and playback URLs are
+`cdk deploy`/`cdk destroy` step exists for it, `redeploy`, `terminate`
+and `outputs` don't apply (igor hides all three for local-docker channels
+rather than showing an inapplicable control), and playback URLs are
 always `http://localhost:<channel.port>/...`.
 
 ## Notes / gotchas

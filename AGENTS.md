@@ -37,7 +37,7 @@ data/playlists/*.yaml
    data/channels/<name>.toml   (its-a-live channel config: backend, S3, AWS region)
         │
         ▼
-   its-a-live/channel.py        →  spark (stage input) → deploy → start
+   its-a-live/channel.py        →  create (Infrastructure: deploy) → spark/start/stop/refresh (Stream)
         │
         ├── backend = "aws-media"     → cdk deploy → MediaLive + MediaPackage v1
         │                               (real live transcoding)

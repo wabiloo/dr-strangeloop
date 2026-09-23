@@ -11,8 +11,8 @@ instructions.
 
 Every operation this console performs ultimately shells out to the same
 tools an agent would use directly: `franken-ts <config.yaml>`,
-`its-a-live/channel.py <cmd>`, and `cdk deploy` (via `channel.py create`/
-`redeploy`). It adds:
+`its-a-live/channel.py <cmd>`, and `cdk deploy`/`cdk destroy` (via
+`channel.py create`/`redeploy`/`terminate`). It adds:
 
 - a visual editor for franken-ts YAML, schema-driven from
   `franken_ts.config.Config.model_json_schema()` (so it can't drift from
@@ -33,7 +33,10 @@ another agent unless you're specifically building on its HTTP API.
 | Prefix | Purpose |
 |---|---|
 | `GET/PUT/DELETE /api/v1/playlists/*` | franken-ts YAML playlist CRUD + `/schema` (JSON Schema) + `/duplicate` (copy under a new name) + `/build` (spawns a job) |
-| `GET/POST/DELETE /api/v1/channels/*` | its-a-live TOML CRUD, `/status`, `/outputs`, `/health` (ecs-express), and job-spawning `/create`, `/spark`, `/start`, `/stop`, `/refresh`, `/redeploy` |
+| `GET/POST/DELETE /api/v1/channels/*` | its-a-live TOML CRUD (igor-only, no `channel.py` equivalent) |
+| ↳ Infrastructure: `/create`, `/redeploy`, `/terminate` (job-spawning), `/outputs` | does the stack/container exist -- `/redeploy`, `/terminate` and `/outputs` are no-ops/unavailable for local-docker channels (no stack); igor's UI hides all three for local-docker. No `/list` -- igor lists channels from its local TOML store directly, not by shelling out to `channel.py list` |
+| ↳ Stream: `/spark`, `/start`, `/stop`, `/refresh`, `/update` (job-spawning), `/status` | is content actually playing -- available for every backend. `/update` is `/spark`+`/refresh` combined (channel.py's `update`); igor's UI shows it instead of a separate Spark/Refresh pair once the channel is running, and plain `/spark` otherwise (staging never depends on deploy state) |
+| ↳ `/health` (ecs-express) | loop-dee-loop `serve.py` proxy, not a `channel.py` command |
 | `GET /api/v1/jobs/*` | poll job status/log (`?log_offset=` for incremental tailing) |
 
 See `src/igor/app/routes/*.py` for the authoritative request/response
@@ -41,8 +44,6 @@ shapes, mirrored in `frontend/src/api/types.ts`.
 
 ## Known gaps (not yet built)
 
-- No `cdk destroy` wiring (only create/redeploy) -- tearing down a
-  channel's AWS stack still needs the CLI directly.
 - No log tailing (CloudWatch Logs) yet -- job logs only cover the
   subprocess's own stdout/stderr, not the deployed ECS task's/MediaLive
   channel's runtime logs.

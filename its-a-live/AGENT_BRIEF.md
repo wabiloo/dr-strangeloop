@@ -104,9 +104,10 @@ This mirrors the known-good reference channel `bpkio_default_live_scte35`.
 
 ## Helper script: `channel.py`
 
-`boto3` subcommands: `spark`, `start`, `stop`, `refresh`, `status`, `outputs`,
-`redeploy`. Stack name `ItsALiveStack-<name>-aws-media`; region from
-`config.toml`.
+`boto3` subcommands split into Infrastructure (`create`, `redeploy`,
+`terminate`, `outputs`, `list`) and Stream (`spark`, `start`, `stop`,
+`refresh`, `update` [= `spark`+`refresh`], `status`). Stack name
+`ItsALiveStack-<name>-aws-media`; region from `config.toml`.
 
 ---
 
