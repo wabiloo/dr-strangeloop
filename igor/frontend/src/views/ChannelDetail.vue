@@ -680,7 +680,7 @@ watch(() => props.name, reload)
             v-for="sec in configSections"
             :key="sec.section"
             class="surface-100 border-round p-2"
-            style="border-left: 3px solid var(--p-primary-color, #0e7490)"
+            style="border-left: 3px solid var(--p-primary-color, #b91c1c)"
           >
             <div class="text-color-secondary font-semibold mb-1" style="font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase">
               {{ sec.title }}

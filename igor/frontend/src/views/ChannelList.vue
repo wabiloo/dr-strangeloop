@@ -174,7 +174,7 @@ onMounted(load)
 
 <style scoped>
 .playlist-link {
-  color: var(--p-primary-color, #0e7490);
+  color: var(--p-primary-color, #b91c1c);
   text-decoration: none;
   font-weight: 600;
 }

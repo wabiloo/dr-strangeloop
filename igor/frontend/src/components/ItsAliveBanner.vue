@@ -80,7 +80,7 @@ defineExpose({ trigger })
   padding: 1.1rem 2.2rem;
   border-radius: 999px;
   background: var(--p-content-background, #fff);
-  border: 2px solid var(--p-primary-color, #0e7490);
+  border: 2px solid var(--p-primary-color, #b91c1c);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
   color: var(--p-text-color, inherit);
   pointer-events: none;
@@ -91,7 +91,7 @@ defineExpose({ trigger })
   width: 3rem;
   height: 3rem;
   flex-shrink: 0;
-  color: var(--p-primary-color, #0e7490);
+  color: var(--p-primary-color, #b91c1c);
   animation: its-alive-flicker 1.3s ease-in-out infinite;
 }
 
@@ -107,13 +107,13 @@ defineExpose({ trigger })
     filter: drop-shadow(0 0 0 transparent);
   }
   12% {
-    filter: drop-shadow(0 0 7px var(--p-primary-color, #0e7490));
+    filter: drop-shadow(0 0 7px var(--p-primary-color, #b91c1c));
   }
   24% {
     filter: drop-shadow(0 0 0 transparent);
   }
   34% {
-    filter: drop-shadow(0 0 9px var(--p-primary-color, #0e7490));
+    filter: drop-shadow(0 0 9px var(--p-primary-color, #b91c1c));
   }
   46% {
     filter: drop-shadow(0 0 0 transparent);

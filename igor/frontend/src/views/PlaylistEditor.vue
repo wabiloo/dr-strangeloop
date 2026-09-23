@@ -2127,14 +2127,14 @@ function applyHexPopover() {
 }
 
 :deep(.p-tab-active) {
-  color: var(--p-primary-color, #0e7490);
+  color: var(--p-primary-color, #b91c1c);
   background: var(--p-primary-50, #ecfeff);
 }
 
 :deep(.p-tablist-active-bar) {
   height: 3px;
   border-radius: 2px;
-  background: var(--p-primary-color, #0e7490);
+  background: var(--p-primary-color, #b91c1c);
   /* Shift down so the underline sits on top of the gray divider line
    * instead of leaving a visible gap above it. */
   bottom: -3px;
