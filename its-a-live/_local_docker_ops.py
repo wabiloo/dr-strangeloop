@@ -22,6 +22,8 @@ import socket
 import subprocess
 import sys
 
+from _reachability import check_manifest_reachable
+
 _LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 _IMAGE_TAG = "loop-dee-loop:local"
 _CONTAINER_PREFIX = "its-a-live-"
@@ -379,14 +381,20 @@ def status(cfg, session, outputs):
     # there simply isn't a port to report.
     raw_port = cfg.get("docker", {}).get("port", "auto")
     port = int(raw_port) if raw_port != "auto" else _running_port(name)
+    hls_url = f"http://localhost:{port}/master.m3u8" if docker_status == "running" and port else None
+    dash_url = f"http://localhost:{port}/manifest.mpd" if docker_status == "running" and port else None
     result = {
         "backend": "local-docker",
         "container_name": name,
         "status": docker_status or "not created",
         "port": port,
-        "hls_url": f"http://localhost:{port}/master.m3u8" if docker_status == "running" and port else None,
-        "dash_url": f"http://localhost:{port}/manifest.mpd" if docker_status == "running" and port else None,
+        "hls_url": hls_url,
+        "dash_url": dash_url,
+        # Only worth network-checking once the container itself claims to
+        # be running -- see _reachability.py.
+        "reachable": check_manifest_reachable(hls_url, dash_url) if docker_status == "running" else None,
     }
     print(f"Container {name}: status={result['status']}"
-          + (f", port={port}" if port else ", port=not yet assigned"))
+          + (f", port={port}" if port else ", port=not yet assigned")
+          + (f", manifest {'reachable' if result['reachable'] else 'UNREACHABLE'}" if result["reachable"] is not None else ""))
     return result

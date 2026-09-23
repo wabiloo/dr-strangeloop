@@ -125,7 +125,15 @@ uv run python channel.py -c <config.toml> spark    # stage input (bake or upload
 uv run python channel.py -c <config.toml> start    # go live, prints playback URLs
 uv run python channel.py -c <config.toml> stop     # stop paying for compute (or stop the local container)
 uv run python channel.py -c <config.toml> refresh  # pick up newly-sparked content on a running channel
-uv run python channel.py -c <config.toml> status   # current status
+uv run python channel.py -c <config.toml> status   # current status -- "running" infra doesn't imply
+                                                    # HlsPlaybackUrl/DashPlaybackUrl are actually
+                                                    # serving; status/list report a `reachable`
+                                                    # true/false/null field from an actual network
+                                                    # check of those URLs (null = not checked because
+                                                    # the backend's own raw status already says
+                                                    # stopped -- see _reachability.py). igor's UI
+                                                    # surfaces `reachable: false` as a distinct
+                                                    # "unreachable" phase, not "running".
 
 # updating content on a running channel, in one step:
 uv run python channel.py -c <config.toml> update   # spark, then refresh

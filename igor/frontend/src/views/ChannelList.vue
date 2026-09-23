@@ -11,7 +11,7 @@ import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { deleteChannel, getJob, listChannels, startChannel, stopChannel } from '../api/client'
 import type { ChannelListItem, Job } from '../api/types'
-import { PHASE_LABEL, listItemPhase, phaseSeverity } from '../utils/channelPhase'
+import { PHASE_LABEL, isUpButMaybeUnreachable, listItemPhase, phaseSeverity } from '../utils/channelPhase'
 
 const router = useRouter()
 const confirm = useConfirm()
@@ -118,7 +118,7 @@ async function confirmDelete(event: MouseEvent, channel: ChannelListItem) {
 // disables it, so mid-action the row doesn't visually shift.
 function isStartRelevant(channel: ChannelListItem) {
   const phase = listItemPhase(channel)
-  return channel.backend === 'local-docker' ? phase !== 'running' : phase === 'stopped'
+  return channel.backend === 'local-docker' ? !isUpButMaybeUnreachable(phase) : phase === 'stopped'
 }
 
 function isStartDisabled(channel: ChannelListItem) {
@@ -126,7 +126,7 @@ function isStartDisabled(channel: ChannelListItem) {
 }
 
 function isStopRelevant(channel: ChannelListItem) {
-  return listItemPhase(channel) === 'running'
+  return isUpButMaybeUnreachable(listItemPhase(channel))
 }
 
 function isStopDisabled(channel: ChannelListItem) {
@@ -241,20 +241,20 @@ onBeforeUnmount(() => {
           <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>
-      <Column header="Running status">
+      <Column header="State">
         <template #body="{ data }">
           <Tag :value="runningStatusLabel(data)" :severity="statusSeverity(data)" />
-        </template>
-      </Column>
-      <Column header="Stack status">
-        <template #body="{ data }">
-          <Tag v-if="data.stack_status" :value="data.stack_status" :severity="stackSeverity(data)" />
-          <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>
       <Column header="Stack">
         <template #body="{ data }">
           <span v-if="stackOrContainerName(data)">{{ stackOrContainerName(data) }}</span>
+          <span v-else class="text-color-secondary text-sm">--</span>
+        </template>
+      </Column>
+      <Column header="Stack status">
+        <template #body="{ data }">
+          <Tag v-if="data.stack_status" :value="data.stack_status" :severity="stackSeverity(data)" />
           <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>

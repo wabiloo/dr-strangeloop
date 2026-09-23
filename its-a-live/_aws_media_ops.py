@@ -11,6 +11,8 @@ import os
 import sys
 import time
 
+from _reachability import check_manifest_reachable
+
 
 def spark(cfg, session, channel_name, extra_args=None):
     """Upload the franken-ts .ts file to S3 as MediaLive's TS_FILE input
@@ -105,12 +107,18 @@ def status(cfg, session, outputs):
     channel_id = _channel_id(outputs)
     ml = session.client("medialive")
     state = ml.describe_channel(ChannelId=channel_id)["State"]
+    hls_url = outputs.get("HlsPlaybackUrl")
+    dash_url = outputs.get("DashPlaybackUrl")
     result = {
         "backend": "aws-media",
         "channel_id": channel_id,
         "status": state,
-        "hls_url": outputs.get("HlsPlaybackUrl"),
-        "dash_url": outputs.get("DashPlaybackUrl"),
+        "hls_url": hls_url,
+        "dash_url": dash_url,
+        # Only worth network-checking once MediaLive itself claims to be
+        # serving -- see _reachability.py.
+        "reachable": check_manifest_reachable(hls_url, dash_url) if state in ("RUNNING", "RECOVERING") else None,
     }
-    print(f"Channel {channel_id}: {state}")
+    print(f"Channel {channel_id}: {state}"
+          + (f" (manifest {'reachable' if result['reachable'] else 'UNREACHABLE'})" if result["reachable"] is not None else ""))
     return result

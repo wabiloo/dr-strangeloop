@@ -107,6 +107,11 @@ export interface ChannelListItem {
   live_status?: string | null
   min_tasks?: number | null
   max_tasks?: number | null
+  // Whether HlsPlaybackUrl/DashPlaybackUrl actually returned a manifest
+  // (not just whether the backend's own infra claims to be serving) --
+  // see its-a-live's _reachability.py. null/absent when not checked
+  // (channel not settled/running, or the check itself couldn't run).
+  reachable?: boolean | null
 }
 
 export interface ChannelStatus {
@@ -125,6 +130,9 @@ export interface ChannelStatus {
   // local-docker only -- the resolved port, even when docker.port is
   // "auto" in the config; null if no container has ever been created yet.
   port?: number | null
+  // Whether HlsPlaybackUrl/DashPlaybackUrl actually returned a manifest --
+  // see its-a-live's _reachability.py. null/absent when not checked.
+  reachable?: boolean | null
 }
 
 export type ChannelOutputs = Record<string, string>

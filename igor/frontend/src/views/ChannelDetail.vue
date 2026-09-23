@@ -28,7 +28,7 @@ import {
   updateChannelContent,
 } from '../api/client'
 import type { ChannelCreatePayload, ChannelHealth, ChannelOutputs, ChannelStatus, Job } from '../api/types'
-import { type Phase, PHASE_LABEL, liveStatusPhase, phaseSeverity } from '../utils/channelPhase'
+import { type Phase, PHASE_LABEL, isUpButMaybeUnreachable, liveStatusPhase, phaseSeverity } from '../utils/channelPhase'
 
 const props = defineProps<{ name: string }>()
 
@@ -288,7 +288,7 @@ const firstDeployAction = computed<ActionDef>(() => ({
     '~5-10 min -- MediaLive channel provisioning and startup. This is normal, not a hang.',
   ),
   fn: () => createChannel(props.name),
-  disabled: () => (backend.value === 'local-docker' ? phase.value === 'running' : phase.value !== 'not-deployed'),
+  disabled: () => (backend.value === 'local-docker' ? isUpButMaybeUnreachable(phase.value) : phase.value !== 'not-deployed'),
   disabledReason: () =>
     backend.value === 'local-docker'
       ? 'Already running -- use the actions on the right to manage it.'
@@ -305,7 +305,7 @@ const firstDeployAction = computed<ActionDef>(() => ({
 // container existing (see channel.py's docstring: "content MUST be staged
 // before the channel stack is deployed").
 const contentAction = computed<ActionDef>(() => {
-  if (phase.value === 'running') {
+  if (isUpButMaybeUnreachable(phase.value)) {
     return {
       key: 'update',
       label: 'Update content',
@@ -365,7 +365,7 @@ const streamActions = computed<ActionDef[]>(() => [
     // local-docker: `start` IS `docker run` -- it creates the container
     // fresh, so it works straight from 'not-deployed' too, same as the
     // Galvanise button above already allows for this backend.
-    disabled: () => (backend.value === 'local-docker' ? phase.value === 'running' : phase.value !== 'stopped'),
+    disabled: () => (backend.value === 'local-docker' ? isUpButMaybeUnreachable(phase.value) : phase.value !== 'stopped'),
     disabledReason: () =>
       backend.value === 'local-docker'
         ? 'Channel is already running.'
@@ -385,7 +385,7 @@ const streamActions = computed<ActionDef[]>(() => [
     ),
     eta: byBackend('~5-10s.', '~10-30s.', 'Up to a couple of minutes.'),
     fn: () => stopChannel(props.name),
-    disabled: () => phase.value !== 'running',
+    disabled: () => !isUpButMaybeUnreachable(phase.value),
     disabledReason: () =>
       phase.value === 'not-deployed' ? 'Requires the channel to be deployed first.' : 'Channel is already stopped.',
   },
@@ -439,7 +439,7 @@ const infrastructureActions = computed<ActionDef[]>(() => {
       disabled: () => phase.value !== 'stopped' && phase.value !== 'failed',
       disabledReason: () => {
         if (phase.value === 'not-deployed') return 'Nothing to terminate -- channel is not deployed.'
-        if (phase.value === 'running') return 'Stop the channel before terminating its stack.'
+        if (isUpButMaybeUnreachable(phase.value)) return 'Stop the channel before terminating its stack.'
         if (phase.value === 'transitioning') return 'Status is transitioning -- wait for it to settle.'
         return 'Status is still loading.'
       },
@@ -536,9 +536,9 @@ async function onJobFinished(job: Job) {
     detail: `See the job log above for details.`,
     life: 4000,
   })
-  const wasRunning = phaseBeforeAction.value === 'running'
+  const wasRunning = phaseBeforeAction.value === 'alive'
   await loadStatus()
-  if (job.status === 'succeeded' && !wasRunning && phase.value === 'running') {
+  if (job.status === 'succeeded' && !wasRunning && phase.value === 'alive') {
     itsAliveBanner.value?.trigger()
   }
 }
@@ -569,8 +569,10 @@ watch(() => props.name, reload)
     <div class="flex align-items-center gap-2">
       <h2 class="m-0">{{ name }}</h2>
       <Tag v-if="status" :value="status.backend" />
-      <Tag v-if="status" :value="status.status" :severity="phaseSeverity(phase)" />
-      <Tag v-else :value="PHASE_LABEL[phase]" :severity="phaseSeverity(phase)" />
+      <Tag :value="PHASE_LABEL[phase]" :severity="phaseSeverity(phase)" />
+      <span v-if="status" class="text-color-secondary text-xs" :title="'Raw backend status: ' + status.status">
+        ({{ status.status }})
+      </span>
     </div>
 
     <Message v-if="statusError && !statusErrorIsMissingStack" severity="warn">
@@ -579,6 +581,13 @@ watch(() => props.name, reload)
         <summary class="cursor-pointer text-sm">Show details</summary>
         <pre class="job-log mt-2">{{ statusError }}</pre>
       </details>
+    </Message>
+
+    <Message v-if="phase === 'unreachable'" severity="error" :closable="false">
+      Infrastructure reports running, but HlsPlaybackUrl/DashPlaybackUrl did not return a manifest
+      on the last check. Common causes: a MediaPackage/CloudFront endpoint still propagating right
+      after deploy, an empty target group, or content not actually Sparked/Started yet. Re-check
+      with Refresh, or re-visit this page in a minute if you just deployed.
     </Message>
 
     <PlaybackPanel

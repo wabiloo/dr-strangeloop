@@ -14,6 +14,8 @@ import subprocess
 import sys
 import time
 
+from _reachability import check_manifest_reachable
+
 _LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 
 
@@ -251,15 +253,22 @@ def status(cfg, session, outputs):
     service = ecs_client.describe_express_gateway_service(serviceArn=service_arn)["service"]
     active = service["activeConfigurations"][0]
     scaling = active.get("scalingTarget", {})
+    min_tasks = scaling.get("minTaskCount")
+    hls_url = outputs.get("HlsPlaybackUrl")
+    dash_url = outputs.get("DashPlaybackUrl")
     result = {
         "backend": "ecs-express",
         "service_name": service["serviceName"],
         "status": service["status"]["statusCode"],
-        "min_tasks": scaling.get("minTaskCount"),
+        "min_tasks": min_tasks,
         "max_tasks": scaling.get("maxTaskCount"),
-        "hls_url": outputs.get("HlsPlaybackUrl"),
-        "dash_url": outputs.get("DashPlaybackUrl"),
+        "hls_url": hls_url,
+        "dash_url": dash_url,
+        # Only worth network-checking once actually scaled up -- see
+        # _reachability.py.
+        "reachable": check_manifest_reachable(hls_url, dash_url) if min_tasks else None,
     }
     print(f"Service {result['service_name']}: status={result['status']} "
-          f"minTasks={result['min_tasks']} maxTasks={result['max_tasks']}")
+          f"minTasks={result['min_tasks']} maxTasks={result['max_tasks']}"
+          + (f" (manifest {'reachable' if result['reachable'] else 'UNREACHABLE'})" if result["reachable"] is not None else ""))
     return result

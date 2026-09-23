@@ -239,7 +239,15 @@ def cmd_list(config_path, extra_args, as_json=False):
     stack; "stack_status" instead reflects the local container's Docker
     status, and "container_name" (None for the other two backends) is
     the deterministic `its-a-live-<name>` container name in place of a
-    stack name."""
+    stack name.
+
+    Each settled/running channel also gets a "reachable" field (see
+    _reachability.py) -- a network check of whether HlsPlaybackUrl/
+    DashPlaybackUrl actually return a manifest, not just whether the
+    backend's own infrastructure claims to be up. This adds real latency
+    per running channel (a several-second timeout if the check fails), on
+    top of the one CloudFormation/ECS/MediaLive API call already made for
+    each one."""
     if len(extra_args) > 1:
         sys.exit("Usage: channel.py list [directory]")
     directory = extra_args[0] if extra_args else os.path.dirname(os.path.abspath(config_path))
@@ -264,6 +272,7 @@ def cmd_list(config_path, extra_args, as_json=False):
                 # container name (see _local_docker_ops.status()).
                 "container_name": result.get("container_name"),
                 "stack_status": result.get("status"),
+                "reachable": result.get("reachable"),
             })
             continue
         stack_name = _stack_name(cfg)
@@ -281,16 +290,18 @@ def cmd_list(config_path, extra_args, as_json=False):
         # nothing about whether the service behind it is actually serving
         # (ecs-express scaled to 0, aws-media IDLE) or not, unlike
         # local-docker above (whose Docker status already IS the live
-        # signal). Fetch the cheap live status too, so the list -- like
-        # local-docker's -- reflects the real running/stopped state, not
-        # just "stack exists". Best-effort: swallow failures (e.g. a
-        # missing output on a freshly-created stack) and fall back to
-        # stack_status alone.
+        # signal). Fetch the live status too (including the manifest
+        # reachability check above), so the list -- like local-docker's --
+        # reflects the real running/stopped/unreachable state, not just
+        # "stack exists". Best-effort: swallow failures (e.g. a missing
+        # output on a freshly-created stack) and fall back to stack_status
+        # alone.
         if status_value and _stack_status_is_settled(status_value):
             try:
                 outputs = _cf_outputs(cfg, stack_name)
                 live = _ops(cfg).status(cfg, _session(cfg), outputs)
                 entry["live_status"] = live.get("status")
+                entry["reachable"] = live.get("reachable")
                 if backend == "ecs-express":
                     entry["min_tasks"] = live.get("min_tasks")
                     entry["max_tasks"] = live.get("max_tasks")
@@ -310,6 +321,8 @@ def cmd_list(config_path, extra_args, as_json=False):
             live = f" tasks={c['min_tasks']}/{c['max_tasks']}"
         elif c.get("live_status"):
             live = f" live={c['live_status']}"
+        if c.get("reachable") is not None:
+            live += f" manifest={'reachable' if c['reachable'] else 'UNREACHABLE'}"
         print(f"  {c['name']:<20} backend={c['backend']:<12} "
               f"stack_status={c['stack_status'] or 'not deployed':<20}{live} {c['config_path']}")
 
