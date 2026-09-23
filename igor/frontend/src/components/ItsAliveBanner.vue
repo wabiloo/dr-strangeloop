@@ -33,17 +33,7 @@ defineExpose({ trigger })
     </Transition>
     <Transition name="its-alive">
       <div v-if="visible" class="its-alive-banner" role="status" aria-live="polite">
-        <svg class="its-alive-icon" viewBox="0 0 64 64" aria-hidden="true">
-          <rect x="12" y="14" width="40" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="3" />
-          <path d="M14 26 H50 V49 Q50 58 41 58 H23 Q14 58 14 49 Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round" />
-          <circle cx="9" cy="39" r="4" fill="currentColor" />
-          <circle cx="55" cy="39" r="4" fill="currentColor" />
-          <path d="M20 30 L28 33.5 M44 30 L36 33.5" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
-          <circle cx="24" cy="41" r="2.4" fill="currentColor" />
-          <circle cx="40" cy="41" r="2.4" fill="currentColor" />
-          <path d="M22 50 L26 47 L30 50 L34 47 L38 50 L42 47" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span class="its-alive-text">It's a Live!</span>
+        <img class="its-alive-image" src="/alive.png" alt="It's a Live!" />
       </div>
     </Transition>
   </Teleport>
@@ -76,47 +66,37 @@ defineExpose({ trigger })
   z-index: 2000;
   display: flex;
   align-items: center;
-  gap: 1rem;
-  padding: 1.1rem 2.2rem;
-  border-radius: 999px;
-  background: var(--p-content-background, #fff);
-  border: 2px solid var(--p-primary-color, #b91c1c);
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
-  color: var(--p-text-color, inherit);
+  justify-content: center;
   pointer-events: none;
-  white-space: nowrap;
 }
 
-.its-alive-icon {
-  width: 3rem;
-  height: 3rem;
-  flex-shrink: 0;
-  color: var(--p-primary-color, #b91c1c);
+.its-alive-image {
+  width: 24rem;
+  max-width: 85vw;
+  height: auto;
+  display: block;
+  filter: drop-shadow(0 12px 36px rgba(0, 0, 0, 0.22));
   animation: its-alive-flicker 1.3s ease-in-out infinite;
-}
-
-.its-alive-text {
-  font-weight: 700;
-  font-size: 1.75rem;
-  letter-spacing: 0.02em;
 }
 
 @keyframes its-alive-flicker {
   0%,
   100% {
-    filter: drop-shadow(0 0 0 transparent);
+    filter: drop-shadow(0 12px 36px rgba(0, 0, 0, 0.22)) drop-shadow(0 0 0 transparent);
   }
   12% {
-    filter: drop-shadow(0 0 7px var(--p-primary-color, #b91c1c));
+    filter: drop-shadow(0 12px 36px rgba(0, 0, 0, 0.22))
+      drop-shadow(0 0 16px var(--p-primary-color, #b91c1c));
   }
   24% {
-    filter: drop-shadow(0 0 0 transparent);
+    filter: drop-shadow(0 12px 36px rgba(0, 0, 0, 0.22)) drop-shadow(0 0 0 transparent);
   }
   34% {
-    filter: drop-shadow(0 0 9px var(--p-primary-color, #b91c1c));
+    filter: drop-shadow(0 12px 36px rgba(0, 0, 0, 0.22))
+      drop-shadow(0 0 20px var(--p-primary-color, #b91c1c));
   }
   46% {
-    filter: drop-shadow(0 0 0 transparent);
+    filter: drop-shadow(0 12px 36px rgba(0, 0, 0, 0.22)) drop-shadow(0 0 0 transparent);
   }
 }
 
