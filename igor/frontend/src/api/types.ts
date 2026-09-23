@@ -117,6 +117,15 @@ export interface ChannelListItem {
 export interface ChannelStatus {
   backend: 'aws-media' | 'ecs-express' | 'local-docker'
   status: string
+  // CloudFormation StackStatus for aws-media/ecs-express (absent for
+  // local-docker, which has no stack). Set even while `status` itself is
+  // a CFN-status fallback (stack mid create/update/delete, or gone) rather
+  // than the backend's own live status -- see its-a-live's cmd_status,
+  // which skips querying MediaLive/ECS entirely until the stack is
+  // "settled", to avoid e.g. MediaLive's DescribeChannel 404ing mid
+  // DELETE_IN_PROGRESS once the channel resource itself is already gone
+  // but other stack resources are still being torn down.
+  stack_status?: string | null
   hls_url?: string | null
   dash_url?: string | null
   // ecs-express only:

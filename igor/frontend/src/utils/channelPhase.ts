@@ -24,6 +24,7 @@ export type Phase =
   | 'alive'
   | 'unreachable'
   | 'transitioning'
+  | 'stopping'
   | 'deleting'
   | 'failed'
   | 'unknown'
@@ -32,6 +33,7 @@ const PHASE_SEVERITY: Record<Phase, 'success' | 'danger' | 'warn' | 'info' | 'se
   alive: 'success',
   unreachable: 'danger',
   transitioning: 'info',
+  stopping: 'info',
   deleting: 'warn',
   stopped: 'warn',
   failed: 'danger',
@@ -54,6 +56,11 @@ export const PHASE_LABEL: Record<Phase, string> = {
   // not actually alive/responsive.
   unreachable: 'Undead',
   transitioning: 'Reanimating',
+  // The inverse of 'transitioning'/Reanimating -- infra winding the
+  // experiment down toward Dormant rather than up toward alive (MediaLive
+  // STOPPING, ECS DRAINING). Distinct from 'deleting'/Dismantling, which
+  // tears the stack itself down rather than just pausing it.
+  stopping: 'Sedating',
   // Being torn down specifically -- distinct from 'transitioning' so the
   // label doesn't imply coming to life while the stack is actually being
   // deleted (see cfnStackPhase/awsMediaLivePhase).
@@ -72,8 +79,11 @@ export const PHASE_LABEL: Record<Phase, string> = {
 // i.e. the set of phases where Stop is meaningful / Start should be
 // hidden, as opposed to genuinely stopped/never-deployed. Exported so
 // ChannelList.vue/ChannelDetail.vue don't each re-derive this union.
+// Includes 'stopping' -- infra is still winding down, so Stop is a no-op
+// (already in progress) but Start/Terminate are just as premature as they
+// are for 'alive'/'unreachable'.
 export function isUpButMaybeUnreachable(phase: Phase): boolean {
-  return phase === 'alive' || phase === 'unreachable'
+  return phase === 'alive' || phase === 'unreachable' || phase === 'stopping'
 }
 
 // Downgrades an 'alive' verdict to 'unreachable' when the manifest check
@@ -130,9 +140,10 @@ function awsMediaLivePhase(status: string, reachable?: boolean | null): Phase {
       return withReachability('alive', reachable)
     case 'CREATING':
     case 'STARTING':
-    case 'STOPPING':
     case 'UPDATING':
       return 'transitioning'
+    case 'STOPPING':
+      return 'stopping'
     case 'DELETING':
       return 'deleting'
     case 'IDLE':
@@ -154,7 +165,7 @@ function awsMediaLivePhase(status: string, reachable?: boolean | null): Phase {
 // `minTasks` alone can't tell "settled at 0" apart from "still draining
 // down to 0", so DRAINING takes priority over the minTasks-based verdict.
 function ecsExpressPhase(liveStatus: string | null | undefined, minTasks: number | null | undefined, reachable?: boolean | null): Phase {
-  if (liveStatus === 'DRAINING') return 'transitioning'
+  if (liveStatus === 'DRAINING') return 'stopping'
   if (minTasks === 0) return 'stopped'
   if ((minTasks ?? 0) > 0) return withReachability('alive', reachable)
   return 'unknown'
@@ -189,6 +200,15 @@ export function listItemPhase(
 
 /** Phase for a channel's live `/status` response. */
 export function liveStatusPhase(status: ChannelStatus): Phase {
+  // Check the CFN stack status first, same as listItemPhase -- while the
+  // stack is mid create/update/delete/broken (or gone), `status.status`
+  // is only a CFN-status fallback string (see its-a-live's cmd_status),
+  // not a real MediaLive/ECS status worth feeding to the backend-specific
+  // mapping below.
+  if (status.stack_status != null) {
+    const stackPhase = cfnStackPhase(status.stack_status)
+    if (stackPhase !== 'alive') return stackPhase
+  }
   if (status.backend === 'aws-media') return awsMediaLivePhase(status.status, status.reachable)
   if (status.backend === 'local-docker') return localDockerPhase(status.status, status.reachable)
   // ecs-express: `status.status` here IS the raw statusCode (see

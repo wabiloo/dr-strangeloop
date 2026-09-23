@@ -59,6 +59,7 @@ const activeActionEta = ref('')
 // e.g. Update content on an already-running channel.
 const phaseBeforeAction = ref<Phase | null>(null)
 const itsAliveBanner = ref<InstanceType<typeof ItsAliveBanner> | null>(null)
+const playbackPanel = ref<InstanceType<typeof PlaybackPanel> | null>(null)
 
 const editing = ref(false)
 const editSaving = ref(false)
@@ -241,6 +242,17 @@ const statusErrorIsMissingStack = computed(() => /does not exist/.test(statusErr
 const phase = computed<Phase>(() => {
   if (!status.value) return statusErrorIsMissingStack.value ? 'not-deployed' : 'unknown'
   return liveStatusPhase(status.value)
+})
+
+// Whenever the channel (re-)reaches "It's Alive!", force both players to
+// tear down and restart from the live edge. PlaybackPanel already does this
+// itself when the playback URLs change or when it gets freshly mounted (via
+// `v-if="showPlayback"` toggling off/on), but a redeploy/restart can leave
+// the URLs identical while a player instance stays attached across the
+// gap -- left alone, it would just keep showing the tail end of the DVR
+// window from the previous run instead of jumping to the new stream.
+watch(phase, (next, prev) => {
+  if (next === 'alive' && prev !== 'alive') playbackPanel.value?.reloadPlayers()
 })
 
 // The State tag at the top of the page: same computation, same labels,
@@ -676,6 +688,7 @@ watch(() => props.name, reload)
 
     <PlaybackPanel
       v-if="showPlayback"
+      ref="playbackPanel"
       :hls-url="playbackHlsUrl"
       :dash-url="playbackDashUrl"
       :health="health"

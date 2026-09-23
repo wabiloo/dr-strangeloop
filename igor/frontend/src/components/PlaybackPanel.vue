@@ -522,6 +522,21 @@ onBeforeUnmount(() => {
 watch(() => props.hlsUrl, (url) => { if (url) playHls() }, { immediate: true })
 watch(() => props.dashUrl, (url) => { if (url) playDash() }, { immediate: true })
 
+// Force both players to tear down and restart from the live edge. Used by
+// the parent when the channel transitions into the "It's Alive!" phase
+// without the playback URLs themselves changing (e.g. MediaLive recovering,
+// or ECS tasks scaling back up) -- otherwise a player left attached across
+// a stop/start cycle can keep showing the tail of a stale DVR window from
+// the previous run instead of jumping to the new live content.
+function reloadPlayers() {
+  destroyHls()
+  destroyDash()
+  if (props.hlsUrl) playHls()
+  if (props.dashUrl) playDash()
+}
+
+defineExpose({ reloadPlayers })
+
 function openUrl(url?: string | null) {
   if (url) window.open(url, '_blank')
 }

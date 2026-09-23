@@ -194,8 +194,41 @@ def cmd_update(cfg, extra_args):
 def cmd_status(cfg, extra_args, as_json=False):
     if extra_args:
         sys.exit("`status` does not take extra arguments")
+    backend = _backend(cfg)
+
+    # For stacked backends, check CloudFormation's own StackStatus first --
+    # same reasoning as cmd_list's _stack_status_is_settled gate. While the
+    # stack is mid create/update/delete (or gone/broken), the backend's own
+    # live status() call (MediaLive DescribeChannel, ECS DescribeServices,
+    # ...) would either read stale/partial Outputs or 404 outright (e.g.
+    # MediaLive's channel resource can already be gone mid DELETE_IN_PROGRESS
+    # while other stack resources are still being torn down) -- letting that
+    # exception propagate used to surface as an opaque 502 to igor's UI
+    # instead of the "Dismantling"/"Dismantled" phase the stack status
+    # itself already unambiguously answers.
+    stack_status = None
+    if backend not in _NO_STACK_BACKENDS:
+        cf = _session(cfg).client("cloudformation")
+        stack_status = _stack_status(cf, _stack_name(cfg))
+        if stack_status is None or not _stack_status_is_settled(stack_status):
+            result = {
+                "backend": backend,
+                # Surface the CFN status itself as the human-readable raw
+                # status text (igor shows this verbatim) when there's no
+                # settled backend-specific status to report.
+                "status": stack_status or "DELETE_COMPLETE",
+                "stack_status": stack_status,
+                "reachable": None,
+            }
+            if as_json:
+                print(json.dumps(result))
+            else:
+                print(f"Stack status: {result['status']}")
+            return
+
     outputs = _outputs_if_needed(cfg)
     result = _ops(cfg).status(cfg, _session(cfg), outputs)
+    result["stack_status"] = stack_status
     if as_json:
         print(json.dumps(result))
 
