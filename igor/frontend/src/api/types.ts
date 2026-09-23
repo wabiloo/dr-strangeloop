@@ -91,6 +91,11 @@ export interface ChannelListItem {
   name: string
   backend: 'aws-media' | 'ecs-express' | 'local-docker'
   stack_name: string | null
+  // local-docker only (null for aws-media/ecs-express) -- there's no
+  // CloudFormation stack for that backend, so this is the nearest
+  // equivalent identifier: the deterministic `its-a-live-<name>` Docker
+  // container name.
+  container_name?: string | null
   stack_status: string | null
   source_path?: string
   playlist_name?: string | null

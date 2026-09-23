@@ -237,7 +237,9 @@ def cmd_list(config_path, extra_args, as_json=False):
     with its CloudFormation stack status if one exists yet (None if the
     channel has never been deployed). local-docker channels have no
     stack; "stack_status" instead reflects the local container's Docker
-    status."""
+    status, and "container_name" (None for the other two backends) is
+    the deterministic `its-a-live-<name>` container name in place of a
+    stack name."""
     if len(extra_args) > 1:
         sys.exit("Usage: channel.py list [directory]")
     directory = extra_args[0] if extra_args else os.path.dirname(os.path.abspath(config_path))
@@ -257,6 +259,10 @@ def cmd_list(config_path, extra_args, as_json=False):
                 "name": name,
                 "backend": backend,
                 "stack_name": None,
+                # No CloudFormation stack for this backend -- the nearest
+                # equivalent identifier is the deterministic local Docker
+                # container name (see _local_docker_ops.status()).
+                "container_name": result.get("container_name"),
                 "stack_status": result.get("status"),
             })
             continue
@@ -268,6 +274,7 @@ def cmd_list(config_path, extra_args, as_json=False):
             "name": name,
             "backend": backend,
             "stack_name": stack_name,
+            "container_name": None,
             "stack_status": status_value,
         }
         # A healthy stack_status only means the stack is deployed -- it says

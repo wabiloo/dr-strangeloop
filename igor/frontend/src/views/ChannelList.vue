@@ -44,15 +44,20 @@ function runningStatusLabel(channel: ChannelListItem) {
   return PHASE_LABEL[listItemPhase(channel)]
 }
 
-// Stack status only makes sense for backends with a real CloudFormation
-// stack (aws-media/ecs-express). local-docker repurposes `stack_status` to
-// carry Docker's State.Status, which isn't a "stack" at all, so don't show
-// it in that column.
-function hasStack(channel: ChannelListItem) {
-  return channel.backend !== 'local-docker'
+// aws-media/ecs-express: the CloudFormation stack name. local-docker has
+// no stack -- its nearest equivalent identifier is the deterministic
+// local Docker container name (see channel.py's cmd_list).
+function stackOrContainerName(channel: ChannelListItem) {
+  return channel.stack_name ?? channel.container_name ?? null
 }
 
+// local-docker repurposes `stack_status` to carry Docker's raw
+// State.Status ("running", "exited", "not created", ...) instead of a
+// CloudFormation StackStatus -- color it the same way the Running status
+// column already does (via listItemPhase) rather than the CFN-specific
+// substring matching below, which wouldn't recognize those strings.
 function stackSeverity(channel: ChannelListItem) {
+  if (channel.backend === 'local-docker') return phaseSeverity(listItemPhase(channel))
   if (!channel.stack_status) return 'secondary'
   if (channel.stack_status.includes('ROLLBACK') || channel.stack_status.includes('FAILED')) return 'danger'
   if (channel.stack_status.includes('IN_PROGRESS')) return 'info'
@@ -135,11 +140,16 @@ onMounted(load)
       </Column>
       <Column header="Stack status">
         <template #body="{ data }">
-          <Tag v-if="hasStack(data) && data.stack_status" :value="data.stack_status" :severity="stackSeverity(data)" />
+          <Tag v-if="data.stack_status" :value="data.stack_status" :severity="stackSeverity(data)" />
           <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>
-      <Column field="stack_name" header="CloudFormation stack" />
+      <Column header="Stack">
+        <template #body="{ data }">
+          <span v-if="stackOrContainerName(data)">{{ stackOrContainerName(data) }}</span>
+          <span v-else class="text-color-secondary text-sm">--</span>
+        </template>
+      </Column>
       <Column header="Actions">
         <template #body="{ data }">
           <div class="flex gap-2" @click.stop>
