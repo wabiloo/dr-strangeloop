@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import Button from 'primevue/button'
 import ConfirmDialog from 'primevue/confirmdialog'
 import Toast from 'primevue/toast'
-import { RouterLink, RouterView, useRouter } from 'vue-router'
+import { computed } from 'vue'
+import { RouterLink, RouterView, useRoute } from 'vue-router'
 
-const router = useRouter()
+const route = useRoute()
+const isPlaylistsActive = computed(() => route.path.startsWith('/playlists'))
+const isChannelsActive = computed(() => route.path.startsWith('/channels'))
 </script>
 
 <template>
@@ -17,17 +19,13 @@ const router = useRouter()
         </RouterLink>
 
         <nav class="app-nav">
-          <RouterLink to="/channels" class="app-nav-link" active-class="app-nav-link-active">
-            Channels
-          </RouterLink>
-          <RouterLink to="/playlists" class="app-nav-link" active-class="app-nav-link-active">
+          <RouterLink to="/playlists" class="app-nav-link" :class="{ 'app-nav-link-active': isPlaylistsActive }">
             Playlists
           </RouterLink>
+          <RouterLink to="/channels" class="app-nav-link" :class="{ 'app-nav-link-active': isChannelsActive }">
+            Channels
+          </RouterLink>
         </nav>
-
-        <div class="app-header-actions">
-          <Button label="New channel" icon="pi pi-plus" size="small" @click="router.push('/channels/new')" />
-        </div>
       </div>
     </header>
 
@@ -75,36 +73,41 @@ const router = useRouter()
 
 .app-nav {
   display: flex;
-  align-items: center;
+  align-items: stretch;
+  align-self: stretch;
   gap: 0.25rem;
   flex: 1;
 }
 
 .app-nav-link {
+  display: flex;
+  align-items: center;
+  position: relative;
   color: #94a3b8;
   text-decoration: none;
   font-weight: 500;
   font-size: 0.9rem;
-  padding: 0.5rem 0.9rem;
-  border-radius: 6px;
-  transition:
-    background-color 0.12s ease,
-    color 0.12s ease;
+  padding: 0 0.9rem;
+  transition: color 0.12s ease;
 }
 
 .app-nav-link:hover {
   color: #f8fafc;
-  background: rgba(255, 255, 255, 0.08);
 }
 
 .app-nav-link-active {
   color: #f8fafc;
-  background: rgba(14, 116, 144, 0.55);
 }
 
-.app-header-actions {
-  display: flex;
-  align-items: center;
+.app-nav-link-active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  background: var(--p-primary-color, #0e7490);
+  z-index: 1;
 }
 
 .app-main {

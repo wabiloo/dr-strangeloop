@@ -19,7 +19,7 @@ import TabPanels from 'primevue/tabpanels'
 import Tabs from 'primevue/tabs'
 import Textarea from 'primevue/textarea'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import { buildPlaylist, getPlaylist, getPreviewStatus, playlistPreviewUrl, probeMedia, resolveMarkers, savePlaylist } from '../api/client'
 import type { Job, ResolvedMarker } from '../api/types'
@@ -212,8 +212,8 @@ function defaultOutput() {
     framerate: 25,
     bitrate_kbps: 10000,
     gop: null as number | null,
-    service_provider: 'broadpeak',
-    service_name: 'broadpeak.io',
+    service_provider: '',
+    service_name: '',
   }
 }
 
@@ -1185,8 +1185,7 @@ function applyHexPopover() {
   <div class="flex flex-column gap-3">
     <div class="editor-header">
       <div class="flex flex-column gap-1">
-        <RouterLink to="/playlists" class="editor-back"><i class="pi pi-arrow-left" /> Playlists</RouterLink>
-        <h2 class="m-0">{{ isNew ? 'New playlist' : `Edit: ${name}` }}</h2>
+        <h2 class="m-0">{{ isNew ? 'New playlist' : name }}</h2>
       </div>
       <div class="flex align-items-center gap-2">
         <span v-if="isDirty" class="text-color-secondary text-sm">Unsaved changes</span>
@@ -1221,28 +1220,43 @@ function applyHexPopover() {
           <div class="flex flex-column gap-4" style="max-width: 56rem">
             <div class="flex flex-column gap-1">
               <label for="playlist-name">Playlist name</label>
-              <InputText id="playlist-name" v-model="nameInput" :disabled="!isNew" placeholder="my-stream" />
+              <InputText id="playlist-name" v-model="nameInput" :disabled="!isNew" placeholder="my-stream" class="field-medium" />
             </div>
 
             <Divider align="left"><span class="font-bold">Output</span></Divider>
 
-            <div class="grid">
-              <div class="col-4 flex flex-column gap-1">
+            <div class="flex gap-4 flex-wrap">
+              <div class="flex flex-column gap-1">
                 <label>Framerate</label>
-                <InputNumber v-model="form.output.framerate" :use-grouping="false" />
+                <InputNumber
+                  v-model="form.output.framerate"
+                  :use-grouping="false"
+                  :min-fraction-digits="0"
+                  :max-fraction-digits="3"
+                  class="field-tiny"
+                />
               </div>
-              <div class="col-4 flex flex-column gap-1">
+              <div class="flex flex-column gap-1">
                 <label>GOP (default = framerate x2)</label>
-                <InputNumber v-model="form.output.gop" :use-grouping="false" placeholder="auto" />
+                <InputNumber
+                  v-model="form.output.gop"
+                  :use-grouping="false"
+                  :min-fraction-digits="0"
+                  :max-fraction-digits="0"
+                  placeholder="auto"
+                  class="field-tiny"
+                />
               </div>
-              <div class="col-4" />
-              <div class="col-6 flex flex-column gap-1">
+            </div>
+
+            <div class="flex gap-4 flex-wrap">
+              <div class="flex flex-column gap-1">
                 <label>Service provider</label>
-                <InputText v-model="form.output.service_provider" />
+                <InputText v-model="form.output.service_provider" placeholder="e.g. broadpeak" class="field-medium" />
               </div>
-              <div class="col-6 flex flex-column gap-1">
+              <div class="flex flex-column gap-1">
                 <label>Service name</label>
-                <InputText v-model="form.output.service_name" />
+                <InputText v-model="form.output.service_name" placeholder="e.g. broadpeak.io" class="field-medium" />
               </div>
             </div>
 
@@ -1253,22 +1267,22 @@ function applyHexPopover() {
               <label><input type="radio" value="ladder" v-model="outputMode" /> ABR ladder (multi-rendition, for ecs-express)</label>
             </div>
 
-            <div class="grid">
-              <div v-if="outputMode === 'single'" class="col-6 flex flex-column gap-1">
+            <div class="flex gap-4 flex-wrap">
+              <div v-if="outputMode === 'single'" class="flex flex-column gap-1">
                 <label>Output file</label>
-                <InputText v-model="form.output.file" />
+                <InputText v-model="form.output.file" class="field-medium" />
               </div>
-              <div v-if="outputMode === 'single'" class="col-3 flex flex-column gap-1">
+              <div v-if="outputMode === 'single'" class="flex flex-column gap-1">
                 <label>Resolution</label>
-                <InputText v-model="form.output.resolution" />
+                <InputText v-model="form.output.resolution" class="field-small" />
               </div>
-              <div v-if="outputMode === 'single'" class="col-3 flex flex-column gap-1">
+              <div v-if="outputMode === 'single'" class="flex flex-column gap-1">
                 <label>Bitrate (kbps)</label>
-                <InputNumber v-model="form.output.bitrate_kbps" :use-grouping="false" />
+                <InputNumber v-model="form.output.bitrate_kbps" :use-grouping="false" :min-fraction-digits="0" :max-fraction-digits="0" class="field-small" />
               </div>
-              <div v-if="outputMode === 'ladder'" class="col-12 flex flex-column gap-1">
+              <div v-if="outputMode === 'ladder'" class="flex flex-column gap-1">
                 <label>Output directory</label>
-                <InputText v-model="form.output.dir" />
+                <InputText v-model="form.output.dir" class="field-medium" />
               </div>
             </div>
 
@@ -1277,13 +1291,17 @@ function applyHexPopover() {
                 <span class="font-bold">Renditions</span>
                 <Button label="Add rendition" icon="pi pi-plus" size="small" text @click="addRendition" />
               </div>
-              <div v-for="(r, i) in form.renditions" :key="i" class="grid align-items-end">
-                <div class="col-4"><label>Name</label><InputText v-model="r.name" /></div>
-                <div class="col-4"><label>Resolution</label><InputText v-model="r.resolution" /></div>
-                <div class="col-3"><label>Bitrate (kbps)</label><InputNumber v-model="r.bitrate_kbps" :use-grouping="false" /></div>
-                <div class="col-1"><Button icon="pi pi-trash" severity="danger" text @click="removeRendition(i)" /></div>
+              <div v-for="(r, i) in form.renditions" :key="i" class="flex gap-4 align-items-end flex-wrap">
+                <div class="flex flex-column gap-1"><label>Name</label><InputText v-model="r.name" class="field-medium" /></div>
+                <div class="flex flex-column gap-1"><label>Resolution</label><InputText v-model="r.resolution" class="field-small" /></div>
+                <div class="flex flex-column gap-1">
+                  <label>Bitrate (kbps)</label>
+                  <InputNumber v-model="r.bitrate_kbps" :use-grouping="false" :min-fraction-digits="0" :max-fraction-digits="0" class="field-small" />
+                </div>
+                <Button icon="pi pi-trash" severity="danger" text @click="removeRendition(i)" />
               </div>
             </template>
+
 
             <Divider align="left"><span class="font-bold">Options</span></Divider>
             <div class="flex align-items-center gap-2">
@@ -2000,6 +2018,34 @@ function applyHexPopover() {
   width: 6rem;
 }
 
+/* Settings tab fields: fixed, content-sized widths instead of stretching
+ * to fill their flex row -- a playlist name or a 4-digit bitrate doesn't
+ * need a field wide enough for a full sentence. */
+.field-tiny {
+  width: 6rem;
+}
+
+.field-tiny :deep(input) {
+  width: 100%;
+}
+
+.field-small {
+  width: 9rem;
+}
+
+.field-small :deep(input) {
+  width: 100%;
+}
+
+.field-medium {
+  width: 16rem;
+}
+
+.field-medium :deep(input) {
+  width: 100%;
+}
+
+
 /* Global OSD options list: a REAL 4-column grid (label, control, secondary
  * label, secondary control) -- not flexbox rows. Flexbox rows let each
  * row's control stretch to fill whatever space its own siblings left
@@ -2049,7 +2095,15 @@ function applyHexPopover() {
  * active-bar + a stray focus-ring rectangle, which read as plain text. */
 :deep(.p-tablist) {
   border-bottom: 2px solid var(--p-surface-200, #e2e8f0);
+  /* Allow the active-bar (positioned inside the scrollable content div)
+   * to paint over this border instead of being clipped by it. */
+  overflow: visible;
 }
+
+:deep(.p-tablist-content) {
+  overflow: visible;
+}
+
 
 :deep(.p-tablist-tab-list) {
   gap: 0.35rem;
@@ -2081,19 +2135,10 @@ function applyHexPopover() {
   height: 3px;
   border-radius: 2px;
   background: var(--p-primary-color, #0e7490);
-}
-
-.editor-back {
-  color: var(--p-text-muted-color, #64748b);
-  text-decoration: none;
-  font-size: 0.85rem;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.editor-back:hover {
-  text-decoration: underline;
+  /* Shift down so the underline sits on top of the gray divider line
+   * instead of leaving a visible gap above it. */
+  bottom: -3px;
+  z-index: 1;
 }
 
 .asset-count-badge {
