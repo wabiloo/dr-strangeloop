@@ -220,7 +220,12 @@ async def channel_health(name: str) -> dict:
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"GET {url} failed: {exc}") from exc
+        # Almost always means the channel isn't actually running yet (container
+        # not started / task still spinning up / stopped) rather than a genuine
+        # upstream gateway problem, so 503 (service unavailable) fits better
+        # than 502 (bad gateway) -- and doesn't read like a proxy-layer bug in
+        # server logs when polled every few seconds from the UI.
+        raise HTTPException(status_code=503, detail=f"GET {url} failed: {exc}") from exc
 
 
 def _spawn(job_type: str, name: str, extra_args: list[str] | None = None) -> dict:
