@@ -89,6 +89,14 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
 
 .app-header {
   position: relative;
+  /* Just needs to be a definite positive stacking level -- ItsAliveBanner
+     dips its OWN z-index below this for the first slice of its entrance (so
+     it's hidden behind this opaque background while behind the header),
+     then raises it back above everything once clear. Deliberately kept low
+     so this doesn't also out-rank real overlays like PrimeVue's Toast
+     (z-index 1100) -- a higher value here previously hid toasts under the
+     header too. */
+  z-index: 10;
   background: #0f172a;
   border-bottom: 1px solid #1e293b;
   overflow: hidden;
