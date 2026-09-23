@@ -62,6 +62,11 @@ async function poll() {
       job.value = { ...update, log: [...job.value.log, ...update.log] }
     } else {
       job.value = update
+      // Re-syncing to an already-running job (e.g. after navigating back
+      // to the page) -- anchor the elapsed timer to when the job actually
+      // started server-side, not to whenever this component happened to
+      // (re)mount.
+      if (update.started_at) startedAtMs = update.started_at * 1000
     }
     error.value = ''
     if (wasNearBottom) await nextTick().then(scrollToBottom)

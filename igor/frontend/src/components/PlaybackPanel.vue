@@ -526,6 +526,17 @@ function openUrl(url?: string | null) {
   if (url) window.open(url, '_blank')
 }
 
+// Rough estimate of how many wrapped lines a URL needs so the readonly
+// textarea below can sit tall enough to show it in full without
+// scrolling/cropping, without needing to measure actual rendered text
+// width (which varies with the panel's responsive column width). Errs on
+// the generous side -- an extra blank-ish line is far less annoying than
+// a cropped URL.
+function urlRows(url?: string | null): number {
+  if (!url) return 1
+  return Math.min(4, Math.max(1, Math.ceil(url.length / 45)))
+}
+
 /** Fixed-width HH:MM:SS -- unlike a bare seconds count, its length never
  * changes as uptime ticks up, so the uptime pill doesn't visibly resize. */
 function formatUptime(totalSeconds: number): string {
@@ -612,7 +623,13 @@ async function copyUrl(url?: string | null) {
           <span>Playhead: {{ hlsPlayheadTime }}</span>
         </div>
         <div class="url-row">
-          <input class="url-input" type="text" readonly :value="hlsUrl" @focus="($event.target as HTMLInputElement).select()" />
+          <textarea
+            class="url-input"
+            readonly
+            :rows="urlRows(hlsUrl)"
+            :value="hlsUrl"
+            @focus="($event.target as HTMLTextAreaElement).select()"
+          />
           <Button icon="pi pi-copy" text size="small" title="Copy URL" @click="copyUrl(hlsUrl)" />
           <Button icon="pi pi-external-link" text size="small" title="Open in new tab" @click="openUrl(hlsUrl)" />
         </div>
@@ -648,7 +665,13 @@ async function copyUrl(url?: string | null) {
           <span>Playhead: {{ dashPlayheadTime }}</span>
         </div>
         <div class="url-row">
-          <input class="url-input" type="text" readonly :value="dashUrl" @focus="($event.target as HTMLInputElement).select()" />
+          <textarea
+            class="url-input"
+            readonly
+            :rows="urlRows(dashUrl)"
+            :value="dashUrl"
+            @focus="($event.target as HTMLTextAreaElement).select()"
+          />
           <Button icon="pi pi-copy" text size="small" title="Copy URL" @click="copyUrl(dashUrl)" />
           <Button icon="pi pi-external-link" text size="small" title="Open in new tab" @click="openUrl(dashUrl)" />
         </div>
@@ -945,12 +968,12 @@ async function copyUrl(url?: string | null) {
 
 .url-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.25rem;
   background: rgba(0, 0, 0, 0.25);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
-  padding: 0.15rem 0.15rem 0.15rem 0.6rem;
+  padding: 0.4rem 0.15rem 0.4rem 0.6rem;
 }
 
 .url-input {
@@ -959,6 +982,11 @@ async function copyUrl(url?: string | null) {
   background: transparent;
   border: none;
   outline: none;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.3;
   color: #e2e8f0;
   font-size: 0.8rem;
   font-family: var(--font-mono, monospace);

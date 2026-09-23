@@ -19,6 +19,8 @@ import {
   getChannelHealth,
   getChannelOutputs,
   getChannelStatus,
+  listChannels,
+  listJobs,
   redeployChannel,
   sparkChannel,
   startChannel,
@@ -27,8 +29,8 @@ import {
   updateChannel,
   updateChannelContent,
 } from '../api/client'
-import type { ChannelCreatePayload, ChannelHealth, ChannelOutputs, ChannelStatus, Job } from '../api/types'
-import { type Phase, PHASE_LABEL, isUpButMaybeUnreachable, liveStatusPhase, phaseSeverity } from '../utils/channelPhase'
+import type { ChannelCreatePayload, ChannelHealth, ChannelListItem, ChannelOutputs, ChannelStatus, Job } from '../api/types'
+import { type Phase, PHASE_LABEL, isUpButMaybeUnreachable, listItemPhase, liveStatusPhase, phaseSeverity } from '../utils/channelPhase'
 
 const props = defineProps<{ name: string }>()
 
@@ -38,6 +40,16 @@ const health = ref<ChannelHealth | null>(null)
 const config = ref<Record<string, unknown> | null>(null)
 const statusError = ref('')
 const healthError = ref('')
+// Row for this channel from the list endpoint (`channel.py list`) -- kept
+// around purely so the top-of-page "State" tag can use the exact same
+// listItemPhase() computation as the list page's State column, rather
+// than each page independently re-deriving what should be the same
+// answer (see channelPhase.ts's module comment). `phase` below stays on
+// liveStatusPhase()/getChannelStatus for action-gating, since that's a
+// single-channel live check with no soft-fail fallback -- it's the more
+// trustworthy signal for "is it safe to Start/Stop right now", while
+// listPhase is what should visually match the list.
+const listItem = ref<ChannelListItem | null>(null)
 const loading = ref(false)
 const activeJobId = ref<string | null>(null)
 const activeAction = ref('')
@@ -230,6 +242,15 @@ const phase = computed<Phase>(() => {
   if (!status.value) return statusErrorIsMissingStack.value ? 'not-deployed' : 'unknown'
   return liveStatusPhase(status.value)
 })
+
+// The State tag at the top of the page: same computation, same labels,
+// same colors as ChannelList.vue's State column (listItemPhase), so a
+// channel never reads differently depending on which page you're
+// looking at it from. Falls back to the live-only `phase` above until
+// the list row has loaded (or if this channel is somehow missing from
+// the list response) -- e.g. right on first mount, before loadListPhase()
+// resolves.
+const listPhase = computed<Phase>(() => (listItem.value ? listItemPhase(listItem.value) : phase.value))
 
 interface ActionDef {
   key: string
@@ -488,6 +509,22 @@ async function loadStatus() {
   }
 }
 
+// There's no single-channel equivalent of `channel.py list`'s enriched
+// row (stack_status/live_status/min_tasks/reachable) -- only the full
+// list endpoint computes those. Best-effort: pull the whole list and
+// pick out this channel's row purely so listPhase can reuse
+// listItemPhase() unchanged. Silently keeps the previous value on
+// failure (e.g. a transient error) rather than blinking the State tag
+// back to "unknown".
+async function loadListPhase() {
+  try {
+    const rows = await listChannels()
+    listItem.value = rows.find((c) => c.name === props.name) ?? null
+  } catch {
+    // ignore -- listPhase falls back to the live-only `phase` computed
+  }
+}
+
 async function loadHealth() {
   if (status.value?.backend !== 'ecs-express' && status.value?.backend !== 'local-docker') return
   try {
@@ -543,23 +580,57 @@ async function onJobFinished(job: Job) {
   }
 }
 
+async function reattachRunningJob() {
+  try {
+    const jobs = await listJobs(props.name)
+    const running = jobs
+      .filter((j) => j.status === 'running' || j.status === 'queued')
+      .sort((a, b) => b.created_at - a.created_at)[0]
+    if (running) {
+      activeAction.value = running.type
+      activeActionEta.value = ''
+      phaseBeforeAction.value = null
+      activeJobId.value = running.id
+    }
+  } catch {
+    // Best-effort -- if the jobs endpoint is unreachable, just fall back
+    // to no active job rather than blocking the rest of the page.
+  }
+}
+
 function reload() {
   status.value = null
   outputs.value = null
   health.value = null
   config.value = null
+  listItem.value = null
   activeJobId.value = null
+  reattachRunningJob()
   loadStatus()
+  loadListPhase()
   loadHealth()
   loadConfig()
 }
 
+// Auto-poll cadence for the live status + list-derived State tag --
+// independent of `healthTimer` below and of JobPanel's own 1.5s job
+// polling, so the header stays fresh even when nothing on this page is
+// actively running a job (e.g. the channel changed state from
+// elsewhere: another tab, ECS scaling, MediaLive recovering, ...).
+const STATUS_POLL_MS = 8000
+let statusTimer: ReturnType<typeof setInterval> | null = null
+
 onMounted(() => {
   reload()
   healthTimer = setInterval(loadHealth, 5000)
+  statusTimer = setInterval(() => {
+    loadStatus()
+    loadListPhase()
+  }, STATUS_POLL_MS)
 })
 onBeforeUnmount(() => {
   if (healthTimer) clearInterval(healthTimer)
+  if (statusTimer) clearInterval(statusTimer)
 })
 watch(() => props.name, reload)
 </script>
@@ -568,11 +639,24 @@ watch(() => props.name, reload)
   <div class="flex flex-column gap-4">
     <div class="flex align-items-center gap-2">
       <h2 class="m-0">{{ name }}</h2>
-      <Tag v-if="status" :value="status.backend" />
-      <Tag :value="PHASE_LABEL[phase]" :severity="phaseSeverity(phase)" />
-      <span v-if="status" class="text-color-secondary text-xs" :title="'Raw backend status: ' + status.status">
-        ({{ status.status }})
-      </span>
+      <div class="state-badge">
+        <Tag class="state-badge-tag" :value="PHASE_LABEL[listPhase]" :severity="phaseSeverity(listPhase)" />
+        <span
+          v-if="status"
+          class="state-badge-drawer text-color-secondary text-xs"
+          :title="'Raw backend status: ' + status.status"
+        >
+          {{ status.status
+          }}<template v-if="status.reachable != null">{{ status.reachable ? ', reachable' : ', unreachable' }}</template
+          ><template v-if="status.min_tasks != null">, {{ status.min_tasks }}/{{ status.max_tasks }} tasks</template>
+        </span>
+      </div>
+      <span
+        v-if="listItem && listPhase !== phase"
+        class="pi pi-exclamation-triangle text-yellow-600 text-sm"
+        :title="`List and live status briefly disagree (list: ${PHASE_LABEL[listPhase]}, live: ${PHASE_LABEL[phase]}) -- usually settles within a poll or two.`"
+      />
+      <Tag v-if="status" class="ml-auto" :value="status.backend" />
     </div>
 
     <Message v-if="statusError && !statusErrorIsMissingStack" severity="warn">
@@ -824,3 +908,34 @@ watch(() => props.name, reload)
     <ItsAliveBanner ref="itsAliveBanner" />
   </div>
 </template>
+
+<style scoped>
+/* The fine-grained status text reads as a drawer pulled out from under
+   the State tag: tucked slightly behind/under its right edge (negative
+   margin + lower z-index), open on the left where it meets the tag (no
+   left border, so the two blend into one shape) and bordered on the
+   other three sides. */
+.state-badge {
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.state-badge-tag {
+  position: relative;
+  z-index: 1;
+}
+
+.state-badge-drawer {
+  position: relative;
+  z-index: 0;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  margin-left: -0.5rem;
+  padding: 0 0.5rem 0 1.25rem;
+  border: 2px solid var(--p-content-border-color, #dee2e6);
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  white-space: nowrap;
+}
+</style>

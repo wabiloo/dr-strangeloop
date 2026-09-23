@@ -28,6 +28,14 @@ const error = ref('')
 const pendingActions = reactive<Set<string>>(new Set())
 const jobTimers = new Map<string, ReturnType<typeof setInterval>>()
 
+// Auto-poll cadence for the whole table -- independent of the per-job
+// polling above, so the State/Stack columns stay fresh even for channels
+// nobody is actively starting/stopping from this page (e.g. someone else
+// changed it, or it drifted on its own -- ECS scaling, MediaLive
+// recovering, ...).
+const LIST_POLL_MS = 10000
+let listTimer: ReturnType<typeof setInterval> | null = null
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -37,6 +45,19 @@ async function load() {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
     loading.value = false
+  }
+}
+
+// Background poll -- same data as `load()`, but never toggles `loading`
+// (no spinner/overlay flicker every 10s) and doesn't clobber the table
+// with an error on a single missed tick; only surfaces an error if we
+// don't have any rows to show at all.
+async function silentLoad() {
+  try {
+    channels.value = await listChannels()
+    error.value = ''
+  } catch (e) {
+    if (channels.value.length === 0) error.value = e instanceof Error ? e.message : String(e)
   }
 }
 
@@ -203,8 +224,12 @@ function pollJob(channelName: string, action: 'start' | 'stop', jobId: string) {
   tick()
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  listTimer = setInterval(silentLoad, LIST_POLL_MS)
+})
 onBeforeUnmount(() => {
+  if (listTimer) clearInterval(listTimer)
   for (const timer of jobTimers.values()) clearInterval(timer)
   jobTimers.clear()
 })
