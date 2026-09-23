@@ -7,10 +7,10 @@ import Message from 'primevue/message'
 import Tag from 'primevue/tag'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { deleteChannel, listChannels } from '../api/client'
-import type { ChannelListItem } from '../api/types'
+import { deleteChannel, getJob, listChannels, startChannel, stopChannel } from '../api/client'
+import type { ChannelListItem, Job } from '../api/types'
 import { PHASE_LABEL, listItemPhase, phaseSeverity } from '../utils/channelPhase'
 
 const router = useRouter()
@@ -19,6 +19,14 @@ const toast = useToast()
 const channels = ref<ChannelListItem[]>([])
 const loading = ref(true)
 const error = ref('')
+
+// Channel names with a start/stop job currently in flight -- disables both
+// buttons on that row (never both backends' worth of jobs at once for the
+// same channel) and shows a spinner instead of the icon. Keyed by name,
+// not a single global flag, so acting on one channel doesn't freeze the
+// whole table.
+const pendingActions = reactive<Set<string>>(new Set())
+const jobTimers = new Map<string, ReturnType<typeof setInterval>>()
 
 async function load() {
   loading.value = true
@@ -99,7 +107,107 @@ async function confirmDelete(event: MouseEvent, channel: ChannelListItem) {
   })
 }
 
+// Start/Stop mirror ChannelDetail.vue's stream actions -- see there for
+// why the disabled conditions differ per backend (local-docker's `start`
+// creates the container fresh so it works from 'not-deployed' too;
+// aws-media/ecs-express's `start` reads stack outputs so it genuinely
+// needs the stack deployed first).
+//
+// "Relevant" (shown vs. hidden-but-space-reserved) is purely phase/backend
+// based -- a job in flight (pendingActions) never hides a button, it only
+// disables it, so mid-action the row doesn't visually shift.
+function isStartRelevant(channel: ChannelListItem) {
+  const phase = listItemPhase(channel)
+  return channel.backend === 'local-docker' ? phase !== 'running' : phase === 'stopped'
+}
+
+function isStartDisabled(channel: ChannelListItem) {
+  return pendingActions.has(channel.name)
+}
+
+function isStopRelevant(channel: ChannelListItem) {
+  return listItemPhase(channel) === 'running'
+}
+
+function isStopDisabled(channel: ChannelListItem) {
+  return pendingActions.has(channel.name)
+}
+
+// Fires the job, then polls it to completion (same polling cadence as
+// JobPanel.vue, without the log/UI panel -- the list is a quick-actions
+// surface, not where you'd want to read a job log) and reloads the list
+// once it settles so the Running-status/Stack-status columns pick up the
+// new phase.
+async function runAction(channel: ChannelListItem, action: 'start' | 'stop') {
+  if (pendingActions.has(channel.name)) return
+  pendingActions.add(channel.name)
+  try {
+    const job = await (action === 'start' ? startChannel(channel.name) : stopChannel(channel.name))
+    pollJob(channel.name, action, job.id)
+  } catch (e) {
+    pendingActions.delete(channel.name)
+    toast.add({
+      severity: 'error',
+      summary: `${action === 'start' ? 'Start' : 'Stop'} failed`,
+      detail: e instanceof Error ? e.message : String(e),
+      life: 6000,
+    })
+  }
+}
+
+function pollJob(channelName: string, action: 'start' | 'stop', jobId: string) {
+  let lastOffset = 0
+  const label = action === 'start' ? 'Start' : 'Stop'
+  const finish = async (job: Job) => {
+    const timer = jobTimers.get(channelName)
+    if (timer) {
+      clearInterval(timer)
+      jobTimers.delete(channelName)
+    }
+    pendingActions.delete(channelName)
+    if (job.status === 'failed') {
+      toast.add({
+        severity: 'error',
+        summary: `${label} failed`,
+        detail: job.log.slice(-1)[0] ?? 'See channel detail page for the job log.',
+        life: 8000,
+      })
+    } else {
+      toast.add({ severity: 'success', summary: `${label} succeeded`, detail: channelName, life: 4000 })
+    }
+    await load()
+  }
+  const tick = async () => {
+    try {
+      const job = await getJob(jobId, lastOffset)
+      lastOffset = job.log_length
+      if (job.status === 'succeeded' || job.status === 'failed') {
+        await finish(job)
+      }
+    } catch (e) {
+      const timer = jobTimers.get(channelName)
+      if (timer) {
+        clearInterval(timer)
+        jobTimers.delete(channelName)
+      }
+      pendingActions.delete(channelName)
+      toast.add({
+        severity: 'error',
+        summary: `${label}: lost track of job`,
+        detail: e instanceof Error ? e.message : String(e),
+        life: 6000,
+      })
+    }
+  }
+  jobTimers.set(channelName, setInterval(tick, 1500))
+  tick()
+}
+
 onMounted(load)
+onBeforeUnmount(() => {
+  for (const timer of jobTimers.values()) clearInterval(timer)
+  jobTimers.clear()
+})
 </script>
 
 <template>
@@ -153,6 +261,26 @@ onMounted(load)
       <Column header="Actions">
         <template #body="{ data }">
           <div class="flex gap-2" @click.stop>
+            <Button
+              icon="pi pi-play"
+              severity="success"
+              text
+              :style="{ visibility: isStartRelevant(data) ? 'visible' : 'hidden' }"
+              :disabled="isStartDisabled(data)"
+              :loading="pendingActions.has(data.name)"
+              title="Start"
+              @click="runAction(data, 'start')"
+            />
+            <Button
+              icon="pi pi-stop"
+              severity="danger"
+              text
+              :style="{ visibility: isStopRelevant(data) ? 'visible' : 'hidden' }"
+              :disabled="isStopDisabled(data)"
+              :loading="pendingActions.has(data.name)"
+              title="Stop"
+              @click="runAction(data, 'stop')"
+            />
             <Button
               icon="pi pi-trash"
               severity="danger"

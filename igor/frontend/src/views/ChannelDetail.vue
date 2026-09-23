@@ -70,6 +70,27 @@ const editForm = reactive<ChannelCreatePayload>({
 const editIsEcsExpress = computed(() => editForm.backend === 'ecs-express')
 const editIsLocalDocker = computed(() => editForm.backend === 'local-docker')
 const editUsesChannelSection = computed(() => editIsEcsExpress.value || editIsLocalDocker.value)
+// Mirrors ChannelNew.vue's autoPort/lastExplicitPort split -- kept as
+// separate UI state so InputNumber always gets a number, and toggling
+// off "auto" restores the last explicit port instead of losing it.
+const editAutoPort = ref(false)
+const editLastExplicitPort = ref(8080)
+watch(editAutoPort, (auto) => {
+  if (auto) {
+    editLastExplicitPort.value = typeof editForm.port === 'number' ? editForm.port : editLastExplicitPort.value
+    editForm.port = 'auto'
+  } else {
+    editForm.port = editLastExplicitPort.value
+  }
+})
+watch(
+  () => editForm.backend,
+  (backend) => {
+    if (backend !== 'local-docker' && editAutoPort.value) {
+      editAutoPort.value = false
+    }
+  },
+)
 
 const daterangeModeOptions = [
   { label: 'shared -- one DATERANGE per descriptor, full shared payload (default)', value: 'shared' },
@@ -117,13 +138,15 @@ function startEdit() {
     source_path: String(input.source_path ?? ''),
     segment_duration: Number(packaging.segment_duration ?? 4.0),
     dvr_window_seconds: Number(packaging.dvr_window_seconds ?? 30),
-    port: Number(portSection.port ?? 8080),
+    port: portSection.port === 'auto' ? 'auto' : Number(portSection.port ?? 8080),
     cpu: Number(express.cpu ?? 256),
     memory: Number(express.memory ?? 512),
     daterange_mode: (markers.daterange_mode as ChannelCreatePayload['daterange_mode']) ?? 'shared',
     cue_tags: (markers.cue_tags as ChannelCreatePayload['cue_tags']) ?? 'none',
     increment_event_ids: Boolean(markers.increment_event_ids ?? false),
   })
+  editAutoPort.value = editForm.port === 'auto'
+  editLastExplicitPort.value = typeof editForm.port === 'number' ? editForm.port : editLastExplicitPort.value
   editError.value = ''
   editing.value = true
 }
@@ -735,7 +758,18 @@ watch(() => props.name, reload)
             </div>
             <div class="flex flex-column gap-1">
               <label class="text-xs text-color-secondary">Serve port</label>
-              <InputNumber v-model="editForm.port" :use-grouping="false" />
+              <div v-if="editIsLocalDocker" class="flex align-items-center gap-2">
+                <Checkbox v-model="editAutoPort" binary input-id="edit-auto-port" />
+                <label for="edit-auto-port" class="text-sm">Auto-select a free port</label>
+              </div>
+              <InputNumber
+                v-if="!editIsLocalDocker || !editAutoPort"
+                v-model="editForm.port as number"
+                :use-grouping="false"
+              />
+              <div v-else class="text-color-secondary text-xs">
+                A free port (8080-8179) is picked on next start/refresh and reused afterward.
+              </div>
             </div>
             <template v-if="editIsEcsExpress">
               <div class="flex flex-column gap-1">

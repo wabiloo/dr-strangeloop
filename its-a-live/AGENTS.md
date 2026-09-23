@@ -68,7 +68,11 @@ cpu = 256      # 0.25 vCPU units, Fargate convention -- ecs-express only, ignore
 memory = 512   # MB
 # local-docker instead gets, in place of [express]:
 # [docker]
-# port = 8080  # also the HOST port (http://localhost:<port>)
+# port = "auto"  # default -- auto-picks a free host port (8080-8179, skipping
+#                # ports already bound, e.g. by other local-docker channels)
+#                # and remembers it across start/refresh/status via the
+#                # container itself (no state file). Set an explicit
+#                # port = 8080 (int) instead to pin it.
 ```
 
 ## Questions to ask before deploying (if not already answered)

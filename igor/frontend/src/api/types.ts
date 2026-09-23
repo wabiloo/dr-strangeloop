@@ -122,6 +122,9 @@ export interface ChannelStatus {
   channel_id?: string
   // local-docker only:
   container_name?: string
+  // local-docker only -- the resolved port, even when docker.port is
+  // "auto" in the config; null if no container has ever been created yet.
+  port?: number | null
 }
 
 export type ChannelOutputs = Record<string, string>
@@ -151,7 +154,9 @@ export interface ChannelCreatePayload {
   source_path: string
   segment_duration?: number
   dvr_window_seconds?: number
-  port?: number
+  // int to pin an explicit host port, "auto" (local-docker only) to let
+  // it self-select a free one at start/refresh time.
+  port?: number | 'auto'
   cpu?: number
   memory?: number
   daterange_mode?: 'grouped' | 'shared' | 'narrowed'

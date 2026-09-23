@@ -66,6 +66,13 @@ port = {port}
 """
 
 
+def _format_local_docker_port(port: int | str) -> str:
+    """"auto" (the default) is a bare TOML string; an explicit port is a
+    bare int -- see _local_docker_ops._resolve_port for how channel.py
+    reads this back."""
+    return '"auto"' if port == "auto" else str(int(port))
+
+
 def generate_toml(
     *,
     name: str,
@@ -76,7 +83,7 @@ def generate_toml(
     source_path: str,
     segment_duration: float = 4.0,
     dvr_window_seconds: float = 30,
-    port: int = 8080,
+    port: int | str = 8080,
     cpu: int = 256,
     memory: int = 512,
     daterange_mode: str = "shared",
@@ -92,13 +99,15 @@ def generate_toml(
         content_folder=content_folder, source_path=source_path,
     )
     if backend == "ecs-express":
+        if port == "auto":
+            raise ValueError("port: 'auto' is only supported for the local-docker backend")
         content += _MARKERS_EXTRA.format(
             daterange_mode=daterange_mode, cue_tags=cue_tags,
             increment_event_ids=str(increment_event_ids).lower(),
         )
         content += _ECS_EXPRESS_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
-            port=port, cpu=cpu, memory=memory,
+            port=int(port), cpu=cpu, memory=memory,
         )
     elif backend == "local-docker":
         # No [express] section -- local-docker has no Fargate CPU/memory
@@ -110,7 +119,7 @@ def generate_toml(
         )
         content += _LOCAL_DOCKER_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
-            port=port,
+            port=_format_local_docker_port(port),
         )
     return content
 

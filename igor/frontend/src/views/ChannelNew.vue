@@ -5,7 +5,7 @@ import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Select from 'primevue/select'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { buildPlaylist, defineChannel, listPlaylists } from '../api/client'
 import JobPanel from '../components/JobPanel.vue'
@@ -57,6 +57,20 @@ const form = reactive<ChannelCreatePayload>({
   cue_tags: 'none',
   increment_event_ids: false,
 })
+// Only meaningful for local-docker (see form.port's "auto" branch below);
+// kept as separate UI state rather than storing 'auto' directly in
+// form.port so InputNumber always gets a number to work with, and
+// switching the toggle off restores whatever port was last typed in.
+const autoPort = ref(false)
+const lastExplicitPort = ref(8080)
+watch(autoPort, (auto) => {
+  if (auto) {
+    lastExplicitPort.value = typeof form.port === 'number' ? form.port : lastExplicitPort.value
+    form.port = 'auto'
+  } else {
+    form.port = lastExplicitPort.value
+  }
+})
 
 function selectPlaylist(name: string | null) {
   selectedPlaylistName.value = name
@@ -100,6 +114,17 @@ const backendOptions = [
 
 const isEcsExpress = computed(() => form.backend === 'ecs-express')
 const isLocalDocker = computed(() => form.backend === 'local-docker')
+// "auto" port is local-docker-only (see backend/its_a_live.generate_toml
+// validation) -- fall back to an explicit port if the backend is switched
+// away from local-docker while it's toggled on.
+watch(
+  () => form.backend,
+  (backend) => {
+    if (backend !== 'local-docker' && autoPort.value) {
+      autoPort.value = false
+    }
+  },
+)
 // Both ecs-express and local-docker bake+serve via loop-dee-loop and share
 // [packaging]/[markers]; `port` itself lands in [express] for ecs-express
 // or the local-docker-only [docker] section (generate_toml() picks the
@@ -212,7 +237,21 @@ async function submit() {
         </div>
         <div class="col-12 flex flex-column gap-1">
           <label for="port">Serve port{{ isLocalDocker ? ' (also the host port -- http://localhost:<port>)' : '' }}</label>
-          <InputNumber id="port" v-model="form.port" :use-grouping="false" />
+          <div v-if="isLocalDocker" class="flex align-items-center gap-2">
+            <Checkbox v-model="autoPort" binary input-id="auto-port" />
+            <label for="auto-port" class="text-sm">Auto-select a free port</label>
+          </div>
+          <InputNumber
+            v-if="!isLocalDocker || !autoPort"
+            id="port"
+            v-model="form.port as number"
+            :use-grouping="false"
+          />
+          <div v-else class="text-color-secondary text-sm">
+            A free port (8080-8179, skipping any already in use -- e.g. by other local-docker
+            channels) is picked when the container is first started, and reused by
+            start/refresh/status afterwards.
+          </div>
         </div>
         <template v-if="isEcsExpress">
           <div class="col-6 flex flex-column gap-1">

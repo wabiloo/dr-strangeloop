@@ -18,6 +18,7 @@ import datetime
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 
@@ -53,8 +54,71 @@ def _local_output_dir(cfg, channel_name):
     ))
 
 
-def _port(cfg):
-    return int(cfg.get("docker", {}).get("port", 8080))
+_AUTO_PORT_RANGE = range(8080, 8180)
+
+
+def _port_is_free(port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("0.0.0.0", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def _find_free_port():
+    for candidate in _AUTO_PORT_RANGE:
+        if _port_is_free(candidate):
+            return candidate
+    sys.exit(f"Could not find a free port in {_AUTO_PORT_RANGE.start}-{_AUTO_PORT_RANGE.stop - 1} "
+              f"for local-docker auto port selection -- set docker.port explicitly in the config.")
+
+
+def _running_port(name):
+    """The --port value a running (or stopped-but-not-removed) container
+    was actually launched with, read back from its own launch command --
+    mirrors _running_epoch. Used so an "auto"-selected port stays stable
+    across start/refresh/status calls instead of being re-picked (and
+    potentially landing on a different free port) every time."""
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{json .Config.Cmd}}", name],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        cmd = json.loads(result.stdout)
+    except ValueError:
+        return None
+    if "--port" in cmd:
+        idx = cmd.index("--port")
+        if idx + 1 < len(cmd):
+            try:
+                return int(cmd[idx + 1])
+            except ValueError:
+                return None
+    return None
+
+
+def _resolve_port(cfg, name):
+    """Explicit docker.port wins outright. In "auto" mode (the default),
+    reuse whatever port an existing container for this channel (running
+    or stopped, as long as it still exists) was last launched with, so
+    repeated start/refresh/status calls never disagree about a channel's
+    port. Only picks a brand new free port -- skipping any port already
+    bound on this host, which naturally avoids other running channels'
+    containers too -- when there's truly no prior container to recover
+    one from."""
+    raw = cfg.get("docker", {}).get("port", "auto")
+    if raw != "auto":
+        return int(raw)
+    running_port = _running_port(name)
+    if running_port is not None:
+        return running_port
+    return _find_free_port()
 
 
 def _dvr_window_seconds(cfg):
@@ -201,7 +265,7 @@ def start(cfg, session, outputs, extra_args=None):
     channel_name = cfg.get("deploy", {}).get("name", "default")
     name = _container_name(channel_name)
     local_output_dir = _local_output_dir(cfg, channel_name)
-    port = _port(cfg)
+    port = _resolve_port(cfg, name)
 
     if not os.path.isdir(local_output_dir) or not os.listdir(local_output_dir):
         sys.exit(f"No baked loop package found at {local_output_dir} -- run "
@@ -271,7 +335,7 @@ def refresh(cfg, session, outputs):
     _require_docker()
     channel_name = cfg.get("deploy", {}).get("name", "default")
     name = _container_name(channel_name)
-    port = _port(cfg)
+    port = _resolve_port(cfg, name)
     local_output_dir = _local_output_dir(cfg, channel_name)
 
     if not os.path.isdir(local_output_dir) or not os.listdir(local_output_dir):
@@ -308,14 +372,21 @@ def status(cfg, session, outputs):
     _require_docker()
     channel_name = cfg.get("deploy", {}).get("name", "default")
     name = _container_name(channel_name)
-    port = _port(cfg)
     docker_status = _container_status(name)
+    # Unlike start/refresh, never picks a brand new port here -- status is
+    # read-only and shouldn't claim a free port that nothing is bound to.
+    # In "auto" mode with no container ever created for this channel yet,
+    # there simply isn't a port to report.
+    raw_port = cfg.get("docker", {}).get("port", "auto")
+    port = int(raw_port) if raw_port != "auto" else _running_port(name)
     result = {
         "backend": "local-docker",
         "container_name": name,
         "status": docker_status or "not created",
-        "hls_url": f"http://localhost:{port}/master.m3u8" if docker_status == "running" else None,
-        "dash_url": f"http://localhost:{port}/manifest.mpd" if docker_status == "running" else None,
+        "port": port,
+        "hls_url": f"http://localhost:{port}/master.m3u8" if docker_status == "running" and port else None,
+        "dash_url": f"http://localhost:{port}/manifest.mpd" if docker_status == "running" and port else None,
     }
-    print(f"Container {name}: status={result['status']}")
+    print(f"Container {name}: status={result['status']}"
+          + (f", port={port}" if port else ", port=not yet assigned"))
     return result

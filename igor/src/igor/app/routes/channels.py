@@ -6,7 +6,7 @@ import re
 
 import httpx
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from igor.integrations import franken_ts, its_a_live
 from igor.store import channels as channel_store
@@ -30,7 +30,10 @@ class ChannelCreatePayload(BaseModel):
     source_path: str
     segment_duration: float = 4.0
     dvr_window_seconds: float = 30
-    port: int = 8080
+    # int to pin an explicit host port, "auto" (local-docker only) to let
+    # it self-select a free one at start/refresh time -- see
+    # its-a-live/AGENTS.md and _local_docker_ops._resolve_port.
+    port: int | str = 8080
     cpu: int = 256
     memory: int = 512
     # [markers] -- shape of the HLS/DASH SCTE-35 signaling loop-dee-loop's
@@ -49,6 +52,15 @@ class ChannelCreatePayload(BaseModel):
             )
         return v
 
+    @field_validator("port")
+    @classmethod
+    def _validate_port(cls, v: int | str) -> int | str:
+        if isinstance(v, str):
+            if v != "auto":
+                raise ValueError("port must be an integer, or the string 'auto' (local-docker only)")
+            return v
+        return v
+
     @field_validator("daterange_mode")
     @classmethod
     def _validate_daterange_mode(cls, v: str) -> str:
@@ -62,6 +74,12 @@ class ChannelCreatePayload(BaseModel):
         if v not in ("none", "alongside", "only"):
             raise ValueError("cue_tags must be 'none', 'alongside', or 'only'")
         return v
+
+    @model_validator(mode="after")
+    def _validate_port_backend(self) -> "ChannelCreatePayload":
+        if self.port == "auto" and self.backend != "local-docker":
+            raise ValueError("port: 'auto' is only supported for the local-docker backend")
+        return self
 
 
 @router.get("/")
@@ -197,7 +215,16 @@ async def channel_health(name: str) -> dict:
     backend = cfg.get("deploy", {}).get("backend")
 
     if backend == "local-docker":
-        port = cfg.get("docker", {}).get("port", 8080)
+        # docker.port may be "auto" in the TOML -- ask channel.py for the
+        # actually-resolved/running port (it reads it back off the
+        # container itself) rather than reading the raw config value.
+        status = its_a_live.get_status(channel_store.config_path_for(name))
+        port = status.get("port")
+        if not port:
+            raise HTTPException(
+                status_code=404,
+                detail="No local-docker container running yet for this channel.",
+            )
         url = f"http://localhost:{port}/health"
     elif backend == "ecs-express":
         outputs = its_a_live.get_outputs(channel_store.config_path_for(name))
