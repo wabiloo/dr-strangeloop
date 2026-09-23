@@ -56,6 +56,17 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
       </div>
     </header>
 
+    <!-- Continuation of the header's brand mark, as a background layer
+         behind the page content -- same source artwork, the section just
+         below what the header crop shows, same width/left-offset so the
+         two line up. Lives outside .app-main (which caps at 1400px and
+         would otherwise clip it) so it can render at full width, the same
+         way the header's own wavy background isn't confined to
+         .app-header-inner either. -->
+    <div class="app-body-mark-wrap">
+      <img src="/brand-mark-bottom.png" alt="" class="app-body-mark" />
+    </div>
+
     <main class="app-main">
       <RouterView />
     </main>
@@ -67,9 +78,15 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
 
 <style scoped>
 .app-shell {
+  position: relative;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  /* Clips bleed past the true viewport edge only (like .app-header's own
+     overflow: hidden already does for the header mark/waves) -- not past
+     .app-main's 1400px content column, which is the whole point of hosting
+     .app-body-mark-wrap here instead of inside .app-main. */
+  overflow-x: hidden;
 }
 
 .app-header {
@@ -122,6 +139,48 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
   display: block;
 }
 
+.app-body-mark-wrap {
+  /* Positioned absolute, outside the flow, so it never pushes .app-main's
+     content down -- and NOT capped at 1400px itself, so the image inside
+     can render at full width even where that extends past .app-main's
+     content column (only .app-shell's overflow-x: hidden above, at the
+     true viewport edge, ever clips it -- same as the header). The inner
+     max-width/margin/padding here exists purely to reproduce
+     .app-header-inner's own box (same values) so `left: -5rem` on the
+     image below lands at the identical X the header mark's own
+     `margin-left: -5rem` does. */
+  position: absolute;
+  top: 3.5rem;
+  left: 0;
+  right: 0;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.app-body-mark {
+  /* Low opacity because this sits behind EVERY route via App.vue, not just
+     pages with empty space up top -- channel/playlist detail pages have
+     real content (name, tags, action buttons) right at the top, which a
+     full-opacity image here would visibly compete with/obscure. */
+  /* -3.5rem, not -5rem: an absolutely positioned child's `left` is measured
+     from the containing block's PADDING edge (i.e. before
+     .app-body-mark-wrap's own 1.5rem padding is applied), while the header
+     mark's `margin-left: -5rem` is measured from its flex-flow position
+     (already past .app-header-inner's matching 1.5rem padding) -- same
+     nominal offset, two different reference points 1.5rem apart. Verified
+     against getBoundingClientRect() on both marks: this value lands them
+     at the identical viewport X. */
+  position: absolute;
+  top: 0;
+  left: -3.5rem;
+  width: 270px;
+  height: auto;
+  opacity: 0.08;
+}
+
 .app-brand-text {
   font-family: 'Irish Grover', 'Georgia', serif;
   font-size: 1.9rem;
@@ -168,6 +227,12 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
 }
 
 .app-main {
+  /* position + z-index so this stacks above .app-body-mark-wrap: a
+     positioned element (however low its z-index) always paints above a
+     static one regardless of DOM order, so without this the mark would
+     render on TOP of the page content instead of behind it. */
+  position: relative;
+  z-index: 1;
   flex: 1;
   padding: 1.5rem;
   max-width: 1400px;
