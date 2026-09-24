@@ -208,7 +208,7 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
   color: #94a3b8;
   text-decoration: none;
   font-weight: 500;
-  font-size: 0.9rem;
+  font-size: 1.05rem;
   padding: 0 0.9rem;
   transition: color 0.12s ease;
 }

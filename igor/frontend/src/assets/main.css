@@ -2,7 +2,7 @@
 body {
   margin: 0;
   font-family:
-    Inter,
+    'Space Grotesk',
     -apple-system,
     BlinkMacSystemFont,
     'Segoe UI',
@@ -13,6 +13,18 @@ body {
 
 #app {
   min-height: 100vh;
+}
+
+/* Form controls (button, input, select, textarea) don't inherit font-family
+ * from ancestors by default in browsers, so PrimeVue's buttons, tabs, and
+ * inputs -- most of which render as native <button>/<input> elements --
+ * would otherwise fall back to the UA default font instead of the one set
+ * on body above. */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
 code {
