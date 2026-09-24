@@ -264,9 +264,16 @@ def report_html_path(name: str) -> Path:
 
 def report_status(name: str) -> dict:
     playlist_path = _resolve_path(name)
+    output_path = output_ts_path(name)
     report_path = report_html_path(name)
     exists = report_path.is_file()
-    stale = (not exists) or report_path.stat().st_mtime < playlist_path.stat().st_mtime
+    # A reassemble replaces the TS without changing the saved playlist YAML.
+    # The report verifies that TS, so an older report must not be shown as
+    # current merely because the playlist itself has not changed.
+    newest_input_mtime = playlist_path.stat().st_mtime
+    if output_path.is_file():
+        newest_input_mtime = max(newest_input_mtime, output_path.stat().st_mtime)
+    stale = (not exists) or report_path.stat().st_mtime < newest_input_mtime
     return {"exists": exists, "stale": stale}
 
 

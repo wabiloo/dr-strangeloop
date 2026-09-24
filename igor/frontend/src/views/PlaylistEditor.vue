@@ -2101,19 +2101,41 @@ function applyHexPopover() {
               </span>
             </div>
 
-            <div v-if="reportStatus?.exists && !reportStatus.stale && !buildRunning" class="flex flex-column gap-2">
-              <Button label="Check its guts" icon="pi pi-search" severity="secondary" outlined :loading="checkingGuts" :disabled="isNew || isDirty || building" @click="checkGuts" class="self-start" />
+            <div v-if="outputStatus?.exists && !outputStatus.stale && !buildRunning" class="flex flex-column gap-2">
+              <span class="font-bold">Verification</span>
+              <span class="text-color-secondary text-sm">
+                Rechecks the saved playlist's source files, rebuilds the expected asset timeline, detects IDR frame
+                timestamps, and verifies that injected SCTE-35 markers match the expected splice boundaries. The
+                generated report includes per-asset timing and marker diagnostics for the assembled TS.
+              </span>
+              <div class="flex align-items-center gap-2">
+                <Button
+                  label="Check its guts"
+                  icon="pi pi-search"
+                  severity="secondary"
+                  outlined
+                  :loading="checkingGuts"
+                  :disabled="isNew || isDirty || building"
+                  @click="checkGuts"
+                  style="width: fit-content"
+                />
+                <Button
+                  v-if="reportStatus?.exists && !reportStatus.stale && reportUrl && !checkingGuts"
+                  as="a"
+                  :href="reportUrl"
+                  target="_blank"
+                  rel="noopener"
+                  label="Open in new tab"
+                  icon="pi pi-external-link"
+                  severity="secondary"
+                  outlined
+                  class="report-open-button"
+                />
+              </div>
             </div>
             <JobPanel v-if="reportJobId" :job-id="reportJobId" @finished="onReportFinished" />
 
             <div v-if="reportStatus?.exists && !reportStatus.stale && reportUrl && !buildRunning && !checkingGuts" class="flex flex-column gap-2">
-              <div class="flex align-items-center justify-content-between gap-2">
-                <span class="font-bold">Verification report</span>
-                <a :href="reportUrl" target="_blank" rel="noopener" class="p-button p-button-outlined p-button-sm">
-                  <i class="pi pi-external-link" />
-                  <span>Open report</span>
-                </a>
-              </div>
               <iframe :src="reportUrl" title="franken-ts verification report" class="report-frame" />
             </div>
           </div>
@@ -2395,6 +2417,10 @@ function applyHexPopover() {
   width: 100%;
   border-radius: 4px;
   background: #000;
+}
+
+.report-open-button {
+  text-decoration: none;
 }
 
 .report-frame {
