@@ -12,6 +12,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { buildPlaylist, deletePlaylist, duplicatePlaylist, listPlaylists } from '../api/client'
 import type { PlaylistListItem } from '../api/types'
+import { alignConfirmPopup } from '../utils/confirmPopup'
 
 const router = useRouter()
 const confirm = useConfirm()
@@ -52,20 +53,21 @@ function outputBasename(path: string) {
 }
 
 function confirmDelete(event: MouseEvent, name: string) {
+  const target = (event.target as HTMLElement).closest('button') ?? (event.target as HTMLElement)
   confirm.require({
-    target: event.currentTarget as HTMLElement,
+    target,
     message: `Delete playlist "${name}"?`,
     accept: async () => {
       await deletePlaylist(name)
       await load()
     },
   })
+  alignConfirmPopup(target)
 }
 
 // -- Duplicate ---------------------------------------------------------
-// No existing modal-name-prompt pattern elsewhere in this view (delete
-// uses an inline ConfirmPopup, new-playlist just navigates to a full
-// editor route) -- a small Dialog with a single name field is the
+// No existing modal-name-prompt pattern elsewhere in this view (new-playlist
+// just navigates to a full editor route) -- a small Dialog with a single name field is the
 // simplest fit here, since duplicate needs a *new* name up front rather
 // than a full form.
 const duplicateSource = ref<string | null>(null)

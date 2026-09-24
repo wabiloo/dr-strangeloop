@@ -12,6 +12,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import { deleteChannel, getJob, listChannels, startChannel, stopChannel } from '../api/client'
 import type { ChannelListItem, Job } from '../api/types'
 import { PHASE_LABEL, isUpButMaybeUnreachable, listItemPhase, phaseSeverity } from '../utils/channelPhase'
+import { alignConfirmPopup } from '../utils/confirmPopup'
 
 const router = useRouter()
 const confirm = useConfirm()
@@ -109,8 +110,9 @@ function deleteDisabledReason(channel: ChannelListItem) {
 }
 
 async function confirmDelete(event: MouseEvent, channel: ChannelListItem) {
+  const target = (event.target as HTMLElement).closest('button') ?? (event.target as HTMLElement)
   confirm.require({
-    target: event.currentTarget as HTMLElement,
+    target,
     message: `Delete channel "${channel.name}"? This only removes its local config -- there is nothing deployed to tear down.`,
     accept: async () => {
       try {
@@ -126,6 +128,7 @@ async function confirmDelete(event: MouseEvent, channel: ChannelListItem) {
       }
     },
   })
+  alignConfirmPopup(target)
 }
 
 // Start/Stop mirror ChannelDetail.vue's stream actions -- see there for

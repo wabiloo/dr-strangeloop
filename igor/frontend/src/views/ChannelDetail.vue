@@ -13,6 +13,7 @@ import { useToast } from 'primevue/usetoast'
 import ItsAliveBanner from '../components/ItsAliveBanner.vue'
 import JobPanel from '../components/JobPanel.vue'
 import PlaybackPanel from '../components/PlaybackPanel.vue'
+import { alignConfirmPopup } from '../utils/confirmPopup'
 import {
   createChannel,
   getChannel,
@@ -555,12 +556,14 @@ function onActionClick(event: MouseEvent, a: ActionDef) {
     run(a.key, a.fn, a.eta)
     return
   }
+  const target = (event.target as HTMLElement).closest('button') ?? (event.target as HTMLElement)
   confirm.require({
-    target: event.currentTarget as HTMLElement,
+    target,
     message: a.confirmMessage,
     acceptClass: 'p-button-danger',
     accept: () => run(a.key, a.fn, a.eta),
   })
+  alignConfirmPopup(target)
 }
 
 async function run(action: string, fn: () => Promise<{ id: string }>, eta = '') {

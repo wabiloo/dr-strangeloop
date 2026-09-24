@@ -2,6 +2,7 @@
 import Button from 'primevue/button'
 import Checkbox from 'primevue/checkbox'
 import ColorPicker from 'primevue/colorpicker'
+import ConfirmPopup from 'primevue/confirmpopup'
 import Dialog from 'primevue/dialog'
 import Divider from 'primevue/divider'
 import InputGroup from 'primevue/inputgroup'
@@ -20,6 +21,7 @@ import Tabs from 'primevue/tabs'
 import Textarea from 'primevue/textarea'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import { buildPlaylist, buildPlaylistReport, getOutputStatus, getPlaylist, getPreviewStatus, getReportStatus, playlistPreviewUrl, playlistReportUrl, probeMedia, resolveMarkers, savePlaylist } from '../api/client'
 import type { Job, ResolvedMarker } from '../api/types'
@@ -27,6 +29,7 @@ import AssetTimeline from '../components/AssetTimeline.vue'
 import AssetFileField from '../components/AssetFileField.vue'
 import JobPanel from '../components/JobPanel.vue'
 import { parseApproxSeconds } from '../utils/duration'
+import { alignConfirmPopup } from '../utils/confirmPopup'
 import {
   SEGMENTATION_PAIR_OPTIONS,
   UPID_TYPE_OPTIONS,
@@ -40,6 +43,7 @@ import { isInstantMarker, layoutMarkers, nextEventId, orderForDisplay } from '..
 
 const props = defineProps<{ name: string | null }>()
 const router = useRouter()
+const confirm = useConfirm()
 const toast = useToast()
 
 const nameInput = ref(props.name ?? '')
@@ -804,6 +808,7 @@ function insertChainOptions(chain: InsertMarkerChain): { value: number; label: s
 
 // ── Splitting an asset into two ─────────────────────────────────────────────
 const splitDialogIndex = ref<number | null>(null)
+const splitPopupTarget = ref<HTMLElement | null>(null)
 const splitFirstPartInput = ref('')
 const splitError = ref('')
 
@@ -819,17 +824,31 @@ function knownTotalSeconds(asset: AssetForm): number | null {
   return parseApproxSeconds(asset.duration)
 }
 
-function startSplit(index: number) {
+function startSplit(payload: { index: number; target: HTMLElement }) {
+  const index = payload.index
   const asset = form.assets[index]
   if (!asset) return
   splitDialogIndex.value = index
+  splitPopupTarget.value = payload.target
   splitError.value = ''
   const total = knownTotalSeconds(asset)
   splitFirstPartInput.value = total !== null ? `${(total / 2).toFixed(2)}s` : ''
+  confirm.require({
+    target: payload.target,
+    message: '',
+    accept: () => undefined,
+    reject: cancelSplit,
+  })
+  alignConfirmPopup(payload.target)
 }
 
 function cancelSplit() {
   splitDialogIndex.value = null
+  splitPopupTarget.value = null
+}
+
+function acceptSplit(acceptCallback: () => void) {
+  if (confirmSplit()) acceptCallback()
 }
 
 /** A fresh id for the split-off second half: "<original>-2", "-3", ... to
@@ -842,28 +861,28 @@ function generateSplitId(baseId: string): string {
   return `${baseId}-${suffix}`
 }
 
-function confirmSplit() {
+function confirmSplit(): boolean {
   const index = splitDialogIndex.value
-  if (index === null) return
+  if (index === null) return false
   const asset = form.assets[index]
-  if (!asset) return
+  if (!asset) return false
 
   const firstPartSeconds = parseApproxSeconds(splitFirstPartInput.value)
   if (firstPartSeconds === null || firstPartSeconds <= 0) {
     splitError.value = 'Enter a valid duration (e.g. "90s", "1:30", "1 min 30 sec").'
-    return
+    return false
   }
 
   const originalStartSeconds = asset.start.trim() ? parseApproxSeconds(asset.start) : 0
   if (originalStartSeconds === null) {
     splitError.value = `Can't parse this asset's own start ("${asset.start}") -- fix it before splitting.`
-    return
+    return false
   }
 
   const totalSeconds = knownTotalSeconds(asset)
   if (totalSeconds !== null && firstPartSeconds >= totalSeconds) {
     splitError.value = `Must be less than the asset's total duration (${totalSeconds.toFixed(2)}s).`
-    return
+    return false
   }
 
   const secondId = generateSplitId(asset.id)
@@ -885,7 +904,9 @@ function confirmSplit() {
   })
 
   splitDialogIndex.value = null
+  splitPopupTarget.value = null
   selectAsset(index)
+  return true
 }
 
 function addRendition() {
@@ -2170,35 +2191,32 @@ function applyHexPopover() {
       </template>
     </Dialog>
 
-    <Dialog
-      :visible="splitDialogIndex !== null"
-      modal
-      header="Split asset"
-      :style="{ width: '28rem' }"
-      @update:visible="cancelSplit"
-    >
-      <div v-if="splitDialogIndex !== null" class="flex flex-column gap-3">
-        <p class="text-sm text-color-secondary m-0">
-          Splits "{{ form.assets[splitDialogIndex].id }}" into two assets at the given offset -- the first part
-          keeps this asset's id, start and fade-in; the second gets a new id, the shifted start, and this
-          asset's fade-out.
-        </p>
-        <div class="flex flex-column gap-1">
-          <label>Duration of the first part</label>
-          <InputText
-            v-model="splitFirstPartInput"
-            placeholder="e.g. 90s, 1:30, 1 min 30 sec"
-            autofocus
-            @keydown.enter="confirmSplit"
-          />
+    <ConfirmPopup>
+      <template #container="{ acceptCallback, rejectCallback }">
+        <div v-if="splitDialogIndex !== null" class="flex flex-column gap-3 p-3" style="width: 28rem; max-width: calc(100vw - 1rem)">
+          <strong>Split asset</strong>
+          <p class="text-sm text-color-secondary m-0">
+            Splits "{{ form.assets[splitDialogIndex].id }}" into two assets at the given offset -- the first part
+            keeps this asset's id, start and fade-in; the second gets a new id, the shifted start, and this
+            asset's fade-out.
+          </p>
+          <div class="flex flex-column gap-1">
+            <label>Duration of the first part</label>
+            <InputText
+              v-model="splitFirstPartInput"
+              placeholder="e.g. 90s, 1:30, 1 min 30 sec"
+              autofocus
+              @keydown.enter="acceptSplit(acceptCallback)"
+            />
+          </div>
+          <Message v-if="splitError" severity="error" class="text-sm">{{ splitError }}</Message>
+          <div class="flex justify-content-end gap-2">
+            <Button label="Cancel" text @click="rejectCallback" />
+            <Button label="Split" @click="acceptSplit(acceptCallback)" />
+          </div>
         </div>
-        <Message v-if="splitError" severity="error" class="text-sm">{{ splitError }}</Message>
-      </div>
-      <template #footer>
-        <Button label="Cancel" text @click="cancelSplit" />
-        <Button label="Split" @click="confirmSplit" />
       </template>
-    </Dialog>
+    </ConfirmPopup>
 
     <Dialog
       v-model:visible="bootstrapOpen"

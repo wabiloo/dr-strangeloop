@@ -38,7 +38,7 @@ const emit = defineEmits<{
   select: [index: number]
   add: [index?: number]
   bootstrap: [index?: number]
-  split: [index: number]
+  split: [payload: { index: number; target: HTMLElement }]
   tagRange: [range: { startIndex: number; endIndex: number }]
   editMarker: [eventId: number]
   hoverMarker: [eventId: number | null]
@@ -54,7 +54,7 @@ const emit = defineEmits<{
 const addMenuRef = ref<InstanceType<typeof Menu> | null>(null)
 const addMenuItems: MenuItem[] = [
   { label: 'Add single asset', icon: 'pi pi-plus', command: () => emit('add') },
-  { label: 'Bootstrap from files...', icon: 'pi pi-list', command: () => emit('bootstrap') },
+  { label: 'Add multiple assets...', icon: 'pi pi-list', command: () => emit('bootstrap') },
 ]
 function toggleAddMenu(event: Event) {
   addMenuRef.value?.toggle(event)
@@ -64,7 +64,7 @@ const insertMenuRef = ref<InstanceType<typeof Menu> | null>(null)
 const pendingInsertIndex = ref<number | null>(null)
 const insertMenuItems: MenuItem[] = [
   { label: 'Insert single asset', icon: 'pi pi-plus', command: () => emit('add', pendingInsertIndex.value ?? undefined) },
-  { label: 'Bootstrap from files...', icon: 'pi pi-list', command: () => emit('bootstrap', pendingInsertIndex.value ?? undefined) },
+  { label: 'Insert multiple assets...', icon: 'pi pi-list', command: () => emit('bootstrap', pendingInsertIndex.value ?? undefined) },
 ]
 function toggleInsertMenu(event: Event, index: number) {
   pendingInsertIndex.value = index
@@ -468,7 +468,7 @@ watch(
                 class="timeline-split-btn"
                 :style="{ left: pt.percent + '%' }"
                 title="Split this asset in two"
-                @click="emit('split', pt.index)"
+                @click="emit('split', { index: pt.index, target: $event.currentTarget as HTMLElement })"
               >
                 <i class="pi pi-arrows-h" />
               </button>
