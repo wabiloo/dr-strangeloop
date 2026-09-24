@@ -470,7 +470,7 @@ watch(
                 title="Split this asset in two"
                 @click="emit('split', pt.index)"
               >
-                <i class="pi pi-arrows-h" />
+                &divide;
               </button>
             </div>
           </div>
@@ -684,47 +684,37 @@ watch(
 .timeline-insert-sub-row,
 .timeline-split-sub-row {
   position: relative;
-  height: 0.9rem;
+  height: 1.15rem;
 }
 
+/* Same square/rounded/gray treatment as the end-of-timeline
+   .timeline-add-segment button, just scaled down to fit between
+   segments. */
 .timeline-insert-btn,
 .timeline-split-btn {
   position: absolute;
   top: 0;
   transform: translateX(-50%);
-  width: 0.9rem;
-  height: 0.9rem;
+  width: 1.15rem;
+  height: 1.15rem;
   padding: 0;
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  color: #475569;
   cursor: pointer;
-  font-size: 0.5rem;
+  font-size: 0.65rem;
   line-height: 1;
   z-index: 2;
 }
 
-.timeline-insert-btn {
-  border: 1px solid #94a3b8;
-  background: #fff;
-  color: #475569;
-}
-
-.timeline-insert-btn:hover {
+.timeline-insert-btn:hover,
+.timeline-split-btn:hover {
   background: #e2e8f0;
   color: #0f172a;
-}
-
-.timeline-split-btn {
-  border: 1px solid #fbbf24;
-  background: #fffbeb;
-  color: #92400e;
-}
-
-.timeline-split-btn:hover {
-  background: #fef3c7;
-  color: #78350f;
 }
 
 .timeline-ruler {
