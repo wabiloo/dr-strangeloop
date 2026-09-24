@@ -684,7 +684,7 @@ watch(
 .timeline-insert-sub-row,
 .timeline-split-sub-row {
   position: relative;
-  height: 0.85rem;
+  height: 1.1rem;
 }
 
 /* Same square/rounded/gray treatment as the end-of-timeline
@@ -695,19 +695,17 @@ watch(
   position: absolute;
   top: 0;
   transform: translateX(-50%);
-  width: 0.85rem;
-  height: 0.85rem;
+  width: 1.1rem;
+  height: 1.1rem;
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   background: #f1f5f9;
   border: 1px solid #cbd5e1;
-  border-radius: 3px;
+  border-radius: 4px;
   color: #475569;
   cursor: pointer;
-  font-size: 0.4rem;
-  line-height: 1;
   z-index: 2;
 }
 
@@ -715,6 +713,15 @@ watch(
 .timeline-split-btn:hover {
   background: #e2e8f0;
   color: #0f172a;
+}
+
+/* PrimeVue's base styles set `.pi { font-size: dt('icon.size') }` directly
+ * on the icon itself (not inherited from an ancestor's font-size), so the
+ * only way to size these glyphs smaller than that global default is to
+ * override .pi here with higher selector specificity. */
+.timeline-insert-btn .pi,
+.timeline-split-btn .pi {
+  font-size: 0.55rem;
 }
 
 .timeline-ruler {
