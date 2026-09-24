@@ -36,14 +36,21 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   select: [index: number]
-  add: []
-  bootstrap: []
+  add: [index?: number]
+  bootstrap: [index?: number]
+  split: [index: number]
   tagRange: [range: { startIndex: number; endIndex: number }]
   editMarker: [eventId: number]
   hoverMarker: [eventId: number | null]
 }>()
 
 // ── Add-asset "+" button: single asset vs bootstrap-from-files popup menu ──
+// Two instances of the same two-item menu: `addMenuRef` for the fixed
+// end-of-timeline button (always appends, no index), `insertMenuRef` shared
+// by every inter-asset "+" joint button (see insertJoints below) -- each
+// joint click records its own target index in `pendingInsertIndex` right
+// before opening the popup, which the (fixed, non-reactive) menu commands
+// read at click time.
 const addMenuRef = ref<InstanceType<typeof Menu> | null>(null)
 const addMenuItems: MenuItem[] = [
   { label: 'Add single asset', icon: 'pi pi-plus', command: () => emit('add') },
@@ -51,6 +58,17 @@ const addMenuItems: MenuItem[] = [
 ]
 function toggleAddMenu(event: Event) {
   addMenuRef.value?.toggle(event)
+}
+
+const insertMenuRef = ref<InstanceType<typeof Menu> | null>(null)
+const pendingInsertIndex = ref<number | null>(null)
+const insertMenuItems: MenuItem[] = [
+  { label: 'Insert single asset', icon: 'pi pi-plus', command: () => emit('add', pendingInsertIndex.value ?? undefined) },
+  { label: 'Bootstrap from files...', icon: 'pi pi-list', command: () => emit('bootstrap', pendingInsertIndex.value ?? undefined) },
+]
+function toggleInsertMenu(event: Event, index: number) {
+  pendingInsertIndex.value = index
+  insertMenuRef.value?.toggle(event)
 }
 
 const FALLBACK_SECONDS = 15 // weight used for assets with no known/parseable duration
@@ -80,6 +98,27 @@ const segments = computed(() => {
 
 const totalSeconds = computed(() => segments.value.reduce((sum, s) => sum + s.seconds, 0) || 1)
 const hasApproxSegments = computed(() => segments.value.some((s) => s.approx))
+
+// ── Inter-asset "+" joints and per-asset split buttons ─────────────────────
+// One joint per gap BETWEEN two existing assets (not before the first or
+// after the last -- those are already covered by the end-of-timeline add
+// button); `index` is the position the new asset(s) will occupy once
+// inserted (i.e. splice(index, 0, ...)).
+const insertJoints = computed(() => {
+  const segs = segments.value
+  const total = totalSeconds.value
+  const joints: { index: number; percent: number }[] = []
+  for (let i = 0; i < segs.length - 1; i++) {
+    joints.push({ index: i + 1, percent: (segs[i + 1].offsetSeconds / total) * 100 })
+  }
+  return joints
+})
+
+const splitPoints = computed(() => {
+  const segs = segments.value
+  const total = totalSeconds.value
+  return segs.map((s, i) => ({ index: i, percent: ((s.offsetSeconds + s.seconds / 2) / total) * 100 }))
+})
 
 /** "Nice" round numbers to space ruler ticks at, in seconds. */
 const NICE_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200]
@@ -402,6 +441,41 @@ watch(
             </div>
           </div>
 
+          <!-- Insert-joint "+" buttons (between two existing assets) and
+               per-asset split buttons -- both positioned by the same
+               percent-of-total-duration math as the segments/ruler above,
+               so they always land exactly on the boundary/midpoint they
+               represent regardless of zoom. -->
+          <div class="timeline-actions-row">
+            <div class="timeline-insert-sub-row">
+              <button
+                v-for="joint in insertJoints"
+                :key="'joint-' + joint.index"
+                type="button"
+                class="timeline-insert-btn"
+                :style="{ left: joint.percent + '%' }"
+                title="Insert asset(s) here"
+                @click="toggleInsertMenu($event, joint.index)"
+              >
+                <i class="pi pi-plus" />
+              </button>
+            </div>
+            <div class="timeline-split-sub-row">
+              <button
+                v-for="pt in splitPoints"
+                :key="'split-' + pt.index"
+                type="button"
+                class="timeline-split-btn"
+                :style="{ left: pt.percent + '%' }"
+                title="Split this asset in two"
+                @click="emit('split', pt.index)"
+              >
+                <i class="pi pi-arrows-h" />
+              </button>
+            </div>
+          </div>
+          <Menu ref="insertMenuRef" :model="insertMenuItems" :popup="true" />
+
           <div class="timeline-ruler">
             <div
               v-for="(tick, i) in ticks"
@@ -599,6 +673,58 @@ watch(
   font-size: 0.65rem;
   color: #0f172acc;
   white-space: nowrap;
+}
+
+.timeline-actions-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.timeline-insert-sub-row,
+.timeline-split-sub-row {
+  position: relative;
+  height: 0.9rem;
+}
+
+.timeline-insert-btn,
+.timeline-split-btn {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  width: 0.9rem;
+  height: 0.9rem;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.5rem;
+  line-height: 1;
+  z-index: 2;
+}
+
+.timeline-insert-btn {
+  border: 1px solid #94a3b8;
+  background: #fff;
+  color: #475569;
+}
+
+.timeline-insert-btn:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.timeline-split-btn {
+  border: 1px solid #fbbf24;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.timeline-split-btn:hover {
+  background: #fef3c7;
+  color: #78350f;
 }
 
 .timeline-ruler {

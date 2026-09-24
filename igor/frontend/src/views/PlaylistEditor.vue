@@ -346,9 +346,14 @@ function selectAsset(i: number) {
   markerDraft.value = null
 }
 
-function addAsset() {
-  form.assets.push(newAsset())
-  selectAsset(form.assets.length - 1)
+function addAsset(index?: number) {
+  const asset = newAsset()
+  if (index === undefined || index === null) {
+    form.assets.push(asset)
+    selectAsset(form.assets.length - 1)
+  } else {
+    insertAssetsAt(index, [asset])
+  }
 }
 
 // ── Bootstrap timeline from a flat list of files/URLs ──────────────────────
@@ -372,8 +377,14 @@ const bootstrapThreshold = ref('1 min')
 const bootstrapRows = ref<BootstrapRow[]>([])
 const bootstrapProbing = ref(false)
 const bootstrapProgress = ref(0)
+// Where commitBootstrap() splices the probed batch in -- undefined means
+// "append at the end" (the original behavior, still used by the toolbar's
+// "Bootstrap from files..." menu item); set when opened from an in-timeline
+// insert-joint "+" button instead (see insertMenuItems in AssetTimeline.vue).
+const bootstrapTargetIndex = ref<number | undefined>(undefined)
 
-function openBootstrap() {
+function openBootstrap(index?: number) {
+  bootstrapTargetIndex.value = index
   bootstrapText.value = ''
   bootstrapRows.value = []
   bootstrapProgress.value = 0
@@ -427,21 +438,24 @@ const bootstrapCanCommit = computed(
   () => bootstrapRows.value.length > 0 && !bootstrapHasErrors.value && !bootstrapProbing.value,
 )
 
-/** Appends the probed rows as new assets at the end of the current
- * timeline, and folds every consecutive run of ads (within this newly
- * added batch only -- pre-existing assets are left untouched) into one
- * `break` marker each. */
+/** Builds the probed rows into new assets (plus one `break` marker per
+ * consecutive run of ads within this batch), then inserts the whole batch
+ * at bootstrapTargetIndex (or appends, if unset) via insertAssetsAt --
+ * same marker-boundary handling as a single inserted asset (see
+ * insertAssetsAt/planInsert). */
 function commitBootstrap() {
   if (!bootstrapCanCommit.value) return
 
   const usedSoFar = [...usedEventIds.value]
   let adRun: string[] = []
+  const newAssets: AssetForm[] = []
+  const extraMarkers: MarkerForm[] = []
 
   function flushRun() {
     if (adRun.length === 0) return
     const eventId = nextEventId(usedSoFar)
     usedSoFar.push(eventId)
-    form.markers.push({
+    extraMarkers.push({
       event_id: eventId,
       splice_type: 'splice_insert',
       assets: [...adRun],
@@ -469,11 +483,11 @@ function commitBootstrap() {
     } else {
       flushRun()
     }
-    form.assets.push(asset)
+    newAssets.push(asset)
   }
   flushRun()
 
-  selectAsset(form.assets.length - 1)
+  insertAssetsAt(bootstrapTargetIndex.value ?? form.assets.length, newAssets, extraMarkers)
   bootstrapOpen.value = false
 }
 
@@ -646,6 +660,233 @@ const pendingAssetMoveOptions = computed(() => {
   }
   return options
 })
+
+// ── Inserting new asset(s) between existing ones ────────────────────────────
+// Mirrors the moveAsset/pendingAssetMove machinery above, but for insertion
+// rather than reordering: dropping new asset(s) at position `index` (i.e.
+// splice(index, 0, ...)) relative to a marker's [lo, hi] span can be:
+//  - unaffected (index <= lo or index > hi + 1): outside the span entirely.
+//  - forced (lo < index <= hi): strictly INSIDE the span -- there's no valid
+//    "leave the marker alone" option, since that would make its assets list
+//    non-contiguous, so the new asset(s) always join it (and, by
+//    containment, every ancestor marker too -- see the proof this relies on
+//    in the comment on InsertMarkerChain below).
+//  - optional (index === lo or index === hi + 1): exactly at one edge --
+//    the user chooses whether it extends the marker or not, same
+//    grow-innermost-first chain UI as pendingAssetMove's detachCount.
+interface InsertMarkerChain {
+  /** 'before': markers whose span ENDS right where the insertion happens
+   * (hi + 1 === index); 'after': markers whose span STARTS there
+   * (lo === index). A single insertion point can have at most one chain of
+   * each side (adjacent sibling marker trees meeting exactly at that point),
+   * and a marker can never appear in both -- see planInsert. */
+  side: 'before' | 'after'
+  /** Innermost (smallest span) first -- same ordering rationale as
+   * pendingAssetMove.chain: choosing to extend an inner marker but not its
+   * container would violate the container's own contiguity. */
+  markers: MarkerForm[]
+  /** How many of `markers`, counting from the innermost, the user has
+   * chosen to extend -- the rest are left untouched. Only 0..markers.length
+   * are valid (same reasoning as PendingAssetMove.detachCount). */
+  growCount: number
+}
+
+interface PendingAssetInsert {
+  index: number
+  newAssets: AssetForm[]
+  extraMarkers: MarkerForm[]
+  forced: MarkerForm[]
+  chains: InsertMarkerChain[]
+}
+const pendingAssetInsert = ref<PendingAssetInsert | null>(null)
+
+function planInsert(index: number, idToIndex: Map<string, number>): { forced: MarkerForm[]; chains: InsertMarkerChain[] } {
+  const forced: MarkerForm[] = []
+  const beforeCandidates: { m: MarkerForm; span: { lo: number; hi: number } }[] = []
+  const afterCandidates: { m: MarkerForm; span: { lo: number; hi: number } }[] = []
+
+  for (const m of form.markers) {
+    const span = markerSpan(m, idToIndex)
+    if (!span) continue
+    if (span.lo < index && index <= span.hi) {
+      forced.push(m)
+    } else if (span.hi + 1 === index) {
+      beforeCandidates.push({ m, span })
+    } else if (span.lo === index) {
+      afterCandidates.push({ m, span })
+    }
+  }
+
+  function toChain(candidates: { m: MarkerForm; span: { lo: number; hi: number } }[], side: 'before' | 'after'): InsertMarkerChain | null {
+    if (candidates.length === 0) return null
+    candidates.sort((a, b) => (a.span.hi - a.span.lo) - (b.span.hi - b.span.lo))
+    return { side, markers: candidates.map((c) => c.m), growCount: 0 }
+  }
+
+  const chains = [toChain(beforeCandidates, 'before'), toChain(afterCandidates, 'after')].filter(
+    (c): c is InsertMarkerChain => c !== null,
+  )
+  return { forced, chains }
+}
+
+function applyInsert(p: PendingAssetInsert) {
+  const newIds = p.newAssets.map((a) => a.id)
+  p.forced.forEach((m) => {
+    m.assets = [...m.assets, ...newIds]
+  })
+  p.chains.forEach((chain) => {
+    chain.markers.slice(0, chain.growCount).forEach((m) => {
+      m.assets = [...m.assets, ...newIds]
+    })
+  })
+  form.assets.splice(p.index, 0, ...p.newAssets)
+  form.markers.push(...p.extraMarkers)
+  selectAsset(p.index + p.newAssets.length - 1)
+}
+
+/** Inserts `newAssets` (plus any `extraMarkers` already scoped to just that
+ * batch, e.g. bootstrap's auto-detected ad-run markers -- always added
+ * unconditionally, since they only reference ids within the new batch and
+ * can't conflict with anything pre-existing) at `index`. Applies
+ * immediately when no existing marker's edge sits exactly at `index`;
+ * otherwise opens the pendingAssetInsert dialog for the user to choose. */
+function insertAssetsAt(index: number, newAssets: AssetForm[], extraMarkers: MarkerForm[] = []) {
+  const idToIndex = new Map(form.assets.map((a, i) => [a.id, i] as const))
+  const { forced, chains } = planInsert(index, idToIndex)
+
+  if (chains.length === 0) {
+    applyInsert({ index, newAssets, extraMarkers, forced, chains })
+    if (forced.length) {
+      toast.add({
+        severity: 'info',
+        summary: `Added into ${forced.length} marker${forced.length > 1 ? 's' : ''} to keep it contiguous`,
+        life: 3000,
+      })
+    }
+    return
+  }
+
+  pendingAssetInsert.value = { index, newAssets, extraMarkers, forced, chains }
+}
+
+function confirmPendingAssetInsert() {
+  const p = pendingAssetInsert.value
+  if (!p) return
+  applyInsert(p)
+  pendingAssetInsert.value = null
+}
+
+function cancelPendingAssetInsert() {
+  pendingAssetInsert.value = null
+}
+
+/** Radio options for one chain in the pending-insert dialog: 0 = leave every
+ * marker in the chain unchanged, N = extend the N innermost markers to
+ * include the new asset(s) (the rest left as-is) -- mirrors
+ * pendingAssetMoveOptions, just growing instead of detaching. */
+function insertChainOptions(chain: InsertMarkerChain): { value: number; label: string }[] {
+  const options: { value: number; label: string }[] = [
+    {
+      value: 0,
+      label: chain.markers.length === 1 ? `Leave "${markerMoveLabel(chain.markers[0])}" unchanged` : `Leave all ${chain.markers.length} markers unchanged`,
+    },
+  ]
+  for (let i = 1; i <= chain.markers.length; i++) {
+    const grown = chain.markers.slice(0, i).map(markerMoveLabel).join(', ')
+    const rest = chain.markers.length - i
+    options.push({
+      value: i,
+      label: rest > 0 ? `Extend ${grown} (leave the other ${rest} unchanged)` : `Extend ${grown}`,
+    })
+  }
+  return options
+}
+
+// ── Splitting an asset into two ─────────────────────────────────────────────
+const splitDialogIndex = ref<number | null>(null)
+const splitFirstPartInput = ref('')
+const splitError = ref('')
+
+/** Best known total duration (seconds) for an asset: a resolved (ffprobe'd)
+ * duration takes priority over the parsed `duration` field, same preference
+ * order the timeline itself uses (see AssetTimeline.vue's segments). Null
+ * if neither is known -- the split can still proceed, it just can't bound
+ * the first part against the total or give the second part an explicit
+ * duration (left blank, meaning "rest of the file"). */
+function knownTotalSeconds(asset: AssetForm): number | null {
+  const resolved = resolvedAssetDurations.value?.[asset.id]
+  if (resolved !== undefined) return resolved
+  return parseApproxSeconds(asset.duration)
+}
+
+function startSplit(index: number) {
+  const asset = form.assets[index]
+  if (!asset) return
+  splitDialogIndex.value = index
+  splitError.value = ''
+  const total = knownTotalSeconds(asset)
+  splitFirstPartInput.value = total !== null ? `${(total / 2).toFixed(2)}s` : ''
+}
+
+function cancelSplit() {
+  splitDialogIndex.value = null
+}
+
+/** A fresh id for the split-off second half: "<original>-2", "-3", ... to
+ * stay meaningful and avoid colliding with an id some other asset already
+ * uses (however unlikely). */
+function generateSplitId(baseId: string): string {
+  const existing = new Set(form.assets.map((a) => a.id))
+  let suffix = 2
+  while (existing.has(`${baseId}-${suffix}`)) suffix++
+  return `${baseId}-${suffix}`
+}
+
+function confirmSplit() {
+  const index = splitDialogIndex.value
+  if (index === null) return
+  const asset = form.assets[index]
+  if (!asset) return
+
+  const firstPartSeconds = parseApproxSeconds(splitFirstPartInput.value)
+  if (firstPartSeconds === null || firstPartSeconds <= 0) {
+    splitError.value = 'Enter a valid duration (e.g. "90s", "1:30", "1 min 30 sec").'
+    return
+  }
+
+  const originalStartSeconds = asset.start.trim() ? parseApproxSeconds(asset.start) : 0
+  if (originalStartSeconds === null) {
+    splitError.value = `Can't parse this asset's own start ("${asset.start}") -- fix it before splitting.`
+    return
+  }
+
+  const totalSeconds = knownTotalSeconds(asset)
+  if (totalSeconds !== null && firstPartSeconds >= totalSeconds) {
+    splitError.value = `Must be less than the asset's total duration (${totalSeconds.toFixed(2)}s).`
+    return
+  }
+
+  const secondId = generateSplitId(asset.id)
+  const first: AssetForm = { ...asset, duration: `${firstPartSeconds.toFixed(3)}s`, fade_out: '' }
+  const second: AssetForm = {
+    ...asset,
+    id: secondId,
+    start: `${(originalStartSeconds + firstPartSeconds).toFixed(3)}s`,
+    duration: totalSeconds !== null ? `${(totalSeconds - firstPartSeconds).toFixed(3)}s` : '',
+    fade_in: '',
+  }
+
+  form.assets.splice(index, 1, first, second)
+  // Any marker covering the original asset must now cover both halves to
+  // stay contiguous -- there's no ambiguity here (unlike insertAssetsAt),
+  // since both halves always belong together.
+  form.markers.forEach((m) => {
+    if (m.assets.includes(asset.id)) m.assets = [...m.assets, secondId]
+  })
+
+  splitDialogIndex.value = null
+  selectAsset(index)
+}
 
 function addRendition() {
   form.renditions.push({ name: '', resolution: '1280x720', bitrate_kbps: 4500 })
@@ -1461,6 +1702,7 @@ function applyHexPopover() {
                 @select="selectAsset"
                 @add="addAsset"
                 @bootstrap="openBootstrap"
+                @split="startSplit"
                 @tag-range="tagRange"
                 @edit-marker="editMarker"
                 @hover-marker="hoverMarkerFromGraph"
@@ -1482,8 +1724,8 @@ function applyHexPopover() {
               <i class="pi pi-images" style="font-size: 1.5rem" />
               <span>{{ form.assets.length === 0 ? 'No assets yet.' : 'Select an asset above to edit it, or shift-click a range of assets to tag a marker.' }}</span>
               <div class="flex gap-2">
-                <Button label="Add asset" icon="pi pi-plus" outlined @click="addAsset" />
-                <Button label="Bootstrap from files" icon="pi pi-list" outlined severity="secondary" @click="openBootstrap" />
+                <Button label="Add asset" icon="pi pi-plus" outlined @click="addAsset()" />
+                <Button label="Bootstrap from files" icon="pi pi-list" outlined severity="secondary" @click="openBootstrap()" />
               </div>
             </div>
 
@@ -1814,6 +2056,67 @@ function applyHexPopover() {
       <template #footer>
         <Button label="Cancel" text @click="cancelPendingAssetMove" />
         <Button label="Move" @click="confirmPendingAssetMove" />
+      </template>
+    </Dialog>
+
+    <Dialog
+      :visible="pendingAssetInsert !== null"
+      modal
+      header="This insertion touches a marker boundary"
+      :style="{ width: '34rem' }"
+      @update:visible="cancelPendingAssetInsert"
+    >
+      <div v-if="pendingAssetInsert" class="flex flex-column gap-3">
+        <p class="text-sm text-color-secondary m-0">
+          The new asset{{ pendingAssetInsert.newAssets.length > 1 ? 's' : '' }} would land right at the edge of
+          {{ pendingAssetInsert.chains.length > 1 ? 'markers' : 'a marker' }} -- choose whether to extend
+          {{ pendingAssetInsert.chains.length > 1 ? 'them' : 'it' }} to include the new asset{{
+            pendingAssetInsert.newAssets.length > 1 ? 's' : ''
+          }}.
+        </p>
+        <div v-for="(chain, ci) in pendingAssetInsert.chains" :key="ci" class="flex flex-column gap-2">
+          <span class="font-semibold text-sm">
+            {{ chain.side === 'before' ? 'Marker(s) ending right before the new asset' : 'Marker(s) starting right after the new asset' }}
+          </span>
+          <div v-for="opt in insertChainOptions(chain)" :key="opt.value" class="flex align-items-center gap-2">
+            <RadioButton v-model="chain.growCount" :input-id="`insert-opt-${ci}-${opt.value}`" :value="opt.value" />
+            <label :for="`insert-opt-${ci}-${opt.value}`" class="text-sm">{{ opt.label }}</label>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancel" text @click="cancelPendingAssetInsert" />
+        <Button label="Insert" @click="confirmPendingAssetInsert" />
+      </template>
+    </Dialog>
+
+    <Dialog
+      :visible="splitDialogIndex !== null"
+      modal
+      header="Split asset"
+      :style="{ width: '28rem' }"
+      @update:visible="cancelSplit"
+    >
+      <div v-if="splitDialogIndex !== null" class="flex flex-column gap-3">
+        <p class="text-sm text-color-secondary m-0">
+          Splits "{{ form.assets[splitDialogIndex].id }}" into two assets at the given offset -- the first part
+          keeps this asset's id, start and fade-in; the second gets a new id, the shifted start, and this
+          asset's fade-out.
+        </p>
+        <div class="flex flex-column gap-1">
+          <label>Duration of the first part</label>
+          <InputText
+            v-model="splitFirstPartInput"
+            placeholder="e.g. 90s, 1:30, 1 min 30 sec"
+            autofocus
+            @keydown.enter="confirmSplit"
+          />
+        </div>
+        <Message v-if="splitError" severity="error" class="text-sm">{{ splitError }}</Message>
+      </div>
+      <template #footer>
+        <Button label="Cancel" text @click="cancelSplit" />
+        <Button label="Split" @click="confirmSplit" />
       </template>
     </Dialog>
 
