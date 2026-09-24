@@ -470,7 +470,7 @@ watch(
                 title="Split this asset in two"
                 @click="emit('split', pt.index)"
               >
-                &divide;
+                <i class="pi pi-arrows-h" />
               </button>
             </div>
           </div>
