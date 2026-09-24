@@ -684,7 +684,7 @@ watch(
 .timeline-insert-sub-row,
 .timeline-split-sub-row {
   position: relative;
-  height: 1.1rem;
+  height: 1.2rem;
 }
 
 /* Same square/rounded/gray treatment as the end-of-timeline
@@ -695,8 +695,8 @@ watch(
   position: absolute;
   top: 0;
   transform: translateX(-50%);
-  width: 1.1rem;
-  height: 1.1rem;
+  width: 1.2rem;
+  height: 1.2rem;
   padding: 0;
   display: flex;
   align-items: center;
@@ -721,7 +721,7 @@ watch(
  * override .pi here with higher selector specificity. */
 .timeline-insert-btn .pi,
 .timeline-split-btn .pi {
-  font-size: 0.55rem;
+  font-size: 0.75rem;
 }
 
 .timeline-ruler {
