@@ -684,7 +684,7 @@ watch(
 .timeline-insert-sub-row,
 .timeline-split-sub-row {
   position: relative;
-  height: 1.15rem;
+  height: 0.85rem;
 }
 
 /* Same square/rounded/gray treatment as the end-of-timeline
@@ -695,18 +695,18 @@ watch(
   position: absolute;
   top: 0;
   transform: translateX(-50%);
-  width: 1.15rem;
-  height: 1.15rem;
+  width: 0.85rem;
+  height: 0.85rem;
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   background: #f1f5f9;
   border: 1px solid #cbd5e1;
-  border-radius: 4px;
+  border-radius: 3px;
   color: #475569;
   cursor: pointer;
-  font-size: 0.5rem;
+  font-size: 0.4rem;
   line-height: 1;
   z-index: 2;
 }
