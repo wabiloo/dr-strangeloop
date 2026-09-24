@@ -706,7 +706,7 @@ watch(
   border-radius: 4px;
   color: #475569;
   cursor: pointer;
-  font-size: 0.65rem;
+  font-size: 0.5rem;
   line-height: 1;
   z-index: 2;
 }
