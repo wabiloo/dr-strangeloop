@@ -122,6 +122,8 @@ def _setup_logging(verbosity: int, debug: bool) -> None:
               help="Stop after ffmpeg transcode, before tsduck injection.")
 @click.option("--verify", is_flag=True, default=False,
               help="Run tsduck extraction after injection and generate an HTML report.")
+@click.option("--report-only", is_flag=True, default=False,
+              help="Verify an existing output TS and generate its HTML report without rebuilding it.")
 @click.option("-v", "--verbose", count=True,
               help="Increase log verbosity (-v = INFO, -vv = DEBUG).")
 def main(
@@ -136,6 +138,7 @@ def main(
     skip_transcode: bool,
     skip_inject: bool,
     verify: bool,
+    report_only: bool,
     verbose: int,
 ) -> None:
     """Build an MPEG-TS file with SCTE-35 markers from a YAML asset list."""
@@ -192,15 +195,18 @@ def main(
         _info(f"cache dir: {effective_cache_dir}")
 
     try:
-        _run_pipeline(
-            cfg=cfg,
-            temp_dir=temp_dir,
-            cache_dir=effective_cache_dir,
-            dry_run=dry_run,
-            skip_transcode=skip_transcode,
-            skip_inject=skip_inject,
-            verify=verify,
-        )
+        if report_only:
+            _run_report_only(cfg, temp_dir, dry_run=dry_run)
+        else:
+            _run_pipeline(
+                cfg=cfg,
+                temp_dir=temp_dir,
+                cache_dir=effective_cache_dir,
+                dry_run=dry_run,
+                skip_transcode=skip_transcode,
+                skip_inject=skip_inject,
+                verify=verify,
+            )
     except subprocess.CalledProcessError as exc:
         _err(f"Subprocess failed (exit {exc.returncode}): {exc.cmd[0]}")
         _show_subprocess_error(exc)
@@ -303,6 +309,58 @@ def _build_clip_table(assets, infos, entries, framerate):
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
+
+def _run_report_only(cfg, temp_dir: Path, dry_run: bool = False) -> None:
+    """Verify an already assembled output and generate its HTML report."""
+    if cfg.output.is_multi_rendition:
+        assert cfg.output.dir is not None
+        assert cfg.output.renditions
+        cfg = cfg.model_copy(update={"output": cfg.output.for_rendition(cfg.output.renditions[0])})
+
+    if not cfg.output.file.is_file() and not dry_run:
+        raise RuntimeError(f"Output TS does not exist: {cfg.output.file}")
+
+    with console.status("  Validating inputs for report...", spinner="dots"):
+        report, infos = validate_inputs(cfg.assets, cfg.output, normalize=True)
+    if report.has_errors:
+        raise RuntimeError("; ".join(report.errors))
+
+    entries, boundaries = build_timeline(
+        cfg.assets, infos, cfg.output.framerate,
+        global_slate_image=cfg.slate_image,
+        markers=cfg.markers,
+    )
+    with console.status("  Detecting IDR frame PTS values...", spinner="dots"):
+        pts_map, muxer_offset = find_idr_pts(
+            cfg.output.file, boundaries, cfg.output.framerate, cfg.output.gop
+        )
+    with console.status("  Verifying injected markers...", spinner="dots"):
+        if not verify_markers(cfg.output.file, boundaries, temp_dir, dry_run=dry_run):
+            raise RuntimeError("Marker verification failed -- check splice-info-tables.xml")
+
+    verify_xml = temp_dir / "splice-info-tables.xml"
+    diag_rows = build_diag_rows(
+        entries=entries,
+        boundaries=boundaries,
+        pts_map=pts_map,
+        final_ts=cfg.output.file,
+        verify_xml=verify_xml if verify_xml.exists() else None,
+        framerate=cfg.output.framerate,
+        muxer_offset=muxer_offset,
+    )
+    report_path = cfg.output.file.with_name(cfg.output.file.stem + "_report.html")
+    with console.status("  Generating HTML report...", spinner="dots"):
+        generate_report(
+            ts_file=cfg.output.file,
+            entries=entries,
+            boundaries=boundaries,
+            pts_map=pts_map,
+            framerate=cfg.output.framerate,
+            output_path=report_path,
+            diag_html=render_html_table(diag_rows, cfg.output.framerate, muxer_offset),
+            dry_run=dry_run,
+        )
+    _ok(f"Report -> [bold]{report_path}[/bold]")
 
 def _run_pipeline(
     cfg,

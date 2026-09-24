@@ -21,7 +21,7 @@ import Textarea from 'primevue/textarea'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
-import { buildPlaylist, getPlaylist, getPreviewStatus, playlistPreviewUrl, probeMedia, resolveMarkers, savePlaylist } from '../api/client'
+import { buildPlaylist, buildPlaylistReport, getOutputStatus, getPlaylist, getPreviewStatus, getReportStatus, playlistPreviewUrl, playlistReportUrl, probeMedia, resolveMarkers, savePlaylist } from '../api/client'
 import type { Job, ResolvedMarker } from '../api/types'
 import AssetTimeline from '../components/AssetTimeline.vue'
 import AssetFileField from '../components/AssetFileField.vue'
@@ -1282,6 +1282,8 @@ async function load() {
   previewError.value = false
   previewVersion.value = Date.now()
   refreshPreviewStatus()
+  refreshReportStatus()
+  refreshOutputStatus()
   if (!props.name) {
     resetForm()
     savedSnapshot.value = currentSnapshot()
@@ -1315,6 +1317,8 @@ async function save() {
     // preview .mp4's -- re-check server-side status so a stale preview
     // (rendered from the pre-save version) gets hidden.
     refreshPreviewStatus()
+    refreshReportStatus()
+    refreshOutputStatus()
     toast.add({ severity: 'success', summary: 'Saved', life: 3000 })
     if (isNew.value) {
       // Was creating a new playlist -- move to its edit route (in place,
@@ -1343,6 +1347,8 @@ async function revertChanges() {
 // currently saved on disk, NOT unsaved in-progress edits) ------------------
 const building = ref(false)
 const buildJobId = ref<string | null>(null)
+const checkingGuts = ref(false)
+const reportJobId = ref<string | null>(null)
 // True from the moment a build job is spawned until it finishes -- the
 // preview player is removed for this whole window (not just while the
 // POST is in flight, unlike `building`) since the .ts/.preview.mp4 files
@@ -1353,6 +1359,8 @@ const buildRunning = ref(false)
 // other browser tabs/clients editing the same playlist, not just this
 // session's save/build actions.
 const previewStatus = ref<{ exists: boolean; stale: boolean } | null>(null)
+const reportStatus = ref<{ exists: boolean; stale: boolean } | null>(null)
+const outputStatus = ref<{ exists: boolean; stale: boolean } | null>(null)
 async function refreshPreviewStatus() {
   if (!props.name) {
     previewStatus.value = null
@@ -1364,19 +1372,52 @@ async function refreshPreviewStatus() {
     previewStatus.value = null
   }
 }
+async function refreshReportStatus() {
+  if (!props.name) {
+    reportStatus.value = null
+    return
+  }
+  try {
+    reportStatus.value = await getReportStatus(props.name)
+  } catch {
+    reportStatus.value = null
+  }
+}
+async function refreshOutputStatus() {
+  if (!props.name) {
+    outputStatus.value = null
+    return
+  }
+  try {
+    outputStatus.value = await getOutputStatus(props.name)
+  } catch {
+    outputStatus.value = null
+  }
+}
 // Bumped whenever a build finishes successfully, and appended to the
 // preview <video>'s src as a cache-busting query param -- otherwise the
 // browser happily keeps showing a stale cached preview after a rebuild
 // (the URL itself never changes across builds).
 const previewVersion = ref(Date.now())
+const reportVersion = ref(Date.now())
 const previewUrl = computed(() =>
   props.name ? playlistPreviewUrl(props.name, previewVersion.value) : null,
+)
+const reportUrl = computed(() =>
+  props.name ? playlistReportUrl(props.name, reportVersion.value) : null,
+)
+const assembleLabel = computed(() =>
+  outputStatus.value?.exists && !outputStatus.value.stale ? 'Reassemble' : 'Assemble',
 )
 
 async function build() {
   if (!props.name) return
   building.value = true
   buildRunning.value = true
+  previewStatus.value = null
+  reportStatus.value = null
+  outputStatus.value = null
+  reportJobId.value = null
   error.value = ''
   try {
     const job = await buildPlaylist(props.name)
@@ -1389,6 +1430,20 @@ async function build() {
   }
 }
 
+async function checkGuts() {
+  if (!props.name || isDirty.value) return
+  checkingGuts.value = true
+  error.value = ''
+  try {
+    const job = await buildPlaylistReport(props.name)
+    reportJobId.value = job.id
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    checkingGuts.value = false
+  }
+}
+
 function onBuildFinished(job: Job) {
   buildRunning.value = false
   if (job.status !== 'succeeded') {
@@ -1396,7 +1451,20 @@ function onBuildFinished(job: Job) {
   } else {
     previewError.value = false
     previewVersion.value = Date.now()
+    reportVersion.value = Date.now()
     refreshPreviewStatus()
+    refreshReportStatus()
+    refreshOutputStatus()
+  }
+}
+
+function onReportFinished(job: Job) {
+  if (job.status !== 'succeeded') {
+    error.value = 'Guts check failed -- see log below.'
+  } else {
+    reportVersion.value = Date.now()
+  refreshReportStatus()
+  refreshOutputStatus()
   }
 }
 
@@ -1985,15 +2053,11 @@ function applyHexPopover() {
               have unsaved changes above.
             </p>
             <div class="flex align-items-center gap-2">
-              <Button label="Assemble" icon="pi pi-cog" :loading="building" :disabled="isNew || isDirty" @click="build" />
+              <Button :label="assembleLabel" icon="pi pi-cog" :loading="building" :disabled="isNew || isDirty || checkingGuts" @click="build" />
               <span v-if="isNew" class="text-color-secondary text-sm">Save the playlist first.</span>
               <span v-else-if="isDirty" class="text-color-secondary text-sm">Save your changes first.</span>
             </div>
             <JobPanel v-if="buildJobId" :job-id="buildJobId" @finished="onBuildFinished" />
-
-            <span v-if="previewStatus?.exists && previewStatus.stale && !buildRunning" class="text-color-secondary text-sm">
-              Preview is out of date with your saved changes -- Assemble to refresh it.
-            </span>
 
             <div
               v-if="previewStatus?.exists && !previewStatus.stale && previewUrl && !previewError && !buildRunning"
@@ -2014,6 +2078,22 @@ function applyHexPopover() {
                 Quick 540p sanity-check render (fast preset, low quality) -- not representative of the
                 real output's bitrate/quality.
               </span>
+            </div>
+
+            <div v-if="reportStatus?.exists && !reportStatus.stale && !buildRunning" class="flex flex-column gap-2">
+              <Button label="Check its guts" icon="pi pi-search" severity="secondary" outlined :loading="checkingGuts" :disabled="isNew || isDirty || building" @click="checkGuts" class="self-start" />
+            </div>
+            <JobPanel v-if="reportJobId" :job-id="reportJobId" @finished="onReportFinished" />
+
+            <div v-if="reportStatus?.exists && !reportStatus.stale && reportUrl && !buildRunning && !checkingGuts" class="flex flex-column gap-2">
+              <div class="flex align-items-center justify-content-between gap-2">
+                <span class="font-bold">Verification report</span>
+                <a :href="reportUrl" target="_blank" rel="noopener" class="p-button p-button-outlined p-button-sm">
+                  <i class="pi pi-external-link" />
+                  <span>Open report</span>
+                </a>
+              </div>
+              <iframe :src="reportUrl" title="franken-ts verification report" class="report-frame" />
             </div>
           </div>
         </TabPanel>
@@ -2297,6 +2377,14 @@ function applyHexPopover() {
   width: 100%;
   border-radius: 4px;
   background: #000;
+}
+
+.report-frame {
+  width: min(100%, 72rem);
+  height: 42rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 4px;
+  background: #fff;
 }
 
 .osd-bar-preview {

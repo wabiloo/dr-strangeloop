@@ -90,6 +90,15 @@ def build_playlist(name: str) -> dict:
     return job.to_dict()
 
 
+@router.post("/{name}/report")
+def build_report(name: str) -> dict:
+    try:
+        job = franken_ts.spawn_report_job(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return job.to_dict()
+
+
 @router.get("/{name}/preview/status")
 def get_preview_status(name: str) -> dict:
     """Whether a preview .mp4 exists and whether it's stale (older than
@@ -100,6 +109,16 @@ def get_preview_status(name: str) -> dict:
         return franken_ts.preview_status(name)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{name}/output/status")
+def get_output_status(name: str) -> dict:
+    try:
+        return franken_ts.output_status(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/{name}/preview")
@@ -117,3 +136,26 @@ def get_preview(name: str) -> FileResponse:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Preview not built yet -- run Assemble first.")
     return FileResponse(path, media_type="video/mp4")
+
+
+@router.get("/{name}/report/status")
+def get_report_status(name: str) -> dict:
+    try:
+        return franken_ts.report_status(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/{name}/report")
+def get_report(name: str) -> FileResponse:
+    try:
+        path = franken_ts.report_html_path(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Report not built yet -- run Assemble first.")
+    return FileResponse(path, media_type="text/html")

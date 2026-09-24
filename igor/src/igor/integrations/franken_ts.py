@@ -198,6 +198,31 @@ def preview_status(name: str) -> dict:
     return {"exists": exists, "stale": stale}
 
 
+def output_ts_path(name: str) -> Path:
+    """Resolve the assembled TS used for the playlist's freshness status."""
+    data = get_playlist(name)
+    output = data.get("output", {}) or {}
+    if output.get("file"):
+        p = Path(output["file"])
+        return p if p.is_absolute() else (paths.REPO_ROOT / p)
+    if output.get("dir"):
+        d = Path(output["dir"])
+        d = d if d.is_absolute() else (paths.REPO_ROOT / d)
+        renditions = output.get("renditions") or []
+        if not renditions:
+            raise ValueError(f"Playlist {name!r} has no renditions configured")
+        return d / f"{renditions[0]['name']}.ts"
+    raise ValueError(f"Playlist {name!r} has no output.file or output.dir configured")
+
+
+def output_status(name: str) -> dict:
+    playlist_path = _resolve_path(name)
+    output_path = output_ts_path(name)
+    exists = output_path.is_file()
+    stale = (not exists) or output_path.stat().st_mtime < playlist_path.stat().st_mtime
+    return {"exists": exists, "stale": stale}
+
+
 def preview_mp4_path(name: str) -> Path:
     """Resolve the on-disk path of the quick 540p preview .mp4 franken-ts
     generates as its last build step (see franken-ts/franken_ts/cli.py),
@@ -219,10 +244,42 @@ def preview_mp4_path(name: str) -> Path:
     raise ValueError(f"Playlist {name!r} has no output.file or output.dir configured")
 
 
+def report_html_path(name: str) -> Path:
+    """Resolve the verification report produced by ``franken-ts --verify``."""
+    data = get_playlist(name)
+    output = data.get("output", {}) or {}
+    if output.get("file"):
+        p = Path(output["file"])
+        p = p if p.is_absolute() else (paths.REPO_ROOT / p)
+        return p.with_name(p.stem + "_report.html")
+    if output.get("dir"):
+        d = Path(output["dir"])
+        d = d if d.is_absolute() else (paths.REPO_ROOT / d)
+        renditions = output.get("renditions") or []
+        if not renditions:
+            raise ValueError(f"Playlist {name!r} has no renditions configured")
+        return d / f"{renditions[0]['name']}_report.html"
+    raise ValueError(f"Playlist {name!r} has no output.file or output.dir configured")
+
+
+def report_status(name: str) -> dict:
+    playlist_path = _resolve_path(name)
+    report_path = report_html_path(name)
+    exists = report_path.is_file()
+    stale = (not exists) or report_path.stat().st_mtime < playlist_path.stat().st_mtime
+    return {"exists": exists, "stale": stale}
+
+
 def spawn_build_job(name: str, extra_args: list[str] | None = None) -> Job:
     playlist_path = _resolve_path(name)
     cmd = paths.franken_ts_python() + [str(playlist_path), *(extra_args or [])]
     return runner.spawn("build", cmd, cwd=paths.REPO_ROOT, channel_name=name)
+
+
+def spawn_report_job(name: str) -> Job:
+    playlist_path = _resolve_path(name)
+    cmd = paths.franken_ts_python() + [str(playlist_path), "--report-only"]
+    return runner.spawn("report", cmd, cwd=paths.REPO_ROOT, channel_name=name)
 
 
 def find_playlist_for_source(source_path: str) -> str | None:
