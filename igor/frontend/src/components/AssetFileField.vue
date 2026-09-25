@@ -5,7 +5,7 @@ import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import ProgressSpinner from 'primevue/progressspinner'
 import { computed, ref } from 'vue'
-import { browseFiles, probeMedia } from '../api/client'
+import { browseFiles, localFilePreviewUrl, probeMedia } from '../api/client'
 import type { FileEntry, ProbeResult } from '../api/types'
 import { filesFromDrop, isDragInside, isFileDrag, sourceFromDroppedFile } from '../utils/fileDrop'
 
@@ -89,6 +89,34 @@ const probing = ref(false)
 const probeResult = ref<ProbeResult | null>(null)
 const probeError = ref('')
 
+// This field is also used for slate images. Only offer the video player for
+// paths/URLs that look like video assets.
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.m4v', '.mov', '.mkv', '.ts', '.avi', '.webm', '.m3u8', '.mpd'])
+const canPreview = computed(() => {
+  const source = model.value.trim()
+  if (!source) return false
+  let pathname = source
+  try {
+    pathname = new URL(source).pathname
+  } catch {
+    // A local filesystem path, rather than an absolute URL.
+  }
+  const extension = pathname.slice(pathname.lastIndexOf('.')).toLowerCase()
+  return VIDEO_EXTENSIONS.has(extension)
+})
+
+const previewOpen = ref(false)
+const previewSource = ref('')
+const previewError = ref(false)
+
+function openPreview() {
+  const source = model.value.trim()
+  if (!source || !canPreview.value) return
+  previewError.value = false
+  previewSource.value = /^https?:\/\//i.test(source) ? source : localFilePreviewUrl(source)
+  previewOpen.value = true
+}
+
 async function probe() {
   if (!model.value.trim()) return
   probing.value = true
@@ -137,6 +165,7 @@ function formatDuration(seconds: number): string {
     <div class="flex gap-1">
       <InputText v-model="model" class="flex-1" :placeholder="props.placeholder ?? '/path/to/file.mp4 or https://...'" />
       <Button icon="pi pi-folder-open" severity="secondary" outlined title="Browse local files" @click="openBrowse" />
+      <Button v-if="canPreview" icon="pi pi-play-circle" severity="secondary" outlined title="Preview video" aria-label="Preview video" @click="openPreview" />
       <Button icon="pi pi-search" severity="secondary" outlined title="Probe (resolution/duration)" :loading="probing" @click="probe" />
     </div>
 
@@ -177,6 +206,21 @@ function formatDuration(seconds: number): string {
         </ul>
       </div>
     </Dialog>
+
+    <Dialog v-model:visible="previewOpen" modal header="Video preview" :style="{ width: '64rem', maxWidth: '95vw' }">
+      <video
+        v-if="previewOpen"
+        :src="previewSource"
+        controls
+        autoplay
+        playsinline
+        class="video-preview"
+        @error="previewError = true"
+      />
+      <Message v-if="previewError" severity="error" :closable="false" class="mt-2">
+        This video could not be played. Check that the file exists and uses a browser-supported format.
+      </Message>
+    </Dialog>
   </div>
 </template>
 
@@ -190,5 +234,12 @@ function formatDuration(seconds: number): string {
 .asset-file-field-drop-zone-active {
   border-color: var(--p-primary-color, #b91c1c);
   background: var(--p-primary-50, #ecfeff);
+}
+
+.video-preview {
+  display: block;
+  width: 100%;
+  max-height: 70vh;
+  background: #000;
 }
 </style>

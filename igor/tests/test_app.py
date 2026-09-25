@@ -94,3 +94,19 @@ def test_upload_file_stores_backend_local_copy(tmp_path, monkeypatch):
     assert uploaded.is_file()
     assert uploaded.read_bytes() == b"test media bytes"
     assert result["name"] == "movie_clip.mp4"
+def test_preview_serves_local_video_and_rejects_non_video(tmp_path):
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"video bytes")
+    image = tmp_path / "slate.png"
+    image.write_bytes(b"image bytes")
+
+    response = client.get("/api/v1/files/preview", params={"path": str(video)})
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "video/mp4"
+    assert response.content == b"video bytes"
+
+    response = client.get("/api/v1/files/preview", params={"path": str(image)})
+    assert response.status_code == 422
+
+    response = client.get("/api/v1/files/preview", params={"path": str(tmp_path / "missing.mp4")})
+    assert response.status_code == 404

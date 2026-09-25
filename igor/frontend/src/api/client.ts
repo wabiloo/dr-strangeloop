@@ -229,6 +229,11 @@ export function probeMedia(pathOrUrl: string): Promise<ProbeResult> {
   return getJson(`${FILES_BASE}/probe?path_or_url=${encodeURIComponent(pathOrUrl)}`)
 }
 
+/** URL for previewing a local source file through Igor's backend. */
+export function localFilePreviewUrl(path: string): string {
+  return `${FILES_BASE}/preview?path=${encodeURIComponent(path)}`
+}
+
 export async function uploadAsset(file: File): Promise<{ path: string; name: string }> {
   const res = await handle(
     await fetch(`${FILES_BASE}/upload?filename=${encodeURIComponent(file.name)}`, {
