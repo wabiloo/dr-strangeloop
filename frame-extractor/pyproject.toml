@@ -13,7 +13,8 @@ dependencies = [
 
 [project.scripts]
 frame-extractor = "frame_extractor:main"
+scte35-verify = "scte35_scan:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
-include = ["frame_extractor.py"]
+include = ["frame_extractor.py", "scte35_scan.py", "scte35_report_html.py", "scte35_tables.py"]

@@ -40,3 +40,15 @@ def franken_ts_python() -> list[str]:
     if shutil.which("uv"):
         return ["uv", "run", "--project", str(REPO_ROOT), "franken-ts"]
     return ["franken-ts"]
+
+
+def scte_verify_python() -> list[str]:
+    """frame-extractor (which owns `scte35-verify`) is a repo-root workspace
+    member but, unlike franken-ts, is *not* one of igor's own declared
+    dependencies -- deliberately, since the whole point of scte35-verify is
+    that it scans a built `.ts` with no franken-ts/playlist involvement, so
+    igor shells out to it via `uv run` exactly like it does for the other
+    workspace-adjacent tools, rather than importing it."""
+    if shutil.which("uv"):
+        return ["uv", "run", "--project", str(REPO_ROOT), "scte35-verify"]
+    return ["scte35-verify"]

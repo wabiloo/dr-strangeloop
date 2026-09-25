@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from igor.integrations import franken_ts
+from igor.integrations import franken_ts, scte_verify
 
 router = APIRouter()
 
@@ -158,4 +158,53 @@ def get_report(name: str) -> FileResponse:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Report not built yet -- run Assemble first.")
+    return FileResponse(path, media_type="text/html")
+
+
+@router.post("/{name}/scte-verify")
+def build_scte_verify(name: str) -> dict:
+    """Spawn an independent scan of the assembled `.ts` for its actual
+    SCTE-35 markers (see `scte_verify.py` -- unlike `/report`, this does
+    not read the playlist at all, only the built file)."""
+    try:
+        job = scte_verify.spawn_scte_verify_job(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return job.to_dict()
+
+
+@router.get("/{name}/scte-verify/status")
+def get_scte_verify_status(name: str) -> dict:
+    try:
+        return scte_verify.scte_verify_status(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/{name}/scte-verify")
+def get_scte_verify_report(name: str) -> dict:
+    """The raw JSON report, for a native (non-iframe) renderer."""
+    try:
+        return scte_verify.scte_verify_report(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/{name}/scte-verify/report")
+def get_scte_verify_html(name: str) -> FileResponse:
+    """The self-contained HTML rendering of the same report, for iframe use."""
+    try:
+        path = scte_verify.scte_verify_html_path(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="SCTE-35 verify report not built yet.")
     return FileResponse(path, media_type="text/html")

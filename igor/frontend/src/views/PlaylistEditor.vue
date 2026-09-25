@@ -23,7 +23,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
-import { buildPlaylist, buildPlaylistReport, getOutputStatus, getPlaylist, getPreviewStatus, getReportStatus, playlistPreviewUrl, playlistReportUrl, probeMedia, resolveMarkers, savePlaylist } from '../api/client'
+import { buildPlaylist, buildPlaylistReport, buildScteVerify, getOutputStatus, getPlaylist, getPreviewStatus, getReportStatus, getScteVerifyStatus, playlistPreviewUrl, playlistReportUrl, probeMedia, resolveMarkers, savePlaylist, scteVerifyReportUrl } from '../api/client'
 import type { Job, ResolvedMarker } from '../api/types'
 import AssetTimeline from '../components/AssetTimeline.vue'
 import AssetFileField from '../components/AssetFileField.vue'
@@ -1641,6 +1641,7 @@ async function load() {
   previewVersion.value = Date.now()
   refreshPreviewStatus()
   refreshReportStatus()
+  refreshScteVerifyStatus()
   refreshOutputStatus()
   if (!props.name) {
     resetForm()
@@ -1715,6 +1716,8 @@ const building = ref(false)
 const buildJobId = ref<string | null>(null)
 const checkingGuts = ref(false)
 const reportJobId = ref<string | null>(null)
+const verifyingScte = ref(false)
+const scteVerifyJobId = ref<string | null>(null)
 // True from the moment a build job is spawned until it finishes -- the
 // preview player is removed for this whole window (not just while the
 // POST is in flight, unlike `building`) since the .ts/.preview.mp4 files
@@ -1726,6 +1729,7 @@ const buildRunning = ref(false)
 // session's save/build actions.
 const previewStatus = ref<{ exists: boolean; stale: boolean } | null>(null)
 const reportStatus = ref<{ exists: boolean; stale: boolean } | null>(null)
+const scteVerifyStatus = ref<{ exists: boolean; stale: boolean } | null>(null)
 const outputStatus = ref<{ exists: boolean; stale: boolean } | null>(null)
 async function refreshPreviewStatus() {
   if (!props.name) {
@@ -1749,6 +1753,17 @@ async function refreshReportStatus() {
     reportStatus.value = null
   }
 }
+async function refreshScteVerifyStatus() {
+  if (!props.name) {
+    scteVerifyStatus.value = null
+    return
+  }
+  try {
+    scteVerifyStatus.value = await getScteVerifyStatus(props.name)
+  } catch {
+    scteVerifyStatus.value = null
+  }
+}
 async function refreshOutputStatus() {
   if (!props.name) {
     outputStatus.value = null
@@ -1766,11 +1781,15 @@ async function refreshOutputStatus() {
 // (the URL itself never changes across builds).
 const previewVersion = ref(Date.now())
 const reportVersion = ref(Date.now())
+const scteVerifyVersion = ref(Date.now())
 const previewUrl = computed(() =>
   props.name ? playlistPreviewUrl(props.name, previewVersion.value) : null,
 )
 const reportUrl = computed(() =>
   props.name ? playlistReportUrl(props.name, reportVersion.value) : null,
+)
+const scteVerifyUrl = computed(() =>
+  props.name ? scteVerifyReportUrl(props.name, scteVerifyVersion.value) : null,
 )
 const assembleLabel = computed(() =>
   outputStatus.value?.exists && !outputStatus.value.stale ? 'Reassemble' : 'Assemble',
@@ -1782,8 +1801,10 @@ async function build() {
   buildRunning.value = true
   previewStatus.value = null
   reportStatus.value = null
+  scteVerifyStatus.value = null
   outputStatus.value = null
   reportJobId.value = null
+  scteVerifyJobId.value = null
   error.value = ''
   try {
     const job = await buildPlaylist(props.name)
@@ -1820,6 +1841,7 @@ function onBuildFinished(job: Job) {
     reportVersion.value = Date.now()
     refreshPreviewStatus()
     refreshReportStatus()
+    refreshScteVerifyStatus()
     refreshOutputStatus()
   }
 }
@@ -1831,6 +1853,29 @@ function onReportFinished(job: Job) {
     reportVersion.value = Date.now()
   refreshReportStatus()
   refreshOutputStatus()
+  }
+}
+
+async function runScteVerify() {
+  if (!props.name || isDirty.value) return
+  verifyingScte.value = true
+  error.value = ''
+  try {
+    const job = await buildScteVerify(props.name)
+    scteVerifyJobId.value = job.id
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    verifyingScte.value = false
+  }
+}
+
+function onScteVerifyFinished(job: Job) {
+  if (job.status !== 'succeeded') {
+    error.value = 'SCTE-35 verify failed -- see log below.'
+  } else {
+    scteVerifyVersion.value = Date.now()
+    refreshScteVerifyStatus()
   }
 }
 
@@ -2523,6 +2568,44 @@ function applyHexPopover() {
 
             <div v-if="reportStatus?.exists && !reportStatus.stale && reportUrl && !buildRunning && !checkingGuts" class="flex flex-column gap-2">
               <iframe :src="reportUrl" title="franken-ts verification report" class="report-frame" />
+            </div>
+
+            <div v-if="outputStatus?.exists && !outputStatus.stale && !buildRunning" class="flex flex-column gap-2">
+              <span class="font-bold">Independent SCTE-35 verification</span>
+              <span class="text-color-secondary text-sm">
+                Scans the assembled TS itself for its actual SCTE-35 markers -- completely independently of
+                franken-ts (no playlist, no markers.json) -- and extracts frames around every splice boundary, so
+                you can confirm what's really in the file, not just what franken-ts thinks it wrote.
+              </span>
+              <div class="flex align-items-center gap-2">
+                <Button
+                  label="Verify SCTE-35 markers"
+                  icon="pi pi-shield"
+                  severity="secondary"
+                  outlined
+                  :loading="verifyingScte"
+                  :disabled="isNew || isDirty || building"
+                  @click="runScteVerify"
+                  style="width: fit-content"
+                />
+                <Button
+                  v-if="scteVerifyStatus?.exists && !scteVerifyStatus.stale && scteVerifyUrl && !verifyingScte"
+                  as="a"
+                  :href="scteVerifyUrl"
+                  target="_blank"
+                  rel="noopener"
+                  label="Open in new tab"
+                  icon="pi pi-external-link"
+                  severity="secondary"
+                  outlined
+                  class="report-open-button"
+                />
+              </div>
+            </div>
+            <JobPanel v-if="scteVerifyJobId" :job-id="scteVerifyJobId" @finished="onScteVerifyFinished" />
+
+            <div v-if="scteVerifyStatus?.exists && !scteVerifyStatus.stale && scteVerifyUrl && !buildRunning && !verifyingScte" class="flex flex-column gap-2">
+              <iframe :src="scteVerifyUrl" title="independent SCTE-35 verification report" class="report-frame" />
             </div>
           </div>
         </TabPanel>

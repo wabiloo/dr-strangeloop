@@ -22,7 +22,7 @@ names or CLI flags from this file alone.
 | 2. Build (.ts + SCTE-35) | `franken-ts/` (same tool, same command) | [`franken-ts/AGENTS.md`](./franken-ts/AGENTS.md) |
 | 3. Deploy + run in AWS | `its-a-live/` | [`its-a-live/AGENTS.md`](./its-a-live/AGENTS.md), [`its-a-live/AGENT_BRIEF.md`](./its-a-live/AGENT_BRIEF.md) |
 | (3a) Self-hosted backend internals | `loop-dee-loop/` | [`loop-dee-loop/AGENTS.md`](./loop-dee-loop/AGENTS.md) |
-| Inspect/verify a built `.ts` | `frame-extractor/` | [`frame-extractor/README.md`](./frame-extractor/README.md) |
+| Inspect/verify a built `.ts` | `frame-extractor/` (`frame-extractor` CLI: every frame + GOP/I-P-B timeline; `scte35-verify` CLI: scans the file's *actual* SCTE-35 markers, independent of franken-ts) | [`frame-extractor/README.md`](./frame-extractor/README.md) |
 | Web UI over all of the above | `igor/` | [`igor/AGENTS.md`](./igor/AGENTS.md) |
 
 ## Architecture

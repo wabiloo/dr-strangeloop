@@ -122,6 +122,28 @@ export function getReportStatus(name: string): Promise<{ exists: boolean; stale:
   return getJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/report/status`)
 }
 
+/** Spawns an independent scan of the assembled `.ts` for its actual
+ * SCTE-35 markers (via frame-extractor's `scte35-verify`, not franken-ts --
+ * see igor's `scte_verify.py`). */
+export function buildScteVerify(name: string): Promise<Job> {
+  return postJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/scte-verify`)
+}
+
+export function getScteVerifyStatus(name: string): Promise<{ exists: boolean; stale: boolean }> {
+  return getJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/scte-verify/status`)
+}
+
+/** The raw JSON report, for a native (non-iframe) renderer. */
+export function getScteVerifyReport(name: string): Promise<Record<string, unknown>> {
+  return getJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/scte-verify`)
+}
+
+/** URL for the self-contained HTML rendering of the same report (iframe use). */
+export function scteVerifyReportUrl(name: string, cacheBust?: string | number): string {
+  const url = `${PLAYLISTS_BASE}/${encodeURIComponent(name)}/scte-verify/report`
+  return cacheBust === undefined ? url : `${url}?v=${encodeURIComponent(String(cacheBust))}`
+}
+
 // ---------------------------------------------------------------------------
 // its-a-live channels
 // ---------------------------------------------------------------------------

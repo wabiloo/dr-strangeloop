@@ -50,3 +50,54 @@ The generated `index.html` is fully self-contained (no server needed). Open it i
 - Search by frame number or timestamp (`HH:MM:SS` or plain seconds)
 - Click any frame for a lightbox with prev/next navigation
 - Keyboard shortcuts: `j`/`k` to step frames, `[`/`]` to jump between I-frames, `g` to go to a timestamp
+
+## `scte35-verify` — independent SCTE-35 marker verification
+
+A second tool in this package, completely independent of franken-ts: it
+scans a built `.ts` for the SCTE-35 markers *actually present in the
+file* (via `tsduck`, filtered by table id `0xFC` so it doesn't need to
+know which PID they're on), pairs them into start/stop markers per
+ANSI/SCTE 35 Table 22/23, infers nesting purely from PTS-span overlap
+(so concurrent segmentation types -- e.g. a Break containing a PPO
+containing an Ad -- show up with no playlist/`markers.json` involved),
+and extracts frames around every splice boundary so you can eyeball
+exactly what's before/after each splice.
+
+Unlike franken-ts's own `--verify`/`--report-only` (which checks the
+file *against the playlist it was built from*), this only ever looks at
+the `.ts` itself -- it's the tool for "does this file really carry the
+markers it claims to."
+
+### Prerequisites
+
+- `ffmpeg` + `ffprobe` and `tsduck` (`tsp`) on your `PATH`
+
+### Usage
+
+```bash
+uv run scte35-verify outputs/my_stream.ts
+uv run scte35-verify outputs/my_stream.ts --output outputs/my_stream_scte
+uv run scte35-verify outputs/my_stream.ts --skip-frames        # metadata-only scan
+uv run scte35-verify --render-only outputs/my_stream_scte/scte-report.json
+```
+
+Writes `scte-report.json` (the machine-readable source of truth --
+markers, inferred nesting, per-boundary frame references, and pass/fail
+checks like "splice lands on an IDR frame" / "declared duration matches
+actual") and `scte-report.html` (a self-contained viewer rendered from
+that JSON) into the output directory. The JSON → HTML rendering step
+(`scte35_report_html.render_html`) is a pure function with no
+ffmpeg/tsduck dependency, so it can be re-run standalone (`--render-only`)
+or imported directly by another tool (igor's Assemble tab uses this to
+show the same report without an iframe, or by iframing the generated
+HTML directly).
+
+### Options
+
+```
+usage: scte35-verify [-h] [--output OUTPUT] [--pid PID] [--before BEFORE]
+                      [--after AFTER] [--width WIDTH] [--skip-frames]
+                      [--skip-html] [--render-only JSON_PATH]
+                      [--idr-tolerance-frames N] [--duration-tolerance-frames N]
+                      [ts]
+```
