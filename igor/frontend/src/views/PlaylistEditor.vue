@@ -125,7 +125,7 @@ const CORNER_PREVIEW_TEXT: Partial<Record<CornerContent, string>> = {
   asset_id: 'asset-1',
   time: '12.32/34.60',
   next_asset_id: 'next: asset-2',
-  scte35_spans: 'b / ppo / pa',
+  scte35_spans: 'BRK / PPO / PAD',
   osd_label: 'Weather',
 }
 
@@ -1071,6 +1071,98 @@ function removeMarker(eventId: number) {
 
 const markerDraft = ref<MarkerDraft | null>(null)
 
+/** Asset-index bounds for the draft's current span. Marker assets are stored
+ * by id, while the controls operate on the visible playlist order. */
+const markerDraftBounds = computed(() => {
+  const draft = markerDraft.value
+  if (!draft) return null
+  const indices = draft.assets
+    .map((id) => form.assets.findIndex((asset) => asset.id === id))
+    .filter((index) => index >= 0)
+  if (!indices.length) return null
+  return { lo: Math.min(...indices), hi: Math.max(...indices) }
+})
+
+/** A proposed marker span is valid when it is disjoint from every other
+ * marker, contains it, or is contained by it. This mirrors franken-ts's
+ * nested-or-disjoint rule and avoids letting a resize create partial overlap. */
+function canSetMarkerDraftBounds(lo: number, hi: number): boolean {
+  const draft = markerDraft.value
+  if (!draft || lo < 0 || hi >= form.assets.length || lo > hi) return false
+  const idToIndex = new Map(form.assets.map((asset, index) => [asset.id, index] as const))
+  for (const other of form.markers) {
+    if (other.event_id === draft.editingEventId) continue
+    const otherBounds = markerSpan(other, idToIndex)
+    if (!otherBounds) continue
+    const overlaps = lo <= otherBounds.hi && otherBounds.lo <= hi
+    const nested = (lo <= otherBounds.lo && otherBounds.hi <= hi)
+      || (otherBounds.lo <= lo && hi <= otherBounds.hi)
+    if (overlaps && !nested) return false
+  }
+  return true
+}
+
+const canExtendDraftLeft = computed(() => {
+  const bounds = markerDraftBounds.value
+  return bounds !== null && canSetMarkerDraftBounds(bounds.lo - 1, bounds.hi)
+})
+const canShrinkDraftLeft = computed(() => {
+  const bounds = markerDraftBounds.value
+  return bounds !== null && bounds.lo < bounds.hi && canSetMarkerDraftBounds(bounds.lo + 1, bounds.hi)
+})
+const canExtendDraftRight = computed(() => {
+  const bounds = markerDraftBounds.value
+  return bounds !== null && canSetMarkerDraftBounds(bounds.lo, bounds.hi + 1)
+})
+const canShrinkDraftRight = computed(() => {
+  const bounds = markerDraftBounds.value
+  return bounds !== null && bounds.lo < bounds.hi && canSetMarkerDraftBounds(bounds.lo, bounds.hi - 1)
+})
+
+function adjustMarkerDraftSpan(edge: 'start' | 'end', direction: -1 | 1) {
+  const draft = markerDraft.value
+  const bounds = markerDraftBounds.value
+  if (!draft || !bounds) return
+  const lo = bounds.lo + (edge === 'start' ? direction : 0)
+  const hi = bounds.hi + (edge === 'end' ? direction : 0)
+  if (!canSetMarkerDraftBounds(lo, hi)) return
+  const assets = form.assets.slice(lo, hi + 1).map((asset) => asset.id)
+  draft.assets = assets
+
+  // Span resizing is an in-memory playlist edit, not a temporary form draft:
+  // retain it when the user selects another marker, while leaving persistence
+  // to the playlist's normal Save action.
+  if (draft.editingEventId !== null) {
+    const marker = form.markers.find((item) => item.event_id === draft.editingEventId)
+    if (marker) marker.assets = [...assets]
+  }
+}
+
+function resizeTimelineMarker(payload: { eventId: number; edge: 'start' | 'end'; direction: -1 | 1 }) {
+  if (markerDraft.value?.editingEventId !== payload.eventId) return
+  adjustMarkerDraftSpan(payload.edge, payload.direction)
+}
+
+/** Show the edited marker's draft assets in the timeline immediately, while
+ * keeping the form's committed marker unchanged until the user presses Update. */
+const timelineMarkers = computed(() => {
+  const draft = markerDraft.value
+  if (!draft || draft.editingEventId === null) return form.markers
+  return form.markers.map((marker) => marker.event_id === draft.editingEventId
+    ? { ...marker, assets: [...draft.assets] }
+    : marker)
+})
+
+const markerResizeAvailability = computed(() => {
+  if (markerDraft.value?.editingEventId !== selectedMarkerEventId.value) return null
+  return {
+    extendStart: canExtendDraftLeft.value,
+    shortenStart: canShrinkDraftLeft.value,
+    shortenEnd: canShrinkDraftRight.value,
+    extendEnd: canExtendDraftRight.value,
+  }
+})
+
 /** Whether the draft's chosen segmentation type has no defined End partner
  * (see markerLayout.isInstantMarker) -- drives the "multiply into one
  * marker per asset" behavior on commit, since an instant signal is a
@@ -1893,9 +1985,10 @@ function applyHexPopover() {
               <AssetTimeline
                 :assets="form.assets"
                 :selected-index="selectedAssetIndex"
-                :markers="form.markers"
+                :markers="timelineMarkers"
                 :resolved-durations="resolvedAssetDurations ?? undefined"
                 :selected-marker-event-id="selectedMarkerEventId"
+                :marker-resize-availability="markerResizeAvailability"
                 :hovered-marker-event-id="hoveredMarkerEventId"
                 :scroll-to-marker-event-id="graphScrollTarget"
                 @select="selectAsset"
@@ -1904,6 +1997,7 @@ function applyHexPopover() {
                 @split="startSplit"
                 @tag-range="tagRange"
                 @edit-marker="editMarker"
+                @resize-marker="resizeTimelineMarker"
                 @hover-marker="hoverMarkerFromGraph"
               >
                 <template #header-actions>
@@ -1955,7 +2049,6 @@ function applyHexPopover() {
                 Covers: {{ markerDraft.assets.join(', ') }} -- span/nesting is derived from these assets, never
                 set directly.
               </span>
-
               <div class="grid">
                 <div class="col-4 flex flex-column gap-1">
                   <label>Event ID (unique)</label>

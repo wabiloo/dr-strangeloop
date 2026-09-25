@@ -25,6 +25,13 @@ const props = defineProps<{
   /** event_id of the marker currently selected (click-driven, persistent)
    * in the parent's marker list -- highlighted with a solid outline. */
   selectedMarkerEventId?: number | null
+  /** Whether each one-asset edge adjustment is valid for the selected span. */
+  markerResizeAvailability?: {
+    extendStart: boolean
+    shortenStart: boolean
+    shortenEnd: boolean
+    extendEnd: boolean
+  } | null
   /** event_id of the marker currently hovered (transient) in the parent's
    * marker list -- highlighted with a lighter dashed outline, visually
    * distinct from "selected" so both can be told apart if they differ. */
@@ -41,6 +48,7 @@ const emit = defineEmits<{
   split: [payload: { index: number; target: HTMLElement }]
   tagRange: [range: { startIndex: number; endIndex: number }]
   editMarker: [eventId: number]
+  resizeMarker: [payload: { eventId: number; edge: 'start' | 'end'; direction: -1 | 1 }]
   hoverMarker: [eventId: number | null]
 }>()
 
@@ -223,13 +231,20 @@ const markerLanes = computed<{ key: string; label: string; spans: MarkerSpan[] }
   if (!props.markers || props.markers.length === 0) return []
   const spans = layoutMarkers(props.markers, assetIdToIndex.value)
   const keys = Array.from(new Set(spans.map((s) => laneKeyForMarker(s.marker))))
-  // Sort by the underlying type_id (numerically) so related lanes (Break,
-  // then Placement Opportunities, then Advertisements, ...) land in Table
-  // 22 order; splice_insert (no type_id) sorts last.
+  // Keep Table 22's numeric order except for Provider/Distributor
+  // Advertisement: visually place those below all Placement Opportunity
+  // lanes, even though their type_ids (0x30/0x32) are numerically lower.
+  // Other lane types retain their existing relative order; splice_insert
+  // (no type_id) sorts last.
+  function visualOrder(key: string): number {
+    if (key === 'splice_insert') return Infinity
+    const typeId = parseInt(key.split(':')[1], 16)
+    if (typeId === 0x30) return 0x3A + 0.25
+    if (typeId === 0x32) return 0x3A + 0.5
+    return typeId
+  }
   keys.sort((a, b) => {
-    const na = a === 'splice_insert' ? Infinity : parseInt(a.split(':')[1], 16)
-    const nb = b === 'splice_insert' ? Infinity : parseInt(b.split(':')[1], 16)
-    return na - nb
+    return visualOrder(a) - visualOrder(b)
   })
   return keys.map((key) => {
     const laneSpans = spans.filter((s) => laneKeyForMarker(s.marker) === key)
@@ -409,7 +424,51 @@ watch(
                   @mouseenter="emit('hoverMarker', span.marker.event_id)"
                   @mouseleave="emit('hoverMarker', null)"
                 >
-                  <span v-if="!span.instant" class="timeline-marker-span-label">#{{ span.marker.event_id }}</span>
+                  <span
+                    v-if="!span.instant"
+                    class="timeline-marker-span-label"
+                    :class="{ 'timeline-marker-span-label-selected': span.marker.event_id === selectedMarkerEventId }"
+                  >#{{ span.marker.event_id }}</span>
+                  <div
+                    v-if="span.marker.event_id === selectedMarkerEventId && !span.instant && markerResizeAvailability"
+                    class="timeline-marker-resize-controls"
+                    @click.stop
+                    @mouseenter="emit('hoverMarker', span.marker.event_id)"
+                    @mouseleave="emit('hoverMarker', null)"
+                  >
+                    <div class="timeline-marker-resize-edge timeline-marker-resize-start">
+                      <button
+                        type="button"
+                        class="timeline-marker-resize-btn"
+                        title="Extend marker to previous asset"
+                        :disabled="!markerResizeAvailability.extendStart"
+                        @click.stop="emit('resizeMarker', { eventId: span.marker.event_id, edge: 'start', direction: -1 })"
+                      ><i class="pi pi-angle-left" /></button>
+                      <button
+                        type="button"
+                        class="timeline-marker-resize-btn"
+                        title="Shorten marker from start"
+                        :disabled="!markerResizeAvailability.shortenStart"
+                        @click.stop="emit('resizeMarker', { eventId: span.marker.event_id, edge: 'start', direction: 1 })"
+                      ><i class="pi pi-angle-right" /></button>
+                    </div>
+                    <div class="timeline-marker-resize-edge timeline-marker-resize-end">
+                      <button
+                        type="button"
+                        class="timeline-marker-resize-btn"
+                        title="Shorten marker from end"
+                        :disabled="!markerResizeAvailability.shortenEnd"
+                        @click.stop="emit('resizeMarker', { eventId: span.marker.event_id, edge: 'end', direction: -1 })"
+                      ><i class="pi pi-angle-left" /></button>
+                      <button
+                        type="button"
+                        class="timeline-marker-resize-btn"
+                        title="Extend marker to next asset"
+                        :disabled="!markerResizeAvailability.extendEnd"
+                        @click.stop="emit('resizeMarker', { eventId: span.marker.event_id, edge: 'end', direction: 1 })"
+                      ><i class="pi pi-angle-right" /></button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -897,6 +956,10 @@ watch(
   text-overflow: ellipsis;
 }
 
+.timeline-marker-span-label-selected {
+  padding-left: 1.6rem;
+}
+
 /* Standalone/instant signal (no End partner): a small diamond "pin" at the
  * span's start rather than a bar spanning start->end. */
 .timeline-marker-span-instant {
@@ -912,6 +975,64 @@ watch(
   outline: 2px solid #0f172a;
   outline-offset: 1px;
   z-index: 2;
+  overflow: visible;
+}
+
+.timeline-marker-resize-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.timeline-marker-resize-edge {
+  position: absolute;
+  top: 50%;
+  display: flex;
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.timeline-marker-resize-start {
+  left: -0.75rem;
+}
+
+.timeline-marker-resize-end {
+  right: -0.75rem;
+}
+
+.timeline-marker-resize-btn {
+  width: 0.8rem;
+  height: 0.9rem;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f1f5f9;
+  border: 1px solid #94a3b8;
+  color: #334155;
+  cursor: pointer;
+}
+
+.timeline-marker-resize-btn:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.timeline-marker-resize-btn:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.timeline-marker-resize-btn:hover:not(:disabled) {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.timeline-marker-resize-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.timeline-marker-resize-btn .pi {
+  font-size: 0.65rem;
 }
 
 /* Hovered (transient, from either the graph or the marker list) -- a
