@@ -14,7 +14,13 @@ with enough surface area (bar + 4 independently-gated text slots + escaping
 
 from typing import Literal, Optional
 
-from .config import MarkerConfig, OsdConfig, OutputConfig, SEGMENTATION_TYPE_NAME, to_ffmpeg_color
+from .config import (
+    MarkerConfig,
+    OsdConfig,
+    OutputConfig,
+    SEGMENTATION_TYPE_CODE,
+    to_ffmpeg_color,
+)
 from .timeline import TimelineEntry
 
 Corner = Literal["top_left", "top_right", "bottom_left", "bottom_right"]
@@ -80,23 +86,18 @@ def escape_ffmpeg_text(text: str) -> str:
 
 def abbreviation_for_marker(marker: MarkerConfig) -> str:
     """Abbreviation shown for one covering SCTE-35 span in the
-    `scte35_spans` corner content: 'splice' for a bare splice_insert
-    (no segmentation descriptor); otherwise lowercase initials of the
-    segmentation type's bare name (config.SEGMENTATION_TYPE_NAME), e.g.
-    'Break' -> 'b', 'Provider Placement Opportunity' -> 'ppo',
-    'Provider Advertisement' -> 'pa'. Falls back to the raw type_id string
+    `scte35_spans` corner content: 'SPI' for a bare splice_insert
+    (no segmentation descriptor); otherwise the stable three-letter code
+    from config.SEGMENTATION_TYPE_CODE. Falls back to the raw type_id string
     if it isn't in the table.
     """
     if marker.segmentation is None:
-        return "splice"
+        return "SPI"
 
     type_id = marker.segmentation.type_id
     value = int(type_id, 16) if isinstance(type_id, str) else int(type_id)
     normalized = f"0x{value:02X}"
-    name = SEGMENTATION_TYPE_NAME.get(normalized)
-    if name is None:
-        return normalized.lower()
-    return "".join(word[0] for word in name.split() if word[0].isalpha()).lower()
+    return SEGMENTATION_TYPE_CODE.get(normalized, normalized)
 
 
 def build_progress_bar_graph(

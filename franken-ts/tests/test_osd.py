@@ -230,19 +230,31 @@ def _marker(splice_type="time_signal", type_id=None):
 
 
 def test_abbreviation_bare_splice_insert():
-    assert abbreviation_for_marker(_marker(splice_type="splice_insert")) == "splice"
+    assert abbreviation_for_marker(_marker(splice_type="splice_insert")) == "SPI"
 
 
 def test_abbreviation_break():
-    assert abbreviation_for_marker(_marker(type_id="0x22")) == "b"
+    assert abbreviation_for_marker(_marker(type_id="0x22")) == "BRK"
 
 
 def test_abbreviation_provider_placement_opportunity():
-    assert abbreviation_for_marker(_marker(type_id="0x34")) == "ppo"
+    assert abbreviation_for_marker(_marker(type_id="0x34")) == "PPO"
 
 
 def test_abbreviation_provider_advertisement():
-    assert abbreviation_for_marker(_marker(type_id="0x30")) == "pa"
+    assert abbreviation_for_marker(_marker(type_id="0x30")) == "PAD"
+
+
+def test_abbreviation_distributor_advertisement():
+    assert abbreviation_for_marker(_marker(type_id="0x32")) == "DAD"
+
+
+def test_abbreviation_unscheduled_event():
+    assert abbreviation_for_marker(_marker(type_id="0x40")) == "USC"
+
+
+def test_abbreviation_unknown_type_id_falls_back_to_hex():
+    assert abbreviation_for_marker(_marker(type_id="0x77")) == "0x77"
 
 
 # ── Filter construction (pure functions, no ffmpeg invocation) ────────────

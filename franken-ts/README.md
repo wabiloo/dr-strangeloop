@@ -286,7 +286,7 @@ can independently show one of:
 | `asset_id` | the current asset's `id` |
 | `time` | elapsed/total seconds within the current asset, sub-second with 2 decimal places, e.g. `12.32/34.60` |
 | `next_asset_id` | `next: {id}` — the next real (non-still-image) asset; the playlist loops, so this always resolves to something |
-| `scte35_spans` | the non-instant SCTE-35 spans currently covering this asset, abbreviated and `/`-joined outermost-first, e.g. `b / ppo / pa` |
+| `scte35_spans` | the non-instant SCTE-35 spans currently covering this asset, shown as stable three-letter codes and `/`-joined outermost-first, e.g. `BRK / PPO / PAD` (`SPI` for a bare `splice_insert`) |
 | `is_adbreak` | `osd.ad_break_label` when the asset is covered by an ad-related SCTE-35 span (break/placement-opportunity/advertisement/promo/ad-block lanes), otherwise nothing |
 | `osd_label` | the asset's own `osd_label` free-text field, or nothing if unset |
 | `null` (or omitted) | nothing shown in that corner |
@@ -418,4 +418,3 @@ Options:
 Source files should have exactly one video track and one audio track (track-count
 mismatches are hard errors). Frame rate, resolution, and aspect ratio are
 normalized automatically during extraction — no flags required.
-

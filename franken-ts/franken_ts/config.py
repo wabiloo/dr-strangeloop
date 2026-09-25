@@ -232,6 +232,41 @@ SEGMENTATION_TYPE_NAME: dict[str, str] = {
     "0x50": "Network",
 }
 
+# Stable three-letter codes for compact SCTE-35 span labels (OSD overlays,
+# reports, and other consumers). Keep these explicit rather than deriving
+# initials: several names collide or produce codes that are too long.
+SEGMENTATION_TYPE_CODE: dict[str, str] = {
+    "0x00": "NIN",  # Not Indicated
+    "0x01": "CID",  # Content Identification
+    "0x02": "CAS",  # Call Ad Server
+    "0x10": "PRG",  # Program
+    "0x12": "PET",  # Program Early Termination
+    "0x13": "PBA",  # Program Breakaway
+    "0x14": "PRS",  # Program Resumption
+    "0x15": "PRP",  # Program Runover Planned
+    "0x16": "PRU",  # Program Runover Unplanned
+    "0x17": "POS",  # Program Overlap Start
+    "0x18": "PBO",  # Program Blackout Override
+    "0x19": "PIP",  # Program Start -- In Progress
+    "0x20": "CHP",  # Chapter
+    "0x22": "BRK",  # Break
+    "0x24": "OPN",  # Opening Credit
+    "0x26": "CLC",  # Closing Credit
+    "0x30": "PAD",  # Provider Advertisement
+    "0x32": "DAD",  # Distributor Advertisement
+    "0x34": "PPO",  # Provider Placement Opportunity
+    "0x36": "DPO",  # Distributor Placement Opportunity
+    "0x38": "PVO",  # Provider Overlay Placement Opportunity
+    "0x3A": "DVO",  # Distributor Overlay Placement Opportunity
+    "0x3C": "PPR",  # Provider Promo
+    "0x3E": "DPR",  # Distributor Promo
+    "0x40": "USC",  # Unscheduled Event
+    "0x42": "ACO",  # Alternate Content Opportunity
+    "0x44": "PAB",  # Provider Ad Block
+    "0x46": "DAB",  # Distributor Ad Block
+    "0x50": "NET",  # Network
+}
+
 
 def lane_for_type_id(type_id: str | int) -> str:
     """The `type` lane (break/ppo/ad/custom) a segmentation_type_id belongs

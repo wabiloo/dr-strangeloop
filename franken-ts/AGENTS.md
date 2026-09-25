@@ -78,8 +78,9 @@ height, grows 0→100% width over each asset's playback) plus up to 4
 `asset_id`/`time` (elapsed/total seconds in the current asset, sub-second
 with 2 decimal places, e.g. `12.32/34.60`)/
 `next_asset_id` (`next: {id}`, always resolves — playlist loops)/
-`scte35_spans` (non-instant covering spans, abbreviated and `/`-joined
-outermost-first, e.g. `b / ppo / pa`)/`is_adbreak` (`ad_break_label` text
+`scte35_spans` (non-instant covering spans, shown as stable three-letter
+codes and `/`-joined outermost-first, e.g. `BRK / PPO / PAD`; bare
+`splice_insert` uses `SPI`)/`is_adbreak` (`ad_break_label` text
 when covered by a break/ppo/ad-lane span)/`osd_label` (the asset's own
 `osd_label` free text, nothing if unset). `text_size_pct`/`text_color`
 apply uniformly to all corner text. `corner_box` (`enabled`/`color`,
