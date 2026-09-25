@@ -23,7 +23,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
-import { buildPlaylist, buildScteVerify, getOutputStatus, getPlaylist, getPreviewStatus, getScteVerifyStatus, playlistPreviewUrl, probeMedia, resolveMarkers, savePlaylist, scteVerifyReportUrl } from '../api/client'
+import { buildPlaylist, buildScteVerify, getOutputStatus, getPlaylist, getPreviewStatus, getScteVerifyStatus, playlistPreviewUrl, probeMedia, resolveMarkers, savePlaylist, scteVerifyReportUrl, validateMarkersNumbering } from '../api/client'
 import type { Job, ResolvedMarker } from '../api/types'
 import AssetTimeline from '../components/AssetTimeline.vue'
 import AssetFileField from '../components/AssetFileField.vue'
@@ -40,7 +40,7 @@ import {
   textToHex,
 } from '../segmentationPresets'
 import { isInstantMarker, layoutMarkers, nextEventId, orderForDisplay, semanticMarkerIssues } from '../markerLayout'
-import type { AssetRole, NumberingScheme } from '../markerLayout'
+import type { AssetRole, NumberingScheme, NumberingValues } from '../markerLayout'
 import { filesFromDrop, isDragInside, isFileDrag, sourceFromDroppedFile } from '../utils/fileDrop'
 
 const props = defineProps<{ name: string | null }>()
@@ -1347,12 +1347,71 @@ function laneColorForBadge(marker: MarkerForm | null): string {
   return colorForLaneKey(laneKeyForMarker(marker))
 }
 
-/** Client-side containment layout (depths/segment_num), same algorithm as
- * the backend, just for display -- not authoritative (see markerLayout.ts). */
+/** Authoritative segment_num/segments_expected/sub_segment_* for each
+ * committed marker (by event_id), from a debounced
+ * `POST /playlists/validate-markers` -- see `scheduleNumberingRefresh`
+ * below. Empty until the first response, or whenever the current state
+ * doesn't validate (semanticMarkerIssues below still reports *why*
+ * instantly; this only ever affects the numbering badges' display). */
+const numberingByEventId = ref<Map<number, NumberingValues>>(new Map())
+let numberingRefreshTimer: ReturnType<typeof setTimeout> | undefined
+let numberingRequestSeq = 0
+
+function scheduleNumberingRefresh() {
+  clearTimeout(numberingRefreshTimer)
+  if (!form.enforce_scte35_marker_semantics || form.markers.length === 0) {
+    numberingByEventId.value = new Map()
+    return
+  }
+  numberingRefreshTimer = setTimeout(refreshNumberingPreview, 250)
+}
+
+async function refreshNumberingPreview() {
+  const seq = ++numberingRequestSeq
+  let result
+  try {
+    result = await validateMarkersNumbering(toYamlPlaylist())
+  } catch {
+    // Current state doesn't validate (e.g. mid-edit hierarchy violation)
+    // or hasn't been saved with valid output settings yet -- leave the
+    // last good numbering in place; semanticMarkerIssues already surfaces
+    // the hierarchy error itself, and this is display-only.
+    return
+  }
+  if (seq !== numberingRequestSeq) return // superseded by a newer edit
+  const next = new Map<number, NumberingValues>()
+  for (const [eventId, values] of Object.entries(result.numbering)) {
+    next.set(Number(eventId), {
+      segmentNum: values.segment_num ?? 0,
+      segmentsExpected: values.segments_expected ?? 0,
+      subSegmentNum: values.sub_segment_num,
+      subSegmentsExpected: values.sub_segments_expected,
+    })
+  }
+  numberingByEventId.value = next
+}
+
+// Debounced rather than instant (unlike semanticMarkerIssues below): this
+// is a network round-trip, and numbering is only ever displayed, never
+// used to gate a drag/resize gesture -- see markerLayout.ts's module
+// docstring.
+watch(
+  () => [
+    form.enforce_scte35_marker_semantics,
+    form.scte35_numbering_scheme,
+    form.break_numbering_supported,
+    JSON.stringify(form.markers),
+    JSON.stringify(form.assets.map((a) => ({ id: a.id, role: a.role }))),
+  ],
+  scheduleNumberingRefresh,
+  { immediate: true },
+)
+
+/** Client-side containment layout (depths), plus the numbering fetched
+ * above -- not authoritative (see markerLayout.ts). */
 const markerLayout = computed(() => {
   const idToIndex = new Map(form.assets.map((a, i) => [a.id, i] as const))
-  const assetRoles = new Map(form.assets.map((a) => [a.id, a.role] as const))
-  return layoutMarkers(form.markers, idToIndex, form.enforce_scte35_marker_semantics, form.scte35_numbering_scheme, form.break_numbering_supported, assetRoles)
+  return layoutMarkers(form.markers, idToIndex, form.enforce_scte35_marker_semantics, numberingByEventId.value)
 })
 
 /** The "Markers" list below the timeline shows nesting via indentation
@@ -1401,11 +1460,21 @@ async function previewMarkerResolution() {
   }
 }
 
-/** Live preview of the draft's containment (segment/depth), computed
- * against form.markers with the draft substituted in for whatever it's
- * replacing (or added fresh) -- lets the "Auto-computed" info in the
- * detail panel update as you edit, even before committing. Not used to
- * feed the graph/list (those only ever show committed markers). */
+/** Live preview of the draft's containment (depth), computed against
+ * form.markers with the draft substituted in for whatever it's replacing
+ * (or added fresh) -- lets the "Auto-computed" info in the detail panel
+ * update as you edit, even before committing. Not used to feed the
+ * graph/list (those only ever show committed markers).
+ *
+ * Its numbering badge reuses `numberingByEventId` (the last-fetched,
+ * committed-list numbering) rather than fetching its own preview: numbering
+ * is display-only, and the debounced refresh above already re-fires (with
+ * this draft substituted in as part of the payload once it's fetched) --
+ * see `scheduleNumberingRefresh`. While actively editing an *existing*
+ * marker's draft, this briefly shows its last-committed numbering rather
+ * than a hypothetical one for the in-progress edit; it catches up 250ms
+ * after committing. A brand-new draft (an event_id not in the map yet)
+ * shows 0/0 until then, same as the pre-fetch loading state elsewhere. */
 const draftPreviewSpan = computed(() => {
   const d = markerDraft.value
   if (!d) return null
@@ -1420,9 +1489,8 @@ const draftPreviewSpan = computed(() => {
     break_interval: d.break_interval,
   }
   const idToIndex = new Map(form.assets.map((a, i) => [a.id, i] as const))
-  const assetRoles = new Map(form.assets.map((a) => [a.id, a.role] as const))
   const preview = layoutMarkers(
-    [...withoutEditing, draftAsMarker], idToIndex, form.enforce_scte35_marker_semantics, form.scte35_numbering_scheme, form.break_numbering_supported, assetRoles,
+    [...withoutEditing, draftAsMarker], idToIndex, form.enforce_scte35_marker_semantics, numberingByEventId.value,
   )
   return preview.find((s) => s.marker._ui_id === d._ui_id) ?? null
 })
@@ -2142,8 +2210,7 @@ function applyHexPopover() {
                 :highlighted-asset-id="highlightedMovedAssetId"
                 :markers="timelineMarkers"
                 :enforce-scte35-marker-semantics="form.enforce_scte35_marker_semantics"
-                :scte35-numbering-scheme="form.scte35_numbering_scheme"
-                :break-numbering-supported="form.break_numbering_supported"
+                :numbering-by-event-id="numberingByEventId"
                 :resolved-durations="resolvedAssetDurations ?? undefined"
                 :selected-marker-event-id="selectedMarkerEventId"
                 :marker-resize-availability="markerResizeAvailability"

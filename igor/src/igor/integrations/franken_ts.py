@@ -178,6 +178,44 @@ def resolve_markers_preview(name: str, data: dict | None = None) -> dict:
     }
 
 
+def validate_markers_numbering(data: dict) -> dict:
+    """Cheap, pure-Python numbering preview for the editor's live "Numbering"
+    display: just `Config.model_validate`, no ffprobe or other filesystem
+    access (unlike `resolve_markers_preview` above), so it's fast enough to
+    call on every edit (debounced client-side -- see PlaylistEditor.vue's
+    `scheduleNumberingRefresh`).
+
+    The Table 23 hierarchy/overlap check itself stays duplicated in the
+    frontend (igor/frontend/src/markerLayout.ts's `semanticMarkerIssues`)
+    for instant drag/resize feedback -- but the numbering *engine* (three
+    SCTE-35 profiles' worth of segment_num/segments_expected/sub_segment_*
+    rules) is only ever displayed, never used to gate an interaction, so
+    it's computed once here instead of also being hand-kept in sync in
+    TypeScript. Raises (via Config.model_validate) on the same errors a
+    real build would -- callers surface these as 422s, same as
+    resolve_markers_preview.
+
+    Keyed by event_id rather than marker_index: with semantics enforced
+    (the only case this is ever called for -- see the frontend's `strict`
+    check), event_ids are guaranteed unique (Config.validate_event_ids_unique),
+    and unlike an index this survives markers being reordered client-side
+    between request and response.
+    """
+    cfg = Config.model_validate(data)
+    numbering: dict[str, dict[str, int | None]] = {}
+    for marker in cfg.markers:
+        seg = marker.segmentation
+        if seg is None:
+            continue
+        numbering[str(marker.event_id)] = {
+            "segment_num": seg.segment_num,
+            "segments_expected": seg.segments_expected,
+            "sub_segment_num": seg.sub_segment_num,
+            "sub_segments_expected": seg.sub_segments_expected,
+        }
+    return {"numbering": numbering}
+
+
 def _resolve_path(name: str, must_exist: bool = True):
     if "/" in name or "\\" in name or name in ("..", "."):
         raise ValueError(f"Invalid playlist name: {name!r}")

@@ -9,6 +9,7 @@ members = [
     "igor",
     "inspector-krogh",
     "loop-dee-loop",
+    "scte35-table23",
 ]
 
 [[package]]
@@ -129,6 +130,7 @@ dependencies = [
     { name = "pytimeparse" },
     { name = "pyyaml" },
     { name = "rich" },
+    { name = "scte35-table23" },
 ]
 
 [package.metadata]
@@ -138,6 +140,7 @@ requires-dist = [
     { name = "pytimeparse", specifier = ">=1.1" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0" },
+    { name = "scte35-table23", editable = "scte35-table23" },
 ]
 
 [[package]]
@@ -286,6 +289,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "scte35-table23" },
 ]
 
 [package.metadata]
@@ -296,7 +300,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.4.0" }]
+dev = [
+    { name = "pytest", specifier = ">=8.4.0" },
+    { name = "scte35-table23", editable = "scte35-table23" },
+]
 
 [[package]]
 name = "markdown-it-py"
@@ -725,6 +732,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/c0/8f/0722ca900cc807c13
 wheels = [
     { url = "https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl", hash = "sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb", size = 310654, upload-time = "2026-04-12T08:24:02.83Z" },
 ]
+
+[[package]]
+name = "scte35-table23"
+version = "0.1.0"
+source = { editable = "scte35-table23" }
 
 [[package]]
 name = "starlette"

@@ -6,6 +6,12 @@ from typing import Literal, Optional, Union
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
+from scte35_table23 import (
+    INSTANT_SEGMENTATION_TYPE_IDS,
+    SEGMENTATION_END_TYPE_ID,
+    SEGMENTATION_TYPE_CODE,
+    SEGMENTATION_TYPE_NAME,
+)
 
 from .utils import parse_time
 
@@ -190,81 +196,16 @@ LANE_FOR_SEGMENTATION_TYPE_ID: dict[str, str] = {
 }
 
 
-# SCTE-35 Table 23 segmentation_type_id -> bare name (no "Start"/"End"
-# wording). Mirrors igor/frontend/src/segmentationPresets.ts so the
-# CLI-burned-in OSD
-# abbreviations (see osd.py's abbreviation_for_marker) and igor's UI never
-# describe the same type_id differently. Used only for OSD display -- not a
-# source of truth for `type`/lane grouping (that's LANE_FOR_SEGMENTATION_TYPE_ID
-# above).
-SEGMENTATION_TYPE_NAME: dict[str, str] = {
-    "0x00": "Not Indicated",
-    "0x01": "Content Identification",
-    "0x02": "Call Ad Server",
-    "0x10": "Program",
-    "0x12": "Program Early Termination",
-    "0x13": "Program Breakaway",
-    "0x14": "Program Resumption",
-    "0x15": "Program Runover Planned",
-    "0x16": "Program Runover Unplanned",
-    "0x17": "Program Overlap Start",
-    "0x18": "Program Blackout Override",
-    "0x19": "Program Join",
-    "0x1A": "Program Immediate Resumption",
-    "0x20": "Chapter",
-    "0x22": "Break",
-    "0x24": "Opening Credit",
-    "0x26": "Closing Credit",
-    "0x30": "Provider Advertisement",
-    "0x32": "Distributor Advertisement",
-    "0x34": "Provider Placement Opportunity",
-    "0x36": "Distributor Placement Opportunity",
-    "0x38": "Provider Overlay Placement Opportunity",
-    "0x3A": "Distributor Overlay Placement Opportunity",
-    "0x3C": "Provider Promo",
-    "0x3E": "Distributor Promo",
-    "0x40": "Unscheduled Event",
-    "0x42": "Alternate Content Opportunity",
-    "0x44": "Provider Ad Block",
-    "0x46": "Distributor Ad Block",
-    "0x50": "Network",
-}
-
-# Stable three-letter codes for compact SCTE-35 span labels (OSD overlays,
-# reports, and other consumers). Keep these explicit rather than deriving
-# initials: several names collide or produce codes that are too long.
-SEGMENTATION_TYPE_CODE: dict[str, str] = {
-    "0x00": "NIN",  # Not Indicated
-    "0x01": "CID",  # Content Identification
-    "0x02": "CAS",  # Call Ad Server
-    "0x10": "PRG",  # Program
-    "0x12": "PET",  # Program Early Termination
-    "0x13": "PBA",  # Program Breakaway
-    "0x14": "PRS",  # Program Resumption
-    "0x15": "PRP",  # Program Runover Planned
-    "0x16": "PRU",  # Program Runover Unplanned
-    "0x17": "POS",  # Program Overlap Start
-    "0x18": "PBO",  # Program Blackout Override
-    "0x19": "PJO",  # Program Join
-    "0x1A": "PIR",  # Program Immediate Resumption
-    "0x20": "CHP",  # Chapter
-    "0x22": "BRK",  # Break
-    "0x24": "OPN",  # Opening Credit
-    "0x26": "CLC",  # Closing Credit
-    "0x30": "PAD",  # Provider Advertisement
-    "0x32": "DAD",  # Distributor Advertisement
-    "0x34": "PPO",  # Provider Placement Opportunity
-    "0x36": "DPO",  # Distributor Placement Opportunity
-    "0x38": "PVO",  # Provider Overlay Placement Opportunity
-    "0x3A": "DVO",  # Distributor Overlay Placement Opportunity
-    "0x3C": "PPR",  # Provider Promo
-    "0x3E": "DPR",  # Distributor Promo
-    "0x40": "USC",  # Unscheduled Event
-    "0x42": "ACO",  # Alternate Content Opportunity
-    "0x44": "PAB",  # Provider Ad Block
-    "0x46": "DAB",  # Distributor Ad Block
-    "0x50": "NET",  # Network
-}
+# SEGMENTATION_TYPE_NAME (bare name, no "Start"/"End" wording) and
+# SEGMENTATION_TYPE_CODE (stable three-letter compact code, used by OSD
+# spans/reports) now live in the `scte35_table23` package (imported above)
+# -- the single source shared with loop-dee-loop's HLS/DASH signaling and
+# igor/frontend/src/segmentationPresets.ts, instead of three
+# hand-maintained copies. (Not to be confused with inspector-krogh's own
+# `scte35_tables.py` -- that's a deliberate, separate duplicate for
+# verification independence, not something to unify with this package.)
+# Used only for OSD display -- not a source of truth for `type`/lane
+# grouping (that's LANE_FOR_SEGMENTATION_TYPE_ID above).
 
 
 def lane_for_type_id(type_id: str | int) -> str:
@@ -275,48 +216,13 @@ def lane_for_type_id(type_id: str | int) -> str:
     normalized = f"0x{value:02X}"
     return LANE_FOR_SEGMENTATION_TYPE_ID.get(normalized, "custom")
 
-# SCTE-35 Table 23 pairings. Most pairs have consecutive IDs, but program
-# segmentation includes non-consecutive pairs and multiple start types that
-# share Program End. Values are keys (start type_id) -> end type_id.
-SEGMENTATION_END_TYPE_ID: dict[int, int] = {
-    0x10: 0x11,  # Program Start / Program End
-    0x13: 0x14,  # Program Breakaway / Program Resumption
-    0x17: 0x11,  # Program Overlap Start / Program End
-    0x19: 0x11,  # Program Join / Program End
-    0x20: 0x21,  # Chapter Start / Chapter End
-    0x22: 0x23,  # Break Start / Break End
-    0x24: 0x25,  # Opening Credit Start / Opening Credit End
-    0x26: 0x27,  # Closing Credit Start / Closing Credit End
-    0x30: 0x31,  # Provider Advertisement Start / End
-    0x32: 0x33,  # Distributor Advertisement Start / End
-    0x34: 0x35,  # Provider Placement Opportunity Start / End
-    0x36: 0x37,  # Distributor Placement Opportunity Start / End
-    0x38: 0x39,  # Provider Overlay Placement Opportunity Start / End
-    0x3A: 0x3B,  # Distributor Overlay Placement Opportunity Start / End
-    0x3C: 0x3D,  # Provider Promo Start / End
-    0x3E: 0x3F,  # Distributor Promo Start / End
-    0x40: 0x41,  # Unscheduled Event Start / End
-    0x42: 0x43,  # Alternate Content Opportunity Start / End
-    0x44: 0x45,  # Provider Ad Block Start / End
-    0x46: 0x47,  # Distributor Ad Block Start / End
-    0x50: 0x51,  # Network Start / End
-}
-SEGMENTATION_START_TYPE_IDS = frozenset(SEGMENTATION_END_TYPE_ID)
-SEGMENTATION_END_TYPE_IDS = frozenset(SEGMENTATION_END_TYPE_ID.values())
-
-# SCTE-35 Table 23 signals not paired as segment start/end messages. The
+# SEGMENTATION_END_TYPE_ID (Table 23 Start -> End type_id pairings) and
+# INSTANT_SEGMENTATION_TYPE_IDS (signals with no Start/End pairing at all)
+# also come from `scte35_table23` -- see the import comment above. The
 # Program Early Termination signal remains instant; this editor does not
 # expose it as an alternate end for a Program Start or Program Join span.
-INSTANT_SEGMENTATION_TYPE_IDS: frozenset[str] = frozenset({
-    "0x00",  # Not Indicated
-    "0x01",  # Content Identification
-    "0x02",  # Call Ad Server
-    "0x12",  # Program Early Termination
-    "0x15",  # Program Runover Planned
-    "0x16",  # Program Runover Unplanned
-    "0x18",  # Program Blackout Override
-    "0x1A",  # Program Immediate Resumption
-})
+SEGMENTATION_START_TYPE_IDS = frozenset(SEGMENTATION_END_TYPE_ID)
+SEGMENTATION_END_TYPE_IDS = frozenset(SEGMENTATION_END_TYPE_ID.values())
 
 
 def segmentation_end_type_id(type_id: int) -> int:

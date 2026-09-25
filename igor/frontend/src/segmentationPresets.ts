@@ -1,5 +1,14 @@
 /** SCTE-35 Table 23 segmentation_type_id definitions and Table 23 pairings,
- * used by the editor and the playback marker labels. */
+ * used by the editor and the playback marker labels. The reference data
+ * itself (name/code/instant/Start-End pairing) comes from
+ * `segmentationTable23.generated.ts` -- generated from the same
+ * `scte35_table23` Python package franken-ts and loop-dee-loop use, via
+ * `scripts/generate_scte35_tables.py`, so it can't silently disagree with
+ * what franken-ts actually authors. Only this file's own presentation
+ * concerns (display `label` wording, lane grouping/coloring) stay
+ * hand-written here. */
+
+import { TABLE23 } from './segmentationTable23.generated'
 
 export interface PresetOption {
   value: string
@@ -29,37 +38,51 @@ export interface SegmentationPairOption {
   endValue?: string
 }
 
-export const SEGMENTATION_PAIR_OPTIONS: SegmentationPairOption[] = [
-  { value: '0x00', label: '0x00 -- Not Indicated', name: 'Not Indicated', code: 'NIN', instant: true },
-  { value: '0x01', label: '0x01 -- Content Identification', name: 'Content Identification', code: 'CID', instant: true },
-  { value: '0x02', label: '0x02 -- Call Ad Server', name: 'Call Ad Server', code: 'CAS', instant: true },
-  { value: '0x10', label: '0x10/0x11 -- Program Start / Program End', name: 'Program', code: 'PRG', instant: false, endValue: '0x11' },
-  { value: '0x12', label: '0x12 -- Program Early Termination', name: 'Program Early Termination', code: 'PET', instant: true },
-  { value: '0x13', label: '0x13/0x14 -- Program Breakaway / Program Resumption', name: 'Program Breakaway', code: 'PBA', instant: false, endValue: '0x14' },
-  { value: '0x15', label: '0x15 -- Program Runover Planned', name: 'Program Runover Planned', code: 'PRP', instant: true },
-  { value: '0x16', label: '0x16 -- Program Runover Unplanned', name: 'Program Runover Unplanned', code: 'PRU', instant: true },
-  { value: '0x17', label: '0x17/0x11 -- Program Overlap Start / Program End', name: 'Program Overlap Start', code: 'POS', instant: false, endValue: '0x11' },
-  { value: '0x18', label: '0x18 -- Program Blackout Override', name: 'Program Blackout Override', code: 'PBO', instant: true },
-  { value: '0x19', label: '0x19/0x11 -- Program Join / Program End', name: 'Program Join', code: 'PJO', instant: false, endValue: '0x11' },
-  { value: '0x1A', label: '0x1A -- Program Immediate Resumption', name: 'Program Immediate Resumption', code: 'PIR', instant: true },
-  { value: '0x20', label: '0x20/0x21 -- Chapter Start / Chapter End', name: 'Chapter', code: 'CHP', instant: false, endValue: '0x21' },
-  { value: '0x22', label: '0x22/0x23 -- Break Start / Break End', name: 'Break', code: 'BRK', instant: false, endValue: '0x23' },
-  { value: '0x24', label: '0x24/0x25 -- Opening Credit Start / End (deprecated)', name: 'Opening Credit', code: 'OPN', instant: false, endValue: '0x25' },
-  { value: '0x26', label: '0x26/0x27 -- Closing Credit Start / End (deprecated)', name: 'Closing Credit', code: 'CLC', instant: false, endValue: '0x27' },
-  { value: '0x30', label: '0x30/0x31 -- Provider Advertisement Start / End', name: 'Provider Advertisement', code: 'PAD', instant: false, endValue: '0x31' },
-  { value: '0x32', label: '0x32/0x33 -- Distributor Advertisement Start / End', name: 'Distributor Advertisement', code: 'DAD', instant: false, endValue: '0x33' },
-  { value: '0x34', label: '0x34/0x35 -- Provider Placement Opportunity Start / End', name: 'Provider Placement Opportunity', code: 'PPO', instant: false, endValue: '0x35' },
-  { value: '0x36', label: '0x36/0x37 -- Distributor Placement Opportunity Start / End', name: 'Distributor Placement Opportunity', code: 'DPO', instant: false, endValue: '0x37' },
-  { value: '0x38', label: '0x38/0x39 -- Provider Overlay Placement Opportunity Start / End', name: 'Provider Overlay Placement Opportunity', code: 'PVO', instant: false, endValue: '0x39' },
-  { value: '0x3A', label: '0x3A/0x3B -- Distributor Overlay Placement Opportunity Start / End', name: 'Distributor Overlay Placement Opportunity', code: 'DVO', instant: false, endValue: '0x3B' },
-  { value: '0x3C', label: '0x3C/0x3D -- Provider Promo Start / End', name: 'Provider Promo', code: 'PPR', instant: false, endValue: '0x3D' },
-  { value: '0x3E', label: '0x3E/0x3F -- Distributor Promo Start / End', name: 'Distributor Promo', code: 'DPR', instant: false, endValue: '0x3F' },
-  { value: '0x40', label: '0x40/0x41 -- Unscheduled Event Start / End', name: 'Unscheduled Event', code: 'USC', instant: false, endValue: '0x41' },
-  { value: '0x42', label: '0x42/0x43 -- Alternate Content Opportunity Start / End', name: 'Alternate Content Opportunity', code: 'ACO', instant: false, endValue: '0x43' },
-  { value: '0x44', label: '0x44/0x45 -- Provider Ad Block Start / End', name: 'Provider Ad Block', code: 'PAB', instant: false, endValue: '0x45' },
-  { value: '0x46', label: '0x46/0x47 -- Distributor Ad Block Start / End', name: 'Distributor Ad Block', code: 'DAB', instant: false, endValue: '0x47' },
-  { value: '0x50', label: '0x50/0x51 -- Network Start / End', name: 'Network', code: 'NET', instant: false, endValue: '0x51' },
-]
+/** Display wording for each paired type's dropdown label, i.e. everything
+ * after "0xNN/0xNN -- " (instant types just show their bare `name`, no
+ * override needed). Hand-authored: whether the End side repeats the full
+ * name ("Program Start / Program End") or abbreviates to just "Start /
+ * End" ("Provider Advertisement Start / End") isn't a rule derivable from
+ * the Table 23 data itself -- it's a per-entry style choice, and (for
+ * 0x13/0x17/0x19) the Start and End sides are altogether different Table
+ * 23 names (e.g. "Program Breakaway" / "Program Resumption"), not a
+ * name+suffix pattern at all. */
+const PAIRED_LABEL_WORDING: Record<string, string> = {
+  '0x10': 'Program Start / Program End',
+  '0x13': 'Program Breakaway / Program Resumption',
+  '0x17': 'Program Overlap Start / Program End',
+  '0x19': 'Program Join / Program End',
+  '0x20': 'Chapter Start / Chapter End',
+  '0x22': 'Break Start / Break End',
+  '0x24': 'Opening Credit Start / End (deprecated)',
+  '0x26': 'Closing Credit Start / End (deprecated)',
+  '0x30': 'Provider Advertisement Start / End',
+  '0x32': 'Distributor Advertisement Start / End',
+  '0x34': 'Provider Placement Opportunity Start / End',
+  '0x36': 'Distributor Placement Opportunity Start / End',
+  '0x38': 'Provider Overlay Placement Opportunity Start / End',
+  '0x3A': 'Distributor Overlay Placement Opportunity Start / End',
+  '0x3C': 'Provider Promo Start / End',
+  '0x3E': 'Distributor Promo Start / End',
+  '0x40': 'Unscheduled Event Start / End',
+  '0x42': 'Alternate Content Opportunity Start / End',
+  '0x44': 'Provider Ad Block Start / End',
+  '0x46': 'Distributor Ad Block Start / End',
+  '0x50': 'Network Start / End',
+}
+
+export const SEGMENTATION_PAIR_OPTIONS: SegmentationPairOption[] = TABLE23.map((entry) => {
+  const hex = entry.endValue ? `${entry.value}/${entry.endValue}` : entry.value
+  const wording = entry.instant ? entry.name : PAIRED_LABEL_WORDING[entry.value]
+  return {
+    value: entry.value,
+    label: `${hex} -- ${wording}`,
+    name: entry.name,
+    code: entry.code,
+    instant: entry.instant,
+    endValue: entry.endValue ?? undefined,
+  }
+})
 
 /** Explicit Table 23 Start -> End map. */
 export const SEGMENTATION_END_TYPE_ID: Record<string, string> = Object.fromEntries(

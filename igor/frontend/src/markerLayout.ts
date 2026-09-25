@@ -1,15 +1,24 @@
 /**
  * Client-side mirror of franken_ts.timeline.resolve_markers' containment
  * logic (asset-index based, not seconds) -- used to lay markers out into
- * stacked "lanes" in the editor timeline and to auto-fill segment_num/
- * segments_expected for immediate UI feedback while editing.
+ * stacked "lanes" in the editor timeline and to report Table 23
+ * hierarchy/overlap violations for immediate UI feedback while editing
+ * (including mid-drag/resize, so it has to run synchronously, client-side).
  *
  * This is a UI convenience only: the source of truth for validation
- * (contiguity, disjoint/nested-only overlap) and for real
- * frame-accurate seconds is still franken-ts itself, via
- * `Config.model_validate` on save and `POST /resolve-markers` for a
- * ffprobe'd preview. If this ever disagrees with the backend, the
- * backend wins.
+ * (contiguity, disjoint/nested-only overlap) and for real frame-accurate
+ * seconds is still franken-ts itself, via `Config.model_validate` on save
+ * and `POST /resolve-markers` for a ffprobe'd preview. If this ever
+ * disagrees with the backend, the backend wins.
+ *
+ * The numbering *values* (segment_num/segments_expected/sub_segment_*)
+ * are NOT computed here: unlike the hierarchy check, they're only ever
+ * displayed (never used to gate a drag/resize gesture), so
+ * PlaylistEditor.vue fetches them from `POST /playlists/validate-markers`
+ * (debounced) and passes them into `layoutMarkers` as `numberingByEventId`
+ * -- see that function's docstring. This used to be a second,
+ * ~135-line hand-kept-in-sync reimplementation of franken-ts's three
+ * SCTE-35 numbering profiles; see SCTE35_MARKER_RULES.md.
  */
 
 import { isInstantTypeId } from './segmentationPresets'
@@ -93,49 +102,6 @@ export function semanticMarkerIssues<M extends MarkerLike>(
   return [...new Set(issues)]
 }
 
-export function semanticNumberingIssues<M extends MarkerLike>(
-  markers: M[],
-  assetIdToIndex: Map<string, number>,
-): string[] {
-  const spans = markers.map((marker) => {
-    const indices = marker.assets.map((id) => assetIdToIndex.get(id)).filter((n): n is number => n !== undefined)
-    return { marker, lo: indices.length ? Math.min(...indices) : -1, hi: indices.length ? Math.max(...indices) : -1 }
-  })
-  const type = (m: M) => Number.parseInt(m.segmentation?.type_id ?? '-1', 16)
-  const programs = spans.filter(({ marker }) => [0x10,0x17,0x19].includes(type(marker)))
-  const breaks = spans.filter(({ marker }) => type(marker) === 0x22)
-  const error: string[] = []
-  const check = (marker: M, expected: [number, number]) => {
-    const got: [number, number] = [marker.segmentation?.segment_num ?? 0, marker.segmentation?.segments_expected ?? 0]
-    if (got[0] !== expected[0] || got[1] !== expected[1]) error.push(`Marker #${marker.event_id} numbering is ${got.join('/')}; expected ${expected.join('/')}.`)
-  }
-  for (const p of programs) if ([0x10,0x17,0x19].includes(type(p.marker))) check(p.marker, [1,1])
-  const byParent = new Map<number | null, typeof breaks>()
-  for (const item of breaks) {
-    const parent = programs.filter((p) => p.lo <= item.lo && item.hi <= p.hi && !(p.lo === item.lo && p.hi === item.hi))
-      .sort((a, b) => (a.hi - a.lo) - (b.hi - b.lo))[0]
-    const key = parent ? parent.marker._ui_id ?? parent.marker.event_id : null
-    byParent.set(key, [...(byParent.get(key) ?? []), item])
-  }
-  const breakNums = new Map<number, [number, number]>()
-  for (const [key, group] of byParent) {
-    group.sort((a, b) => a.lo - b.lo)
-    const numbered = key !== null
-    group.forEach((item, pos) => {
-      const expected: [number, number] = numbered ? [pos + 1, group.length] : [0,0]
-      check(item.marker, expected)
-      breakNums.set(item.marker._ui_id ?? item.marker.event_id, expected)
-    })
-  }
-  for (const item of spans) {
-    if (![0x34,0x36,0x38,0x3a,0x44,0x46,0x30,0x32,0x3c,0x3e].includes(type(item.marker))) continue
-    const parent = breaks.filter((b) => b.lo <= item.lo && item.hi <= b.hi && !(b.lo === item.lo && b.hi === item.hi))
-      .sort((a,b) => (a.hi-a.lo) - (b.hi-b.lo))[0]
-    check(item.marker, parent ? (breakNums.get(parent.marker._ui_id ?? parent.marker.event_id) ?? [0,0]) : [0,0])
-  }
-  return [...new Set(error)]
-}
-
 export interface MarkerSpan<M extends MarkerLike = MarkerLike> {
   marker: M
   markerIndex: number
@@ -161,17 +127,34 @@ export function isInstantMarker(marker: MarkerLike): boolean {
   return typeId ? isInstantTypeId(typeId) : false
 }
 
-/** Resolve each marker's asset-index span, containment depth (0 = top-level,
- * i.e. no other marker strictly contains it), and sibling segment_num/
- * segments_expected -- same "immediate parent = smallest strictly
- * containing span" rule as the Python implementation. */
+/** One marker's numbering fields, as computed server-side by
+ * `POST /playlists/validate-markers` -- see `layoutMarkers`'s
+ * `numberingByEventId` parameter. */
+export interface NumberingValues {
+  segmentNum: number
+  segmentsExpected: number
+  subSegmentNum: number | null
+  subSegmentsExpected: number | null
+}
+
+/** Resolve each marker's asset-index span and containment depth (0 =
+ * top-level, i.e. no other marker strictly contains it) -- same
+ * "immediate parent = smallest strictly containing span" rule as the
+ * Python implementation.
+ *
+ * `numberingByEventId`, when `strict` (enforcement on), supplies the
+ * segment_num/segments_expected/sub_segment_* to report for each span --
+ * fetched from `POST /playlists/validate-markers` (see
+ * PlaylistEditor.vue's `scheduleNumberingRefresh`), not computed here.
+ * A marker missing from the map (nothing fetched yet, or the current
+ * state doesn't validate) reports 0/0/null/null, same as the loading-state
+ * fallback this replaced. With `strict` false, authored values pass
+ * through unchanged, as before. */
 export function layoutMarkers<M extends MarkerLike>(
   markers: M[],
   assetIdToIndex: Map<string, number>,
   strict = true,
-  scheme: NumberingScheme = 'SCTE35_2023R1',
-  breakNumberingSupported = false,
-  assetRoles: ReadonlyMap<string, AssetRole | null> = new Map(),
+  numberingByEventId: ReadonlyMap<number, NumberingValues> = new Map(),
 ): MarkerSpan<M>[] {
   const spans = markers.map((marker) => {
     const indices = marker.assets.map((id) => assetIdToIndex.get(id)).filter((i): i is number => i !== undefined)
@@ -214,90 +197,21 @@ export function layoutMarkers<M extends MarkerLike>(
   }
   spans.forEach((_, i) => depthOfIndex(i))
 
-  const semanticNumbers = strict ? getSemanticNumbers(spans, markers, scheme, breakNumberingSupported, assetRoles) : new Map<number, { outer: [number, number]; inner: [number, number] | null }>()
-
-  return spans.map((span, i) => ({
-    marker: span.marker,
-    markerIndex: i,
-    loIndex: span.loIndex,
-    hiIndex: span.hiIndex,
-    depth: depthOf[i],
-    segmentNum: semanticNumbers.get(i)?.outer[0] ?? (strict ? 0 : span.marker.segmentation?.segment_num ?? 0),
-    segmentsExpected: semanticNumbers.get(i)?.outer[1] ?? (strict ? 0 : span.marker.segmentation?.segments_expected ?? 0),
-    subSegmentNum: semanticNumbers.get(i)?.inner?.[0] ?? (strict ? null : span.marker.segmentation?.sub_segment_num ?? null),
-    subSegmentsExpected: semanticNumbers.get(i)?.inner?.[1] ?? (strict ? null : span.marker.segmentation?.sub_segments_expected ?? null),
-    instant: isInstantMarker(span.marker),
-  }))
-}
-
-function getSemanticNumbers<M extends MarkerLike>(
-  spans: { loIndex: number; hiIndex: number }[],
-  markers: M[],
-  scheme: NumberingScheme,
-  breakNumberingSupported: boolean,
-  assetRoles: ReadonlyMap<string, AssetRole | null>,
-): Map<number, { outer: [number, number]; inner: [number, number] | null }> {
-  const result = new Map<number, { outer: [number, number]; inner: [number, number] | null }>()
-  const typeId = (index: number) => {
-    const raw = markers[index]?.segmentation?.type_id
-    return raw ? Number.parseInt(raw, 16) : -1
-  }
-  const ranges = (ids: number[]) => ids.map((i) => ({ i, lo: spans[i].loIndex, hi: spans[i].hiIndex }))
-  type Range = ReturnType<typeof ranges>[number]
-  const all = ranges(markers.map((_, i) => i).filter((i) => markers[i].splice_type === 'time_signal'))
-  const programs = ranges(markers.map((_, i) => i).filter((i) => [0x10, 0x17, 0x19].includes(typeId(i))))
-  const breaks = ranges(markers.map((_, i) => i).filter((i) => typeId(i) === 0x22))
-  const pos = (items: Range[], target: Range): [number, number] => [items.findIndex((s) => s.i === target.i) + 1, items.length]
-  const ordered = (items: Range[]) => [...items].sort((a, b) => a.lo - b.lo || a.hi - b.hi || markers[a.i].event_id - markers[b.i].event_id)
-  const parent = (item: Range, parents: Range[]): Range | undefined => parents.filter((p) => p.i !== item.i && p.lo <= item.lo && item.hi <= p.hi)
-    .sort((a, b) => (a.hi - a.lo) - (b.hi - b.lo) || a.lo - b.lo || markers[a.i].event_id - markers[b.i].event_id)[0]
-  const set = (item: Range, outer: [number, number], inner: [number, number] | null = null) => result.set(item.i, { outer, inner })
-  const po = (t: number) => [0x34, 0x36, 0x38, 0x3a].includes(t)
-  const ad = (t: number) => [0x30, 0x32, 0x3c, 0x3e].includes(t)
-  const block = (t: number) => [0x44, 0x46].includes(t)
-  const isJingle = (item: Range) => assetRoles.get(markers[item.i].assets[0]) === 'jingle'
-
-  for (const item of all) {
-    const t = typeId(item.i)
-    set(item, [0x10,0x13,0x14,0x15,0x16,0x17,0x19,0x24,0x26].includes(t) ? [1, 1] : [0, 0])
-  }
-  for (const item of ordered(all.filter((s) => typeId(s.i) === 0x20))) {
-    const p = parent(item, programs)?.i
-    const group = ordered(all.filter((s) => typeId(s.i) === 0x20 && parent(s, programs)?.i === p))
-    set(item, pos(group, item))
-  }
-  for (const item of ordered(breaks)) {
-    const p = parent(item, programs)?.i
-    const group = ordered(breaks.filter((s) => parent(s, programs)?.i === p && (p !== undefined || (markers[s.i].break_interval ?? 1) === (markers[item.i].break_interval ?? 1))))
-    set(item, scheme === 'AF2M_SNPTV' ? [1, 1] : breakNumberingSupported ? pos(group, item) : [0, 0])
-  }
-  for (const item of ordered(all.filter((s) => po(typeId(s.i)) || ad(typeId(s.i)) || block(typeId(s.i))))) {
-    const br = parent(item, breaks)
-    const group = ordered(all.filter((s) => parent(s, breaks)?.i === br?.i))
-    const t = typeId(item.i)
-    const outer = br ? result.get(br.i)?.outer ?? [0, 0] as [number, number] : [0, 0] as [number, number]
-    if (scheme === 'AF2M_SNPTV') {
-      if (po(t)) set(item, [1, 1])
-      else {
-        const spots = group.filter((s) => typeId(s.i) === 0x30 && !isJingle(s))
-        if (!isJingle(item)) set(item, pos(spots, item))
-        else {
-          const ads = group.filter((s) => typeId(s.i) === 0x30)
-          set(item, ads[0]?.i === item.i && item.lo === br?.lo ? [0, spots.length] : [0, 0])
-        }
-      }
-    } else if (scheme === 'SCTE35_2019A') {
-      if (po(t)) set(item, outer, br ? pos(group.filter((s) => po(typeId(s.i))), item) : null)
-      else set(item, br ? pos(group.filter((s) => ad(typeId(s.i))), item) : [0, 0])
-    } else if (block(t)) {
-      const ads = group.filter((s) => ad(typeId(s.i)))
-      const first = ads.findIndex((s) => item.lo <= s.lo && s.hi <= item.hi) + 1
-      set(item, outer, first ? [first, group.filter((s) => block(typeId(s.i))).length] : null)
-    } else {
-      set(item, outer, br ? pos(group.filter((s) => po(t) ? po(typeId(s.i)) : ad(typeId(s.i))), item) : null)
+  return spans.map((span, i) => {
+    const authoritative = strict ? numberingByEventId.get(span.marker.event_id) : undefined
+    return {
+      marker: span.marker,
+      markerIndex: i,
+      loIndex: span.loIndex,
+      hiIndex: span.hiIndex,
+      depth: depthOf[i],
+      segmentNum: authoritative?.segmentNum ?? (strict ? 0 : span.marker.segmentation?.segment_num ?? 0),
+      segmentsExpected: authoritative?.segmentsExpected ?? (strict ? 0 : span.marker.segmentation?.segments_expected ?? 0),
+      subSegmentNum: authoritative ? authoritative.subSegmentNum : (strict ? null : span.marker.segmentation?.sub_segment_num ?? null),
+      subSegmentsExpected: authoritative ? authoritative.subSegmentsExpected : (strict ? null : span.marker.segmentation?.sub_segments_expected ?? null),
+      instant: isInstantMarker(span.marker),
     }
-  }
-  return result
+  })
 }
 
 /** Next unused event_id across the flat `markers` list -- max(used ids) + 1,

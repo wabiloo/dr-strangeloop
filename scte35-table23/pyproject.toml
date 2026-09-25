@@ -1,0 +1,10 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "scte35-table23"
+version = "0.1.0"
+description = "SCTE-35 Table 23 segmentation_type_id reference data, shared by franken-ts, loop-dee-loop, and igor's frontend. Named scte35_table23 (not scte35_tables) to avoid colliding with inspector-krogh's own, intentionally-separate scte35_tables.py -- see that file's docstring for why it's a deliberate duplicate, not something to unify with this package."
+requires-python = ">=3.11"
+dependencies = []

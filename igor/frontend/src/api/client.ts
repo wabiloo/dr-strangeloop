@@ -7,6 +7,7 @@ import type {
   ChannelStatus,
   FrankenTsPlaylist,
   Job,
+  MarkersNumberingPreview,
   MarkersPreview,
   PlaylistListItem,
   ProbeResult,
@@ -85,6 +86,13 @@ export function buildPlaylist(name: string): Promise<Job> {
 
 export function resolveMarkers(name: string, data?: FrankenTsPlaylist): Promise<MarkersPreview> {
   return postJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/resolve-markers`, data ? { data } : undefined)
+}
+
+/** Cheap numbering-only preview (no ffprobe/filesystem access) -- see
+ * MarkersNumberingPreview. Doesn't need a playlist name: it never reads a
+ * saved file, only validates `data`. */
+export function validateMarkersNumbering(data: FrankenTsPlaylist): Promise<MarkersNumberingPreview> {
+  return postJson(`${PLAYLISTS_BASE}/validate-markers`, { data })
 }
 
 /** URL for the quick 540p preview .mp4 franken-ts writes as the last step

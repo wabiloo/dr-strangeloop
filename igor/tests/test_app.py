@@ -113,3 +113,62 @@ def test_upload_file_stores_backend_local_copy(tmp_path, monkeypatch):
     assert uploaded.is_file()
     assert uploaded.read_bytes() == b"test media bytes"
     assert result["name"] == "movie_clip.mp4"
+
+
+def _minimal_playlist(**overrides) -> dict:
+    """A synthetic Config payload valid enough for pure model_validate
+    (validate-markers never touches the filesystem, so file paths need not
+    exist)."""
+    payload = {
+        "output": {"file": "outputs/test.ts"},
+        "assets": [
+            {"file": "content1.mp4", "duration": "10s"},
+            {"file": "ad1.mp4", "id": "ad1", "duration": "5s"},
+            {"file": "content2.mp4", "duration": "10s"},
+        ],
+        "markers": [
+            {
+                "event_id": 1,
+                "splice_type": "time_signal",
+                "assets": ["ad1"],
+                "segmentation": {"type_id": "0x22"},
+            },
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_validate_markers_returns_computed_numbering():
+    resp = client.post("/api/v1/playlists/validate-markers", json={"data": _minimal_playlist()})
+    assert resp.status_code == 200
+    numbering = resp.json()["numbering"]
+    # A single, unnumbered Break (no Program, break_numbering_supported
+    # defaults false) -- franken-ts computes 0/0 for both Start and End.
+    assert numbering == {"1": {"segment_num": 0, "segments_expected": 0, "sub_segment_num": None, "sub_segments_expected": None}}
+
+
+def test_validate_markers_passes_through_authored_values_when_enforcement_off():
+    payload = _minimal_playlist(enforce_scte35_marker_semantics=False)
+    payload["markers"][0]["segmentation"]["segment_num"] = 7
+    payload["markers"][0]["segmentation"]["segments_expected"] = 9
+    resp = client.post("/api/v1/playlists/validate-markers", json={"data": payload})
+    assert resp.status_code == 200
+    assert resp.json()["numbering"]["1"]["segment_num"] == 7
+    assert resp.json()["numbering"]["1"]["segments_expected"] == 9
+
+
+def test_validate_markers_rejects_invalid_hierarchy():
+    payload = _minimal_playlist()
+    # A second Break over the exact same span as the first duplicates its
+    # signal -- rejected by validate_markers's semantic checks.
+    payload["markers"].append(
+        {
+            "event_id": 2,
+            "splice_type": "time_signal",
+            "assets": ["ad1"],
+            "segmentation": {"type_id": "0x22"},
+        }
+    )
+    resp = client.post("/api/v1/playlists/validate-markers", json={"data": payload})
+    assert resp.status_code == 422

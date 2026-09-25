@@ -3,7 +3,7 @@ import Menu from 'primevue/menu'
 import type { MenuItem } from 'primevue/menuitem'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { parseApproxSeconds } from '../utils/duration'
-import { layoutMarkers, type AssetRole, type MarkerLike, type MarkerSpan, type NumberingScheme } from '../markerLayout'
+import { layoutMarkers, type AssetRole, type MarkerLike, type MarkerSpan, type NumberingValues } from '../markerLayout'
 import { colorForLaneKey, laneKeyForMarker, laneLabelForMarker } from '../segmentationPresets'
 
 interface TimelineAsset {
@@ -18,8 +18,10 @@ const props = defineProps<{
   selectedIndex?: number | null
   markers?: MarkerLike[]
   enforceScte35MarkerSemantics?: boolean
-  scte35NumberingScheme?: NumberingScheme
-  breakNumberingSupported?: boolean
+  /** Authoritative segment_num/segments_expected/sub_segment_* per
+   * event_id, from a debounced POST /playlists/validate-markers -- see
+   * markerLayout.ts's `layoutMarkers`. */
+  numberingByEventId?: ReadonlyMap<number, NumberingValues>
   /** Real per-asset durations (seconds) from a resolve-markers preview
    * (ffprobe'd), keyed by asset id -- overrides the parsed/fallback
    * duration used for layout so assets with no explicit `duration:` in
@@ -227,16 +229,12 @@ const assetIdToIndex = computed(() => {
   props.assets.forEach((a, i) => m.set(a.id, i))
   return m
 })
-const assetRoles = computed(() => new Map(props.assets.map((asset) => [asset.id, asset.role ?? null] as const)))
-
 const markerLanes = computed<{ key: string; label: string; spans: MarkerSpan[] }[]>(() => {
   if (!props.markers || props.markers.length === 0) return []
   const spans = layoutMarkers(
     props.markers, assetIdToIndex.value,
     props.enforceScte35MarkerSemantics ?? true,
-    props.scte35NumberingScheme ?? 'SCTE35_2023R1',
-    props.breakNumberingSupported ?? false,
-    assetRoles.value,
+    props.numberingByEventId,
   )
   const keys = Array.from(new Set(spans.map((s) => laneKeyForMarker(s.marker))))
   // Keep Table 23's numeric order except for Provider/Distributor

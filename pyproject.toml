@@ -10,4 +10,5 @@ members = [
     "inspector-krogh",
     "loop-dee-loop",
     "igor",
+    "scte35-table23",
 ]

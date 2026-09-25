@@ -81,6 +81,20 @@ def resolve_markers(name: str, payload: PlaylistPayload | None = None) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/validate-markers")
+def validate_markers(payload: PlaylistPayload) -> dict:
+    """Cheap numbering-only preview for the editor's live marker numbering
+    display -- pure Config.model_validate, no ffprobe/filesystem access,
+    so it's fast enough to call on every edit (debounced client-side).
+    Doesn't need a playlist `name` (unlike resolve-markers): it never
+    reads/writes a saved file, only validates the posted `data`. See
+    `resolve_markers` above for the heavier, real-durations variant."""
+    try:
+        return franken_ts.validate_markers_numbering(payload.data)
+    except Exception as exc:  # noqa: BLE001 -- surface validation errors to the client
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/{name}/build")
 def build_playlist(name: str) -> dict:
     try:

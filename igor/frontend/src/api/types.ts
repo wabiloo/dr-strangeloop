@@ -67,6 +67,25 @@ export interface MarkersPreview {
   asset_durations: Record<string, number>
 }
 
+/** One marker's numbering fields, as returned by
+ * POST /playlists/validate-markers -- see MarkersNumberingPreview. */
+export interface MarkerNumbering {
+  segment_num: number | null
+  segments_expected: number | null
+  sub_segment_num: number | null
+  sub_segments_expected: number | null
+}
+
+/** Response from POST /playlists/validate-markers -- the numbering
+ * franken-ts would compute for the posted (possibly unsaved) playlist,
+ * keyed by event_id. Cheap (no ffprobe), so the editor calls this on a
+ * debounce after every edit rather than only via an explicit "Resolve"
+ * action -- see resolveMarkers/MarkersPreview above for the heavier,
+ * real-durations variant. */
+export interface MarkersNumberingPreview {
+  numbering: Record<string, MarkerNumbering>
+}
+
 export interface FileEntry {
   name: string
   path: string
