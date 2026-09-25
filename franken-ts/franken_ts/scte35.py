@@ -121,10 +121,16 @@ def _time_signal_message(
                      segmentation_duration=format_pts(seg_duration_pts),
                      segmentation_type_id=f"0x{type_id:02X}",
                      segment_num=str(seg.segment_num or 0),
-                     segments_expected=str(seg.segments_expected or 0))
-        if boundary.is_start and seg.sub_segment_num is not None:
-            attrs["sub_segment_num"] = str(seg.sub_segment_num)
-            attrs["sub_segments_expected"] = str(seg.sub_segments_expected or 0)
+                     segments_expected=str(seg.segments_expected or 0),
+                     # TSDuck's XML parser requires both attributes even when
+                     # this numbering profile does not use sub-segments.
+                     # Always emitting 0/0 is also the historical format.
+                     sub_segment_num=str(
+                         seg.sub_segment_num or 0 if boundary.is_start else 0
+                     ),
+                     sub_segments_expected=str(
+                         seg.sub_segments_expected or 0 if boundary.is_start else 0
+                     ))
         seg_desc = ET.SubElement(sit, "splice_segmentation_descriptor", **attrs)
         upid = ET.SubElement(seg_desc, "segmentation_upid", type=seg.upid_type)
         upid.text = seg.upid_hex

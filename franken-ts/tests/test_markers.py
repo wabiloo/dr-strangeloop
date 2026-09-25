@@ -552,7 +552,8 @@ def test_2023_numbering_independent_tracks_and_first_ad_in_block(tmp_path):
     descriptors = ET.parse(xml_path).findall('.//splice_segmentation_descriptor')
     starts = [d for d in descriptors if d.get('segmentation_event_id') == '0x00000021']
     assert starts[0].get('sub_segment_num') == '3'
-    assert starts[1].get('sub_segment_num') is None
+    assert starts[1].get('sub_segment_num') == '0'
+    assert starts[1].get('sub_segments_expected') == '0'
     sidecar = build_markers(boundaries, pts)
     assert next(m for m in sidecar if m['event_id'] == '0x00000021' and m['is_out'])['sub_segment_num'] == 3
 
