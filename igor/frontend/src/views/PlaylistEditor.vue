@@ -350,6 +350,38 @@ function selectAsset(i: number) {
   markerDraft.value = null
 }
 
+/** Keep marker references attached to the same asset when its id changes.
+ * Asset ids are the references used by marker spans, so changing the asset
+ * object alone would make every span that covered it look unresolved. */
+function updateAssetId(index: number | null, newId: string) {
+  if (index === null) return
+  const asset = form.assets[index]
+  if (!asset || asset.id === newId) return
+
+  const oldId = asset.id
+  asset.id = newId
+
+  function replaceInSpans(spans: { assets: string[] }[]) {
+    spans.forEach((span) => {
+      if (span.assets.includes(oldId)) {
+        span.assets = span.assets.map((id) => (id === oldId ? newId : id))
+      }
+    })
+  }
+
+  replaceInSpans(form.markers)
+  if (markerDraft.value) replaceInSpans([markerDraft.value])
+  if (resolvedMarkers.value) replaceInSpans(resolvedMarkers.value)
+
+  // Preserve the resolved width for this asset after moving its duration
+  // cache entry to the new key.
+  if (resolvedAssetDurations.value && oldId in resolvedAssetDurations.value) {
+    const durations = { ...resolvedAssetDurations.value, [newId]: resolvedAssetDurations.value[oldId] }
+    delete durations[oldId]
+    resolvedAssetDurations.value = durations
+  }
+}
+
 function addAsset(index?: number) {
   const asset = newAsset()
   if (index === undefined || index === null) {
@@ -2001,7 +2033,10 @@ function applyHexPopover() {
                 </div>
                 <div class="col-4 flex flex-column gap-1">
                   <label>Asset ID (for tagging markers)</label>
-                  <InputText v-model="form.assets[selectedAssetIndex].id" />
+                  <InputText
+                    :model-value="form.assets[selectedAssetIndex].id"
+                    @update:model-value="updateAssetId(selectedAssetIndex, String($event ?? ''))"
+                  />
                 </div>
                 <div class="col-3 flex flex-column gap-1">
                   <label>Start</label>
