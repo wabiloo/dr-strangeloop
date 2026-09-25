@@ -39,6 +39,7 @@ class SignalingMarker:
     splice_command_b64: str
     is_out: bool  # True = CUE-OUT / splice-out, False = CUE-IN / splice-in
     is_instant: bool = False  # True = standalone signal, no OUT/IN pairing
+    marker_identity: str | None = None
 
 
 def _splice_command_base64_from_marker(marker: dict) -> str:
@@ -62,9 +63,8 @@ def _splice_command_base64_from_marker(marker: dict) -> str:
     )
 
 
-# SCTE-35 Table 22 segmentation_type_id values that are standalone/instant
-# signals -- NOT part of a Start/End pair (e.g. 0x02 "Call Ad Server"; there
-# is no "+1" partner the way there is for 0x30/0x31 Ad Start/End). Mirrors
+# SCTE-35 Table 23 segmentation_type_id values that are standalone/instant
+# signals -- NOT part of a Start/End pair (e.g. 0x02 "Call Ad Server"). Mirrors
 # franken-ts's own `INSTANT_SEGMENTATION_TYPE_IDS` (franken_ts/config.py) --
 # duplicated here rather than imported since loop-dee-loop and franken-ts
 # are separate tools/venvs by design (see repo-root AGENTS.md), consuming
@@ -74,13 +74,19 @@ INSTANT_SEGMENTATION_TYPE_IDS: frozenset[str] = frozenset({
     "0x01",  # Content Identification
     "0x02",  # Call Ad Server
     "0x12",  # Program Early Termination
-    "0x13",  # Program Breakaway
-    "0x14",  # Program Resumption
     "0x15",  # Program Runover Planned
     "0x16",  # Program Runover Unplanned
-    "0x17",  # Program Overlap Start
     "0x18",  # Program Blackout Override
-    "0x19",  # Program Start -- In Progress
+    "0x1A",  # Program Immediate Resumption
+})
+
+SEGMENTATION_END_TYPE_IDS: frozenset[int] = frozenset({
+    0x11, 0x14, 0x21, 0x23, 0x25, 0x27, 0x31, 0x33, 0x35, 0x37,
+    0x39, 0x3B, 0x3D, 0x3F, 0x41, 0x43, 0x45, 0x47, 0x51,
+})
+SEGMENTATION_START_TYPE_IDS: frozenset[int] = frozenset({
+    0x10, 0x13, 0x17, 0x19, 0x20, 0x22, 0x24, 0x26, 0x30, 0x32,
+    0x34, 0x36, 0x38, 0x3A, 0x3C, 0x3E, 0x40, 0x42, 0x44, 0x46, 0x50,
 })
 
 
@@ -93,11 +99,23 @@ def is_instant_segmentation(m: dict) -> bool:
     CUE-IN will close -- there is no such CUE-IN coming, on this loop or
     any other.
     """
+    if "is_instant" in m:
+        return bool(m["is_instant"])
     seg_type_id = m.get("segmentation_type_id")
     if seg_type_id is None:
         return False
     type_id_int = int(seg_type_id, 16) if isinstance(seg_type_id, str) else seg_type_id
     return f"0x{type_id_int:02X}" in INSTANT_SEGMENTATION_TYPE_IDS
+
+
+def is_out_type_id(type_id: int) -> bool:
+    if type_id in SEGMENTATION_END_TYPE_IDS:
+        return type_id in SEGMENTATION_START_TYPE_IDS
+    return True
+
+
+def is_standalone_instant_type_id(type_id: int) -> bool:
+    return f"0x{type_id:02X}" in INSTANT_SEGMENTATION_TYPE_IDS
 
 
 def is_out_marker(m: dict) -> bool:
@@ -108,9 +126,8 @@ def is_out_marker(m: dict) -> bool:
     active interval (see serve.py's `_marker_covers_segment`) versus which
     are a single point-in-time signal.
 
-    Even `segmentation_type_id` -> "start" (e.g. 0x34 Program Start, 0x30
-    Distributor placement opportunity start), odd -> "end" pair, matching
-    franken-ts's own start/start+1 convention (scte35.py).
+    New sidecars carry an explicit `is_out`; older sidecars use the Table 23
+    End ID set rather than assuming every even/odd ID pair is consecutive.
 
     NOT meaningful for standalone/instant signals (see
     `is_instant_segmentation`) -- callers must check that first: an instant
@@ -119,9 +136,11 @@ def is_out_marker(m: dict) -> bool:
     """
     splice_type = m.get("splice_type")
     seg_type_id = m.get("segmentation_type_id")
+    if "is_out" in m:
+        return bool(m["is_out"])
     if seg_type_id is not None:
         type_id_int = int(seg_type_id, 16) if isinstance(seg_type_id, str) else seg_type_id
-        return (type_id_int % 2) == 0
+        return is_out_type_id(type_id_int)
     if splice_type == "splice_insert":
         # splice_insert markers don't carry a segmentation_type_id in
         # markers.json; caller must set an explicit "is_out" flag instead.
@@ -151,6 +170,7 @@ def markers_to_signaling(
                 splice_command_b64=_splice_command_base64_from_marker(m),
                 is_out=is_out,
                 is_instant=is_instant,
+                marker_identity=(str(m["marker_identity"]) if m.get("marker_identity") is not None else None),
             )
         )
     return result
@@ -235,6 +255,8 @@ def build_daterange_tags(
             # segmentation_type_id-based ID from a time_signal marker.
             direction = 'splice-out' if marker.is_out else 'splice-in'
             marker_id = f'{direction}-{event_id_dec}-{loop_number}'
+        if marker.marker_identity is not None:
+            marker_id += f'-{marker.marker_identity}'
 
         attrs = [
             f'ID="{marker_id}"',
@@ -300,7 +322,10 @@ def build_eventstream_xml(
         event_attrs = {"presentationTime": str(marker.pts_time_ticks)}
         if marker.segmentation_duration_ticks is not None:
             event_attrs["duration"] = str(marker.segmentation_duration_ticks)
-        event_attrs["id"] = marker.event_id
+        event_attrs["id"] = (
+            f"{marker.event_id}-{marker.marker_identity}"
+            if marker.marker_identity is not None else marker.event_id
+        )
 
         event = ET.SubElement(event_stream, "Event", event_attrs)
         signal = ET.SubElement(event, "Signal", {"xmlns": "urn:scte:scte35:2013:xml"})
@@ -398,8 +423,15 @@ def group_markers_by_event_id(markers: list[dict]) -> dict[str, list[dict]]:
     return grouped
 
 
+def group_markers_by_identity(markers: list[dict]) -> dict[tuple[str, str | None], list[dict]]:
+    grouped: dict[tuple[str, str | None], list[dict]] = {}
+    for marker in markers:
+        grouped.setdefault((marker["event_id"], marker.get("marker_identity")), []).append(marker)
+    return grouped
+
+
 def resolve_marker_duration_ticks(
-    marker: dict, markers_by_event_id: dict[str, list[dict]]
+    marker: dict, markers_by_event_id: dict
 ) -> int | None:
     """Best-effort duration (in ticks) for a CUE-OUT-style DURATION
     attribute. `segmentation_duration_ticks` is present for every
@@ -417,7 +449,10 @@ def resolve_marker_duration_ticks(
     stop = next(
         (
             m
-            for m in markers_by_event_id.get(marker["event_id"], [])
+            for m in markers_by_event_id.get(
+                (marker["event_id"], marker.get("marker_identity")),
+                markers_by_event_id.get(marker["event_id"], []),
+            )
             if m is not marker and not is_out_marker(m)
         ),
         None,
@@ -446,7 +481,7 @@ def build_cue_breaks(markers: list[dict]) -> list[dict]:
     actually models.
     """
     splice_insert_markers = [m for m in markers if m.get("splice_type") == "splice_insert"]
-    markers_by_event_id = group_markers_by_event_id(splice_insert_markers)
+    markers_by_event_id = group_markers_by_identity(splice_insert_markers)
     breaks: list[dict] = []
     for m in splice_insert_markers:
         if not is_out_marker(m):

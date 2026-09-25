@@ -56,7 +56,7 @@ def find_idr_pts(
 
     Returns:
         Tuple of (pts_map, muxer_offset_seconds) where:
-          pts_map         maps (event_id, is_start) → PTS ticks (90kHz)
+        pts_map         maps (marker_index, is_start) → PTS ticks (90kHz)
           muxer_offset_s  the uniform PTS offset the muxer added (seconds)
     """
     idr_times = _load_idr_timestamps(ts_file)
@@ -78,7 +78,7 @@ def find_idr_pts(
         # Shift the expected position by the muxer offset so we search in
         # the same PTS space as the actual IDR timestamps.
         expected = boundary.output_time + muxer_offset
-        key = (boundary.event_id, boundary.is_start)
+        key = ("marker", boundary.marker_index, boundary.is_start)
         label = f"event {boundary.event_id} ({'start' if boundary.is_start else 'stop'})"
 
         candidates = [t for t in idr_times if abs(t - expected) <= gop_duration]

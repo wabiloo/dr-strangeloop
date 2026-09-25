@@ -149,14 +149,15 @@ def resolve_markers_preview(name: str, data: dict | None = None) -> dict:
     }
 
     marker_boundaries = resolve_markers(cfg.markers, entries)
-    by_event: dict[int, dict[bool, float]] = {}
+    by_marker: dict[int, dict[bool, float]] = {}
     for b in marker_boundaries:
-        by_event.setdefault(b.event_id, {})[b.is_start] = b.output_time
+        by_marker.setdefault(b.marker_index, {})[b.is_start] = b.output_time
 
     markers_out = []
-    for marker in cfg.markers:
-        span = by_event.get(marker.event_id, {})
+    for marker_index, marker in enumerate(cfg.markers):
+        span = by_marker.get(marker_index, {})
         entry = {
+            "marker_index": marker_index,
             "event_id": marker.event_id,
             "type": marker.type,
             "assets": marker.assets,
@@ -166,6 +167,8 @@ def resolve_markers_preview(name: str, data: dict | None = None) -> dict:
         if marker.segmentation is not None:
             entry["segment_num"] = marker.segmentation.segment_num
             entry["segments_expected"] = marker.segmentation.segments_expected
+            entry["sub_segment_num"] = marker.segmentation.sub_segment_num
+            entry["sub_segments_expected"] = marker.segmentation.sub_segments_expected
         markers_out.append(entry)
 
     return {

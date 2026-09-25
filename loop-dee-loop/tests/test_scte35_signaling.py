@@ -49,6 +49,25 @@ def test_daterange_id_is_segtype_event_loop_decimal():
     assert 'ID="34-100-3"' in tags[0]
 
 
+def test_duplicate_id_marker_identity_disambiguates_hls_id_and_groups_stop():
+    out = {
+        "event_id": "0x00000001", "marker_identity": "10", "splice_type": "splice_insert",
+        "pts_time_ticks": 0, "is_out": True,
+    }
+    stop = {
+        "event_id": "0x00000001", "marker_identity": "10", "splice_type": "splice_insert",
+        "pts_time_ticks": 900_000, "is_out": False,
+    }
+    markers = [
+        SignalingMarker("0x00000001", 0, None, None, "AAAA", True, marker_identity="10"),
+        SignalingMarker("0x00000001", 1, None, None, "BBBB", False, marker_identity="11"),
+    ]
+    tags = build_daterange_tags(markers, 90_000, _START)
+    assert 'ID="splice-out-1-0-10"' in tags[0]
+    assert 'ID="splice-in-1-0-11"' in tags[1]
+    assert resolve_marker_duration_ticks(out, {("0x00000001", "10"): [out, stop]}) == 900_000
+
+
 def test_daterange_id_uses_splice_out_prefix_when_no_segmentation():
     marker = SignalingMarker(
         event_id="0x00000001",
@@ -143,6 +162,17 @@ def test_is_instant_segmentation_recognizes_call_ad_server():
     assert is_instant_segmentation({"segmentation_type_id": "0x02"}) is True
     assert is_instant_segmentation({"segmentation_type_id": "0x30"}) is False
     assert is_instant_segmentation({"segmentation_type_id": None}) is False
+
+
+def test_explicit_out_flag_overrides_type_id_for_nonconsecutive_program_pairs():
+    assert is_out_marker({"segmentation_type_id": "0x17", "is_out": True}) is True
+    assert is_out_marker({"segmentation_type_id": "0x11", "is_out": False}) is False
+    assert is_instant_segmentation({"segmentation_type_id": "0x11", "is_instant": False}) is False
+
+
+def test_legacy_table_23_program_end_is_treated_as_end():
+    assert is_out_marker({"segmentation_type_id": "0x11"}) is False
+    assert is_out_marker({"segmentation_type_id": "0x14"}) is False
 
 
 def test_call_ad_server_is_out_marker_true_but_instant_overrides_in_serve():

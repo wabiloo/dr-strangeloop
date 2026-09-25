@@ -6,7 +6,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .config import AssetConfig, MarkerConfig, is_instant_segmentation
+from .config import (
+    AssetConfig,
+    MarkerConfig,
+    is_instant_segmentation,
+    segmentation_end_type_id,
+)
 from .utils import is_image
 from .validate import VideoInfo
 
@@ -51,6 +56,19 @@ class AdBoundary:
     is_start: bool           # True = splice-out, False = splice-in
     marker: MarkerConfig
     break_duration: float    # seconds (full marker span duration)
+    segmentation_type_id: int | None = None  # actual Table 23 value for this boundary
+    marker_index: int = 0     # stable playlist-local identity; event IDs may duplicate in relaxed mode
+
+
+def pts_for_boundary(pts_map: dict, boundary: AdBoundary) -> int | None:
+    """Look up a boundary by internal marker identity, with compatibility
+    for callers/tests that still provide the historical event-ID keyed map."""
+    value = pts_map.get(("marker", boundary.marker_index, boundary.is_start))
+    if value is None:
+        value = pts_map.get((boundary.marker_index, boundary.is_start))
+    if value is None:
+        value = pts_map.get((boundary.event_id, boundary.is_start))
+    return value
 
 
 def _snap_inpoint(t: float, framerate: int) -> float:
@@ -247,18 +265,6 @@ def compute_marker_spans(
     for group in siblings_by_parent.values():
         group.sort(key=lambda i: raw_spans[i][0])
 
-    for group in siblings_by_parent.values():
-        n = len(group)
-        for position, i in enumerate(group):
-            marker = raw_spans[i][2]
-            seg = marker.segmentation
-            if seg is None:
-                continue
-            if seg.segment_num is None:
-                seg.segment_num = position
-            if seg.segments_expected is None:
-                seg.segments_expected = n
-
     def depth_of(i: int) -> int:
         d = 0
         p = parent_of[i]
@@ -312,7 +318,7 @@ def resolve_markers(
         spans = compute_marker_spans(markers, entries)
 
     boundaries: list[AdBoundary] = []
-    for span in spans:
+    for marker_index, span in enumerate(spans):
         lo, hi, marker = span.lo, span.hi, span.marker
         start_time = entries[lo].output_start
         end_time = entries[hi].output_end
@@ -323,6 +329,14 @@ def resolve_markers(
             is_start=True,
             marker=marker,
             break_duration=break_duration,
+            segmentation_type_id=(
+                (int(marker.segmentation.type_id, 16)
+                 if isinstance(marker.segmentation.type_id, str)
+                 else marker.segmentation.type_id)
+                if marker.splice_type == "time_signal" and marker.segmentation is not None
+                else None
+            ),
+            marker_index=marker_index,
         ))
         # Instant/standalone segmentation types (see
         # INSTANT_SEGMENTATION_TYPE_IDS) have no defined "end" partner --
@@ -337,12 +351,22 @@ def resolve_markers(
             else not is_instant_segmentation(marker.segmentation)
         )
         if needs_stop_boundary:
+            stop_type_id = None
+            if marker.splice_type == "time_signal" and marker.segmentation is not None:
+                start_type_id = (
+                    int(marker.segmentation.type_id, 16)
+                    if isinstance(marker.segmentation.type_id, str)
+                    else marker.segmentation.type_id
+                )
+                stop_type_id = segmentation_end_type_id(start_type_id)
             boundaries.append(AdBoundary(
                 output_time=end_time,
                 event_id=marker.event_id,
                 is_start=False,
                 marker=marker,
                 break_duration=break_duration,
+                segmentation_type_id=stop_type_id,
+                marker_index=marker_index,
             ))
 
     return boundaries

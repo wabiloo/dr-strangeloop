@@ -26,6 +26,7 @@ def test_playlist_schema_is_derived_from_franken_ts():
     schema = resp.json()
     assert schema["title"] == "Config"
     assert "assets" in schema["properties"]
+    assert schema["properties"]["enforce_scte35_marker_semantics"]["default"] is True
 
 
 def test_list_playlists_returns_real_franken_ts_yaml_files():
@@ -79,21 +80,6 @@ def test_probe_missing_file_is_422():
     assert resp.status_code == 422
 
 
-def test_upload_file_stores_backend_local_copy(tmp_path, monkeypatch):
-    from igor import paths
-
-    monkeypatch.setattr(paths, "ASSET_UPLOADS_DIR", tmp_path)
-    resp = client.post(
-        "/api/v1/files/upload",
-        params={"filename": "../../movie clip.mp4"},
-        content=b"test media bytes",
-    )
-    assert resp.status_code == 200
-    result = resp.json()
-    uploaded = tmp_path / Path(result["path"]).name
-    assert uploaded.is_file()
-    assert uploaded.read_bytes() == b"test media bytes"
-    assert result["name"] == "movie_clip.mp4"
 def test_preview_serves_local_video_and_rejects_non_video(tmp_path):
     video = tmp_path / "clip.mp4"
     video.write_bytes(b"video bytes")
@@ -110,3 +96,20 @@ def test_preview_serves_local_video_and_rejects_non_video(tmp_path):
 
     response = client.get("/api/v1/files/preview", params={"path": str(tmp_path / "missing.mp4")})
     assert response.status_code == 404
+
+
+def test_upload_file_stores_backend_local_copy(tmp_path, monkeypatch):
+    from igor import paths
+
+    monkeypatch.setattr(paths, "ASSET_UPLOADS_DIR", tmp_path)
+    resp = client.post(
+        "/api/v1/files/upload",
+        params={"filename": "../../movie clip.mp4"},
+        content=b"test media bytes",
+    )
+    assert resp.status_code == 200
+    result = resp.json()
+    uploaded = tmp_path / Path(result["path"]).name
+    assert uploaded.is_file()
+    assert uploaded.read_bytes() == b"test media bytes"
+    assert result["name"] == "movie_clip.mp4"

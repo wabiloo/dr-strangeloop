@@ -11,7 +11,8 @@ from rich.table import Table
 from rich.text import Text
 
 from .pts import _load_idr_timestamps, PTS_CLOCK
-from .timeline import AdBoundary, TimelineEntry
+from .config import is_segmentation_start_type_id
+from .timeline import AdBoundary, TimelineEntry, pts_for_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +56,8 @@ def _collect_scte_from_xml(xml_path: Path) -> dict[tuple[int, bool], _ScteEntry]
     the whole document (which was the original bug: all descriptors picked up
     the first time_signal pts_time found anywhere).
 
-    start vs stop for time_signal is determined from segmentation_type_id:
-      even type_id  → programme/break start (splice-out)
-      odd  type_id  → programme/break end   (splice-in)
-    This follows SCTE-35 Table 23 where types are defined in start/end pairs
-    (0x34 Program Start, 0x35 Program End, 0x38 Break Start, 0x39 Break End…).
+    start vs stop for time_signal is determined from the explicit Table 23
+    pairing map, with parity used only as a fallback for unknown legacy IDs.
     """
     if not xml_path.exists():
         return {}
@@ -112,10 +110,7 @@ def _collect_scte_from_xml(xml_path: Path) -> dict[tuple[int, bool], _ScteEntry]
                 type_id  = _parse_int(raw_type)
             except (ValueError, TypeError):
                 continue
-            # Even type_id = start (splice-out), odd = stop (splice-in).
-            # SCTE-35 Table 23 defines types in start/end pairs: 0x34/0x35,
-            # 0x38/0x39, etc.
-            is_start = (type_id % 2 == 0)
+            is_start = is_segmentation_start_type_id(type_id)
             key = (event_id, is_start)
             result[key] = _ScteEntry(event_id, is_start, pts_ticks, pts_ticks / PTS_CLOCK)
 
@@ -169,7 +164,7 @@ def build_diag_rows(
         for b in boundaries_by_time.get(t, []):
             kind = "ad_start" if b.is_start else "ad_stop"
             label = f"Event #{b.event_id} {'Start' if b.is_start else 'Stop'}"
-            scte_pts = pts_map.get((b.event_id, b.is_start))
+            scte_pts = pts_for_boundary(pts_map, b)
             scte_t = scte_pts / PTS_CLOCK if scte_pts else None
             actual_entry = actual_scte.get((b.event_id, b.is_start))
 

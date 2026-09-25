@@ -1,22 +1,25 @@
 <script setup lang="ts">
 import Menu from 'primevue/menu'
 import type { MenuItem } from 'primevue/menuitem'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { parseApproxSeconds } from '../utils/duration'
-import { layoutMarkers, type MarkerLike, type MarkerSpan } from '../markerLayout'
+import { layoutMarkers, type AssetRole, type MarkerLike, type MarkerSpan, type NumberingScheme } from '../markerLayout'
 import { colorForLaneKey, laneKeyForMarker, laneLabelForMarker } from '../segmentationPresets'
 
 interface TimelineAsset {
   id: string
   file: string
   duration: string
+  role?: AssetRole | null
 }
 
 const props = defineProps<{
   assets: TimelineAsset[]
   selectedIndex?: number | null
-  highlightedAssetId?: string | null
   markers?: MarkerLike[]
+  enforceScte35MarkerSemantics?: boolean
+  scte35NumberingScheme?: NumberingScheme
+  breakNumberingSupported?: boolean
   /** Real per-asset durations (seconds) from a resolve-markers preview
    * (ffprobe'd), keyed by asset id -- overrides the parsed/fallback
    * duration used for layout so assets with no explicit `duration:` in
@@ -37,10 +40,6 @@ const props = defineProps<{
    * marker list -- highlighted with a lighter dashed outline, visually
    * distinct from "selected" so both can be told apart if they differ. */
   hoveredMarkerEventId?: number | null
-  /** Set (by the parent) whenever the marker list's hover/selection should
-   * bring the corresponding span into view here -- e.g. when hovering a
-   * list row for a marker currently scrolled out of sight under zoom. */
-  scrollToMarkerEventId?: number | null
 }>()
 const emit = defineEmits<{
   select: [index: number]
@@ -228,12 +227,19 @@ const assetIdToIndex = computed(() => {
   props.assets.forEach((a, i) => m.set(a.id, i))
   return m
 })
+const assetRoles = computed(() => new Map(props.assets.map((asset) => [asset.id, asset.role ?? null] as const)))
 
 const markerLanes = computed<{ key: string; label: string; spans: MarkerSpan[] }[]>(() => {
   if (!props.markers || props.markers.length === 0) return []
-  const spans = layoutMarkers(props.markers, assetIdToIndex.value)
+  const spans = layoutMarkers(
+    props.markers, assetIdToIndex.value,
+    props.enforceScte35MarkerSemantics ?? true,
+    props.scte35NumberingScheme ?? 'SCTE35_2023R1',
+    props.breakNumberingSupported ?? false,
+    assetRoles.value,
+  )
   const keys = Array.from(new Set(spans.map((s) => laneKeyForMarker(s.marker))))
-  // Keep Table 22's numeric order except for Provider/Distributor
+  // Keep Table 23's numeric order except for Provider/Distributor
   // Advertisement: visually place those below all Placement Opportunity
   // lanes, even though their type_ids (0x30/0x32) are numerically lower.
   // Other lane types retain their existing relative order; splice_insert
@@ -315,24 +321,8 @@ onMounted(() => {
 })
 onBeforeUnmount(() => trackResizeObserver?.disconnect())
 
-// ── Cross-highlight with the parent's marker list (hover + click) ─────────
-// The parent owns the actual hover/selection state (it also needs to drive
-// the list side); this component only renders the highlight classes and,
-// when told to via `scrollToMarkerEventId`, scrolls the matching span into
-// view -- needed once zoom hides most of the timeline off-screen.
-const markerSpanEls = new Map<number, HTMLElement>()
-function setMarkerSpanRef(eventId: number, el: unknown) {
-  if (el instanceof HTMLElement) markerSpanEls.set(eventId, el)
-  else markerSpanEls.delete(eventId)
-}
-
-watch(
-  () => props.scrollToMarkerEventId,
-  (eventId) => {
-    if (eventId === null || eventId === undefined) return
-    markerSpanEls.get(eventId)?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
-  },
-)
+// The parent owns marker hover/selection; render highlights without changing
+// the user's scroll position when a marker is selected or hovered.
 </script>
 
 
@@ -410,33 +400,32 @@ watch(
               <div class="timeline-marker-lane-track">
                 <div
                   v-for="span in lane.spans"
-                  :key="span.marker.event_id"
-                  :ref="(el) => setMarkerSpanRef(span.marker.event_id, el)"
+                  :key="span.marker._ui_id ?? span.marker.event_id"
                   class="timeline-marker-span"
                   :class="{
                     'timeline-marker-span-instant': span.instant,
-                    'timeline-marker-span-selected': span.marker.event_id === selectedMarkerEventId,
-                    'timeline-marker-span-hovered': span.marker.event_id === hoveredMarkerEventId,
+                    'timeline-marker-span-selected': (span.marker._ui_id ?? span.marker.event_id) === selectedMarkerEventId,
+                    'timeline-marker-span-hovered': (span.marker._ui_id ?? span.marker.event_id) === hoveredMarkerEventId,
                   }"
                   :style="{ ...spanStyle(span), background: colorForLaneKey(lane.key) }"
-                  :title="`${lane.label} #${span.marker.event_id}${span.instant ? ' (instant)' : ` (segment ${span.segmentNum + 1} of ${span.segmentsExpected})`} -- depth ${span.depth}`"
+                   :title="`${lane.label} #${span.marker.event_id}${span.instant || span.marker.splice_type !== 'time_signal' ? '' : ` (segment ${span.segmentNum} of ${span.segmentsExpected}${span.subSegmentNum === null ? '' : `, sub-segment ${span.subSegmentNum} of ${span.subSegmentsExpected}`})`} -- depth ${span.depth}`"
                   role="button"
                   tabindex="0"
-                  @click="emit('editMarker', span.marker.event_id)"
-                  @mouseenter="emit('hoverMarker', span.marker.event_id)"
+                  @click="emit('editMarker', span.marker._ui_id ?? span.marker.event_id)"
+                  @mouseenter="emit('hoverMarker', span.marker._ui_id ?? span.marker.event_id)"
                   @mouseleave="emit('hoverMarker', null)"
                 >
                   <span
                     v-if="!span.instant"
                     class="timeline-marker-span-label"
-                    :class="{ 'timeline-marker-span-label-selected': span.marker.event_id === selectedMarkerEventId }"
-                  >#{{ span.marker.event_id }}</span>
+                    :class="{ 'timeline-marker-span-label-selected': (span.marker._ui_id ?? span.marker.event_id) === selectedMarkerEventId }"
+                   >#{{ span.marker.event_id }}<span v-if="span.marker.splice_type === 'time_signal'" class="timeline-marker-numbering">{{ span.segmentNum }}:{{ span.segmentsExpected }}<template v-if="span.subSegmentNum !== null"> / {{ span.subSegmentNum }}:{{ span.subSegmentsExpected }}</template></span></span>
                   <div
-                    v-if="span.marker.event_id === selectedMarkerEventId && !span.instant && markerResizeAvailability"
+                    v-if="(span.marker._ui_id ?? span.marker.event_id) === selectedMarkerEventId && !span.instant && markerResizeAvailability"
                     class="timeline-marker-resize-controls"
                     @click.stop
-                    @mouseenter="emit('hoverMarker', span.marker.event_id)"
-                    @mouseleave="emit('hoverMarker', null)"
+                     @mouseenter="emit('hoverMarker', span.marker._ui_id ?? span.marker.event_id)"
+                     @mouseleave="emit('hoverMarker', null)"
                   >
                     <div class="timeline-marker-resize-edge timeline-marker-resize-start">
                       <button
@@ -444,14 +433,14 @@ watch(
                         class="timeline-marker-resize-btn"
                         title="Extend marker to previous asset"
                         :disabled="!markerResizeAvailability.extendStart"
-                        @click.stop="emit('resizeMarker', { eventId: span.marker.event_id, edge: 'start', direction: -1 })"
+                        @click.stop="emit('resizeMarker', { eventId: span.marker._ui_id ?? span.marker.event_id, edge: 'start', direction: -1 })"
                       ><i class="pi pi-angle-left" /></button>
                       <button
                         type="button"
                         class="timeline-marker-resize-btn"
                         title="Shorten marker from start"
                         :disabled="!markerResizeAvailability.shortenStart"
-                        @click.stop="emit('resizeMarker', { eventId: span.marker.event_id, edge: 'start', direction: 1 })"
+                        @click.stop="emit('resizeMarker', { eventId: span.marker._ui_id ?? span.marker.event_id, edge: 'start', direction: 1 })"
                       ><i class="pi pi-angle-right" /></button>
                     </div>
                     <div class="timeline-marker-resize-edge timeline-marker-resize-end">
@@ -460,14 +449,14 @@ watch(
                         class="timeline-marker-resize-btn"
                         title="Shorten marker from end"
                         :disabled="!markerResizeAvailability.shortenEnd"
-                        @click.stop="emit('resizeMarker', { eventId: span.marker.event_id, edge: 'end', direction: -1 })"
+                        @click.stop="emit('resizeMarker', { eventId: span.marker._ui_id ?? span.marker.event_id, edge: 'end', direction: -1 })"
                       ><i class="pi pi-angle-left" /></button>
                       <button
                         type="button"
                         class="timeline-marker-resize-btn"
                         title="Extend marker to next asset"
                         :disabled="!markerResizeAvailability.extendEnd"
-                        @click.stop="emit('resizeMarker', { eventId: span.marker.event_id, edge: 'end', direction: 1 })"
+                        @click.stop="emit('resizeMarker', { eventId: span.marker._ui_id ?? span.marker.event_id, edge: 'end', direction: 1 })"
                       ><i class="pi pi-angle-right" /></button>
                     </div>
                   </div>
@@ -483,7 +472,6 @@ watch(
               class="timeline-segment"
               :class="{
                 'timeline-segment-selected': i === selectedIndex,
-                'timeline-segment-move-highlight': seg.asset.id === highlightedAssetId,
                 'timeline-segment-in-range': isInRange(i),
               }"
               :style="{ width: seg.percent + '%' }"
@@ -721,15 +709,6 @@ watch(
   outline-offset: -3px;
   z-index: 1;
   overflow: visible;
-}
-
-.timeline-segment-move-highlight {
-  animation: timeline-asset-move-highlight 1500ms ease-out;
-}
-
-@keyframes timeline-asset-move-highlight {
-  0%, 65% { background-color: #facc15; }
-  100% { background-color: #38bdf8; }
 }
 
 .timeline-segment-move-controls {
@@ -1038,7 +1017,15 @@ watch(
 }
 
 .timeline-marker-span-label-selected {
-  padding-left: 1.6rem;
+  /* Resize buttons sit on the span's edges, outside the label's text line.
+   * Keeping the full inset clipped the numbering on short jingle spans. */
+  padding-left: 0.3rem;
+}
+
+.timeline-marker-numbering {
+  margin-left: 0.3rem;
+  font-weight: 400;
+  opacity: 0.7;
 }
 
 /* Standalone/instant signal (no End partner): a small diamond "pin" at the

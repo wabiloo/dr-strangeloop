@@ -22,6 +22,7 @@ export type FrankenTsPlaylist = Record<string, unknown>
 
 /** One `markers` entry from the playlist YAML, as edited in the UI. */
 export interface MarkerEntry {
+  _ui_id: number
   event_id: number
   type: string
   splice_type: 'splice_insert' | 'time_signal'
@@ -36,6 +37,8 @@ export interface MarkerEntry {
     device_restrictions?: number
     segment_num?: number | null
     segments_expected?: number | null
+    sub_segment_num?: number | null
+    sub_segments_expected?: number | null
   }
   /** `splice_insert` only, default true -- see franken_ts.config.SpliceConfig.auto_return. */
   auto_return?: boolean
@@ -45,6 +48,7 @@ export interface MarkerEntry {
  * start/end seconds (from ffprobe'd durations) and the auto-filled
  * segment_num/segments_expected, for rendering marker lanes on the timeline. */
 export interface ResolvedMarker {
+  marker_index: number
   event_id: number
   type: string
   assets: string[]
@@ -52,6 +56,8 @@ export interface ResolvedMarker {
   end_seconds: number | null
   segment_num?: number | null
   segments_expected?: number | null
+  sub_segment_num?: number | null
+  sub_segments_expected?: number | null
 }
 
 export interface MarkersPreview {

@@ -59,6 +59,7 @@ class DecodedMarker:
     event_id: str
     pts_time_ticks: int
     splice_command_b64: str
+    segmentation_type_id: int | None = None
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -169,11 +170,17 @@ def decode_embedded_scte35(ts_file: Path, *, narrow_descriptors: bool = False) -
         # opt-in for downstream consumers that can't cope with more than
         # one segmentation descriptor per message.
         descriptors = list(getattr(cue, "descriptors", []))
-        seg_event_ids = [
-            getattr(descriptor, "segmentation_event_id", None)
-            for descriptor in descriptors
+        seg_descriptors = [
+            descriptor for descriptor in descriptors
+            if getattr(descriptor, "segmentation_event_id", None) is not None
         ]
-        seg_event_ids = [eid for eid in seg_event_ids if eid is not None]
+        seg_event_ids = [getattr(descriptor, "segmentation_event_id") for descriptor in seg_descriptors]
+        segmentation_type_by_event = {}
+        for descriptor in seg_descriptors:
+            descriptor_event_id = getattr(descriptor, "segmentation_event_id")
+            descriptor_type_id = getattr(descriptor, "segmentation_type_id", None)
+            if descriptor_type_id is not None:
+                segmentation_type_by_event[descriptor_event_id] = descriptor_type_id
 
         if not seg_event_ids:
             # splice_insert carries its own splice_event_id directly on the
@@ -219,6 +226,11 @@ def decode_embedded_scte35(ts_file: Path, *, narrow_descriptors: bool = False) -
                     event_id=event_id_str,
                     pts_time_ticks=ticks,
                     splice_command_b64=per_event_b64[event_id],
+                    segmentation_type_id=(
+                        int(segmentation_type_by_event[event_id], 16)
+                        if isinstance(segmentation_type_by_event.get(event_id), str)
+                        else segmentation_type_by_event.get(event_id)
+                    ),
                 )
             )
 
@@ -332,7 +344,9 @@ def validate_markers_against_ts(
         return keyed
 
     decoded_by_key = _with_occurrence(decoded, lambda d: d.event_id, lambda d: d.pts_time_ticks)
-    markers_by_key = _with_occurrence(markers, lambda m: m["event_id"], lambda m: m["pts_time_ticks"])
+    markers_by_key = _with_occurrence(
+        markers, lambda m: m["event_id"], lambda m: m["pts_time_ticks"],
+    )
 
     missing = set(markers_by_key) - set(decoded_by_key)
     extra = set(decoded_by_key) - set(markers_by_key)
@@ -362,6 +376,23 @@ def validate_markers_against_ts(
                 f"{abs(decoded_marker.pts_time_ticks - marker['pts_time_ticks'])} "
                 f"tick(s)). Hard failure -- not reconciling."
             )
+        expected_type_id = marker.get("segmentation_type_id")
+        if expected_type_id is not None:
+            expected_type_id_int = (
+                int(expected_type_id, 16) if isinstance(expected_type_id, str) else expected_type_id
+            )
+            if expected_type_id_int != decoded_marker.segmentation_type_id:
+                actual_type = (
+                    f"0x{decoded_marker.segmentation_type_id:02X}"
+                    if decoded_marker.segmentation_type_id is not None
+                    else "missing"
+                )
+                raise ValidationError(
+                    f"event {marker['event_id']}: markers.json declares "
+                    f"segmentation_type_id=0x{expected_type_id_int:02X} but the .ts's "
+                    f"decoded SCTE-35 has segmentation_type_id={actual_type}. "
+                    "Hard failure -- not reconciling."
+                )
         augmented_marker = dict(marker)
         augmented_marker["splice_command_b64"] = decoded_marker.splice_command_b64
         augmented.append(augmented_marker)

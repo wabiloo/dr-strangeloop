@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from .config import MarkerConfig
-from .timeline import AdBoundary, TimelineEntry
+from .timeline import AdBoundary, TimelineEntry, pts_for_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ class BoundaryPoint:
     event_id: Optional[int]
     marker: Optional[MarkerConfig] = None      # config for ad events
     break_duration: Optional[float] = None     # marker span length in seconds
+    marker_index: Optional[int] = None
 
 
 def _collect_boundary_points(
@@ -44,7 +45,7 @@ def _collect_boundary_points(
         boundaries_by_time.setdefault(b.output_time, []).append(b)
 
     for b in boundaries:
-        pts = pts_map.get((b.event_id, b.is_start))
+        pts = pts_for_boundary(pts_map, b)
         ts = pts / 90_000 if pts else b.output_time
         points.append(BoundaryPoint(
             label=f"Event #{b.event_id} {'Start' if b.is_start else 'Stop'}",
@@ -54,6 +55,7 @@ def _collect_boundary_points(
             event_id=b.event_id,
             marker=b.marker,
             break_duration=b.break_duration,
+            marker_index=b.marker_index,
         ))
 
     for i, entry in enumerate(entries):
@@ -138,11 +140,11 @@ def _fmt_time(seconds: float) -> str:
 
 
 def _marker_intervals(boundaries: list[AdBoundary]) -> list[tuple[float, float]]:
-    """Pair up start/stop boundaries by event_id into (start, end) intervals,
+    """Pair up start/stop boundaries by internal marker identity,
     covering markers of any span/depth -- used to shade the timeline bar."""
-    starts = {b.event_id: b.output_time for b in boundaries if b.is_start}
-    stops = {b.event_id: b.output_time for b in boundaries if not b.is_start}
-    return [(starts[eid], stops[eid]) for eid in starts if eid in stops]
+    starts = {b.marker_index: b.output_time for b in boundaries if b.is_start}
+    stops = {b.marker_index: b.output_time for b in boundaries if not b.is_start}
+    return [(starts[index], stops[index]) for index in starts if index in stops]
 
 
 def _build_timeline_bar(entries: list[TimelineEntry], total: float, boundaries: list[AdBoundary]) -> str:
