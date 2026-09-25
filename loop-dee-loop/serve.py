@@ -243,6 +243,7 @@ class LoopPackage:
         self.daterange_mode: str = self.descriptor.get("daterange_mode", "shared")
         self.cue_tags: str = self.descriptor.get("cue_tags", "none")
         self.increment_event_ids: bool = self.descriptor.get("increment_event_ids", False)
+        self.daterange_id_format: str | None = self.descriptor.get("daterange_id_format")
 
         # Precomputed once (not per-request): see build_cue_breaks for
         # what this holds and why it's splice_insert-only.
@@ -612,6 +613,7 @@ class Channel:
                             pkg.timescale,
                             loop_start_datetime,
                             loop_number=local_loop_number,
+                            daterange_id_format=pkg.daterange_id_format,
                         )
                     )
 

@@ -143,6 +143,9 @@ def spark(cfg, session, channel_name, extra_args=None):
     daterange_mode = markers_cfg.get("daterange_mode", "shared")
     cue_tags = markers_cfg.get("cue_tags", "none")
     increment_event_ids = markers_cfg.get("increment_event_ids", False)
+    daterange_id_format = markers_cfg.get(
+        "daterange_id_format", "{segcode}-{eventid}-{loop}"
+    )
     os.makedirs(local_output_dir, exist_ok=True)
 
     python_cmd = _resolve_python_cmd()
@@ -150,7 +153,8 @@ def spark(cfg, session, channel_name, extra_args=None):
     bake_args = python_cmd + [bake_script, source_path, "--output", local_output_dir,
                               "--segment-duration", segment_duration,
                               "--daterange-mode", daterange_mode,
-                              "--cue-tags", cue_tags]
+                              "--cue-tags", cue_tags,
+                              "--daterange-id-format", daterange_id_format]
     if increment_event_ids:
         bake_args.append("--increment-event-ids")
 

@@ -9,6 +9,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { buildPlaylist, defineChannel, listPlaylists } from '../api/client'
 import JobPanel from '../components/JobPanel.vue'
+import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import type { ChannelCreatePayload, Job, PlaylistListItem } from '../api/types'
 
 const router = useRouter()
@@ -56,6 +57,7 @@ const form = reactive<ChannelCreatePayload>({
   daterange_mode: 'shared',
   cue_tags: 'none',
   increment_event_ids: false,
+  daterange_id_format: '{segcode}-{eventid}-{loop}',
 })
 // Only meaningful for local-docker (see form.port's "auto" branch below);
 // kept as separate UI state rather than storing 'auto' directly in
@@ -277,6 +279,13 @@ async function submit() {
       <div class="flex align-items-center gap-2">
         <Checkbox v-model="form.increment_event_ids" binary input-id="increment-event-ids" />
         <label for="increment-event-ids">Increment SCTE-35 event ids each loop (HLS + DASH)</label>
+      </div>
+      <div class="flex flex-column gap-1">
+        <div class="flex align-items-center gap-1">
+          <label for="daterange-id-format">HLS DATERANGE ID format</label>
+          <DaterangeIdFormatHelp />
+        </div>
+        <InputText id="daterange-id-format" v-model="form.daterange_id_format" />
       </div>
       <div class="text-color-secondary text-xs">
         Off (default) repeats the same event id every loop -- easiest to test against. On bumps

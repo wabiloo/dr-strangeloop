@@ -55,6 +55,7 @@ local_output_dir = "..."   # optional, defaults to ./.local-loop-package/<name>
 daterange_mode = "shared"        # "shared" (default) | "narrowed" | "grouped" -- one DATERANGE per descriptor with the full shared payload, per descriptor narrowed to just that event, or one per group of coincident descriptors
 cue_tags = "none"                # "none" (default) | "alongside" | "only" -- also emit EXT-X-CUE-OUT/-CONT/-IN next to DATERANGE, or instead of it entirely ("only" requires every marker to be a bare splice_insert). Both modes only ever build CUE-OUT/-CONT/-IN from bare splice_insert markers -- "alongside" still DATERANGE-tags every marker regardless of splice_type, but silently skips CUE-OUT/-IN for non-splice_insert ones, since nested/overlapping time_signal types (e.g. Break containing PPO containing Ad) have no well-formed single CUE-OUT/-IN pair the way a flat splice_insert avail does
 increment_event_ids = false      # bump every event id by (loop number * step) each iteration instead of repeating it every loop -- step is the smallest power of 10 above the channel's largest base event id (e.g. base ids 100-190 -> step 1000, so loop 1 emits 1100/1190, loop 2 emits 2100/2190, ...), so each id's original base stays recognizable as its low-order remainder, and the id at any moment is predictable purely from wall-clock time against the channel's epoch (no runtime counter). Wraps the loop-number component back to 0 at the 32-bit SCTE-35 ceiling.
+daterange_id_format = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template, ecs-express/local-docker only
 
 [packaging]
 segment_duration = 4.0
@@ -74,6 +75,28 @@ memory = 512   # MB
 #                # container itself (no state file). Set an explicit
 #                # port = 8080 (int) instead to pin it.
 ```
+
+`daterange_id_format` accepts static text and these `{placeholder}` fields.
+It defaults to `{segcode}-{eventid}-{loop}`. Loop packages baked before the
+setting existed continue to be served with their original DATERANGE ID format:
+`{loop}` (loop number), `{eventid}` (emitted SCTE-35 event ID in decimal,
+including loop increment when enabled), `{segid}` (segmentation type ID in
+decimal, or splice_insert command type 5), `{seghex}` (hex type ID, or
+`0x05` for splice_insert), `{segcode}` (stable pair type code with `s`/`e`
+suffix; splice_insert uses `SPIs`/`SPIe`), `{segname}` (full lower-case
+segmentation name with hyphens, ending in `-start` or `-end`, e.g.
+`provider-advertisement-start`), `{epoch}` (marker Unix time in
+milliseconds), and `{pd}` (marker program date-time as ISO-8601). Paired
+start/end types use an explicit code when the type-code table has one (e.g.
+`0x14` uses `PRS`); unmapped end types inherit their paired start code.
+Unknown/reserved values use the raw hex type. In shared/narrowed modes the
+code is based on the marker's type. Grouped mode
+uses the first start marker's values, or the first marker with an `e` suffix
+if the group has only ends.
+Unknown placeholders fail validation. Double quotes and Unicode control
+characters are removed from the expanded ID per RFC 8216 quoted-string and
+playlist text constraints. MediaPackage's aws-media backend does not author
+these IDs, so this setting applies only to ecs-express and local-docker.
 
 ## Questions to ask before deploying (if not already answered)
 

@@ -55,6 +55,7 @@ source_path = "../outputs/mychannel"
 daterange_mode      = "shared"  # "shared" | "narrowed" | "grouped"
 cue_tags            = "none"    # "none" | "alongside" | "only"
 increment_event_ids = false     # bump each event id by loop_number * step (step = a shared power of 10 above the channel's largest base id) instead of repeating it every loop -- see AGENTS.md
+daterange_id_format = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template; ecs-express/local-docker only
 
 [packaging]
 segment_duration   = 4.0   # nominal bake segment duration, seconds

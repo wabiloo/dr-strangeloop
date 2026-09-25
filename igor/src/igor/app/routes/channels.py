@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator, model_validator
 
 from igor.integrations import franken_ts, its_a_live
+from igor.integrations.its_a_live import DEFAULT_DATERANGE_ID_FORMAT, validate_daterange_id_format
 from igor.store import channels as channel_store
 
 router = APIRouter()
@@ -41,6 +42,7 @@ class ChannelCreatePayload(BaseModel):
     daterange_mode: str = "shared"
     cue_tags: str = "none"
     increment_event_ids: bool = False
+    daterange_id_format: str = DEFAULT_DATERANGE_ID_FORMAT
 
     @field_validator("name")
     @classmethod
@@ -74,6 +76,11 @@ class ChannelCreatePayload(BaseModel):
         if v not in ("none", "alongside", "only"):
             raise ValueError("cue_tags must be 'none', 'alongside', or 'only'")
         return v
+
+    @field_validator("daterange_id_format")
+    @classmethod
+    def _validate_daterange_id_format(cls, v: str) -> str:
+        return validate_daterange_id_format(v)
 
     @model_validator(mode="after")
     def _validate_port_backend(self) -> "ChannelCreatePayload":

@@ -18,9 +18,36 @@ from __future__ import annotations
 
 import json
 import subprocess
+import string
 
 from igor import paths
 from igor.jobs.runner import Job, runner
+
+DEFAULT_DATERANGE_ID_FORMAT = "{segcode}-{eventid}-{loop}"
+_DATERANGE_ID_FIELDS = {"loop", "eventid", "segid", "seghex", "segcode", "segname", "epoch", "pd"}
+
+
+def validate_daterange_id_format(value: str) -> str:
+    """Validate placeholders before writing the channel TOML."""
+    if not isinstance(value, str):
+        raise ValueError("daterange_id_format must be a string")
+    try:
+        for _literal, field_name, format_spec, conversion in string.Formatter().parse(value):
+            if field_name is None:
+                continue
+            if field_name not in _DATERANGE_ID_FIELDS:
+                raise ValueError(
+                    f"unknown daterange_id_format placeholder {{{field_name}}}; "
+                    f"supported: {', '.join(sorted(_DATERANGE_ID_FIELDS))}"
+                )
+            if format_spec or conversion:
+                raise ValueError("daterange_id_format placeholders do not support format specs or conversions")
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"invalid daterange_id_format: {exc}") from exc
+    return value
+
 
 _TOML_TEMPLATE = """\
 [deploy]
@@ -43,6 +70,7 @@ _MARKERS_EXTRA = """
 daterange_mode      = "{daterange_mode}"
 cue_tags            = "{cue_tags}"
 increment_event_ids = {increment_event_ids}
+daterange_id_format = "{daterange_id_format}"
 """
 
 _ECS_EXPRESS_EXTRA = """
@@ -89,11 +117,13 @@ def generate_toml(
     daterange_mode: str = "shared",
     cue_tags: str = "none",
     increment_event_ids: bool = False,
+    daterange_id_format: str = DEFAULT_DATERANGE_ID_FORMAT,
 ) -> str:
     if backend not in ("aws-media", "ecs-express", "local-docker"):
         raise ValueError(
             f"backend must be 'aws-media', 'ecs-express', or 'local-docker', got {backend!r}"
         )
+    validate_daterange_id_format(daterange_id_format)
     content = _TOML_TEMPLATE.format(
         name=name, backend=backend, region=region, bucket_name=bucket_name,
         content_folder=content_folder, source_path=source_path,
@@ -104,6 +134,7 @@ def generate_toml(
         content += _MARKERS_EXTRA.format(
             daterange_mode=daterange_mode, cue_tags=cue_tags,
             increment_event_ids=str(increment_event_ids).lower(),
+            daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
         )
         content += _ECS_EXPRESS_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
@@ -116,6 +147,7 @@ def generate_toml(
         content += _MARKERS_EXTRA.format(
             daterange_mode=daterange_mode, cue_tags=cue_tags,
             increment_event_ids=str(increment_event_ids).lower(),
+            daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
         )
         content += _LOCAL_DOCKER_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,

@@ -27,14 +27,13 @@ from scte35_signaling import (  # noqa: E402
     is_out_marker,
     reencode_event_ids,
     resolve_marker_duration_ticks,
+    validate_daterange_id_format,
 )
 
 _START = dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)
 
 
-def test_daterange_id_is_segtype_event_loop_decimal():
-    """ID format is `<segmentation_type_id>-<event_id>-<loop_number>`, all
-    decimal (e.g. 0x22 Break Start + event 0x64 + loop 3 -> "34-100-3")."""
+def test_daterange_id_uses_configurable_default_template():
     marker = SignalingMarker(
         event_id="0x00000064",
         pts_time_ticks=0,
@@ -46,7 +45,75 @@ def test_daterange_id_is_segtype_event_loop_decimal():
 
     tags = build_daterange_tags([marker], timescale=90_000, program_start_datetime=_START, loop_number=3)
 
-    assert 'ID="34-100-3"' in tags[0]
+    assert 'ID="BRKs-100-3"' in tags[0]
+
+
+def test_daterange_id_template_expands_all_fields_and_pdt_values():
+    marker = SignalingMarker("0x00000064", 90_000, "0x23", None, "AAAA", False)
+    tags = build_daterange_tags(
+        [marker], 90_000, _START, loop_number=3,
+        daterange_id_format="x-{loop}-{eventid}-{segid}-{seghex}-{segcode}-{epoch}-{pd}!",
+    )
+    assert 'ID="x-3-100-35-0x23-BRKe-1704067201000-2024-01-01T00:00:01.000Z!"' in tags[0]
+
+
+@pytest.mark.parametrize(
+    ("seg_type_id", "is_out", "expected"),
+    [
+        ("0x30", True, "provider-advertisement-start"),
+        ("0x31", False, "provider-advertisement-end"),
+        ("0x52", True, "0x52-start"),
+        (None, True, "splice-insert-start"),
+    ],
+)
+def test_segname_placeholder(seg_type_id, is_out, expected):
+    marker = SignalingMarker("0x00000064", 0, seg_type_id, None, "AAAA", is_out)
+    tags = build_daterange_tags([marker], 90_000, _START, daterange_id_format="{segname}")
+    assert f'ID="{expected}"' in tags[0]
+
+
+def test_unmapped_segmentation_type_uses_raw_hex_base_code():
+    marker = SignalingMarker("0x00000001", 0, "0x52", None, "AAAA", True)
+    tags = build_daterange_tags([marker], 90_000, _START)
+    assert 'ID="0x52s-1-0"' in tags[0]
+
+
+def test_segmentation_end_code_uses_its_pair_start_code():
+    marker = SignalingMarker("0x00000001", 0, "0x14", None, "AAAA", False)
+    tags = build_daterange_tags([marker], 90_000, _START)
+    assert 'ID="PRSe-1-0"' in tags[0]
+
+
+def test_grouped_id_uses_first_start_marker_regardless_of_input_order():
+    end = SignalingMarker("0x00000065", 0, "0x23", None, "AAAA", False)
+    start = SignalingMarker("0x00000064", 0, "0x22", None, "AAAA", True)
+    tags = build_grouped_daterange_tags([end, start], 90_000, _START)
+    assert 'ID="BRKs-100-0"' in tags[0]
+
+
+def test_grouped_id_uses_end_code_when_group_has_only_ends():
+    marker = SignalingMarker("0x00000064", 0, "0x23", None, "AAAA", False)
+    tags = build_grouped_daterange_tags(
+        [marker, SignalingMarker("0x00000065", 0, "0x35", None, "AAAA", False)],
+        90_000,
+        _START,
+        daterange_id_format="{segcode}-{eventid}",
+    )
+    assert 'ID="BRKe-100"' in tags[0]
+
+
+@pytest.mark.parametrize("template", ["{unknown}", "{loop!r}", "{eventid:04d}", "{loop"])
+def test_daterange_id_format_rejects_invalid_placeholders(template):
+    with pytest.raises(ValueError):
+        validate_daterange_id_format(template)
+
+
+def test_daterange_id_strips_hls_quoted_string_prohibited_characters():
+    marker = SignalingMarker("0x00000001", 0, "0x22", None, "AAAA", True)
+    tags = build_daterange_tags(
+        [marker], 90_000, _START, daterange_id_format='a"b,c\nd',
+    )
+    assert 'ID="ab,cd"' in tags[0]
 
 
 def test_duplicate_id_marker_identity_disambiguates_hls_id_and_groups_stop():
@@ -63,12 +130,12 @@ def test_duplicate_id_marker_identity_disambiguates_hls_id_and_groups_stop():
         SignalingMarker("0x00000001", 1, None, None, "BBBB", False, marker_identity="11"),
     ]
     tags = build_daterange_tags(markers, 90_000, _START)
-    assert 'ID="splice-out-1-0-10"' in tags[0]
-    assert 'ID="splice-in-1-0-11"' in tags[1]
+    assert 'ID="SPIs-1-0-10"' in tags[0]
+    assert 'ID="SPIe-1-0-11"' in tags[1]
     assert resolve_marker_duration_ticks(out, {("0x00000001", "10"): [out, stop]}) == 900_000
 
 
-def test_daterange_id_uses_splice_out_prefix_when_no_segmentation():
+def test_daterange_id_uses_spi_fallback_when_no_segmentation():
     marker = SignalingMarker(
         event_id="0x00000001",
         pts_time_ticks=0,
@@ -80,7 +147,7 @@ def test_daterange_id_uses_splice_out_prefix_when_no_segmentation():
 
     tags = build_daterange_tags([marker], timescale=90_000, program_start_datetime=_START, loop_number=0)
 
-    assert 'ID="splice-out-1-0"' in tags[0]
+    assert 'ID="SPIs-1-0"' in tags[0]
 
 
 def test_daterange_id_differs_for_splice_insert_out_vs_in():
@@ -112,8 +179,8 @@ def test_daterange_id_differs_for_splice_insert_out_vs_in():
         [out_marker, in_marker], timescale=90_000, program_start_datetime=_START, loop_number=0,
     )
 
-    assert 'ID="splice-out-1-0"' in tags[0]
-    assert 'ID="splice-in-1-0"' in tags[1]
+    assert 'ID="SPIs-1-0"' in tags[0]
+    assert 'ID="SPIe-1-0"' in tags[1]
 
 
 def test_instant_marker_has_no_planned_duration():
@@ -216,7 +283,7 @@ def test_grouped_daterange_collapses_coincident_markers_into_one_tag():
     )
 
     assert len(tags) == 1
-    assert 'ID="group-100-0"' in tags[0]  # min(0x64, 0x65) = 100 decimal
+    assert 'ID="BRKs-100-0"' in tags[0]  # first start marker represents the group
     assert "SCTE35-CMD=0x0102" in tags[0]
     assert "PLANNED-DURATION" not in tags[0]
     assert "SCTE35-OUT" not in tags[0]
@@ -272,7 +339,7 @@ def test_grouped_daterange_merges_instant_marker_coincident_with_others():
     )
 
     assert len(tags) == 1
-    assert 'ID="group-100-0"' in tags[0]  # min(0x64, 0x69) = 100 decimal
+    assert 'ID="BRKs-100-0"' in tags[0]
     assert "SCTE35-CMD=0x0102" in tags[0]
 
 

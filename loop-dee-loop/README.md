@@ -144,6 +144,11 @@ python3 bake.py path/to/output.ts --output /var/loop-packages/2026-01-01 \
   Wraps the loop-number component back to 0 (i.e. the id back to its
   base) at the 32-bit SCTE-35 ceiling. Off by default (same id every
   loop, easiest to test against); on is more spec-correct.
+- `--daterange-id-format` (default `{segcode}-{eventid}-{loop}`): customize
+  HLS DATERANGE IDs using static text and placeholders `{loop}`, `{eventid}`,
+  `{segid}`, `{seghex}`, `{segcode}`, `{segname}`, `{epoch}`, and `{pd}`.
+  `{segname}` is the full lower-case type name with dashes, plus `-start` or
+  `-end` (for example, `provider-advertisement-start`).
 
 ### Endpoints
 

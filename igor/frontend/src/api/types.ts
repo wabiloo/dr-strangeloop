@@ -185,6 +185,7 @@ export interface ChannelCreatePayload {
   daterange_mode?: 'grouped' | 'shared' | 'narrowed'
   cue_tags?: 'none' | 'alongside' | 'only'
   increment_event_ids?: boolean
+  daterange_id_format?: string
 }
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed'

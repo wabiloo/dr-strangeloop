@@ -42,7 +42,12 @@ from gpac_pipeline import (
     compute_segment_boundary_ticks,
     run_gpac_dasher,
 )
-from scte35_signaling import SCTE35_EVENT_ID_MAX, compute_event_id_step
+from scte35_signaling import (
+    DATERANGE_ID_FORMAT_DEFAULT,
+    SCTE35_EVENT_ID_MAX,
+    compute_event_id_step,
+    validate_daterange_id_format,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -971,6 +976,7 @@ def bake(
     daterange_mode: str = "shared",
     cue_tags: str = "none",
     increment_event_ids: bool = False,
+    daterange_id_format: str | None = DATERANGE_ID_FORMAT_DEFAULT,
 ) -> None:
     """Bake phase entrypoint (SCOPE.md §4.1), generalized to a rendition
     ladder auto-discovered from disk (see discover_renditions()).
@@ -987,6 +993,11 @@ def bake(
     and `cue_tags="only"`'s validation below.
     """
     logger.info("Bake starting: %s -> %s", input_path, output_package_dir)
+
+    try:
+        validate_daterange_id_format(daterange_id_format)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
 
     renditions, markers_json = discover_renditions(input_path, markers_override)
     raw_markers = load_markers(markers_json)
@@ -1052,6 +1063,9 @@ def bake(
         "daterange_mode": daterange_mode,
         "cue_tags": cue_tags,
         "increment_event_ids": increment_event_ids,
+        # None marks packages baked before configurable ID formatting and
+        # tells serve.py to preserve their original per-marker ID scheme.
+        "daterange_id_format": daterange_id_format,
         "markers": reference["markers"],
         "video_renditions": [
             {k: v for k, v in r.items() if k != "markers"} for r in rendition_results
@@ -1141,6 +1155,14 @@ def main(argv: list[str] | None = None) -> int:
         "against); this is a serve-time behavior read from "
         "loop_descriptor.json, recorded here at bake time.",
     )
+    parser.add_argument(
+        "--daterange-id-format",
+        default=DATERANGE_ID_FORMAT_DEFAULT,
+        help="Python-style HLS DATERANGE ID template. Supported fields: "
+        "{loop}, {eventid}, {segid}, {seghex}, {segcode}, {segname}, {epoch} "
+        "(Unix milliseconds), {pd} (ISO-8601 program date-time). "
+        f"Default: {DATERANGE_ID_FORMAT_DEFAULT!r}.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -1160,6 +1182,7 @@ def main(argv: list[str] | None = None) -> int:
             daterange_mode=args.daterange_mode,
             cue_tags=args.cue_tags,
             increment_event_ids=args.increment_event_ids,
+            daterange_id_format=args.daterange_id_format,
         )
     except ValidationError as exc:
         logger.error("VALIDATION FAILED: %s", exc)
