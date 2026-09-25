@@ -40,6 +40,7 @@ import {
   textToHex,
 } from '../segmentationPresets'
 import { isInstantMarker, layoutMarkers, nextEventId, orderForDisplay } from '../markerLayout'
+import { filesFromDrop, isDragInside, isFileDrag, sourceFromDroppedFile } from '../utils/fileDrop'
 
 const props = defineProps<{ name: string | null }>()
 const router = useRouter()
@@ -525,6 +526,83 @@ function commitBootstrap() {
 
   insertAssetsAt(bootstrapTargetIndex.value ?? form.assets.length, newAssets, extraMarkers)
   bootstrapOpen.value = false
+}
+
+// ── Browser file drop targets ------------------------------------------------
+// Normal browsers do not expose the absolute path of a dropped local file.
+// sourceFromDroppedFile uploads it to Igor when necessary, while desktop
+// shells that expose File.path can use the original path directly.
+const emptyAssetDropActive = ref(false)
+const emptyAssetDropBusy = ref(false)
+const emptyAssetDropError = ref('')
+const bootstrapDropActive = ref(false)
+const bootstrapDropBusy = ref(false)
+const bootstrapDropError = ref('')
+
+function handleEmptyAssetDragOver(event: DragEvent) {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  emptyAssetDropActive.value = true
+}
+
+function handleEmptyAssetDragLeave(event: DragEvent) {
+  if (!isDragInside(event)) emptyAssetDropActive.value = false
+}
+
+async function handleEmptyAssetDrop(event: DragEvent) {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  emptyAssetDropActive.value = false
+  const files = filesFromDrop(event)
+  if (!files.length) return
+
+  emptyAssetDropBusy.value = true
+  emptyAssetDropError.value = ''
+  try {
+    const newAssets: AssetForm[] = []
+    for (const file of files) {
+      const asset = newAsset()
+      asset.file = await sourceFromDroppedFile(file)
+      newAssets.push(asset)
+    }
+    insertAssetsAt(form.assets.length, newAssets)
+  } catch (e) {
+    emptyAssetDropError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    emptyAssetDropBusy.value = false
+  }
+}
+
+function handleBootstrapDragOver(event: DragEvent) {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  bootstrapDropActive.value = true
+}
+
+function handleBootstrapDragLeave(event: DragEvent) {
+  if (!isDragInside(event)) bootstrapDropActive.value = false
+}
+
+async function handleBootstrapDrop(event: DragEvent) {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  bootstrapDropActive.value = false
+  const files = filesFromDrop(event)
+  if (!files.length) return
+
+  bootstrapDropBusy.value = true
+  bootstrapDropError.value = ''
+  bootstrapRows.value = []
+  try {
+    const sources: string[] = []
+    for (const file of files) sources.push(await sourceFromDroppedFile(file))
+    const existing = bootstrapText.value.trimEnd()
+    bootstrapText.value = [existing, ...sources].filter(Boolean).join('\n')
+  } catch (e) {
+    bootstrapDropError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    bootstrapDropBusy.value = false
+  }
 }
 
 function removeAsset(i: number) {
@@ -1841,9 +1919,21 @@ function applyHexPopover() {
               </AssetTimeline>
             </div>
 
-            <div v-if="selectedAssetIndex === null && markerDraft === null" class="asset-empty-state">
+            <div
+              v-if="selectedAssetIndex === null && markerDraft === null"
+              class="asset-empty-state"
+              :class="{ 'asset-empty-state-drop-active': emptyAssetDropActive }"
+              @dragover="handleEmptyAssetDragOver"
+              @dragleave="handleEmptyAssetDragLeave"
+              @drop="handleEmptyAssetDrop"
+            >
               <i class="pi pi-images" style="font-size: 1.5rem" />
               <span>{{ form.assets.length === 0 ? 'No assets yet.' : 'Select an asset above to edit it, or shift-click a range of assets to tag a marker.' }}</span>
+              <span v-if="emptyAssetDropBusy" class="text-sm text-color-secondary">
+                <i class="pi pi-spin pi-spinner" /> Uploading dropped file(s)...
+              </span>
+              <span v-else class="text-sm text-color-secondary">Drop local file(s) here to add them</span>
+              <Message v-if="emptyAssetDropError" severity="error" class="text-sm m-0">{{ emptyAssetDropError }}</Message>
               <div class="flex gap-2">
                 <Button label="Add asset" icon="pi pi-plus" outlined @click="addAsset()" />
                 <Button label="Bootstrap from files" icon="pi pi-list" outlined severity="secondary" @click="openBootstrap()" />
@@ -2281,7 +2371,13 @@ function applyHexPopover() {
       header="Bootstrap timeline from files"
       :style="{ width: '46rem' }"
     >
-      <div class="flex flex-column gap-3">
+      <div
+        class="bootstrap-drop-zone flex flex-column gap-3"
+        :class="{ 'bootstrap-drop-zone-active': bootstrapDropActive }"
+        @dragover="handleBootstrapDragOver"
+        @dragleave="handleBootstrapDragLeave"
+        @drop="handleBootstrapDrop"
+      >
         <p class="text-sm text-color-secondary m-0">
           Paste an ordered list of local file paths or URLs (one per line, blank lines and
           <code>#</code> comments ignored). Each is probed for duration; anything at or under the
@@ -2298,6 +2394,11 @@ function applyHexPopover() {
             auto-resize
             placeholder="/path/to/content1.mp4&#10;/path/to/ad1.mp4&#10;https://cdn.example.com/ad2.mp4&#10;/path/to/content2.mp4"
           />
+          <span v-if="bootstrapDropBusy" class="text-sm text-color-secondary">
+            <i class="pi pi-spin pi-spinner" /> Uploading dropped file(s)...
+          </span>
+          <span v-else class="text-sm text-color-secondary">Drop local file(s) anywhere in this modal to add sources</span>
+          <Message v-if="bootstrapDropError" severity="error" class="text-sm m-0">{{ bootstrapDropError }}</Message>
         </div>
 
         <div class="flex align-items-end gap-2">
@@ -2642,6 +2743,24 @@ function applyHexPopover() {
   color: var(--p-text-muted-color, #64748b);
   border: 1px dashed var(--p-surface-border, #cbd5e1);
   border-radius: 8px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.asset-empty-state-drop-active {
+  border-color: var(--p-primary-color, #b91c1c);
+  background: var(--p-primary-50, #ecfeff);
+}
+
+.bootstrap-drop-zone {
+  padding: 0.25rem;
+  border: 2px dashed transparent;
+  border-radius: 8px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.bootstrap-drop-zone-active {
+  border-color: var(--p-primary-color, #b91c1c);
+  background: var(--p-primary-50, #ecfeff);
 }
 
 .detail-panel {

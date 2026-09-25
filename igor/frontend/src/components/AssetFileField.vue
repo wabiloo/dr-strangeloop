@@ -7,9 +7,43 @@ import ProgressSpinner from 'primevue/progressspinner'
 import { computed, ref } from 'vue'
 import { browseFiles, probeMedia } from '../api/client'
 import type { FileEntry, ProbeResult } from '../api/types'
+import { filesFromDrop, isDragInside, isFileDrag, sourceFromDroppedFile } from '../utils/fileDrop'
 
 const model = defineModel<string>({ required: true })
 const props = defineProps<{ placeholder?: string }>()
+
+const dropActive = ref(false)
+const dropBusy = ref(false)
+const dropError = ref('')
+
+function handleDragOver(event: DragEvent) {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  dropActive.value = true
+}
+
+function handleDragLeave(event: DragEvent) {
+  if (isDragInside(event)) return
+  dropActive.value = false
+}
+
+async function handleDrop(event: DragEvent) {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  dropActive.value = false
+  const file = filesFromDrop(event)[0]
+  if (!file) return
+
+  dropBusy.value = true
+  dropError.value = ''
+  try {
+    model.value = await sourceFromDroppedFile(file)
+  } catch (e) {
+    dropError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    dropBusy.value = false
+  }
+}
 
 // --- Browse dialog --------------------------------------------------------
 const browseOpen = ref(false)
@@ -93,13 +127,23 @@ function formatDuration(seconds: number): string {
 </script>
 
 <template>
-  <div class="flex flex-column gap-1">
+  <div
+    class="asset-file-field-drop-zone flex flex-column gap-1"
+    :class="{ 'asset-file-field-drop-zone-active': dropActive }"
+    @dragover="handleDragOver"
+    @dragleave="handleDragLeave"
+    @drop="handleDrop"
+  >
     <div class="flex gap-1">
       <InputText v-model="model" class="flex-1" :placeholder="props.placeholder ?? '/path/to/file.mp4 or https://...'" />
       <Button icon="pi pi-folder-open" severity="secondary" outlined title="Browse local files" @click="openBrowse" />
       <Button icon="pi pi-search" severity="secondary" outlined title="Probe (resolution/duration)" :loading="probing" @click="probe" />
     </div>
 
+    <div v-if="dropBusy" class="text-sm text-color-secondary flex align-items-center gap-1">
+      <i class="pi pi-spin pi-spinner" /> Uploading dropped file...
+    </div>
+    <Message v-if="dropError" severity="error" class="text-sm">{{ dropError }}</Message>
     <Message v-if="probeError" severity="error" class="text-sm">{{ probeError }}</Message>
     <div v-if="probeSummary" class="text-sm text-color-secondary flex align-items-center gap-1">
       <i class="pi pi-info-circle" />
@@ -135,3 +179,16 @@ function formatDuration(seconds: number): string {
     </Dialog>
   </div>
 </template>
+
+<style scoped>
+.asset-file-field-drop-zone {
+  border: 2px dashed transparent;
+  border-radius: 6px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.asset-file-field-drop-zone-active {
+  border-color: var(--p-primary-color, #b91c1c);
+  background: var(--p-primary-50, #ecfeff);
+}
+</style>

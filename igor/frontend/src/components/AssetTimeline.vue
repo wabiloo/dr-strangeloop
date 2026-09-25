@@ -99,11 +99,11 @@ const segments = computed(() => {
 const totalSeconds = computed(() => segments.value.reduce((sum, s) => sum + s.seconds, 0) || 1)
 const hasApproxSegments = computed(() => segments.value.some((s) => s.approx))
 
-// ── Inter-asset "+" joints and per-asset split buttons ─────────────────────
-// One joint per gap BETWEEN two existing assets (not before the first or
-// after the last -- those are already covered by the end-of-timeline add
-// button); `index` is the position the new asset(s) will occupy once
-// inserted (i.e. splice(index, 0, ...)).
+// ── Asset insertion "+" joints and per-asset split buttons ─────────────────
+// One joint per gap BETWEEN two existing assets; the leading joint is
+// rendered separately at position zero so a new asset can be inserted before
+// the first existing one. The end-of-timeline button still appends assets.
+// `index` is the position the new asset(s) will occupy once inserted.
 const insertJoints = computed(() => {
   const segs = segments.value
   const total = totalSeconds.value
@@ -272,16 +272,11 @@ const boundaryPercents = computed(() => {
 })
 
 // ── Add-asset button vertical alignment ────────────────────────────────────
-// The button lives OUTSIDE .timeline-scale (a flex sibling of
-// .timeline-viewport, see template) so it (a) never eats into the
-// percentage budget the marker lanes/track/ruler assume is 100% of the
-// scale -- adding it as a real row member there desyncs segment widths from
-// the marker lanes/ruler above/below, since they'd stop agreeing on what
-// 100% means -- and (b) stays put while the scale scrolls under zoom.
-// Because it's outside, it can't line up with .timeline-track (whose
-// vertical offset varies with the marker lane count) via percentage/flex
-// math either -- so its position is measured directly off the real DOM
-// node instead of duplicated as CSS constants that would drift out of sync.
+// The append button lives OUTSIDE .timeline-scale (as a flex sibling of
+// .timeline-viewport, see template) so it never eats into the percentage
+// budget shared by the marker lanes/track/ruler and stays fixed while the
+// scale scrolls under zoom. Insert buttons, including the leading button,
+// belong to the scale's action row below the asset track.
 // A ResizeObserver (not a markerLanes watch) drives the remeasure: this
 // component can mount while its tab is inactive (PrimeVue keeps inactive
 // TabPanels in the DOM, just display:none'd) -- offsetTop reads 0 in that
@@ -448,6 +443,16 @@ watch(
                represent regardless of zoom. -->
           <div class="timeline-actions-row">
             <div class="timeline-insert-sub-row">
+              <button
+                v-if="segments.length"
+                type="button"
+                class="timeline-insert-btn timeline-leading-insert-btn"
+                :style="{ left: '0%' }"
+                title="Insert asset(s) before the first asset"
+                @click="toggleInsertMenu($event, 0)"
+              >
+                <i class="pi pi-plus" />
+              </button>
               <button
                 v-for="joint in insertJoints"
                 :key="'joint-' + joint.index"
@@ -707,6 +712,13 @@ watch(
   color: #475569;
   cursor: pointer;
   z-index: 2;
+}
+
+/* The first insertion point is at the viewport edge. Unlike centered
+   * boundary buttons, it must not place half of itself outside the clipped
+   * timeline viewport. */
+.timeline-leading-insert-btn {
+  transform: none;
 }
 
 .timeline-insert-btn:hover,

@@ -15,6 +15,7 @@ LOOP_DEE_LOOP_DIR = REPO_ROOT / "loop-dee-loop"
 
 FRANKEN_TS_PLAYLISTS_DIR = REPO_ROOT / "data" / "playlists"
 ITS_A_LIVE_CONFIGS_DIR = REPO_ROOT / "data" / "channels"
+ASSET_UPLOADS_DIR = REPO_ROOT / "data" / "assets"
 OUTPUTS_DIR = REPO_ROOT / "outputs"
 
 

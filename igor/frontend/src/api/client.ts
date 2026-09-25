@@ -228,3 +228,14 @@ export function browseFiles(path?: string): Promise<BrowseResult> {
 export function probeMedia(pathOrUrl: string): Promise<ProbeResult> {
   return getJson(`${FILES_BASE}/probe?path_or_url=${encodeURIComponent(pathOrUrl)}`)
 }
+
+export async function uploadAsset(file: File): Promise<{ path: string; name: string }> {
+  const res = await handle(
+    await fetch(`${FILES_BASE}/upload?filename=${encodeURIComponent(file.name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    }),
+  )
+  return res.json()
+}

@@ -4,6 +4,8 @@ need its-a-live's separate venv + credentials, out of scope here)."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from igor.app.main import app
@@ -75,3 +77,20 @@ def test_browse_files_lists_a_real_directory():
 def test_probe_missing_file_is_422():
     resp = client.get("/api/v1/files/probe", params={"path_or_url": "/no/such/file.mp4"})
     assert resp.status_code == 422
+
+
+def test_upload_file_stores_backend_local_copy(tmp_path, monkeypatch):
+    from igor import paths
+
+    monkeypatch.setattr(paths, "ASSET_UPLOADS_DIR", tmp_path)
+    resp = client.post(
+        "/api/v1/files/upload",
+        params={"filename": "../../movie clip.mp4"},
+        content=b"test media bytes",
+    )
+    assert resp.status_code == 200
+    result = resp.json()
+    uploaded = tmp_path / Path(result["path"]).name
+    assert uploaded.is_file()
+    assert uploaded.read_bytes() == b"test media bytes"
+    assert result["name"] == "movie_clip.mp4"

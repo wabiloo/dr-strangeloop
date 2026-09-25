@@ -1,18 +1,51 @@
-"""Local filesystem browsing (for the asset file picker) and media
-probing (ffprobe) -- both operate on the igor *backend's*
-filesystem/network, not the browser's. "Local files" here means files
-reachable from wherever this backend process runs (same machine as
-franken-ts/ffmpeg, by design -- see repo AGENTS.md), not a browser
-upload; "browse" lists directories on that machine."""
+"""Local filesystem browsing, browser uploads, and media probing.
+
+Browsing/probing operate on the igor *backend's* filesystem/network, not the
+browser's. Browser drag-and-drop therefore stores the dropped file in the
+repo's asset directory first, so the resulting path is reachable by the same
+franken-ts/ffmpeg process that consumes playlist assets.
+"""
 
 from __future__ import annotations
 
 import json
-import os
+import re
 import subprocess
+import uuid
+from collections.abc import AsyncIterable
 from pathlib import Path
 
+from igor import paths
+
 FFPROBE_TIMEOUT_SECONDS = 20
+MAX_UPLOAD_FILENAME_LENGTH = 255
+
+
+def _safe_upload_name(filename: str) -> str:
+    name = Path(filename).name.strip()
+    if not name or name in {".", ".."}:
+        raise ValueError("Uploaded files must have a filename.")
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+    return name[:MAX_UPLOAD_FILENAME_LENGTH] or "dropped-file"
+
+
+async def save_uploaded_file(filename: str, chunks: AsyncIterable[bytes]) -> dict:
+    """Save a browser-dropped file and return its backend-local path.
+
+    A random prefix prevents two files with the same name from overwriting
+    each other while retaining the original extension for ffprobe/ffmpeg.
+    """
+    safe_name = _safe_upload_name(filename)
+    paths.ASSET_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    destination = paths.ASSET_UPLOADS_DIR / f"{uuid.uuid4().hex[:12]}-{safe_name}"
+    try:
+        with destination.open("wb") as output:
+            async for chunk in chunks:
+                output.write(chunk)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+    return {"path": str(destination), "name": safe_name}
 
 
 def browse_directory(path: str | None) -> dict:

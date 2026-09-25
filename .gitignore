@@ -9,6 +9,7 @@ dist/
 .venv/
 
 # Generated outputs
+data/assets/
 outputs/*.ts
 outputs/*.markers.json
 outputs/*_report.html
