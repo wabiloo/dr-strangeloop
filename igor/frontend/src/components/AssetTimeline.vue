@@ -15,6 +15,7 @@ interface TimelineAsset {
 const props = defineProps<{
   assets: TimelineAsset[]
   selectedIndex?: number | null
+  highlightedAssetId?: string | null
   markers?: MarkerLike[]
   /** Real per-asset durations (seconds) from a resolve-markers preview
    * (ffprobe'd), keyed by asset id -- overrides the parsed/fallback
@@ -43,6 +44,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   select: [index: number]
+  moveAsset: [payload: { index: number; direction: -1 | 1 }]
   add: [index?: number]
   bootstrap: [index?: number]
   split: [payload: { index: number; target: HTMLElement }]
@@ -481,6 +483,7 @@ watch(
               class="timeline-segment"
               :class="{
                 'timeline-segment-selected': i === selectedIndex,
+                'timeline-segment-move-highlight': seg.asset.id === highlightedAssetId,
                 'timeline-segment-in-range': isInRange(i),
               }"
               :style="{ width: seg.percent + '%' }"
@@ -492,6 +495,22 @@ watch(
             >
               <span class="timeline-segment-label">{{ seg.asset.id || fileLabel(seg.asset.file) || `Asset ${i + 1}` }}</span>
               <span class="timeline-segment-duration">{{ formatDuration(seg.seconds) }}<span v-if="seg.approx">~</span></span>
+              <div class="timeline-segment-move-controls" @click.stop>
+                <button
+                  type="button"
+                  class="timeline-marker-resize-btn timeline-segment-move-left"
+                  title="Move earlier in the playlist"
+                  :disabled="i === 0"
+                  @click.stop="emit('moveAsset', { index: i, direction: -1 })"
+                ><i class="pi pi-angle-left" /></button>
+                <button
+                  type="button"
+                  class="timeline-marker-resize-btn timeline-segment-move-right"
+                  title="Move later in the playlist"
+                  :disabled="i === assets.length - 1"
+                  @click.stop="emit('moveAsset', { index: i, direction: 1 })"
+                ><i class="pi pi-angle-right" /></button>
+              </div>
             </div>
           </div>
 
@@ -534,7 +553,7 @@ watch(
                 title="Split this asset in two"
                 @click="emit('split', { index: pt.index, target: $event.currentTarget as HTMLElement })"
               >
-                <i class="pi pi-arrows-h" />
+                <i class="pi pi-slash" />
               </button>
             </div>
           </div>
@@ -689,6 +708,8 @@ watch(
 
 .timeline-segment:hover {
   filter: brightness(0.92);
+  overflow: visible;
+  z-index: 2;
 }
 
 .timeline-segment:last-child {
@@ -699,6 +720,66 @@ watch(
   outline: 3px solid #0f172a;
   outline-offset: -3px;
   z-index: 1;
+  overflow: visible;
+}
+
+.timeline-segment-move-highlight {
+  animation: timeline-asset-move-highlight 1500ms ease-out;
+}
+
+@keyframes timeline-asset-move-highlight {
+  0%, 65% { background-color: #facc15; }
+  100% { background-color: #38bdf8; }
+}
+
+.timeline-segment-move-controls {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  container-name: asset-move-controls;
+  container-type: inline-size;
+  pointer-events: none;
+  visibility: hidden;
+  z-index: 2;
+}
+
+.timeline-segment:hover .timeline-segment-move-controls {
+  visibility: visible;
+}
+
+.timeline-segment-move-controls .timeline-marker-resize-btn {
+  position: absolute;
+  top: 50%;
+  pointer-events: auto;
+  transform: translateY(-50%);
+}
+
+.timeline-segment-move-left {
+  left: 0.15rem;
+  border-radius: 4px 0 0 4px;
+}
+
+.timeline-segment-move-right {
+  right: 0.15rem;
+  border-radius: 0 4px 4px 0;
+}
+
+@container asset-move-controls (max-width: 3rem) {
+  .timeline-segment-move-controls .timeline-marker-resize-btn {
+    transform: translateY(-50%);
+  }
+
+  .timeline-segment-move-left {
+    left: auto;
+    right: 100%;
+  }
+
+  .timeline-segment-move-right {
+    left: 100%;
+    right: auto;
+  }
 }
 
 /* Its own row, outside .timeline-scale -- see trackOffsetTop in the script

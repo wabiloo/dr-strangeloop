@@ -19,7 +19,7 @@ import TabPanel from 'primevue/tabpanel'
 import TabPanels from 'primevue/tabpanels'
 import Tabs from 'primevue/tabs'
 import Textarea from 'primevue/textarea'
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
@@ -660,6 +660,20 @@ interface PendingAssetMove {
   detachCount: number
 }
 const pendingAssetMove = ref<PendingAssetMove | null>(null)
+const highlightedMovedAssetId = ref<string | null>(null)
+let movedAssetHighlightTimer: ReturnType<typeof setTimeout> | undefined
+
+function highlightMovedAsset(assetId: string) {
+  highlightedMovedAssetId.value = assetId
+  if (movedAssetHighlightTimer) clearTimeout(movedAssetHighlightTimer)
+  movedAssetHighlightTimer = setTimeout(() => {
+    if (highlightedMovedAssetId.value === assetId) highlightedMovedAssetId.value = null
+    movedAssetHighlightTimer = undefined
+  }, 1500)
+}
+onBeforeUnmount(() => {
+  if (movedAssetHighlightTimer) clearTimeout(movedAssetHighlightTimer)
+})
 
 function applyAssetMove(opts: {
   index: number
@@ -671,6 +685,7 @@ function applyAssetMove(opts: {
   const { index, direction, detachFromMoving, growWithOther, growWithMoving } = opts
   const otherIndex = index + direction
   const movingId = form.assets[index].id
+  const movedAssetId = movingId
   const otherId = form.assets[otherIndex].id
 
   detachFromMoving.forEach((m) => {
@@ -689,6 +704,7 @@ function applyAssetMove(opts: {
 
   if (selectedAssetIndex.value === index) selectedAssetIndex.value = otherIndex
   else if (selectedAssetIndex.value === otherIndex) selectedAssetIndex.value = index
+  highlightMovedAsset(movedAssetId)
 }
 
 function moveAsset(index: number, direction: -1 | 1) {
@@ -1985,6 +2001,7 @@ function applyHexPopover() {
               <AssetTimeline
                 :assets="form.assets"
                 :selected-index="selectedAssetIndex"
+                :highlighted-asset-id="highlightedMovedAssetId"
                 :markers="timelineMarkers"
                 :resolved-durations="resolvedAssetDurations ?? undefined"
                 :selected-marker-event-id="selectedMarkerEventId"
@@ -1992,6 +2009,7 @@ function applyHexPopover() {
                 :hovered-marker-event-id="hoveredMarkerEventId"
                 :scroll-to-marker-event-id="graphScrollTarget"
                 @select="selectAsset"
+                @move-asset="({ index, direction }) => moveAsset(index, direction)"
                 @add="addAsset"
                 @bootstrap="openBootstrap"
                 @split="startSplit"
