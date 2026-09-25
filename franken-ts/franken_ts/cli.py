@@ -22,7 +22,7 @@ from .markers import write_markers_sidecar
 from .pts import find_idr_pts
 from .report import generate_report
 from .scte35 import generate_xml
-from .timeline import build_timeline, all_forced_keyframe_times
+from .timeline import build_timeline, all_forced_keyframe_times, pts_for_boundary
 from .tsduck import inject_markers, verify_markers
 from .utils import check_tool
 from .validate import validate_inputs
@@ -640,7 +640,9 @@ def _run_pipeline_single(
         f"[dim](muxer offset: {muxer_offset:.6f}s)[/dim]"
     )
     for boundary in boundaries:
-        pts = pts_map[(boundary.event_id, boundary.is_start)]
+        pts = pts_for_boundary(pts_map, boundary)
+        if pts is None:
+            raise KeyError((boundary.marker_index, boundary.is_start))
         label = "start" if boundary.is_start else "stop "
         _info(
             f"Event [bold]{boundary.event_id}[/bold]  {label}  "

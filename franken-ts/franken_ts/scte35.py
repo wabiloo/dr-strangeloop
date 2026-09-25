@@ -6,7 +6,7 @@ from typing import Optional
 from xml.etree import ElementTree as ET
 
 from .pts import PTS_CLOCK
-from .timeline import AdBoundary
+from .timeline import AdBoundary, pts_for_boundary
 from .utils import format_pts
 
 logger = logging.getLogger(__name__)
@@ -100,31 +100,38 @@ def _time_signal_message(
         event_hex = f"0x{boundary.event_id:08X}"
 
         break_duration_pts = round(boundary.break_duration * PTS_CLOCK)
-        seg_duration_pts = (
+        seg_duration_pts = 0 if not boundary.is_start else (
             round(seg.duration_seconds() * PTS_CLOCK)
             if seg.duration_seconds() is not None
             else break_duration_pts
         )
 
-        # Start/stop type_ids are consecutive pairs in SCTE-35 Table 22, e.g.
-        # 0x34 Program Start / 0x35 Program End, 0x38 Break Start / 0x39 Break
-        # End. The stop is always start + 1.
-        start_type_id = int(seg.type_id, 16) if isinstance(seg.type_id, str) else seg.type_id
-        stop_type_id = start_type_id + 1
-        type_id = start_type_id if boundary.is_start else stop_type_id
+        # The boundary carries the resolved Table 23 type ID. Do not derive
+        # the end from parity/+1: program pairs include 0x17/0x11 and
+        # 0x19/0x11.
+        type_id = boundary.segmentation_type_id
+        if type_id is None:
+            raise ValueError(f"time_signal boundary {boundary.event_id} is missing its segmentation type ID")
 
-        seg_desc = ET.SubElement(sit, "splice_segmentation_descriptor",
-                                 segmentation_event_id=event_hex,
-                                 web_delivery_allowed=str(seg.web_delivery_allowed).lower(),
-                                 no_regional_blackout=str(seg.no_regional_blackout).lower(),
-                                 archive_allowed=str(seg.archive_allowed).lower(),
-                                 device_restrictions=str(seg.device_restrictions),
-                                 segmentation_duration=format_pts(seg_duration_pts),
-                                 segmentation_type_id=f"0x{type_id:02X}",
-                                 segment_num=str(seg.segment_num or 0),
-                                 segments_expected=str(seg.segments_expected or 0),
-                                 sub_segment_num="0",
-                                 sub_segments_expected="0")
+        attrs = dict(segmentation_event_id=event_hex,
+                     web_delivery_allowed=str(seg.web_delivery_allowed).lower(),
+                     no_regional_blackout=str(seg.no_regional_blackout).lower(),
+                     archive_allowed=str(seg.archive_allowed).lower(),
+                     device_restrictions=str(seg.device_restrictions),
+                     segmentation_duration=format_pts(seg_duration_pts),
+                     segmentation_type_id=f"0x{type_id:02X}",
+                     segment_num=str(seg.segment_num or 0),
+                     segments_expected=str(seg.segments_expected or 0),
+                     # TSDuck's XML parser requires both attributes even when
+                     # this numbering profile does not use sub-segments.
+                     # Always emitting 0/0 is also the historical format.
+                     sub_segment_num=str(
+                         seg.sub_segment_num or 0 if boundary.is_start else 0
+                     ),
+                     sub_segments_expected=str(
+                         seg.sub_segments_expected or 0 if boundary.is_start else 0
+                     ))
+        seg_desc = ET.SubElement(sit, "splice_segmentation_descriptor", **attrs)
         upid = ET.SubElement(seg_desc, "segmentation_upid", type=seg.upid_type)
         upid.text = seg.upid_hex
 
@@ -148,12 +155,17 @@ def generate_xml(
         if not boundary.is_start:
             continue
         eid = boundary.event_id
-        if eid in seen:
+        if boundary.marker_index in seen:
             continue
-        seen.add(eid)
+        seen.add(boundary.marker_index)
 
-        start_pts = pts_map[(eid, True)]
-        end_pts = pts_map.get((eid, False))  # None when auto_return (no stop boundary)
+        start_pts = pts_for_boundary(pts_map, boundary)
+        end_pts = pts_map.get(("marker", boundary.marker_index, False))
+        if end_pts is None:
+            end_pts = pts_map.get((boundary.marker_index, False))
+        if end_pts is None:
+            end_pts = pts_map.get((boundary.event_id, False))
+        assert start_pts is not None
 
         root.append(ET.Comment(f" Event {eid} "))
         _splice_insert_pair(root, boundary, start_pts, end_pts)
@@ -166,9 +178,11 @@ def generate_xml(
     for boundary in boundaries:
         if boundary.marker.splice_type != "time_signal":
             continue
-        pts = pts_map[(boundary.event_id, boundary.is_start)]
+        pts = pts_for_boundary(pts_map, boundary)
+        if pts is None:
+            raise KeyError((boundary.marker_index, boundary.is_start))
         by_pts.setdefault(pts, []).append(boundary)
-        seen.add(boundary.event_id)
+        seen.add(boundary.marker_index)
 
     for pts in sorted(by_pts):
         boundaries_at_pts = by_pts[pts]

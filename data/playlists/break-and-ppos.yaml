@@ -13,6 +13,7 @@ assets:
 - file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/slates/test_cards/grid_h264_1080p_7000k_eng_aac_192k.mp4
   id: jingle1
   duration: 5s
+  role: jingle
 - file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-1-10s/ad-1-10s_h264_1080p_5000k_eng_aac_128k.mp4
   id: ad1a
   duration: 10.00s
@@ -28,6 +29,7 @@ assets:
 - file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/slates/test_cards/grid_h264_1080p_7000k_eng_aac_192k.mp4
   id: jingle2
   duration: 5s
+  role: jingle
 - file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-4-30s/ad-4-30s_h264_1080p_5000k_eng_aac_128k.mp4
   id: ad2a
   duration: 30.00s
@@ -47,6 +49,7 @@ assets:
   id: content3
   duration: 3 min
 normalize: true
+scte35_numbering_scheme: AF2M_SNPTV
 markers:
 - event_id: 100
   splice_type: time_signal

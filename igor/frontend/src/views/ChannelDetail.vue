@@ -13,6 +13,7 @@ import { useToast } from 'primevue/usetoast'
 import ItsAliveBanner from '../components/ItsAliveBanner.vue'
 import JobPanel from '../components/JobPanel.vue'
 import PlaybackPanel from '../components/PlaybackPanel.vue'
+import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import { alignConfirmPopup } from '../utils/confirmPopup'
 import {
   createChannel,
@@ -80,6 +81,7 @@ const editForm = reactive<ChannelCreatePayload>({
   daterange_mode: 'shared',
   cue_tags: 'none',
   increment_event_ids: false,
+  daterange_id_format: '{segcode}-{eventid}-{loop}',
 })
 const editIsEcsExpress = computed(() => editForm.backend === 'ecs-express')
 const editIsLocalDocker = computed(() => editForm.backend === 'local-docker')
@@ -158,6 +160,7 @@ function startEdit() {
     daterange_mode: (markers.daterange_mode as ChannelCreatePayload['daterange_mode']) ?? 'shared',
     cue_tags: (markers.cue_tags as ChannelCreatePayload['cue_tags']) ?? 'none',
     increment_event_ids: Boolean(markers.increment_event_ids ?? false),
+    daterange_id_format: String(markers.daterange_id_format ?? '{segcode}-{eventid}-{loop}'),
   })
   editAutoPort.value = editForm.port === 'auto'
   editLastExplicitPort.value = typeof editForm.port === 'number' ? editForm.port : editLastExplicitPort.value
@@ -902,6 +905,13 @@ watch(() => props.name, reload)
             <div class="flex align-items-center gap-2">
               <Checkbox v-model="editForm.increment_event_ids" binary input-id="edit-increment-event-ids" />
               <label for="edit-increment-event-ids" class="text-xs text-color-secondary">Increment SCTE-35 event ids each loop (HLS + DASH)</label>
+            </div>
+            <div class="flex flex-column gap-1">
+              <div class="flex align-items-center gap-1">
+                <label class="text-xs text-color-secondary">HLS DATERANGE ID format</label>
+                <DaterangeIdFormatHelp />
+              </div>
+              <InputText id="edit-daterange-id-format" v-model="editForm.daterange_id_format" />
             </div>
           </template>
 

@@ -4,7 +4,7 @@ import Button from 'primevue/button'
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import type { ChannelHealth } from '../api/types'
-import { bytesToHex, describeAllMarkers, type Scte35MarkerKind } from '../scte35Lite'
+import { bytesToHex, describeAllMarkers, markerToastLabel, type Scte35MarkerKind } from '../scte35Lite'
 
 const props = defineProps<{
   hlsUrl?: string | null
@@ -216,7 +216,7 @@ function attachHlsMetadataCueListener(video: HTMLVideoElement) {
         // -- still marked seen above, so it never re-announces later.
         if (video.currentTime - startTime > MARKER_STALE_THRESHOLD_SECONDS) continue
         for (const marker of describeAllMarkers(bytes)) {
-          pushMarkerToast(hlsMarkerToasts, `${marker.label} · ${marker.eventId ?? '?'}`, marker.kind)
+          pushMarkerToast(hlsMarkerToasts, markerToastLabel(marker), marker.kind)
         }
       }
     })
@@ -456,7 +456,7 @@ async function playDash() {
               // above, so it never re-announces later.
               if (video.currentTime - groupPresentationTime > MARKER_STALE_THRESHOLD_SECONDS) continue
               for (const marker of describeAllMarkers(groupBytes)) {
-                pushMarkerToast(dashMarkerToasts, `${marker.label} · ${marker.eventId ?? '?'}`, marker.kind)
+                pushMarkerToast(dashMarkerToasts, markerToastLabel(marker), marker.kind)
               }
             }
           })

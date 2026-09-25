@@ -243,6 +243,7 @@ class LoopPackage:
         self.daterange_mode: str = self.descriptor.get("daterange_mode", "shared")
         self.cue_tags: str = self.descriptor.get("cue_tags", "none")
         self.increment_event_ids: bool = self.descriptor.get("increment_event_ids", False)
+        self.daterange_id_format: str | None = self.descriptor.get("daterange_id_format")
 
         # Precomputed once (not per-request): see build_cue_breaks for
         # what this holds and why it's splice_insert-only.
@@ -512,7 +513,7 @@ class Channel:
         # in increasing window order (oldest/earliest first), so a simple
         # "already emitted in this response" set is sufficient to enforce
         # the single-occurrence rule without a separate pre-pass.
-        already_emitted_markers: set[tuple[str, int]] = set()
+        already_emitted_markers: set[tuple[str, object, int]] = set()
 
         # [markers].cue_tags: which cue_breaks (see LoopPackage.__init__)
         # have already had their opening #EXT-X-CUE-OUT/-CONT emitted in
@@ -579,11 +580,15 @@ class Channel:
             if pkg.cue_tags != "only":
                 matching_markers = [
                     m for m in pkg.markers
-                    if (m["event_id"], m["pts_time_ticks"]) not in already_emitted_markers
+                    if (
+                        m["event_id"], m.get("marker_identity"), m["pts_time_ticks"]
+                    ) not in already_emitted_markers
                     and _marker_covers_segment(m, ref_seg_start_ticks, ref_seg_end_ticks)
                 ]
                 for m in matching_markers:
-                    already_emitted_markers.add((m["event_id"], m["pts_time_ticks"]))
+                    already_emitted_markers.add(
+                        (m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
+                    )
                 if matching_markers:
                     loop_start_ticks = program_date_time_ticks(
                         local_loop_number, 0, pkg.total_loop_duration_ticks, self.epoch_ticks
@@ -608,6 +613,7 @@ class Channel:
                             pkg.timescale,
                             loop_start_datetime,
                             loop_number=local_loop_number,
+                            daterange_id_format=pkg.daterange_id_format,
                         )
                     )
 

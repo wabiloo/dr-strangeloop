@@ -39,7 +39,8 @@ import {
   laneLabelForMarker,
   textToHex,
 } from '../segmentationPresets'
-import { isInstantMarker, layoutMarkers, nextEventId, orderForDisplay } from '../markerLayout'
+import { isInstantMarker, layoutMarkers, nextEventId, orderForDisplay, semanticMarkerIssues } from '../markerLayout'
+import type { AssetRole, NumberingScheme } from '../markerLayout'
 import { filesFromDrop, isDragInside, isFileDrag, sourceFromDroppedFile } from '../utils/fileDrop'
 
 const props = defineProps<{ name: string | null }>()
@@ -67,11 +68,16 @@ interface SegmentationForm {
   no_regional_blackout: boolean
   archive_allowed: boolean
   device_restrictions: number
+  segment_num?: number | null
+  segments_expected?: number | null
+  sub_segment_num?: number | null
+  sub_segments_expected?: number | null
 }
 
 interface AssetForm {
   id: string
   file: string
+  role: AssetRole | null
   start: string
   duration: string
   fade_in: string
@@ -139,6 +145,7 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 interface MarkerForm {
+  _ui_id: number
   event_id: number
   splice_type: 'splice_insert' | 'time_signal'
   assets: string[]
@@ -147,13 +154,26 @@ interface MarkerForm {
    * message with no cue-in (SCTE-35 auto_return); false emits an explicit
    * cue-out/cue-in pair. Ignored for `time_signal`. */
   auto_return: boolean
+  break_interval: number
 }
+
+const ASSET_ROLE_OPTIONS: { label: string; value: AssetRole | null }[] = [
+  { label: 'None', value: null },
+  { label: 'Advert', value: 'advert' },
+  { label: 'Jingle', value: 'jingle' },
+]
+
+const NUMBERING_OPTIONS = [
+  { label: 'SCTE 35 2023r1', value: 'SCTE35_2023R1' },
+  { label: 'SCTE 35 2019a', value: 'SCTE35_2019A' },
+  { label: 'af2m / SNPTV', value: 'AF2M_SNPTV' },
+]
 
 /** A marker being created or edited, not yet committed to `form.markers`.
  * `editingEventId` is the event_id of the existing committed marker being
  * replaced on commit, or `null` for a brand-new marker (from "Add marker"). */
 interface MarkerDraft extends MarkerForm {
-  editingEventId: number | null
+  editingMarkerUiId: number | null
 }
 
 function newSegmentation(): SegmentationForm {
@@ -182,11 +202,14 @@ let adIdCounter = 1
 function generateAdId(): string {
   return `ad-${adIdCounter++}`
 }
+let markerUiIdCounter = 1
+function generateMarkerUiId(): number { return markerUiIdCounter++ }
 
 function newAsset(): AssetForm {
   return {
     id: generateAssetId(),
     file: '',
+    role: null,
     start: '',
     duration: '',
     fade_in: '',
@@ -230,6 +253,9 @@ const form = reactive({
   osd: defaultOsd(),
   assets: [] as AssetForm[],
   markers: [] as MarkerForm[],
+  enforce_scte35_marker_semantics: true,
+  scte35_numbering_scheme: 'SCTE35_2023R1' as NumberingScheme,
+  break_numbering_supported: false,
 })
 
 function previewTextFor(corner: 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right'): string {
@@ -283,10 +309,19 @@ function resetForm() {
   Object.assign(form.osd, defaultOsd())
   form.assets = []
   form.markers = []
+  form.enforce_scte35_marker_semantics = true
+  form.scte35_numbering_scheme = 'SCTE35_2023R1'
+  form.break_numbering_supported = false
+  markerUiIdCounter = 1
   assetIdCounter = 1
+  markerUiIdCounter = 1
   markerDraft.value = null
   selectedMarkerEventId.value = null
 }
+
+watch(() => [form.markers, form.assets, form.scte35_numbering_scheme, form.break_numbering_supported, form.enforce_scte35_marker_semantics], () => {
+  resolvedMarkers.value = null
+}, { deep: true })
 
 // PrimeVue's <ColorPicker> (format="hex", the default) reads/writes a bare
 // "RRGGBB" string, but franken_ts.config.OsdConfig.text_color is "#RRGGBB"
@@ -323,27 +358,14 @@ const selectedAssetIndex = ref<number | null>(null)
 const selectedMarkerEventId = ref<number | null>(null)
 
 // ── Hover cross-highlight between the marker list and the timeline graph ──
-// `hoverSource` records which side the CURRENT hover came from, so hovering
-// a list row scrolls the graph to it (the graph can be zoomed/scrolled out
-// of view), while hovering a graph span only highlights the list row
-// without scrolling the list (scrolling the list on hover was annoying).
 const hoveredMarkerEventId = ref<number | null>(null)
-const hoverSource = ref<'list' | 'graph' | null>(null)
 
 function hoverMarkerFromList(eventId: number | null) {
   hoveredMarkerEventId.value = eventId
-  hoverSource.value = eventId === null ? null : 'list'
 }
 function hoverMarkerFromGraph(eventId: number | null) {
   hoveredMarkerEventId.value = eventId
-  hoverSource.value = eventId === null ? null : 'graph'
 }
-
-/** What the graph should scroll to: the list-originated hover if there is
- * one, else whatever's currently selected (click, from either side). */
-const graphScrollTarget = computed(() =>
-  hoverSource.value === 'list' ? hoveredMarkerEventId.value : selectedMarkerEventId.value,
-)
 
 function selectAsset(i: number) {
   selectedAssetIndex.value = i
@@ -493,11 +515,13 @@ function commitBootstrap() {
     const eventId = nextEventId(usedSoFar)
     usedSoFar.push(eventId)
     extraMarkers.push({
+      _ui_id: generateMarkerUiId(),
       event_id: eventId,
       splice_type: 'splice_insert',
       assets: [...adRun],
       segmentation: newSegmentation(),
       auto_return: true,
+      break_interval: 1,
     })
     adRun = []
   }
@@ -1045,6 +1069,54 @@ function removeRendition(i: number) {
 // ── Markers (nested, multi-asset SCTE-35 spans) ────────────────────────────
 
 const usedEventIds = computed(() => form.markers.map((m) => m.event_id))
+const duplicateEventIds = computed(() => {
+  const seen = new Set<number>()
+  const duplicates = new Set<number>()
+  for (const marker of form.markers) {
+    if (seen.has(marker.event_id)) duplicates.add(marker.event_id)
+    seen.add(marker.event_id)
+  }
+  return [...duplicates].sort((a, b) => a - b)
+})
+const semanticIssues = computed(() => {
+  if (!form.enforce_scte35_marker_semantics) return []
+  const idToIndex = new Map(form.assets.map((asset, index) => [asset.id, index] as const))
+  const issues = semanticMarkerIssues(form.markers, idToIndex)
+  for (const marker of form.markers) {
+    const t = Number.parseInt(marker.segmentation.type_id, 16)
+    if (marker.splice_type !== 'time_signal') continue
+    if (form.scte35_numbering_scheme === 'AF2M_SNPTV' && ![0x22, 0x34, 0x30, 0x02].includes(t))
+      issues.push(`Marker #${marker.event_id}: this segmentation type is not in the af2m profile.`)
+    if (form.scte35_numbering_scheme === 'SCTE35_2019A' && [0x44, 0x46].includes(t))
+      issues.push(`Marker #${marker.event_id}: Ad Block is unavailable in SCTE 35 2019a.`)
+  }
+  if (form.scte35_numbering_scheme === 'AF2M_SNPTV') {
+    for (const marker of form.markers) {
+      if (marker.splice_type !== 'time_signal' || Number.parseInt(marker.segmentation.type_id, 16) !== 0x30) continue
+      const roles = new Set(marker.assets.map((id) => form.assets.find((asset) => asset.id === id)?.role === 'jingle'))
+      if (roles.size > 1) issues.push(`Marker #${marker.event_id}: af2m Provider Advertisement covers both Jingle and non-Jingle assets.`)
+    }
+  }
+  if (form.break_numbering_supported && form.scte35_numbering_scheme !== 'AF2M_SNPTV') {
+    const programRanges = form.markers.filter((marker) => marker.splice_type === 'time_signal' && marker.segmentation.type_id === '0x10')
+      .map((marker) => marker.assets.map((asset) => idToIndex.get(asset) ?? -1))
+    const intervals = form.markers.filter((marker) => marker.splice_type === 'time_signal' && marker.segmentation.type_id === '0x22')
+      .map((marker) => ({ lo: Math.min(...marker.assets.map((asset) => idToIndex.get(asset) ?? -1)), hi: Math.max(...marker.assets.map((asset) => idToIndex.get(asset) ?? -1)), interval: marker.break_interval }))
+      .filter((br) => !programRanges.some((program) => Math.min(...program) <= br.lo && br.hi <= Math.max(...program)))
+      .sort((a, b) => a.lo - b.lo)
+      .map((br) => br.interval)
+    if (intervals.some((interval, index) => index > 0 && interval < intervals[index - 1]))
+      issues.push('Break intervals must increase in playback order outside a Program.')
+  }
+  return issues
+})
+const draftHasDuplicateEventId = computed(() => {
+  const draft = markerDraft.value
+  if (!draft) return false
+  return form.markers.some((marker) =>
+    marker.event_id === draft.event_id && marker._ui_id !== draft._ui_id,
+  )
+})
 
 const resolvedMarkers = ref<ResolvedMarker[] | null>(null)
 const resolvedAssetDurations = ref<Record<string, number> | null>(null)
@@ -1053,36 +1125,40 @@ const resolvingMarkers = ref(false)
 function tagRange({ startIndex, endIndex }: { startIndex: number; endIndex: number }) {
   const assetIds = form.assets.slice(startIndex, endIndex + 1).map((a) => a.id)
   markerDraft.value = {
-    editingEventId: null,
+    _ui_id: generateMarkerUiId(),
+    editingMarkerUiId: null,
     event_id: nextEventId(usedEventIds.value),
     splice_type: 'time_signal',
     assets: assetIds,
     segmentation: newSegmentation(),
     auto_return: true,
+    break_interval: 1,
   }
-  selectedMarkerEventId.value = markerDraft.value.event_id
+  selectedMarkerEventId.value = markerDraft.value._ui_id
   selectedAssetIndex.value = null
 }
 
-function editMarker(eventId: number) {
-  const existing = form.markers.find((m) => m.event_id === eventId)
+function editMarker(eventId: number, markerUiId?: number) {
+  const existing = form.markers.find((m) => markerUiId === undefined ? m.event_id === eventId : m._ui_id === markerUiId)
   if (!existing) return
   markerDraft.value = {
-    editingEventId: existing.event_id,
+    _ui_id: existing._ui_id,
+    editingMarkerUiId: existing._ui_id,
     event_id: existing.event_id,
     splice_type: existing.splice_type,
     assets: [...existing.assets],
     segmentation: { ...existing.segmentation },
     auto_return: existing.auto_return,
+    break_interval: existing.break_interval,
   }
-  selectedMarkerEventId.value = eventId
+  selectedMarkerEventId.value = existing._ui_id
   selectedAssetIndex.value = null
 }
 
-function removeMarker(eventId: number) {
-  form.markers = form.markers.filter((m) => m.event_id !== eventId)
-  if (markerDraft.value?.editingEventId === eventId) markerDraft.value = null
-  if (selectedMarkerEventId.value === eventId) selectedMarkerEventId.value = null
+function removeMarker(markerUiId: number) {
+  form.markers = form.markers.filter((m) => m._ui_id !== markerUiId)
+  if (markerDraft.value?._ui_id === markerUiId) markerDraft.value = null
+  if (selectedMarkerEventId.value === markerUiId) selectedMarkerEventId.value = null
 }
 
 const markerDraft = ref<MarkerDraft | null>(null)
@@ -1105,17 +1181,14 @@ const markerDraftBounds = computed(() => {
 function canSetMarkerDraftBounds(lo: number, hi: number): boolean {
   const draft = markerDraft.value
   if (!draft || lo < 0 || hi >= form.assets.length || lo > hi) return false
+  if (!form.enforce_scte35_marker_semantics) return true
   const idToIndex = new Map(form.assets.map((asset, index) => [asset.id, index] as const))
-  for (const other of form.markers) {
-    if (other.event_id === draft.editingEventId) continue
-    const otherBounds = markerSpan(other, idToIndex)
-    if (!otherBounds) continue
-    const overlaps = lo <= otherBounds.hi && otherBounds.lo <= hi
-    const nested = (lo <= otherBounds.lo && otherBounds.hi <= hi)
-      || (otherBounds.lo <= lo && hi <= otherBounds.hi)
-    if (overlaps && !nested) return false
+  const adjusted: MarkerForm = {
+    ...draft,
+    assets: form.assets.slice(lo, hi + 1).map((asset) => asset.id),
   }
-  return true
+  const others = form.markers.filter((marker) => marker._ui_id !== draft._ui_id)
+  return semanticMarkerIssues([...others, adjusted], idToIndex).length === 0
 }
 
 const canExtendDraftLeft = computed(() => {
@@ -1148,14 +1221,14 @@ function adjustMarkerDraftSpan(edge: 'start' | 'end', direction: -1 | 1) {
   // Span resizing is an in-memory playlist edit, not a temporary form draft:
   // retain it when the user selects another marker, while leaving persistence
   // to the playlist's normal Save action.
-  if (draft.editingEventId !== null) {
-    const marker = form.markers.find((item) => item.event_id === draft.editingEventId)
+  if (draft.editingMarkerUiId !== null) {
+    const marker = form.markers.find((item) => item._ui_id === draft.editingMarkerUiId)
     if (marker) marker.assets = [...assets]
   }
 }
 
 function resizeTimelineMarker(payload: { eventId: number; edge: 'start' | 'end'; direction: -1 | 1 }) {
-  if (markerDraft.value?.editingEventId !== payload.eventId) return
+  if (markerDraft.value?._ui_id !== payload.eventId) return
   adjustMarkerDraftSpan(payload.edge, payload.direction)
 }
 
@@ -1163,14 +1236,14 @@ function resizeTimelineMarker(payload: { eventId: number; edge: 'start' | 'end';
  * keeping the form's committed marker unchanged until the user presses Update. */
 const timelineMarkers = computed(() => {
   const draft = markerDraft.value
-  if (!draft || draft.editingEventId === null) return form.markers
-  return form.markers.map((marker) => marker.event_id === draft.editingEventId
+  if (!draft || draft.editingMarkerUiId === null) return form.markers
+  return form.markers.map((marker) => marker._ui_id === draft.editingMarkerUiId
     ? { ...marker, assets: [...draft.assets] }
     : marker)
 })
 
 const markerResizeAvailability = computed(() => {
-  if (markerDraft.value?.editingEventId !== selectedMarkerEventId.value) return null
+  if (markerDraft.value?._ui_id !== selectedMarkerEventId.value) return null
   return {
     extendStart: canExtendDraftLeft.value,
     shortenStart: canShrinkDraftLeft.value,
@@ -1199,12 +1272,23 @@ const draftPendingCount = computed(() => {
 const canCommitDraft = computed(() => {
   if (!markerDraft.value) return false
   if (markerDraft.value.splice_type === 'time_signal' && !markerDraft.value.segmentation.type_id) return false
+  if (form.enforce_scte35_marker_semantics && draftHasDuplicateEventId.value) return false
+  if (form.enforce_scte35_marker_semantics) {
+    const d = markerDraft.value
+    const withoutDraft = form.markers.filter((m) => m._ui_id !== d._ui_id)
+    const draftMarker: MarkerForm = { ...d, assets: isDraftInstant.value ? d.assets.slice(0, 1) : d.assets }
+    const idToIndex = new Map(form.assets.map((a, i) => [a.id, i] as const))
+    if (semanticMarkerIssues([...withoutDraft, draftMarker], idToIndex).length) return false
+    const t = Number.parseInt(d.segmentation.type_id, 16)
+    if (d.splice_type === 'time_signal' && form.scte35_numbering_scheme === 'AF2M_SNPTV' && ![0x22, 0x34, 0x30, 0x02].includes(t)) return false
+    if (d.splice_type === 'time_signal' && form.scte35_numbering_scheme === 'SCTE35_2019A' && [0x44, 0x46].includes(t)) return false
+  }
   return true
 })
 
 const commitButtonLabel = computed(() => {
   if (!markerDraft.value) return ''
-  if (markerDraft.value.editingEventId !== null) return 'Update'
+  if (markerDraft.value.editingMarkerUiId !== null) return 'Update'
   const n = draftPendingCount.value
   return n > 1 ? `Add ${n} markers` : 'Add marker'
 })
@@ -1218,8 +1302,8 @@ function commitDraft() {
   const d = markerDraft.value
   if (!d || !canCommitDraft.value) return
 
-  if (d.editingEventId !== null) {
-    form.markers = form.markers.filter((m) => m.event_id !== d.editingEventId)
+  if (d.editingMarkerUiId !== null) {
+    form.markers = form.markers.filter((m) => m._ui_id !== d.editingMarkerUiId)
   }
 
   if (isDraftInstant.value && d.assets.length > 1) {
@@ -1232,21 +1316,25 @@ function commitDraft() {
       const eventId = idx === 0 ? d.event_id : nextEventId(usedSoFar)
       usedSoFar.push(eventId)
       return {
+        _ui_id: generateMarkerUiId(),
         event_id: eventId,
         splice_type: d.splice_type,
         assets: [assetId],
         segmentation: { ...d.segmentation },
         auto_return: d.auto_return,
+        break_interval: d.break_interval,
       }
     })
     form.markers.push(...newMarkers)
   } else {
     form.markers.push({
+      _ui_id: d._ui_id,
       event_id: d.event_id,
       splice_type: d.splice_type,
       assets: [...d.assets],
       segmentation: { ...d.segmentation },
       auto_return: d.auto_return,
+      break_interval: d.break_interval,
     })
   }
 
@@ -1263,7 +1351,8 @@ function laneColorForBadge(marker: MarkerForm | null): string {
  * the backend, just for display -- not authoritative (see markerLayout.ts). */
 const markerLayout = computed(() => {
   const idToIndex = new Map(form.assets.map((a, i) => [a.id, i] as const))
-  return layoutMarkers(form.markers, idToIndex)
+  const assetRoles = new Map(form.assets.map((a) => [a.id, a.role] as const))
+  return layoutMarkers(form.markers, idToIndex, form.enforce_scte35_marker_semantics, form.scte35_numbering_scheme, form.break_numbering_supported, assetRoles)
 })
 
 /** The "Markers" list below the timeline shows nesting via indentation
@@ -1312,10 +1401,6 @@ async function previewMarkerResolution() {
   }
 }
 
-function resolvedSpanFor(eventId: number): ResolvedMarker | undefined {
-  return resolvedMarkers.value?.find((m) => m.event_id === eventId)
-}
-
 /** Live preview of the draft's containment (segment/depth), computed
  * against form.markers with the draft substituted in for whatever it's
  * replacing (or added fresh) -- lets the "Auto-computed" info in the
@@ -1324,22 +1409,28 @@ function resolvedSpanFor(eventId: number): ResolvedMarker | undefined {
 const draftPreviewSpan = computed(() => {
   const d = markerDraft.value
   if (!d) return null
-  const withoutEditing = form.markers.filter((m) => m.event_id !== d.editingEventId)
+  const withoutEditing = form.markers.filter((m) => m._ui_id !== d._ui_id)
   const draftAsMarker: MarkerForm = {
+    _ui_id: d._ui_id,
     event_id: d.event_id,
     splice_type: d.splice_type,
     assets: isDraftInstant.value ? d.assets.slice(0, 1) : [...d.assets],
     segmentation: { ...d.segmentation },
     auto_return: d.auto_return,
+    break_interval: d.break_interval,
   }
   const idToIndex = new Map(form.assets.map((a, i) => [a.id, i] as const))
-  const preview = layoutMarkers([...withoutEditing, draftAsMarker], idToIndex)
-  return preview.find((s) => s.marker.event_id === d.event_id) ?? null
+  const assetRoles = new Map(form.assets.map((a) => [a.id, a.role] as const))
+  const preview = layoutMarkers(
+    [...withoutEditing, draftAsMarker], idToIndex, form.enforce_scte35_marker_semantics, form.scte35_numbering_scheme, form.break_numbering_supported, assetRoles,
+  )
+  return preview.find((s) => s.marker._ui_id === d._ui_id) ?? null
 })
 
 const draftResolved = computed(() => {
-  if (!markerDraft.value || markerDraft.value.editingEventId === null) return undefined
-  return resolvedSpanFor(markerDraft.value.editingEventId)
+  if (!markerDraft.value || markerDraft.value.editingMarkerUiId === null) return undefined
+  const index = form.markers.findIndex((m) => m._ui_id === markerDraft.value?._ui_id)
+  return resolvedMarkers.value?.find((m) => m.marker_index === index)
 })
 
 function timeOrUndefined(v: string): string | number | undefined {
@@ -1372,6 +1463,7 @@ function toYamlPlaylist(): Record<string, unknown> {
     .map((a) => {
       const asset: Record<string, unknown> = { file: a.file }
       if (a.id.trim()) asset.id = a.id
+      if (a.role !== null) asset.role = a.role
       if (a.start.trim()) asset.start = timeOrUndefined(a.start)
       if (a.duration.trim()) asset.duration = timeOrUndefined(a.duration)
       if (a.fade_in.trim()) asset.fade_in = timeOrUndefined(a.fade_in)
@@ -1383,6 +1475,9 @@ function toYamlPlaylist(): Record<string, unknown> {
     })
 
   const cfg: Record<string, unknown> = { output, assets }
+  cfg.enforce_scte35_marker_semantics = form.enforce_scte35_marker_semantics
+  cfg.scte35_numbering_scheme = form.scte35_numbering_scheme
+  cfg.break_numbering_supported = form.break_numbering_supported
   if (form.normalize) cfg.normalize = true
   if (form.slate_image.trim()) cfg.slate_image = form.slate_image
   if (form.osd.enabled) {
@@ -1412,7 +1507,15 @@ function toYamlPlaylist(): Record<string, unknown> {
         assets: [...m.assets],
       }
       if (m.splice_type === 'time_signal') {
-        marker.segmentation = { ...m.segmentation }
+        const seg = { ...m.segmentation }
+        if (form.enforce_scte35_marker_semantics) {
+          delete seg.segment_num
+          delete seg.segments_expected
+          delete seg.sub_segment_num
+          delete seg.sub_segments_expected
+        }
+        marker.segmentation = seg
+        if (m.break_interval !== 1) marker.break_interval = m.break_interval
       } else if (!m.auto_return) {
         // Default (true) is left implicit -- only write the field when it
         // diverges from franken-ts's own default, same convention as the
@@ -1440,6 +1543,9 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
   form.output.service_name = (output.service_name as string) ?? form.output.service_name
   form.renditions = ((output.renditions as RenditionForm[]) ?? []).map((r) => ({ ...r }))
   form.normalize = Boolean(data.normalize)
+  form.enforce_scte35_marker_semantics = data.enforce_scte35_marker_semantics !== false
+  form.scte35_numbering_scheme = (data.scte35_numbering_scheme as NumberingScheme) ?? 'SCTE35_2023R1'
+  form.break_numbering_supported = data.break_numbering_supported === true
   form.slate_image = (data.slate_image as string) ?? ''
 
   const rawOsd = (data.osd as Record<string, unknown>) ?? {}
@@ -1473,12 +1579,20 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
   }
 
   const rawAssets = (data.assets as Record<string, unknown>[]) ?? []
+  const rawMarkers = (data.markers as Record<string, unknown>[]) ?? []
+  const legacyRoles = new Map<string, AssetRole>()
+  for (const marker of rawMarkers) {
+    const ids = marker.assets as string[] | undefined
+    if (marker.jingle_role === 'opening' || marker.jingle_role === 'closing')
+      for (const id of ids ?? []) legacyRoles.set(id, 'jingle')
+  }
   form.assets = rawAssets.map((a) => ({
     // Playlists saved before this field existed won't have an id --
     // generate one so markers can still be tagged against these assets;
     // it gets written back on next save.
     id: a.id ? String(a.id) : generateAssetId(),
     file: String(a.file ?? ''),
+    role: (a.role as AssetRole | null) ?? (a.jingle_role === 'opening' || a.jingle_role === 'closing' ? 'jingle' : null) ?? legacyRoles.get(String(a.id)) ?? null,
     start: a.start !== undefined ? String(a.start) : '',
     duration: a.duration !== undefined ? String(a.duration) : '',
     fade_in: a.fade_in !== undefined ? String(a.fade_in) : '',
@@ -1488,10 +1602,10 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
     osd_label: a.osd_label !== undefined ? String(a.osd_label) : '',
   }))
 
-  const rawMarkers = (data.markers as Record<string, unknown>[]) ?? []
   form.markers = rawMarkers.map((m) => {
     const seg = (m.segmentation as Record<string, unknown>) ?? {}
     return {
+      _ui_id: generateMarkerUiId(),
       event_id: Number(m.event_id),
       splice_type: (m.splice_type as 'splice_insert' | 'time_signal') ?? 'time_signal',
       assets: [...((m.assets as string[]) ?? [])],
@@ -1503,8 +1617,13 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
         no_regional_blackout: Boolean(seg.no_regional_blackout),
         archive_allowed: Boolean(seg.archive_allowed),
         device_restrictions: Number(seg.device_restrictions ?? 1),
+        segment_num: seg.segment_num == null ? null : Number(seg.segment_num),
+        segments_expected: seg.segments_expected == null ? null : Number(seg.segments_expected),
+        sub_segment_num: seg.sub_segment_num == null ? null : Number(seg.sub_segment_num),
+        sub_segments_expected: seg.sub_segments_expected == null ? null : Number(seg.sub_segments_expected),
       },
       auto_return: m.auto_return !== false,
+      break_interval: Number(m.break_interval ?? 1),
     }
   })
   resolvedMarkers.value = null
@@ -1544,6 +1663,14 @@ async function load() {
 async function save() {
   if (!nameInput.value.trim()) {
     error.value = 'Playlist name is required.'
+    return
+  }
+  if (form.enforce_scte35_marker_semantics && semanticIssues.value.length) {
+    error.value = semanticIssues.value.join(' ')
+    return
+  }
+  if (!form.enforce_scte35_marker_semantics && duplicateEventIds.value.length) {
+    error.value = `Relaxed mode allows duplicate IDs to be saved, but franken-ts cannot build them safely yet. Assign unique event ID(s): ${duplicateEventIds.value.join(', ')}`
     return
   }
   saving.value = true
@@ -1757,7 +1884,7 @@ function applyHexPopover() {
         <Tab value="settings">Settings</Tab>
         <Tab value="osd">OSD</Tab>
         <Tab value="assets">
-          Timeline
+          Playlist
           <span class="asset-count-badge">{{ form.assets.length }}</span>
         </Tab>
         <Tab value="build">Assemble</Tab>
@@ -2003,18 +2130,20 @@ function applyHexPopover() {
                 :selected-index="selectedAssetIndex"
                 :highlighted-asset-id="highlightedMovedAssetId"
                 :markers="timelineMarkers"
+                :enforce-scte35-marker-semantics="form.enforce_scte35_marker_semantics"
+                :scte35-numbering-scheme="form.scte35_numbering_scheme"
+                :break-numbering-supported="form.break_numbering_supported"
                 :resolved-durations="resolvedAssetDurations ?? undefined"
                 :selected-marker-event-id="selectedMarkerEventId"
                 :marker-resize-availability="markerResizeAvailability"
                 :hovered-marker-event-id="hoveredMarkerEventId"
-                :scroll-to-marker-event-id="graphScrollTarget"
                 @select="selectAsset"
                 @move-asset="({ index, direction }) => moveAsset(index, direction)"
                 @add="addAsset"
                 @bootstrap="openBootstrap"
                 @split="startSplit"
                 @tag-range="tagRange"
-                @edit-marker="editMarker"
+                @edit-marker="(uiId) => { const marker = form.markers.find((m) => m._ui_id === uiId); if (marker) editMarker(marker.event_id, uiId) }"
                 @resize-marker="resizeTimelineMarker"
                 @hover-marker="hoverMarkerFromGraph"
               >
@@ -2054,13 +2183,13 @@ function applyHexPopover() {
 
             <div v-else-if="markerDraft" class="p-3 border-1 surface-border border-round flex flex-column gap-2 detail-panel">
               <div class="flex justify-content-between align-items-center">
-                <span class="font-semibold">{{ markerDraft.editingEventId !== null ? `Marker #${markerDraft.editingEventId}` : 'New marker' }}</span>
+                <span class="font-semibold">{{ markerDraft.editingMarkerUiId !== null ? `Marker #${markerDraft.event_id}` : 'New marker' }}</span>
                 <Button
-                  v-if="markerDraft.editingEventId !== null"
+                  v-if="markerDraft.editingMarkerUiId !== null"
                   icon="pi pi-trash"
                   severity="danger"
                   text
-                  @click="removeMarker(markerDraft.editingEventId)"
+                  @click="removeMarker(markerDraft._ui_id)"
                 />
               </div>
               <span class="text-sm text-color-secondary">
@@ -2069,7 +2198,7 @@ function applyHexPopover() {
               </span>
               <div class="grid">
                 <div class="col-4 flex flex-column gap-1">
-                  <label>Event ID (unique)</label>
+                  <label>Event ID</label>
                   <InputNumber v-model="markerDraft.event_id" :use-grouping="false" />
                 </div>
                 <div class="col-8 flex flex-column gap-1">
@@ -2097,7 +2226,7 @@ function applyHexPopover() {
                     </label>
                     <Select
                       v-model="markerDraft.segmentation.type_id"
-                      :options="SEGMENTATION_PAIR_OPTIONS"
+                      :options="SEGMENTATION_PAIR_OPTIONS.filter((option) => form.scte35_numbering_scheme === 'AF2M_SNPTV' ? ['0x22', '0x34', '0x30', '0x02'].includes(option.value) : form.scte35_numbering_scheme === 'SCTE35_2019A' ? !['0x44', '0x46'].includes(option.value) : true)"
                       option-label="label"
                       option-value="value"
                       placeholder="Select a segmentation type..."
@@ -2113,6 +2242,16 @@ function applyHexPopover() {
                         <span v-if="isDraftInstant" class="text-color-secondary text-sm">(instant -- no End)</span>
                       </template>
                       <span v-else class="text-color-secondary text-sm">(pick a segmentation type first)</span>
+                    </div>
+                  </div>
+                  <div v-if="markerDraft.segmentation.type_id === '0x22' && form.scte35_numbering_scheme !== 'AF2M_SNPTV' && form.break_numbering_supported" class="col-6 flex flex-column gap-1">
+                    <label>Provider-defined Break interval</label>
+                    <InputNumber v-model="markerDraft.break_interval" :min="1" :use-grouping="false" />
+                  </div>
+                  <div v-if="!form.enforce_scte35_marker_semantics" class="col-12 flex gap-3 flex-wrap">
+                    <div v-for="field in (['segment_num', 'segments_expected', 'sub_segment_num', 'sub_segments_expected'] as const)" :key="field" class="flex flex-column gap-1">
+                      <label>{{ field }}</label>
+                      <InputNumber v-model="markerDraft.segmentation[field]" :min="0" :max="255" :use-grouping="false" placeholder="unset" class="field-tiny" />
                     </div>
                   </div>
                   <div class="col-6 flex flex-column gap-1">
@@ -2168,10 +2307,10 @@ function applyHexPopover() {
                   </span>
                 </template>
                 <template v-else>
-                  <span class="font-semibold text-sm">Auto-computed (from asset containment):</span>
+                  <span class="font-semibold text-sm">{{ form.enforce_scte35_marker_semantics ? 'Auto-computed numbering:' : 'Authored numbering:' }}</span>
                   <span class="text-sm text-color-secondary">
-                    segment {{ (draftPreviewSpan?.segmentNum ?? 0) + 1 }}
-                    of {{ draftPreviewSpan?.segmentsExpected ?? 1 }},
+                    segment {{ draftPreviewSpan?.segmentNum ?? 0 }}/{{ draftPreviewSpan?.segmentsExpected ?? 0 }}
+                    <template v-if="draftPreviewSpan?.subSegmentNum != null"> · sub {{ draftPreviewSpan.subSegmentNum }}/{{ draftPreviewSpan.subSegmentsExpected }}</template>,
                     depth {{ draftPreviewSpan?.depth ?? 0 }}
                   </span>
                   <template v-if="draftResolved">
@@ -2208,22 +2347,6 @@ function applyHexPopover() {
                     :disabled="selectedAssetIndex === form.assets.length - 1"
                     @click="selectAsset(selectedAssetIndex + 1)"
                   />
-                  <Divider layout="vertical" class="m-0" />
-                  <Button
-                    icon="pi pi-arrow-up"
-                    text
-                    title="Move earlier in the playlist"
-                    :disabled="selectedAssetIndex === 0"
-                    @click="moveAsset(selectedAssetIndex, -1)"
-                  />
-                  <Button
-                    icon="pi pi-arrow-down"
-                    text
-                    title="Move later in the playlist"
-                    :disabled="selectedAssetIndex === form.assets.length - 1"
-                    @click="moveAsset(selectedAssetIndex, 1)"
-                  />
-                  <Divider layout="vertical" class="m-0" />
                   <Button icon="pi pi-trash" severity="danger" text @click="removeAsset(selectedAssetIndex)" />
                 </div>
               </div>
@@ -2238,6 +2361,10 @@ function applyHexPopover() {
                     :model-value="form.assets[selectedAssetIndex].id"
                     @update:model-value="updateAssetId(selectedAssetIndex, String($event ?? ''))"
                   />
+                </div>
+                <div class="col-4 flex flex-column gap-1">
+                  <label for="asset-role">Role</label>
+                  <Select input-id="asset-role" v-model="form.assets[selectedAssetIndex].role" :options="ASSET_ROLE_OPTIONS" option-label="label" option-value="value" />
                 </div>
                 <div class="col-3 flex flex-column gap-1">
                   <label>Start</label>
@@ -2276,27 +2403,50 @@ function applyHexPopover() {
               </div>
             </div>
 
-            <div v-if="form.markers.length" class="flex flex-column gap-2">
-              <div class="flex justify-content-between align-items-center">
+            <div class="marker-section">
+              <div class="flex flex-column gap-2">
                 <span class="font-bold">Markers ({{ form.markers.length }})</span>
+                <Message v-if="duplicateEventIds.length" severity="warn" class="text-sm m-0">
+                  Duplicate event ID(s): {{ duplicateEventIds.join(', ') }}.
+                  {{ form.enforce_scte35_marker_semantics ? 'Resolve these before saving.' : 'Allowed to save while semantic enforcement is off, but franken-ts cannot build duplicate IDs safely yet.' }}
+                </Message>
+                <Message v-for="(issue, i) in semanticIssues" :key="`semantic-${i}`" severity="error" class="text-sm m-0">
+                  {{ issue }}
+                </Message>
+                <div
+                  v-for="span in markerListOrder"
+                  :key="span.marker._ui_id"
+                  class="marker-row"
+                  :class="{
+                    'marker-row-selected': span.marker._ui_id === selectedMarkerEventId,
+                    'marker-row-hovered': span.marker._ui_id === hoveredMarkerEventId,
+                  }"
+                  :style="{ paddingLeft: `${span.depth * 1.25}rem` }"
+                  @click="editMarker(span.marker.event_id, span.marker._ui_id)"
+                  @mouseenter="hoverMarkerFromList(span.marker._ui_id)"
+                  @mouseleave="hoverMarkerFromList(null)"
+                >
+                  <span class="marker-type-dot" :style="{ background: laneColorForBadge(span.marker) }" />
+                  <span class="font-semibold">{{ laneLabelForMarker(span.marker) }} #{{ span.marker.event_id }}</span>
+                  <span class="text-color-secondary text-sm">{{ span.marker.assets.join(', ') }}</span>
+                  <span class="text-color-secondary text-sm">seg {{ span.segmentNum }}/{{ span.segmentsExpected }}<template v-if="span.subSegmentNum != null"> · sub {{ span.subSegmentNum }}/{{ span.subSegmentsExpected }}</template></span>
+                </div>
               </div>
-              <div
-                v-for="span in markerListOrder"
-                :key="span.marker.event_id"
-                class="marker-row"
-                :class="{
-                  'marker-row-selected': span.marker.event_id === selectedMarkerEventId,
-                  'marker-row-hovered': span.marker.event_id === hoveredMarkerEventId,
-                }"
-                :style="{ paddingLeft: `${span.depth * 1.25}rem` }"
-                @click="editMarker(span.marker.event_id)"
-                @mouseenter="hoverMarkerFromList(span.marker.event_id)"
-                @mouseleave="hoverMarkerFromList(null)"
-              >
-                <span class="marker-type-dot" :style="{ background: laneColorForBadge(span.marker) }" />
-                <span class="font-semibold">{{ laneLabelForMarker(span.marker) }} #{{ span.marker.event_id }}</span>
-                <span class="text-color-secondary text-sm">{{ span.marker.assets.join(', ') }}</span>
-                <span class="text-color-secondary text-sm">seg {{ span.segmentNum + 1 }}/{{ span.segmentsExpected }}</span>
+              <div class="scte-panel flex flex-column gap-3 p-3 border-1 surface-border border-round">
+                <span class="font-bold">SCTE-35</span>
+                <div class="flex align-items-center gap-2">
+                  <Checkbox v-model="form.enforce_scte35_marker_semantics" binary input-id="marker-semantics" />
+                  <label for="marker-semantics">Enforce marker semantics</label>
+                </div>
+                <div class="flex flex-column gap-1">
+                  <label for="numbering-scheme">Numbering scheme</label>
+                  <Select input-id="numbering-scheme" v-model="form.scte35_numbering_scheme" :options="NUMBERING_OPTIONS" option-label="label" option-value="value" />
+                </div>
+                <div v-if="form.scte35_numbering_scheme !== 'AF2M_SNPTV'" class="flex align-items-center gap-2">
+                  <Checkbox v-model="form.break_numbering_supported" binary input-id="break-numbering" :disabled="!form.enforce_scte35_marker_semantics" />
+                  <label for="break-numbering">Number Breaks within Program / interval</label>
+                </div>
+                <span class="text-sm text-color-secondary">{{ form.enforce_scte35_marker_semantics ? 'The selected scheme computes numbering on save and build.' : 'Semantic checks and automatic numbering are off; authored fields pass through.' }}</span>
               </div>
             </div>
           </div>
@@ -2876,6 +3026,23 @@ function applyHexPopover() {
 
 .detail-panel {
   background: var(--p-surface-50, #f8fafc);
+}
+
+.marker-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.scte-panel {
+  background: var(--p-surface-50, #f8fafc);
+}
+
+@media (max-width: 800px) {
+  .marker-section {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .marker-row {

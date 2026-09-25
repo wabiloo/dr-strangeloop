@@ -115,6 +115,14 @@ See `AGENTS.md`'s config reference for the full schema, including the
 signaling `loop-dee-loop` renders, and `local-docker`'s `[docker]`
 section (in place of `[express]`, holding just `port`).
 
+For `ecs-express` and `local-docker`, `[markers].daterange_id_format`
+controls HLS DATERANGE IDs. Its default is
+`"{segcode}-{eventid}-{loop}"`; supported fields are `{loop}`, `{eventid}`,
+`{segid}`, `{seghex}`, `{segcode}`, `{segname}` (e.g.
+`provider-advertisement-start`), `{epoch}` (Unix milliseconds), and `{pd}`
+(ISO-8601 PDT). Static characters can be included freely. The
+MediaPackage `aws-media` backend does not author these IDs.
+
 `[deploy].name` + `[deploy].backend` together drive the CloudFormation
 stack name (`ItsALiveStack-<name>-<backend>`) and every AWS resource name,
 so config files are fully independent, parallel deployments — you could

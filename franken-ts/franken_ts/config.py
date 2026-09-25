@@ -128,13 +128,10 @@ class SegmentationConfig(BaseModel):
     archive_allowed: bool = False
     device_restrictions: int = 1
     duration: Optional[TimeValue] = None
-    # Sibling position within an enclosing marker (e.g. the Nth of M Provider
-    # Placement Opportunities inside a Break).  Left unset by the user in the
-    # common case: the `markers` resolution pass (see timeline.py) fills these
-    # in automatically from inferred containment, but an explicit value here
-    # always wins.
-    segment_num: Optional[int] = None
-    segments_expected: Optional[int] = None
+    segment_num: Optional[int] = Field(default=None, ge=0, le=255)
+    segments_expected: Optional[int] = Field(default=None, ge=0, le=255)
+    sub_segment_num: Optional[int] = Field(default=None, ge=0, le=255)
+    sub_segments_expected: Optional[int] = Field(default=None, ge=0, le=255)
 
     def duration_seconds(self) -> Optional[float]:
         if self.duration is None:
@@ -171,7 +168,7 @@ class SpliceConfig(BaseModel):
         return self
 
 
-# SCTE-35 Table 22 segmentation_type_id (Start value) -> `type` lane label.
+# SCTE-35 Table 23 segmentation_type_id (Start value) -> `type` lane label.
 # `type` is purely a downstream/UI convenience (timeline lane grouping,
 # markers.json labeling) -- `segmentation.type_id` is the single source of
 # truth for what a marker actually signals, so `type` is always *derived*
@@ -193,9 +190,9 @@ LANE_FOR_SEGMENTATION_TYPE_ID: dict[str, str] = {
 }
 
 
-# SCTE-35 Table 22 segmentation_type_id (Start value) -> bare name (no
-# "Start"/"End" wording). Mirrors igor/frontend/src/segmentationPresets.ts's
-# SEGMENTATION_PAIR_OPTIONS[].name exactly, so the CLI-burned-in OSD
+# SCTE-35 Table 23 segmentation_type_id -> bare name (no "Start"/"End"
+# wording). Mirrors igor/frontend/src/segmentationPresets.ts so the
+# CLI-burned-in OSD
 # abbreviations (see osd.py's abbreviation_for_marker) and igor's UI never
 # describe the same type_id differently. Used only for OSD display -- not a
 # source of truth for `type`/lane grouping (that's LANE_FOR_SEGMENTATION_TYPE_ID
@@ -212,7 +209,8 @@ SEGMENTATION_TYPE_NAME: dict[str, str] = {
     "0x16": "Program Runover Unplanned",
     "0x17": "Program Overlap Start",
     "0x18": "Program Blackout Override",
-    "0x19": "Program Start -- In Progress",
+    "0x19": "Program Join",
+    "0x1A": "Program Immediate Resumption",
     "0x20": "Chapter",
     "0x22": "Break",
     "0x24": "Opening Credit",
@@ -247,7 +245,8 @@ SEGMENTATION_TYPE_CODE: dict[str, str] = {
     "0x16": "PRU",  # Program Runover Unplanned
     "0x17": "POS",  # Program Overlap Start
     "0x18": "PBO",  # Program Blackout Override
-    "0x19": "PIP",  # Program Start -- In Progress
+    "0x19": "PJO",  # Program Join
+    "0x1A": "PIR",  # Program Immediate Resumption
     "0x20": "CHP",  # Chapter
     "0x22": "BRK",  # Break
     "0x24": "OPN",  # Opening Credit
@@ -276,25 +275,65 @@ def lane_for_type_id(type_id: str | int) -> str:
     normalized = f"0x{value:02X}"
     return LANE_FOR_SEGMENTATION_TYPE_ID.get(normalized, "custom")
 
-# SCTE-35 Table 22 segmentation_type_id values that are standalone/instant
-# signals -- NOT part of a Start/End pair (there is no "+1" partner; e.g.
-# 0x13 Program Breakaway is its own distinct type, not "0x12 End"). Every
-# other type_id in the table is a Start (even) / End (odd) pair. Used to
-# decide whether a `time_signal` marker resolves to one boundary (instant,
-# at the marker span's start) or two (start + stop, spanning the marker).
+# SCTE-35 Table 23 pairings. Most pairs have consecutive IDs, but program
+# segmentation includes non-consecutive pairs and multiple start types that
+# share Program End. Values are keys (start type_id) -> end type_id.
+SEGMENTATION_END_TYPE_ID: dict[int, int] = {
+    0x10: 0x11,  # Program Start / Program End
+    0x13: 0x14,  # Program Breakaway / Program Resumption
+    0x17: 0x11,  # Program Overlap Start / Program End
+    0x19: 0x11,  # Program Join / Program End
+    0x20: 0x21,  # Chapter Start / Chapter End
+    0x22: 0x23,  # Break Start / Break End
+    0x24: 0x25,  # Opening Credit Start / Opening Credit End
+    0x26: 0x27,  # Closing Credit Start / Closing Credit End
+    0x30: 0x31,  # Provider Advertisement Start / End
+    0x32: 0x33,  # Distributor Advertisement Start / End
+    0x34: 0x35,  # Provider Placement Opportunity Start / End
+    0x36: 0x37,  # Distributor Placement Opportunity Start / End
+    0x38: 0x39,  # Provider Overlay Placement Opportunity Start / End
+    0x3A: 0x3B,  # Distributor Overlay Placement Opportunity Start / End
+    0x3C: 0x3D,  # Provider Promo Start / End
+    0x3E: 0x3F,  # Distributor Promo Start / End
+    0x40: 0x41,  # Unscheduled Event Start / End
+    0x42: 0x43,  # Alternate Content Opportunity Start / End
+    0x44: 0x45,  # Provider Ad Block Start / End
+    0x46: 0x47,  # Distributor Ad Block Start / End
+    0x50: 0x51,  # Network Start / End
+}
+SEGMENTATION_START_TYPE_IDS = frozenset(SEGMENTATION_END_TYPE_ID)
+SEGMENTATION_END_TYPE_IDS = frozenset(SEGMENTATION_END_TYPE_ID.values())
+
+# SCTE-35 Table 23 signals not paired as segment start/end messages. The
+# Program Early Termination signal remains instant; this editor does not
+# expose it as an alternate end for a Program Start or Program Join span.
 INSTANT_SEGMENTATION_TYPE_IDS: frozenset[str] = frozenset({
     "0x00",  # Not Indicated
     "0x01",  # Content Identification
     "0x02",  # Call Ad Server
     "0x12",  # Program Early Termination
-    "0x13",  # Program Breakaway
-    "0x14",  # Program Resumption
     "0x15",  # Program Runover Planned
     "0x16",  # Program Runover Unplanned
-    "0x17",  # Program Overlap Start
     "0x18",  # Program Blackout Override
-    "0x19",  # Program Start -- In Progress
+    "0x1A",  # Program Immediate Resumption
 })
+
+
+def segmentation_end_type_id(type_id: int) -> int:
+    """Return the Table 23 End type for a paired segmentation Start."""
+    return SEGMENTATION_END_TYPE_ID.get(type_id, type_id + 1)
+
+
+def is_segmentation_start_type_id(type_id: int) -> bool:
+    """Whether a raw Table 23 ID represents a start or standalone signal."""
+    normalized = f"0x{type_id:02X}"
+    if normalized in INSTANT_SEGMENTATION_TYPE_IDS:
+        return True
+    if type_id in SEGMENTATION_START_TYPE_IDS:
+        return True
+    if type_id in SEGMENTATION_END_TYPE_IDS:
+        return type_id in SEGMENTATION_START_TYPE_IDS
+    return type_id % 2 == 0
 
 
 def is_instant_segmentation(segmentation: Optional["SegmentationConfig"]) -> bool:
@@ -323,6 +362,172 @@ def _marker_signal_identity(marker: "MarkerConfig") -> tuple:
     return (marker.splice_type, f"0x{value:02X}")
 
 
+def _semantic_segment_role(marker: "MarkerConfig") -> tuple[str, int] | None:
+    """Map a marker to its SCTE-35 segment family and hierarchy level.
+
+    Levels increase from outer to inner. Instant descriptors, splice_insert,
+    and Table 23 types outside the selected Content/Advertising/Alternate
+    hierarchies are intentionally ignored by span hierarchy validation.
+    """
+    if marker.splice_type != "time_signal" or marker.segmentation is None:
+        return None
+    value = int(marker.segmentation.type_id, 16)
+    if value in INSTANT_SEGMENTATION_TYPE_IDS:
+        return None
+    content_levels = {0x50: 0, 0x10: 1, 0x17: 1, 0x19: 1, 0x20: 2}
+    advertising_levels = {
+        0x22: 0,
+        0x34: 1, 0x36: 1, 0x38: 1, 0x3A: 1,
+        0x44: 2, 0x46: 2,
+        0x30: 3, 0x32: 3, 0x3C: 3, 0x3E: 3,
+    }
+    if value in content_levels:
+        return ("content", content_levels[value])
+    if value in advertising_levels:
+        return ("advertising", advertising_levels[value])
+    if value == 0x42:
+        return ("alternate", 0)
+    return None
+
+
+def _populate_and_validate_segment_numbering(
+    spans: list[tuple[int, int, "MarkerConfig"]],
+    scheme: str,
+    break_numbering_supported: bool,
+    assets: list["AssetConfig"],
+) -> None:
+    """Resolve the profile's two independent counting tiers from asset spans.
+
+    Equal spans can represent distinct hierarchy levels, so containment here
+    includes equality. Ties are ordered by type level and then event ID.
+    """
+    typed = [(lo, hi, m, int(m.segmentation.type_id, 16)) for lo, hi, m in spans
+             if m.splice_type == "time_signal" and m.segmentation is not None]
+    programs = [s for s in typed if s[3] in {0x10, 0x17, 0x19}]
+    breaks = [s for s in typed if s[3] == 0x22]
+    po_types = {0x34, 0x36, 0x38, 0x3A}
+    block_types = {0x44, 0x46}
+    ad_types = {0x30, 0x32, 0x3C, 0x3E}
+    asset_roles = {asset.id: asset.role for asset in assets if asset.id is not None}
+
+    def asset_role(item):
+        # A marker can cover multiple contiguous clips (e.g. a split video),
+        # but all clips in the same PAD must have the same classification.
+        roles = {asset_roles[asset_id] == "jingle" for asset_id in item[2].assets}
+        if len(roles) != 1:
+            raise ValueError(f"markers: AF2M_SNPTV Provider Advertisement {item[2].event_id} covers assets with conflicting roles")
+        return roles.pop()
+
+    def parent(item, candidates):
+        containing = [p for p in candidates if p[2] is not item[2]
+                      and p[0] <= item[0] and item[1] <= p[1]]
+        return min(containing, key=lambda p: (p[1] - p[0], p[0], p[2].event_id)) if containing else None
+
+    def ordered(items):
+        return sorted(items, key=lambda s: (s[0], s[1], s[2].event_id))
+
+    def values(item, outer=(0, 0), inner=None):
+        seg = item[2].segmentation
+        assert seg is not None
+        if max(outer) > 255 or (inner is not None and max(inner) > 255):
+            raise ValueError("markers: numbering exceeds the SCTE-35 8-bit field range")
+        seg.segment_num, seg.segments_expected = outer
+        seg.sub_segment_num, seg.sub_segments_expected = inner if inner is not None else (None, None)
+
+    intervals = [s[2].break_interval for s in ordered(breaks) if parent(s, programs) is None]
+    if break_numbering_supported and scheme != "AF2M_SNPTV" and intervals != sorted(intervals):
+        raise ValueError("markers: break_interval must increase in playback order when numbering Breaks without a Program")
+
+    for item in typed:
+        t = item[3]
+        seg = item[2].segmentation
+        assert seg is not None
+        if (seg.sub_segment_num is not None or seg.sub_segments_expected is not None) and (
+            scheme == "AF2M_SNPTV"
+            or (scheme == "SCTE35_2019A" and t not in po_types)
+            or (scheme == "SCTE35_2023R1" and t not in po_types | block_types | ad_types)
+        ):
+            raise ValueError(f"markers: event_id {item[2].event_id} cannot specify sub_segment_* in {scheme}")
+        if scheme == "AF2M_SNPTV" and t not in {0x22, 0x34, 0x30, 0x02}:
+            raise ValueError(f"markers: event_id {item[2].event_id} uses a type unsupported by AF2M_SNPTV")
+        if scheme == "SCTE35_2019A" and t in block_types:
+            raise ValueError(f"markers: event_id {item[2].event_id} uses Ad Block, absent from SCTE35_2019A")
+        if item[2].break_interval != 1 and t != 0x22:
+            raise ValueError("markers: break_interval is only valid on Break markers")
+        if t in {0x10, 0x13, 0x14, 0x15, 0x16, 0x17, 0x19}:
+            values(item, (1, 1))
+        elif t in {0x24, 0x26}:
+            values(item, (1, 1))
+        else:
+            values(item)
+
+    for chapter in ordered([s for s in typed if s[3] == 0x20]):
+        chapter_parent = parent(chapter, programs)
+        siblings = ordered([s for s in typed if s[3] == 0x20 and parent(s, programs) is chapter_parent])
+        values(chapter, (next(i for i, s in enumerate(siblings, 1) if s[2] is chapter[2]), len(siblings)))
+
+    break_numbers = {}
+    for br in ordered(breaks):
+        program = parent(br, programs)
+        if scheme == "AF2M_SNPTV":
+            number = (1, 1)
+        elif break_numbering_supported:
+            siblings = ordered([s for s in breaks if parent(s, programs) is program
+                                and (program is not None or s[2].break_interval == br[2].break_interval)])
+            number = (next(i for i, s in enumerate(siblings, 1) if s[2] is br[2]), len(siblings))
+        else:
+            number = (0, 0)
+        values(br, number)
+        break_numbers[id(br[2])] = number
+
+    for item in ordered([s for s in typed if s[3] in po_types | block_types | ad_types]):
+        br = parent(item, breaks)
+        t = item[3]
+        if scheme == "AF2M_SNPTV" and br is None:
+            raise ValueError(f"markers: AF2M_SNPTV event_id {item[2].event_id} needs a containing Break")
+        collection = [s for s in typed if parent(s, breaks) is br]
+        outer = break_numbers[id(br[2])] if br is not None else (0, 0)
+        if scheme == "AF2M_SNPTV":
+            if t in po_types:
+                values(item, (1, 1))
+            else:
+                spots = ordered([s for s in collection if s[3] == 0x30 and not asset_role(s)])
+                if not asset_role(item):
+                    pos = next(i for i, s in enumerate(spots, 1) if s[2] is item[2])
+                    values(item, (pos, len(spots)))
+                else:
+                    ads_in_break = ordered([s for s in collection if s[3] == 0x30])
+                    if ads_in_break[0][2] is item[2] and item[0] == br[0]:
+                        values(item, (0, len(spots)))
+                    elif ads_in_break[-1][2] is item[2] and item[1] == br[1]:
+                        values(item, (0, 0))
+                    else:
+                        raise ValueError(f"markers: AF2M_SNPTV jingle {item[2].event_id} must be at the start or end of its Break")
+        elif scheme == "SCTE35_2019A":
+            if t in po_types:
+                pos = ordered([s for s in collection if s[3] in po_types])
+                inner = (next(i for i, s in enumerate(pos, 1) if s[2] is item[2]), len(pos)) if br else None
+                values(item, outer, inner)
+            else:
+                ads = ordered([s for s in collection if s[3] in ad_types])
+                values(item, (next(i for i, s in enumerate(ads, 1) if s[2] is item[2]), len(ads)) if br else (0, 0))
+        else:
+            if t in po_types:
+                group = ordered([s for s in collection if s[3] in po_types])
+                inner = (next(i for i, s in enumerate(group, 1) if s[2] is item[2]), len(group)) if br else None
+            elif t in ad_types:
+                group = ordered([s for s in collection if s[3] in ad_types])
+                inner = (next(i for i, s in enumerate(group, 1) if s[2] is item[2]), len(group)) if br else None
+            else:
+                ads = ordered([s for s in collection if s[3] in ad_types])
+                blocks = [s for s in collection if s[3] in block_types]
+                first = next((i for i, ad in enumerate(ads, 1) if item[0] <= ad[0] and ad[1] <= item[1]), None)
+                if first is None:
+                    raise ValueError(f"markers: Ad Block {item[2].event_id} needs an underlying Advertisement or Promo")
+                inner = (first, len(blocks))
+            values(item, outer, inner)
+
+
 class MarkerConfig(SpliceConfig):
     """One node in the flat `markers` list (top-level, sibling of `assets`) --
     the only way to signal ad breaks/placements/etc. A marker names the
@@ -339,6 +544,7 @@ class MarkerConfig(SpliceConfig):
     """
 
     assets: list[str] = Field(min_length=1)
+    break_interval: int = Field(default=1, ge=1)
 
     @property
     def type(self) -> str:
@@ -359,6 +565,9 @@ class MarkerConfig(SpliceConfig):
 class AssetConfig(BaseModel):
     file: Path
     id: Optional[str] = None
+    # Content role is independent of any signaling scheme. Only af2m currently
+    # uses Jingle when numbering Provider Advertisement descriptors.
+    role: Optional[Literal["advert", "jingle"]] = None
     start: Optional[TimeValue] = None
     duration: Optional[TimeValue] = None
     fade_in: Optional[TimeValue] = None
@@ -479,9 +688,43 @@ class Config(BaseModel):
     output: OutputConfig
     assets: list[AssetConfig] = Field(min_length=1)
     markers: list[MarkerConfig] = Field(default_factory=list)
+    enforce_scte35_marker_semantics: bool = True
+    scte35_numbering_scheme: Literal["SCTE35_2019A", "SCTE35_2023R1", "AF2M_SNPTV"] = "SCTE35_2023R1"
+    break_numbering_supported: bool = False
     normalize: bool = False
     slate_image: Optional[Path] = None
     osd: OsdConfig = Field(default_factory=OsdConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_jingle_roles(cls, raw: object) -> object:
+        """Read previous marker- and asset-level jingle_role spellings."""
+        if not isinstance(raw, dict):
+            return raw
+        assets = [dict(asset) for asset in raw.get("assets", [])]
+        for asset in assets:
+            old_role = asset.pop("jingle_role", None)
+            if old_role is not None:
+                new_role = "jingle" if old_role in ("opening", "closing") else None
+                if asset.get("role", new_role) != new_role:
+                    raise ValueError(f"assets: conflicting role and legacy jingle_role on {asset.get('id')!r}")
+                if new_role is not None:
+                    asset["role"] = new_role
+        by_id = {asset.get("id"): asset for asset in assets}
+        markers = []
+        for original in raw.get("markers", []):
+            marker = dict(original)
+            role = marker.pop("jingle_role", None)
+            if role in ("opening", "closing"):
+                for asset_id in marker.get("assets", []):
+                    if asset_id not in by_id:
+                        raise ValueError(f"markers: legacy jingle_role references unknown asset {asset_id!r}")
+                    asset = by_id[asset_id]
+                    if asset.get("role", "jingle") != "jingle":
+                        raise ValueError(f"markers: conflicting role on asset {asset_id!r}")
+                    asset["role"] = "jingle"
+            markers.append(marker)
+        return {**raw, "assets": assets, "markers": markers}
 
     @field_validator("slate_image", mode="before")
     @classmethod
@@ -490,6 +733,8 @@ class Config(BaseModel):
 
     @model_validator(mode="after")
     def validate_event_ids_unique(self) -> "Config":
+        if not self.enforce_scte35_marker_semantics:
+            return self
         seen: set[int] = set()
         for marker in self.markers:
             eid = marker.event_id
@@ -516,10 +761,9 @@ class Config(BaseModel):
         - every referenced asset id must exist exactly once in `assets`
         - each marker's own `assets` must be a contiguous run in the
           asset list (no gaps, matching the asset list's own order)
-        - every pair of marker spans must be disjoint or one must
-          strictly contain the other -- never partially overlapping
-          (this is the invariant that stands in for an authored
-          parent/child tree; see MarkerConfig docstring)
+        - spans must be contiguous regardless of semantic enforcement
+        - when SCTE semantics are enforced, marker relationships must
+          follow the Table 23 hierarchy
         """
         if not self.markers:
             return self
@@ -548,35 +792,123 @@ class Config(BaseModel):
                 )
             spans.append((lo, hi, marker))
 
+        if not self.enforce_scte35_marker_semantics:
+            return self
+
+        for marker in self.markers:
+            if marker.splice_type != "time_signal" or marker.segmentation is None:
+                continue
+            type_id = int(marker.segmentation.type_id, 16)
+            if type_id in SEGMENTATION_END_TYPE_IDS and type_id not in SEGMENTATION_START_TYPE_IDS:
+                raise ValueError(
+                    f"markers: event_id {marker.event_id} uses segmentation End type "
+                    f"0x{type_id:02X}; select its Start type instead"
+                )
+
         for i in range(len(spans)):
             lo_a, hi_a, m_a = spans[i]
             for j in range(i + 1, len(spans)):
                 lo_b, hi_b, m_b = spans[j]
                 disjoint = hi_a < lo_b or hi_b < lo_a
-                a_contains_b = lo_a <= lo_b and hi_b <= hi_a
-                b_contains_a = lo_b <= lo_a and hi_a <= hi_b
                 if disjoint:
                     continue
-                if a_contains_b and b_contains_a:
-                    # Identical spans are only redundant when both markers
-                    # signal the exact same thing (same splice_type and, for
-                    # time_signal, the same segmentation.type_id) -- two
-                    # different signals (e.g. a Provider Placement
-                    # Opportunity span and a Call Ad Server instant, or two
-                    # different Start/End pairs) can validly coexist over
-                    # identical assets as distinct SCTE-35 messages.
-                    if _marker_signal_identity(m_a) == _marker_signal_identity(m_b):
+
+                if (lo_a, hi_a) == (lo_b, hi_b) and _marker_signal_identity(m_a) == _marker_signal_identity(m_b):
+                    raise ValueError(
+                        f"markers: event_id {m_a.event_id} and {m_b.event_id} "
+                        "cover the exact same assets with the same signal"
+                    )
+
+                relation_a = _semantic_segment_role(m_a)
+                relation_b = _semantic_segment_role(m_b)
+                # Non-segmenting/unknown descriptors don't participate in
+                # the hierarchy or span overlap policy.
+                if relation_a is None or relation_b is None:
+                    continue
+
+                if m_a.splice_type != "time_signal" or m_b.splice_type != "time_signal":
+                    continue
+
+                a_contains_b = lo_a <= lo_b and hi_b <= hi_a
+                b_contains_a = lo_b <= lo_a and hi_a <= hi_b
+                same_category = relation_a[0] == relation_b[0]
+
+                # Chapters explicitly may overlap. Placement Opportunities
+                # may nest, but may not partially cross one another.
+                if relation_a == ("content", 2) and relation_b == ("content", 2):
+                    continue
+                # Program Overlap Start explicitly permits an embedded
+                # Program to begin before the active Program ends.
+                program_overlap_pair = (
+                    relation_a == ("content", 1)
+                    and relation_b == ("content", 1)
+                    and (int(m_a.segmentation.type_id, 16) == 0x17
+                         or int(m_b.segmentation.type_id, 16) == 0x17)
+                )
+                if program_overlap_pair:
+                    continue
+                if relation_a[0] == "alternate" and relation_b[0] == "alternate":
+                    if a_contains_b or b_contains_a:
+                        continue
+                    raise ValueError(
+                        f"markers: Alternate Content Opportunities {m_a.event_id} and "
+                        f"{m_b.event_id} must be nested or disjoint"
+                    )
+                if relation_a == ("advertising", 1) and relation_b == ("advertising", 1):
+                    if a_contains_b or b_contains_a:
+                        continue
+                    raise ValueError(
+                        f"markers: Placement Opportunities {m_a.event_id} and {m_b.event_id} "
+                        "partially overlap; they must be nested or disjoint"
+                    )
+
+                if same_category:
+                    category_a, level_a = relation_a
+                    _, level_b = relation_b
+                    if level_a == level_b:
+                        # Ads and Promos share the lowest logical level and
+                        # cannot overlap; similarly forbid same-level Network,
+                        # Program, Break, Ad Block, and Promo/Ad spans.
                         raise ValueError(
-                            f"markers: event_id {m_a.event_id} and {m_b.event_id} "
-                            f"cover the exact same assets -- remove the redundant one"
+                            f"markers: {m_a.event_id} and {m_b.event_id} overlap "
+                            f"at the same {category_a} segmentation level"
+                        )
+                    outer_is_a = level_a < level_b
+                    valid = a_contains_b if outer_is_a else b_contains_a
+                    if not valid:
+                        raise ValueError(
+                            f"markers: {m_a.event_id} and {m_b.event_id} violate "
+                            "the Network/Program/Chapter or Break/Placement Opportunity/"
+                            "Ad Block/Advertisement hierarchy"
                         )
                     continue
-                if not (a_contains_b or b_contains_a):
+
+                if relation_a == ("alternate", 0) and relation_b[0] in {"content", "advertising"}:
+                    if not b_contains_a:
+                        raise ValueError(f"markers: Alternate Content Opportunity {m_a.event_id} must be within Content or Advertising")
+                    continue
+                if relation_b == ("alternate", 0) and relation_a[0] in {"content", "advertising"}:
+                    if not a_contains_b:
+                        raise ValueError(f"markers: Alternate Content Opportunity {m_b.event_id} must be within Content or Advertising")
+                    continue
+
+                # Alternate Content Opportunities can only be nested within
+                # content or advertising. Advertising may occur inside a
+                # Program/Chapter or between them, but must not cross their
+                # boundaries.
+                if relation_a[0] == "alternate" or relation_b[0] == "alternate":
+                    alternate_is_a = relation_a[0] == "alternate"
+                    valid = b_contains_a if alternate_is_a else a_contains_b
+                else:
+                    content_is_a = relation_a[0] == "content"
+                    valid = a_contains_b if content_is_a else b_contains_a
+                if not valid:
                     raise ValueError(
-                        f"markers: event_id {m_a.event_id} ({m_a.assets!r}) and "
-                        f"event_id {m_b.event_id} ({m_b.assets!r}) partially overlap -- "
-                        f"marker spans must be nested or disjoint, never partially overlapping"
+                        f"markers: {m_a.event_id} and {m_b.event_id} overlap without "
+                        "a valid containing relationship"
                     )
+
+        _populate_and_validate_segment_numbering(spans, self.scte35_numbering_scheme, self.break_numbering_supported, self.assets)
         return self
 
 

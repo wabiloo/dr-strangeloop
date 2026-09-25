@@ -117,7 +117,7 @@ def test_build_timeline_sets_covering_spans_and_is_adbreak():
 
 def test_is_adbreak_false_for_custom_lane_marker():
     """A marker whose segmentation type isn't break/ppo/ad-related (e.g.
-    0x10 Program) yields `type == "custom"`, so it must NOT count toward
+    0x10 Program Start) yields `type == "custom"`, so it must NOT count toward
     is_adbreak."""
     raw = {
         "output": {"file": "out.ts"},
@@ -136,9 +136,8 @@ def test_is_adbreak_false_for_custom_lane_marker():
     assert entries[0].is_adbreak is False
 
 
-def test_instant_markers_excluded_from_covering_spans():
-    """0x13 Program Breakaway has no start/end pair -- it must not appear
-    in covering_spans (and therefore can't contribute to is_adbreak)."""
+def test_program_breakaway_included_as_non_instant_covering_span():
+    """Program Breakaway pairs with Program Resumption and spans its assets."""
     raw = {
         "output": {"file": "out.ts"},
         "assets": [
@@ -153,7 +152,7 @@ def test_instant_markers_excluded_from_covering_spans():
     cfg = Config.model_validate(raw)
     infos = {a.file: _FakeInfo(10.0) for a in cfg.assets}
     entries, _ = build_timeline(cfg.assets, infos, framerate=25, markers=cfg.markers)
-    assert entries[1].covering_spans == []
+    assert len(entries[1].covering_spans) == 1
     assert entries[1].is_adbreak is False
 
 

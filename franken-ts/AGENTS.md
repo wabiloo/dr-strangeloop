@@ -121,18 +121,20 @@ markers:
 - `splice_insert` — two-point out/in splice, no segmentation block needed.
 - `time_signal` — needs `segmentation`; `segmentation_duration` derives
   from the marker's span duration unless overridden.
-- `type` (`break`/`ppo`/`ad`/custom) is a label that also supplies a
-  default `segmentation.type_id` (break→`0x22`, ppo→`0x34`, ad→`0x30`) —
-  always overridable via an explicit `segmentation.type_id`.
+- `type` (`break`/`ppo`/`ad`/custom) is derived from
+  `segmentation.type_id` for timeline grouping; do not author it separately.
 - **Nested markers** (e.g. a `break` spanning a jingle + several `ad`s,
   with a `ppo` spanning just the ads): give each nesting level its own
   marker entry over the appropriate sub-range of asset ids. Nesting is
-  expressed by span *containment*, not an authored tree — every pair of
-  marker spans must be disjoint or one must strictly contain the other
-  (validated at load time). `segmentation.segment_num`/`segments_expected`
-  auto-fill from sibling position/count under the same immediate parent
-  (e.g. the Nth of M placements in a break) unless set explicitly.
-- Every `event_id` across all markers must be unique.
+  expressed by span *containment*, not an authored tree. With semantic
+  enforcement on, the type-aware hierarchy and profile determine which
+  overlaps are valid and how all numbering fields are computed.
+- Every `event_id` across all markers must be unique when semantic
+  enforcement is on.
+
+### Numbering and semantic enforcement
+
+Playlist-level `enforce_scte35_marker_semantics` defaults to `true` and computes the four segmentation number fields. Set `scte35_numbering_scheme` to `SCTE35_2023R1` (default), `SCTE35_2019A`, or `AF2M_SNPTV`; `break_numbering_supported: true` opts into one-based Break numbering per Program or, without Program markers, per provider-defined interval. A Break's `break_interval` (positive integer, default 1) groups Breaks when no Program is present. An asset's optional **`role`** is `advert` or `jingle`, independent of the scheme; af2m numbers a Jingle Provider Advertisement `0x30` at the Break's opening as `0/n` and at its closing as `0/0`. Legacy `jingle_role` on assets or markers migrates to `role: jingle` on load. See root `SCTE35_MARKER_RULES.md` for detailed profile behavior. With enforcement off, explicit `segmentation.segment_num`, `segments_expected`, `sub_segment_num`, and `sub_segments_expected` pass through.
 
 ## What to ask the user before writing a config (if not already specified)
 

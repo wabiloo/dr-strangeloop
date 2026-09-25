@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import base64
 import datetime as _dt
+import string
+import unicodedata
 from dataclasses import dataclass
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
@@ -39,6 +41,7 @@ class SignalingMarker:
     splice_command_b64: str
     is_out: bool  # True = CUE-OUT / splice-out, False = CUE-IN / splice-in
     is_instant: bool = False  # True = standalone signal, no OUT/IN pairing
+    marker_identity: str | None = None
 
 
 def _splice_command_base64_from_marker(marker: dict) -> str:
@@ -62,9 +65,8 @@ def _splice_command_base64_from_marker(marker: dict) -> str:
     )
 
 
-# SCTE-35 Table 22 segmentation_type_id values that are standalone/instant
-# signals -- NOT part of a Start/End pair (e.g. 0x02 "Call Ad Server"; there
-# is no "+1" partner the way there is for 0x30/0x31 Ad Start/End). Mirrors
+# SCTE-35 Table 23 segmentation_type_id values that are standalone/instant
+# signals -- NOT part of a Start/End pair (e.g. 0x02 "Call Ad Server"). Mirrors
 # franken-ts's own `INSTANT_SEGMENTATION_TYPE_IDS` (franken_ts/config.py) --
 # duplicated here rather than imported since loop-dee-loop and franken-ts
 # are separate tools/venvs by design (see repo-root AGENTS.md), consuming
@@ -74,14 +76,179 @@ INSTANT_SEGMENTATION_TYPE_IDS: frozenset[str] = frozenset({
     "0x01",  # Content Identification
     "0x02",  # Call Ad Server
     "0x12",  # Program Early Termination
-    "0x13",  # Program Breakaway
-    "0x14",  # Program Resumption
     "0x15",  # Program Runover Planned
     "0x16",  # Program Runover Unplanned
-    "0x17",  # Program Overlap Start
     "0x18",  # Program Blackout Override
-    "0x19",  # Program Start -- In Progress
+    "0x1A",  # Program Immediate Resumption
 })
+
+SEGMENTATION_END_TYPE_IDS: frozenset[int] = frozenset({
+    0x11, 0x14, 0x21, 0x23, 0x25, 0x27, 0x31, 0x33, 0x35, 0x37,
+    0x39, 0x3B, 0x3D, 0x3F, 0x41, 0x43, 0x45, 0x47, 0x51,
+})
+SEGMENTATION_START_TYPE_IDS: frozenset[int] = frozenset({
+    0x10, 0x13, 0x17, 0x19, 0x20, 0x22, 0x24, 0x26, 0x30, 0x32,
+    0x34, 0x36, 0x38, 0x3A, 0x3C, 0x3E, 0x40, 0x42, 0x44, 0x46, 0x50,
+})
+
+# Stable compact labels shared with franken-ts' OSD code table. Kept local
+# because loop-dee-loop and franken-ts are separate tools/venvs by design.
+SEGMENTATION_TYPE_CODES: dict[int, str] = {
+    0x00: "NIN", 0x01: "CID", 0x02: "CAS", 0x10: "PRG", 0x12: "PET",
+    0x13: "PBA", 0x14: "PRS", 0x15: "PRP", 0x16: "PRU", 0x17: "POS",
+    0x18: "PBO", 0x19: "PJO", 0x1A: "PIR", 0x20: "CHP", 0x22: "BRK",
+    0x24: "OPN", 0x26: "CLC", 0x30: "PAD", 0x32: "DAD", 0x34: "PPO",
+    0x36: "DPO", 0x38: "PVO", 0x3A: "DVO", 0x3C: "PPR", 0x3E: "DPR",
+    0x40: "USC", 0x42: "ACO", 0x44: "PAB", 0x46: "DAB", 0x50: "NET",
+}
+
+SEGMENTATION_TYPE_NAMES: dict[int, str] = {
+    0x00: "Not Indicated", 0x01: "Content Identification", 0x02: "Call Ad Server",
+    0x10: "Program", 0x12: "Program Early Termination", 0x13: "Program Breakaway",
+    0x14: "Program Resumption", 0x15: "Program Runover Planned",
+    0x16: "Program Runover Unplanned", 0x17: "Program Overlap Start",
+    0x18: "Program Blackout Override", 0x19: "Program Join",
+    0x1A: "Program Immediate Resumption", 0x20: "Chapter", 0x22: "Break",
+    0x24: "Opening Credit", 0x26: "Closing Credit", 0x30: "Provider Advertisement",
+    0x32: "Distributor Advertisement", 0x34: "Provider Placement Opportunity",
+    0x36: "Distributor Placement Opportunity", 0x38: "Provider Overlay Placement Opportunity",
+    0x3A: "Distributor Overlay Placement Opportunity", 0x3C: "Provider Promo",
+    0x3E: "Distributor Promo", 0x40: "Unscheduled Event",
+    0x42: "Alternate Content Opportunity", 0x44: "Provider Ad Block",
+    0x46: "Distributor Ad Block", 0x50: "Network",
+}
+
+SEGMENTATION_START_TYPE_FOR_END: dict[int, int] = {
+    0x11: 0x10, 0x21: 0x20, 0x23: 0x22, 0x25: 0x24, 0x27: 0x26,
+    0x31: 0x30, 0x33: 0x32, 0x35: 0x34, 0x37: 0x36, 0x39: 0x38,
+    0x3B: 0x3A, 0x3D: 0x3C, 0x3F: 0x3E, 0x41: 0x40, 0x43: 0x42,
+    0x45: 0x44, 0x47: 0x46, 0x51: 0x50,
+}
+
+DATERANGE_ID_FORMAT_DEFAULT = "{segcode}-{eventid}-{loop}"
+DATERANGE_ID_FIELDS = frozenset({
+    "loop", "eventid", "segid", "seghex", "segcode", "segname", "epoch", "pd",
+})
+
+
+def validate_daterange_id_format(value: str | None) -> str | None:
+    """Validate template fields and reject format conversions/specifiers."""
+    if value is None:  # Old baked loop descriptors retain their old ID scheme.
+        return value
+    if not isinstance(value, str):
+        raise ValueError("daterange_id_format must be a string")
+    try:
+        for _literal, field_name, format_spec, conversion in string.Formatter().parse(value):
+            if field_name is None:
+                continue
+            if field_name not in DATERANGE_ID_FIELDS:
+                raise ValueError(
+                    f"unknown daterange_id_format placeholder {{{field_name}}}; "
+                    f"supported placeholders: {', '.join(sorted(DATERANGE_ID_FIELDS))}"
+                )
+            if format_spec or conversion:
+                raise ValueError(
+                    "daterange_id_format placeholders do not support format specs or conversions"
+                )
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"invalid daterange_id_format: {exc}") from exc
+    return value
+
+
+def _segmentation_type_id(marker: SignalingMarker) -> int:
+    # A bare splice_insert has no segmentation_descriptor; its SCTE-35
+    # splice_command_type is 0x05, represented by the agreed SPI fallback.
+    return int(marker.segmentation_type_id, 16) if marker.segmentation_type_id is not None else 0x05
+
+
+def _segmentation_code(marker: SignalingMarker) -> str:
+    if marker.segmentation_type_id is None:
+        return "SPI" + ("s" if marker.is_out else "e")
+    type_id = _segmentation_type_id(marker)
+    # Prefer an explicit code for this exact type (when the compact-code
+    # table has one). End IDs without their own code inherit their paired
+    # start's code, with the suffix retaining direction.
+    base = SEGMENTATION_TYPE_CODES.get(type_id)
+    if base is None and type_id in SEGMENTATION_START_TYPE_FOR_END:
+        base = SEGMENTATION_TYPE_CODES.get(SEGMENTATION_START_TYPE_FOR_END[type_id])
+    if base is None:
+        base = f"0x{type_id:02X}"
+    return base + ("s" if marker.is_out else "e")
+
+
+def _segmentation_name(marker: SignalingMarker) -> str:
+    if marker.segmentation_type_id is None:
+        name = "splice-insert"
+    else:
+        type_id = _segmentation_type_id(marker)
+        name = SEGMENTATION_TYPE_NAMES.get(type_id)
+        if name is None and type_id in SEGMENTATION_START_TYPE_FOR_END:
+            name = SEGMENTATION_TYPE_NAMES.get(SEGMENTATION_START_TYPE_FOR_END[type_id])
+        if name is None:
+            name = f"0x{type_id:02x}"
+    suffix = "start" if marker.is_out else "end"
+    return f"{name.lower().replace(' ', '-')}-{suffix}"
+
+
+def _render_daterange_id(
+    template: str,
+    marker: SignalingMarker,
+    loop_number: int,
+    start_date: _dt.datetime,
+) -> str:
+    type_id = _segmentation_type_id(marker)
+    event_id = int(marker.event_id, 16)
+    if start_date.tzinfo is None:
+        start_date = start_date.replace(tzinfo=_dt.timezone.utc)
+    pd = start_date.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    epoch_delta = start_date - _dt.datetime(1970, 1, 1, tzinfo=_dt.timezone.utc)
+    epoch = (
+        epoch_delta.days * 86_400_000
+        + epoch_delta.seconds * 1_000
+        + epoch_delta.microseconds // 1_000
+    )
+    values = {
+        "loop": loop_number,
+        "eventid": event_id,
+        "segid": type_id,
+        "seghex": f"0x{type_id:02X}",
+        "segcode": _segmentation_code(marker),
+        "segname": _segmentation_name(marker),
+        "epoch": epoch,
+        "pd": pd,
+    }
+    try:
+        rendered = template.format_map(values)
+    except (KeyError, ValueError, IndexError) as exc:
+        raise ValueError(f"invalid daterange_id_format: {exc}") from exc
+    # RFC 8216 quoted-string forbids double quotes, CR, and LF. Playlist
+    # text also forbids other control characters; strip them so the output
+    # remains a syntactically valid HLS attribute value.
+    rendered = "".join(
+        char for char in rendered
+        if char != '"' and char not in "\r\n" and unicodedata.category(char) != "Cc"
+    )
+    return unicodedata.normalize("NFC", rendered)
+
+
+def _legacy_daterange_id(marker: SignalingMarker, loop_number: int) -> str:
+    event_id = int(marker.event_id, 16)
+    if marker.segmentation_type_id is not None:
+        return f"{int(marker.segmentation_type_id, 16)}-{event_id}-{loop_number}"
+    direction = "splice-out" if marker.is_out else "splice-in"
+    return f"{direction}-{event_id}-{loop_number}"
+
+
+def _sanitize_daterange_id(value: str) -> str:
+    # RFC 8216 quoted-string excludes double quote, CR, and LF; playlist
+    # text excludes control characters. Normalize ID text to NFC as well.
+    value = "".join(
+        char for char in value
+        if char != '"' and char not in "\r\n" and unicodedata.category(char) != "Cc"
+    )
+    return unicodedata.normalize("NFC", value)
 
 
 def is_instant_segmentation(m: dict) -> bool:
@@ -93,11 +260,23 @@ def is_instant_segmentation(m: dict) -> bool:
     CUE-IN will close -- there is no such CUE-IN coming, on this loop or
     any other.
     """
+    if "is_instant" in m:
+        return bool(m["is_instant"])
     seg_type_id = m.get("segmentation_type_id")
     if seg_type_id is None:
         return False
     type_id_int = int(seg_type_id, 16) if isinstance(seg_type_id, str) else seg_type_id
     return f"0x{type_id_int:02X}" in INSTANT_SEGMENTATION_TYPE_IDS
+
+
+def is_out_type_id(type_id: int) -> bool:
+    if type_id in SEGMENTATION_END_TYPE_IDS:
+        return type_id in SEGMENTATION_START_TYPE_IDS
+    return True
+
+
+def is_standalone_instant_type_id(type_id: int) -> bool:
+    return f"0x{type_id:02X}" in INSTANT_SEGMENTATION_TYPE_IDS
 
 
 def is_out_marker(m: dict) -> bool:
@@ -108,9 +287,8 @@ def is_out_marker(m: dict) -> bool:
     active interval (see serve.py's `_marker_covers_segment`) versus which
     are a single point-in-time signal.
 
-    Even `segmentation_type_id` -> "start" (e.g. 0x34 Program Start, 0x30
-    Distributor placement opportunity start), odd -> "end" pair, matching
-    franken-ts's own start/start+1 convention (scte35.py).
+    New sidecars carry an explicit `is_out`; older sidecars use the Table 23
+    End ID set rather than assuming every even/odd ID pair is consecutive.
 
     NOT meaningful for standalone/instant signals (see
     `is_instant_segmentation`) -- callers must check that first: an instant
@@ -119,9 +297,11 @@ def is_out_marker(m: dict) -> bool:
     """
     splice_type = m.get("splice_type")
     seg_type_id = m.get("segmentation_type_id")
+    if "is_out" in m:
+        return bool(m["is_out"])
     if seg_type_id is not None:
         type_id_int = int(seg_type_id, 16) if isinstance(seg_type_id, str) else seg_type_id
-        return (type_id_int % 2) == 0
+        return is_out_type_id(type_id_int)
     if splice_type == "splice_insert":
         # splice_insert markers don't carry a segmentation_type_id in
         # markers.json; caller must set an explicit "is_out" flag instead.
@@ -151,6 +331,7 @@ def markers_to_signaling(
                 splice_command_b64=_splice_command_base64_from_marker(m),
                 is_out=is_out,
                 is_instant=is_instant,
+                marker_identity=(str(m["marker_identity"]) if m.get("marker_identity") is not None else None),
             )
         )
     return result
@@ -165,6 +346,7 @@ def build_daterange_tags(
     timescale: int,
     program_start_datetime: _dt.datetime,
     loop_number: int = 0,
+    daterange_id_format: str | None = DATERANGE_ID_FORMAT_DEFAULT,
 ) -> list[str]:
     """Return a list of `#EXT-X-DATERANGE:...` tag lines, one per marker.
 
@@ -205,37 +387,22 @@ def build_daterange_tags(
     after the first loop. Scoping the ID to the loop number gives each
     occurrence a genuinely unique, internally-consistent ID.
     """
+    validate_daterange_id_format(daterange_id_format)
     tags: list[str] = []
     for marker in markers:
         offset_seconds = _iso8601_duration_seconds(marker.pts_time_ticks, timescale)
         start_date = program_start_datetime + _dt.timedelta(seconds=offset_seconds)
         start_date_str = start_date.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
-        event_id_dec = int(marker.event_id, 16)
-        if marker.segmentation_type_id is not None:
-            seg_type_id_dec = int(marker.segmentation_type_id, 16)
-            marker_id = f'{seg_type_id_dec}-{event_id_dec}-{loop_number}'
+        if daterange_id_format is None:
+            marker_id = _legacy_daterange_id(marker, loop_number)
         else:
-            # splice_insert carries no segmentation_type_id, so (unlike
-            # time_signal's even/odd Start/End pair) there's nothing here to
-            # naturally make a cue-out and its cue-in produce different IDs.
-            # Without this, an explicit (non-auto_return) pair shares the
-            # exact same ID for both tags -- same event_id, same
-            # loop_number, both landing in one loop iteration -- which
-            # collides with RFC 8216 4.3.2.7 ("any AttributeName in both
-            # tags MUST have the same AttributeValue") since their
-            # START-DATEs genuinely differ. hls.js treats same-ID tags as
-            # updates to one DateRange rather than two independent cues, so
-            # the cue-in's own cuechange activation never fires -- its
-            # SCTE35-IN tag is in the manifest text but never becomes a
-            # distinct on-screen event. "splice-out"/"splice-in" (spelled
-            # out, rather than reusing the numeric segmentation_type_id
-            # slot) makes it obvious at a glance which half of the pair a
-            # given ID belongs to, without colliding with any real
-            # segmentation_type_id-based ID from a time_signal marker.
-            direction = 'splice-out' if marker.is_out else 'splice-in'
-            marker_id = f'{direction}-{event_id_dec}-{loop_number}'
-
+            marker_id = _render_daterange_id(
+                daterange_id_format, marker, loop_number, start_date,
+            )
+        if marker.marker_identity is not None:
+            marker_id += f"-{marker.marker_identity}"
+        marker_id = _sanitize_daterange_id(marker_id)
         attrs = [
             f'ID="{marker_id}"',
             f'START-DATE="{start_date_str}"',
@@ -300,7 +467,10 @@ def build_eventstream_xml(
         event_attrs = {"presentationTime": str(marker.pts_time_ticks)}
         if marker.segmentation_duration_ticks is not None:
             event_attrs["duration"] = str(marker.segmentation_duration_ticks)
-        event_attrs["id"] = marker.event_id
+        event_attrs["id"] = (
+            f"{marker.event_id}-{marker.marker_identity}"
+            if marker.marker_identity is not None else marker.event_id
+        )
 
         event = ET.SubElement(event_stream, "Event", event_attrs)
         signal = ET.SubElement(event, "Signal", {"xmlns": "urn:scte:scte35:2013:xml"})
@@ -328,6 +498,7 @@ def build_grouped_daterange_tags(
     timescale: int,
     program_start_datetime: _dt.datetime,
     loop_number: int = 0,
+    daterange_id_format: str | None = DATERANGE_ID_FORMAT_DEFAULT,
 ) -> list[str]:
     """Like `build_daterange_tags`, but collapses every group of markers
     sharing the same `pts_time_ticks` (e.g. a Break start + nested PPO
@@ -354,6 +525,7 @@ def build_grouped_daterange_tags(
     `build_daterange_tags`'s exact per-marker ID scheme and its normal
     OUT/IN/CMD attribute choice, for continuity with ungrouped output.
     """
+    validate_daterange_id_format(daterange_id_format)
     groups: dict[int, list[SignalingMarker]] = {}
     order: list[int] = []
     for marker in markers:
@@ -366,7 +538,10 @@ def build_grouped_daterange_tags(
         group = groups[pts]
         if len(group) == 1:
             tags.extend(
-                build_daterange_tags(group, timescale, program_start_datetime, loop_number)
+                build_daterange_tags(
+                    group, timescale, program_start_datetime, loop_number,
+                    daterange_id_format,
+                )
             )
             continue
 
@@ -374,10 +549,13 @@ def build_grouped_daterange_tags(
         start_date = program_start_datetime + _dt.timedelta(seconds=offset_seconds)
         start_date_str = start_date.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
-        min_event_id_dec = min(int(m.event_id, 16) for m in group)
+        representative = next(
+            (m for m in group if m.is_out and not m.is_instant),
+            next((m for m in group if not m.is_out and not m.is_instant), group[0]),
+        )
         payload_hex = _b64_to_hex(group[0].splice_command_b64)
         attrs = [
-            f'ID="group-{min_event_id_dec}-{loop_number}"',
+            f'ID="{_render_daterange_id(daterange_id_format, representative, loop_number, start_date)}"',
             f'START-DATE="{start_date_str}"',
             'CLASS="com.scte35"',
             f'SCTE35-CMD=0x{payload_hex}',
@@ -398,8 +576,15 @@ def group_markers_by_event_id(markers: list[dict]) -> dict[str, list[dict]]:
     return grouped
 
 
+def group_markers_by_identity(markers: list[dict]) -> dict[tuple[str, str | None], list[dict]]:
+    grouped: dict[tuple[str, str | None], list[dict]] = {}
+    for marker in markers:
+        grouped.setdefault((marker["event_id"], marker.get("marker_identity")), []).append(marker)
+    return grouped
+
+
 def resolve_marker_duration_ticks(
-    marker: dict, markers_by_event_id: dict[str, list[dict]]
+    marker: dict, markers_by_event_id: dict
 ) -> int | None:
     """Best-effort duration (in ticks) for a CUE-OUT-style DURATION
     attribute. `segmentation_duration_ticks` is present for every
@@ -417,7 +602,10 @@ def resolve_marker_duration_ticks(
     stop = next(
         (
             m
-            for m in markers_by_event_id.get(marker["event_id"], [])
+            for m in markers_by_event_id.get(
+                (marker["event_id"], marker.get("marker_identity")),
+                markers_by_event_id.get(marker["event_id"], []),
+            )
             if m is not marker and not is_out_marker(m)
         ),
         None,
@@ -446,7 +634,7 @@ def build_cue_breaks(markers: list[dict]) -> list[dict]:
     actually models.
     """
     splice_insert_markers = [m for m in markers if m.get("splice_type") == "splice_insert"]
-    markers_by_event_id = group_markers_by_event_id(splice_insert_markers)
+    markers_by_event_id = group_markers_by_identity(splice_insert_markers)
     breaks: list[dict] = []
     for m in splice_insert_markers:
         if not is_out_marker(m):

@@ -74,6 +74,15 @@ def test_validation_fails_on_one_tick_pts_mismatch():
         validate_markers_against_ts(markers, decoded)
 
 
+def test_validation_fails_on_segmentation_type_mismatch():
+    marker = _marker("0x00000001", 5_400_000)
+    marker["segmentation_type_id"] = "0x11"
+    decoded = [DecodedMarker("0x00000001", 5_400_000, "AAAA", segmentation_type_id=0x12)]
+
+    with pytest.raises(ValidationError, match="segmentation_type_id=0x11.*0x12"):
+        validate_markers_against_ts([marker], decoded)
+
+
 # ── decode_embedded_scte35 (real threefive-decode, stubbed) ──────────────────
 
 

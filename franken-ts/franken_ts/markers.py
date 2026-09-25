@@ -5,7 +5,8 @@ import logging
 from pathlib import Path
 
 from .pts import PTS_CLOCK
-from .timeline import AdBoundary
+from .config import is_instant_segmentation, is_segmentation_start_type_id
+from .timeline import AdBoundary, pts_for_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +31,19 @@ def build_markers(
     matching exactly what `scte35.generate_xml` wrote to the tsduck XML.
     """
     markers: list[dict] = []
+    duplicate_ids: set[int] = set()
+    seen_ids: set[int] = set()
+    for boundary in boundaries:
+        if boundary.is_start:
+            if boundary.event_id in seen_ids:
+                duplicate_ids.add(boundary.event_id)
+            seen_ids.add(boundary.event_id)
 
     for boundary in boundaries:
         ab = boundary.marker
-        pts = pts_map[(boundary.event_id, boundary.is_start)]
+        pts = pts_for_boundary(pts_map, boundary)
+        if pts is None:
+            raise KeyError((boundary.marker_index, boundary.is_start))
 
         entry: dict = {
             "event_id": f"0x{boundary.event_id:08X}",
@@ -42,28 +52,38 @@ def build_markers(
             "pts_time_ticks": pts,
             "pts_time_seconds": pts / PTS_CLOCK,
             "assets": list(ab.assets),
-            # loop-dee-loop's scte35_signaling.is_out_marker() falls back to
-            # this for splice_insert markers, which carry no
-            # segmentation_type_id parity to distinguish start/stop.
-            "is_out": boundary.is_start,
+            # loop-dee-loop uses explicit role rather than inferring from the
+            # segmentation ID (some Table 23 pairs are non-consecutive).
+            "is_out": (
+                boundary.is_start
+                if ab.splice_type == "splice_insert"
+                else is_segmentation_start_type_id(boundary.segmentation_type_id)
+                if boundary.segmentation_type_id is not None
+                else boundary.is_start
+            ),
         }
+        if boundary.event_id in duplicate_ids:
+            entry["marker_identity"] = boundary.marker_index
 
         if ab.splice_type == "time_signal" and ab.segmentation is not None:
             seg = ab.segmentation
-            start_type_id = (
-                int(seg.type_id, 16) if isinstance(seg.type_id, str) else seg.type_id
-            )
-            type_id = start_type_id if boundary.is_start else start_type_id + 1
+            type_id = boundary.segmentation_type_id
+            if type_id is None:
+                raise ValueError(f"time_signal boundary {boundary.event_id} is missing its segmentation type ID")
+            is_instant = is_instant_segmentation(seg) and boundary.is_start
             seg_duration_seconds = seg.duration_seconds()
             seg_duration_ticks = (
-                round(seg_duration_seconds * PTS_CLOCK)
-                if seg_duration_seconds is not None
-                else round(boundary.break_duration * PTS_CLOCK)
+                0 if not boundary.is_start else (
+                    round(seg_duration_seconds * PTS_CLOCK)
+                    if seg_duration_seconds is not None
+                    else round(boundary.break_duration * PTS_CLOCK)
+                )
             )
 
             entry.update(
                 {
                     "segmentation_type_id": f"0x{type_id:02X}",
+                    "is_instant": is_instant,
                     "segmentation_duration_ticks": seg_duration_ticks,
                     "segment_num": seg.segment_num or 0,
                     "segments_expected": seg.segments_expected or 0,
@@ -72,6 +92,9 @@ def build_markers(
                     "flags": _flags_for(seg),
                 }
             )
+            if boundary.is_start and seg.sub_segment_num is not None:
+                entry["sub_segment_num"] = seg.sub_segment_num
+                entry["sub_segments_expected"] = seg.sub_segments_expected or 0
 
         markers.append(entry)
 
