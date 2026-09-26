@@ -128,10 +128,32 @@ function updateHlsDvrRange() {
     return
   }
   const idx = video.seekable.length - 1
+  let seekableStart: number
+  let seekableEnd: number
   try {
-    hlsSeekMin.value = video.seekable.start(idx)
-    hlsSeekMax.value = video.seekable.end(idx)
+    seekableStart = video.seekable.start(idx)
+    seekableEnd = video.seekable.end(idx)
   } catch {
+    return
+  }
+
+  // MediaSource's seekable range can retain buffered HLS history beyond
+  // the segments still advertised by the current live playlist. Bound the
+  // DVR slider to that playlist window, then intersect with media seekable
+  // so slider targets remain positions the browser can actually seek to.
+  const details = hlsInstance?.latestLevelDetails
+  if (details?.live && Number.isFinite(details.fragmentStart) && Number.isFinite(details.edge)) {
+    hlsSeekMin.value = Math.max(details.fragmentStart, seekableStart)
+    hlsSeekMax.value = Math.min(details.edge, seekableEnd)
+  } else {
+    // Native HLS (e.g. Safari) does not expose hls.js playlist details.
+    hlsSeekMin.value = seekableStart
+    hlsSeekMax.value = seekableEnd
+  }
+  if (hlsSeekMax.value <= hlsSeekMin.value) {
+    hlsSeekMin.value = 0
+    hlsSeekMax.value = 0
+    hlsSeekValue.value = 0
     return
   }
   if (!hlsSeekDragging.value && !hlsSeekPending.value) {
