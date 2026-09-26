@@ -1288,16 +1288,16 @@ async function copyUrl(url?: string | null) {
           </div>
         </div>
         <Message v-if="hlsError" severity="error" :closable="false" class="text-xs">{{ hlsError }}</Message>
-        <div v-if="hlsPlayheadTime || hlsDvrWindowSeconds > 0" class="playback-meta">
-          <div v-if="hlsPlayheadTime" class="playhead-chip">
-            <i class="pi pi-clock" />
-            <span class="playback-meta-label">Playhead</span>
-            <time class="playback-meta-value">{{ hlsPlayheadTime }}</time>
-          </div>
+        <div v-if="hlsPlayheadTime || hlsDvrWindowSeconds > 0" class="playback-meta-panel">
           <div v-if="hlsDvrWindowSeconds > 0" class="playhead-chip dvr-window-chip">
             <i class="pi pi-history" />
             <span class="playback-meta-label">DVR window</span>
             <span class="playback-meta-value">{{ formatDvrWindow(hlsDvrWindowSeconds) }}</span>
+          </div>
+          <div v-if="hlsPlayheadTime" class="playhead-chip playhead-chip-right">
+            <i class="pi pi-clock" />
+            <span class="playback-meta-label">Playhead</span>
+            <time class="playback-meta-value">{{ hlsPlayheadTime }}</time>
           </div>
         </div>
         <div class="url-row">
@@ -1407,16 +1407,16 @@ async function copyUrl(url?: string | null) {
           </div>
         </div>
         <Message v-if="dashError" severity="error" :closable="false" class="text-xs">{{ dashError }}</Message>
-        <div v-if="dashPlayheadTime || dashDvrWindowSeconds > 0" class="playback-meta">
-          <div v-if="dashPlayheadTime" class="playhead-chip">
-            <i class="pi pi-clock" />
-            <span class="playback-meta-label">Playhead</span>
-            <time class="playback-meta-value">{{ dashPlayheadTime }}</time>
-          </div>
+        <div v-if="dashPlayheadTime || dashDvrWindowSeconds > 0" class="playback-meta-panel">
           <div v-if="dashDvrWindowSeconds > 0" class="playhead-chip dvr-window-chip">
             <i class="pi pi-history" />
             <span class="playback-meta-label">DVR window</span>
             <span class="playback-meta-value">{{ formatDvrWindow(dashDvrWindowSeconds) }}</span>
+          </div>
+          <div v-if="dashPlayheadTime" class="playhead-chip playhead-chip-right">
+            <i class="pi pi-clock" />
+            <span class="playback-meta-label">Playhead</span>
+            <time class="playback-meta-value">{{ dashPlayheadTime }}</time>
           </div>
         </div>
         <div class="url-row">
@@ -1889,22 +1889,29 @@ async function copyUrl(url?: string | null) {
   }
 }
 
-.playback-meta {
+.playback-meta-panel {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 58px;
+  width: 100%;
+  padding: 0.65rem 0.9rem;
+  background: #162238;
+  border: 1px solid rgba(96, 165, 250, 0.2);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }
 
 .playhead-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  min-height: 30px;
-  padding: 0.3rem 0.65rem;
-  background: rgba(11, 18, 32, 0.72);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 7px;
+  min-height: 36px;
+  padding: 0.4rem 0.7rem;
+  background: rgba(7, 14, 28, 0.34);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 6px;
   color: #94a3b8;
   font-size: 0.7rem;
 }
@@ -1933,14 +1940,24 @@ async function copyUrl(url?: string | null) {
   color: #4ade80;
 }
 
+.playhead-chip-right {
+  margin-left: auto;
+}
+
 @media (max-width: 520px) {
-  .playback-meta {
-    gap: 0.35rem;
+  .playback-meta-panel {
+    gap: 0.5rem;
+    min-height: 52px;
+    padding: 0.5rem;
   }
 
   .playhead-chip {
-    padding-inline: 0.5rem;
-    gap: 0.35rem;
+    padding-inline: 0.55rem;
+    gap: 0.3rem;
+  }
+
+  .playback-meta-value {
+    font-size: 0.66rem;
   }
 }
 
