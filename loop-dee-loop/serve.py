@@ -448,7 +448,7 @@ class LoopPackage:
                 ts_segments = package_dir / "hls-ts" / rendition.name
                 if len(list(ts_segments.glob("*.ts"))) != self.segments_per_loop:
                     raise RuntimeError(f"Missing HLS TS segments for rendition {rendition.name!r}")
-            if self.has_audio and not self.hls_ts_mux_audio:
+            if self.has_audio and not self.hls_ts_mux_audio and not self.audio_rendition.audio_sparse:
                 if len(list((package_dir / "hls-ts" / "audio").glob("*.ts"))) != self.segments_per_loop:
                     raise RuntimeError("Missing separate HLS TS audio segments")
 
@@ -495,6 +495,26 @@ class LoopPackage:
     def has_audio(self) -> bool:
         return self.audio_rendition is not None
 
+    # ── Public playlist names ──────────────────────────────────────────────
+    # index.m3u8 (HLS multivariant), stream.mpd (DASH), audio.m3u8 (the single
+    # shared audio track), and one media playlist per video rendition:
+    # video[_N].m3u8 (video only) or video_audio[_N].m3u8 (audio muxed into the
+    # segments, i.e. hls_format=ts with hls_ts_mux_audio). N is the 1-based
+    # rendition index, only present when there is more than one rendition.
+    INDEX_PLAYLIST = "index.m3u8"
+    AUDIO_PLAYLIST = "audio.m3u8"
+    DASH_MANIFEST = "stream.mpd"
+
+    @property
+    def audio_muxed_in_video(self) -> bool:
+        return self.has_audio and self.hls_format == "ts" and self.hls_ts_mux_audio
+
+    def video_playlist_name(self, rendition: VideoRendition) -> str:
+        base = "video_audio" if self.audio_muxed_in_video else "video"
+        position = self.video_renditions.index(rendition) + 1
+        suffix = f"_{position}" if len(self.video_renditions) > 1 else ""
+        return f"{base}{suffix}.m3u8"
+
     def rendition_by_name(self, name: str) -> VideoRendition:
         for r in self.video_renditions:
             if r.name == name:
@@ -539,7 +559,7 @@ class Channel:
         a single-rendition/bitrate stream, not a bare media playlist).
 
         One #EXT-X-STREAM-INF per video rendition, each pointing at its own
-        `<rendition-name>/live.m3u8`. #EXT-X-STREAM-INF attributes
+        `video[_audio][_N].m3u8` (LoopPackage.video_playlist_name). #EXT-X-STREAM-INF attributes
         (BANDWIDTH/CODECS/RESOLUTION/FRAME-RATE) come from each rendition's
         `video_variant`, the exact codec/resolution/bandwidth GPAC itself
         computed while producing the real segments at bake time (bake.py's
@@ -579,7 +599,7 @@ class Channel:
                 stream_inf_attrs.append('AUDIO="audio"')
 
             lines.append("#EXT-X-STREAM-INF:" + ",".join(stream_inf_attrs))
-            lines.append(f"{rendition.name}/live.m3u8")
+            lines.append(pkg.video_playlist_name(rendition))
 
         return "\n".join(lines) + "\n"
 
@@ -593,9 +613,9 @@ class Channel:
         per_span = not is_ts and rendition.shared_init
         return self._build_hls_media_playlist(
             boundary_ticks=rendition.segment_boundary_ticks,
-            init_uri=None if no_init or per_span else "init.mp4",
-            span_init_uri=(lambda k: f"init_{k}.mp4") if per_span else None,
-            seg_uri_template="seg/{index}.ts" if is_ts else "seg/{index}.m4s",
+            init_uri=None if no_init or per_span else f"{rendition.name}/init.mp4",
+            span_init_uri=(lambda k: f"{rendition.name}/init_{k}.mp4") if per_span else None,
+            seg_uri_template=f"{rendition.name}/seg/{{index}}.ts" if is_ts else f"{rendition.name}/seg/{{index}}.m4s",
             window_segments=window_segments,
         )
 
@@ -610,7 +630,7 @@ class Channel:
             boundary_ticks=pkg.audio_rendition.audio_segment_boundary_ticks,
             init_uri=None if is_ts or pkg.audio_rendition.audio_sparse else "audio/init.mp4",
             span_init_uri=(lambda k: f"audio/init_{k}.mp4") if pkg.audio_rendition.audio_sparse and not is_ts else None,
-            seg_uri_template="/audio/seg/{index}.ts" if is_ts else "/audio/seg/{index}.m4s",
+            seg_uri_template="audio/seg/{index}.ts" if is_ts else "audio/seg/{index}.m4s",
             window_segments=window_segments,
         )
 
@@ -1380,23 +1400,26 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
             "window_segments": channel.window_segments,
         }
 
-    @app.get("/master.m3u8")
+    @app.get(f"/{LoopPackage.INDEX_PLAYLIST}")
     def hls_master_playlist():
         body = channel.build_hls_master_playlist()
         return Response(body, mimetype="application/vnd.apple.mpegurl")
 
-    @app.get("/manifest.mpd")
+    @app.get(f"/{LoopPackage.DASH_MANIFEST}")
     def dash_manifest():
         body = channel.build_dash_manifest()
         return Response(body, mimetype="application/dash+xml")
 
-    @app.get("/<rendition_name>/live.m3u8")
-    def hls_manifest(rendition_name: str):
-        try:
-            body = channel.build_hls_manifest(rendition_name)
-        except KeyError:
-            abort(404)
-        return Response(body, mimetype="application/vnd.apple.mpegurl")
+    def _register_video_playlist(rendition):
+        def view():
+            body = channel.build_hls_manifest(rendition.name)
+            return Response(body, mimetype="application/vnd.apple.mpegurl")
+
+        name = package.video_playlist_name(rendition)
+        app.add_url_rule(f"/{name}", endpoint=f"hls_{name}", view_func=view)
+
+    for _rendition in package.video_renditions:
+        _register_video_playlist(_rendition)
 
     @app.get("/<rendition_name>/init.mp4")
     def init_segment(rendition_name: str):
@@ -1450,7 +1473,7 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
         return send_file(path, mimetype="video/mp2t")
 
     if package.has_audio:
-        @app.get("/audio.m3u8")
+        @app.get(f"/{LoopPackage.AUDIO_PLAYLIST}")
         def hls_audio_manifest():
             if package.hls_format == "ts" and package.hls_ts_mux_audio:
                 abort(404)
@@ -1484,8 +1507,10 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
         def hls_ts_audio_segment(physical_index: int):
             if package.hls_format != "ts" or package.hls_ts_mux_audio or physical_index >= package.segments_per_loop:
                 abort(404)
-            return send_file(package.package_dir / "hls-ts" / "audio" / f"{physical_index}.ts",
-                             mimetype="video/mp2t")
+            path = package.package_dir / "hls-ts" / "audio" / f"{physical_index}.ts"
+            if not path.is_file():  # sparse audio hole
+                abort(404)
+            return send_file(path, mimetype="video/mp2t")
 
     return app
 

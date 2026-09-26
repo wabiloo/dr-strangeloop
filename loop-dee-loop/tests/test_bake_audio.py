@@ -104,3 +104,40 @@ def test_separate_audio_playlist_with_a_hole(tmp_path):
     assert r["audio_segment_present"] == [True, False]
     assert (out / "segments" / r["name"] / "seg_a_000000.m4s").exists()
     assert not (out / "segments" / r["name"] / "seg_a_000001.m4s").exists()
+
+
+def _ts_info(path: Path) -> tuple[set[str], float]:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,start_time", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+    rows = [line.split(",") for line in out if "," in line]
+    return {r[0] for r in rows}, min(float(r[1]) for r in rows)
+
+
+def test_unmuxed_hls_ts_has_separate_audio_and_continuous_timestamps(tmp_path):
+    for i in range(2):
+        _video_ts(tmp_path / f"v{i}.ts", with_audio=True)
+    manifest = _manifest(tmp_path, [_seg(i, tmp_path / f"v{i}.ts") for i in range(2)])
+    out = tmp_path / "out"
+
+    bake_segment_list(manifest, out, hls_format="ts", hls_ts_mux_audio=False)
+
+    assert json.loads((out / "loop_descriptor.json").read_text())["hls_ts_mux_audio"] is False
+    video_types, video_start = _ts_info(out / "hls-ts" / "archive" / "1.ts")
+    audio_types, audio_start = _ts_info(out / "hls-ts" / "audio" / "1.ts")
+    assert video_types == {"video"} and audio_types == {"audio"}
+    # segment 1 sits 2 s into the loop (plus the 1.4 s TS base), for BOTH tracks
+    assert video_start == pytest.approx(3.4, abs=0.15) and audio_start == pytest.approx(3.4, abs=0.15)
+
+
+def test_separate_audio_cannot_be_muxed_into_ts(tmp_path):
+    _video_ts(tmp_path / "v0.ts", with_audio=False)
+    _audio_ts(tmp_path / "a0.ts")
+    manifest = _manifest(
+        tmp_path, [_seg(0, tmp_path / "v0.ts", audio_media_file=str(tmp_path / "a0.ts"))], audio={"separate": True}
+    )
+    from bake import ValidationError
+
+    with pytest.raises(ValidationError, match="no-hls-ts-mux-audio"):
+        bake_segment_list(manifest, tmp_path / "out", hls_format="ts", hls_ts_mux_audio=True)

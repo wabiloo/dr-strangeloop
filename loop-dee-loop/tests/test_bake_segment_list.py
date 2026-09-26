@@ -260,7 +260,7 @@ def _stub_media_io(monkeypatch):
         dest.write_bytes(_fake_fmp4())
         remux_calls.append((Path(src), dest))
 
-    def _fake_remux_ts(src, dest):
+    def _fake_remux_ts(src, dest, **_kw):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"fake-ts-segment")
         ts_calls.append((Path(src), dest))

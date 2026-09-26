@@ -258,8 +258,8 @@ def _resolve_epoch_arg(raw):
 
 
 def _print_urls(port):
-    print(f"\nHLS:  http://localhost:{port}/master.m3u8")
-    print(f"DASH: http://localhost:{port}/manifest.mpd")
+    print(f"\nHLS:  http://localhost:{port}/index.m3u8")
+    print(f"DASH: http://localhost:{port}/stream.mpd")
 
 
 def start(cfg, session, outputs, extra_args=None):
@@ -394,8 +394,8 @@ def status(cfg, session, outputs):
     # there simply isn't a port to report.
     raw_port = cfg.get("docker", {}).get("port", "auto")
     port = int(raw_port) if raw_port != "auto" else _running_port(name)
-    hls_url = f"http://localhost:{port}/master.m3u8" if docker_status == "running" and port else None
-    dash_url = f"http://localhost:{port}/manifest.mpd" if docker_status == "running" and port else None
+    hls_url = f"http://localhost:{port}/index.m3u8" if docker_status == "running" and port else None
+    dash_url = f"http://localhost:{port}/stream.mpd" if docker_status == "running" and port else None
     result = {
         "backend": "local-docker",
         "container_name": name,

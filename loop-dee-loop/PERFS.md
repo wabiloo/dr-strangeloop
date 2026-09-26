@@ -12,7 +12,7 @@ original (informational, not measured) sizing expectations this confirms.
 - **Bake**: `bake.py ... --segment-duration 4` (real ABR-sized 4s segments,
   see `README.md`'s segmentation section).
 - **Load**: `load_test.py`, a small concurrent-client script that spins up
-  N threads, each continuously polling `/live.m3u8` every 2s and
+  N threads, each continuously polling `/video.m3u8` every 2s and
   downloading every newly-advertised segment (i.e. a realistic HLS
   client access pattern: repeated manifest polls + segment fetches, no
   manifest/segment caching assumed on the client side).

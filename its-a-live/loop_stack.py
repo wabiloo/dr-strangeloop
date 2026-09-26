@@ -162,7 +162,7 @@ class LoopStack(Stack):
             task_role_arn=task_role.role_arn,
             cpu=serve_cpu,
             memory=serve_memory,
-            health_check_path="/manifest.mpd",
+            health_check_path="/stream.mpd",
             primary_container=ecs.CfnExpressGatewayService.ExpressGatewayContainerProperty(
                 image=image_asset.image_uri,
                 container_port=port,
@@ -236,5 +236,5 @@ class LoopStack(Stack):
         cdk.CfnOutput(self, "ExpressServiceArn", value=service.attr_service_arn)
         cdk.CfnOutput(self, "ExpressServiceEndpoint", value=f"https://{service.attr_endpoint}")
         cdk.CfnOutput(self, "CloudFrontDomainName", value=distribution.distribution_domain_name)
-        cdk.CfnOutput(self, "HlsPlaybackUrl", value=f"https://{distribution.distribution_domain_name}/master.m3u8")
-        cdk.CfnOutput(self, "DashPlaybackUrl", value=f"https://{distribution.distribution_domain_name}/manifest.mpd")
+        cdk.CfnOutput(self, "HlsPlaybackUrl", value=f"https://{distribution.distribution_domain_name}/index.m3u8")
+        cdk.CfnOutput(self, "DashPlaybackUrl", value=f"https://{distribution.distribution_domain_name}/stream.mpd")

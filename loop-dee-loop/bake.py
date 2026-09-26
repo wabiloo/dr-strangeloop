@@ -1083,13 +1083,36 @@ def remux_segment_to_self_initializing_fragment(src: Path, dest: Path) -> None:
     )
 
 
-def remux_segment_to_ts(src: Path, dest: Path) -> None:
+TS_BASE_SECONDS = 1.4  # PTS of a loop's first segment (ffmpeg's usual mpegts mux delay)
+
+
+def _container_start_seconds(path: Path) -> float:
+    out = _run(["ffprobe", "-v", "error", "-show_entries", "format=start_time", "-of", "csv=p=0", str(path)])
+    return float(out.stdout.strip().splitlines()[0])
+
+
+def remux_segment_to_ts(
+    src: Path, dest: Path, *, stream: str | None = None, start_seconds: float | None = None
+) -> None:
     """Container-only remux to self-contained MPEG-TS (no init-segment
     concept at all) -- for hls_format='ts' output, same ffmpeg stream-copy
     style bake_hls_ts_segments already uses for the normal path's CMAF->TS
     derivation."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _run(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-c", "copy", "-f", "mpegts", str(dest)])
+    # stream="v"/"a": keep only that stream (unmuxed HLS TS: video-only and audio-only files).
+    select = ["-map", f"0:{stream}:0"] if stream else []
+    # start_seconds: place the segment's first timestamp at its position on the loop
+    # timeline (independently captured segments otherwise each restart near 0, which
+    # HLS players read as an unsignalled discontinuity). -copyts keeps the source's
+    # timestamps so one offset moves every stream together, preserving A/V sync.
+    timing = []
+    if start_seconds is not None:
+        timing = ["-copyts", "-muxdelay", "0", "-muxpreload", "0"]
+    _run(
+        ["ffmpeg", "-v", "error", "-y", *timing[:1], "-i", str(src), *select, "-c", "copy", *timing[1:],
+         *(["-output_ts_offset", str(start_seconds - _container_start_seconds(src))] if start_seconds is not None else []),
+         "-f", "mpegts", str(dest)]
+    )
 
 
 # RFC 6381 profile_idc byte for the H.264 profile names ffprobe reports.
@@ -1242,6 +1265,7 @@ def bake_segment_list(
     allow_missing_segments: bool = False,
     dry_run: bool = False,
     hls_format: str = "cmaf",
+    hls_ts_mux_audio: bool = True,
 ) -> None:
     """Bake phase entrypoint for the segment-list ('sparse') input mode
     (SCOPE.md §11), an alternative to bake()'s single-.ts/rendition-ladder
@@ -1313,11 +1337,12 @@ def bake_segment_list(
     # audio muxed into the video segments (detected by probing). Same span/init
     # scheme as video; audio has its own ledger only when separately sourced.
     audio_separate = bool((manifest.get("audio") or {}).get("separate"))
-    if audio_separate and hls_format == "ts":
+    if audio_separate and hls_format == "ts" and hls_ts_mux_audio:
         raise ValidationError(
-            "A separate audio playlist can't be baked into HLS TS output yet (TS carries audio "
-            "muxed); use hls_format='cmaf'."
+            "A separate audio playlist can't be muxed into HLS TS video segments; use "
+            "--no-hls-ts-mux-audio (separate TS audio playlist) or hls_format='cmaf'."
         )
+    ts_unmuxed = hls_format == "ts" and not hls_ts_mux_audio
     audio_durations = [
         s.get("audio_duration_ticks", s["duration_ticks"]) if audio_separate else s["duration_ticks"]
         for s in segments
@@ -1354,6 +1379,11 @@ def bake_segment_list(
             a_fragments, round(relative_ticks * timescale / TIMESCALE), audio_next_sequence_number
         )
         (audio_dir / f"seg_a_{index:06d}.m4s").write_bytes(body)
+        if ts_unmuxed:
+            remux_segment_to_ts(
+                audio_src, output_package_dir / "hls-ts" / "audio" / f"{index}.ts", stream="a",
+                start_seconds=TS_BASE_SECONDS + audio_starts[index] / TIMESCALE,
+            )
         audio_present[index] = True
         if audio_reference is None:
             audio_reference = audio_src
@@ -1402,7 +1432,10 @@ def bake_segment_list(
         if hls_format == "ts":
             ts_dest = output_package_dir / "hls-ts" / SPARSE_RENDITION_NAME / f"{index}.ts"
             if not dry_run:
-                remux_segment_to_ts(src, ts_dest)
+                remux_segment_to_ts(
+                    src, ts_dest, stream="v" if ts_unmuxed else None,
+                    start_seconds=TS_BASE_SECONDS + segment_starts[index] / TIMESCALE,
+                )
 
     if dry_run:
         logger.warning("dry-run: skipping loop_descriptor.json (no real segments produced)")
@@ -1458,7 +1491,7 @@ def bake_segment_list(
         "total_loop_duration_ticks": total_loop_duration_ticks,
         "segment_duration_seconds": nominal_segment_duration_seconds,
         "hls_format": hls_format,
-        "hls_ts_mux_audio": True,
+        "hls_ts_mux_audio": hls_ts_mux_audio,
         "daterange_mode": "shared",
         "cue_tags": "none",
         "increment_event_ids": False,
@@ -1864,6 +1897,7 @@ def main(argv: list[str] | None = None) -> int:
                 allow_missing_segments=args.allow_missing_segments,
                 dry_run=args.dry_run,
                 hls_format=args.hls_format,
+                hls_ts_mux_audio=args.hls_ts_mux_audio,
             )
         else:
             bake(

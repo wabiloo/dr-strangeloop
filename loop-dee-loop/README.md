@@ -213,17 +213,18 @@ python3 bake.py path/to/output.ts --output /var/loop-packages/2026-01-01 \
 
 | Path | What it is |
 |---|---|
-| `/master.m3u8` | HLS **multivariant** playlist — give players this URL, not a rendition's `live.m3u8` directly. |
-| `/<rendition>/live.m3u8` | HLS media playlist for one rendition (e.g. `/1080p/live.m3u8`). |
-| `/audio.m3u8` | HLS media playlist (audio, shared across renditions) — only present if the source has an audio track. |
-| `/manifest.mpd` | DASH MPD (one video `AdaptationSet` with one `Representation` per rendition, + one audio `AdaptationSet`). |
+| `/index.m3u8` | HLS **multivariant** playlist — give players this URL, not a media playlist directly. |
+| `/video[_N].m3u8` | HLS media playlist for one video rendition (video only). `_N` is the 1-based rendition index, present only when there is more than one rendition. |
+| `/video_audio[_N].m3u8` | Same, when audio is muxed into the segments (`hls_format=ts` with `hls_ts_mux_audio`). |
+| `/audio.m3u8` | HLS media playlist (audio, the one track shared across renditions) — only present if the source has an audio track and it isn't muxed into the video segments. |
+| `/stream.mpd` | DASH MPD (one video `AdaptationSet` with one `Representation` per rendition, + one audio `AdaptationSet`). |
 | `/<rendition>/init.mp4` | CMAF init segment for one rendition. |
 | `/<rendition>/seg/<n>.m4s` | CMAF media segments for one rendition. |
 | `/audio/init.mp4` | CMAF init segment (audio track). |
 | `/audio/seg/<n>.m4s` | CMAF media segments (audio track). |
 
 `#EXT-X-STREAM-INF`'s `BANDWIDTH`/`CODECS`/`RESOLUTION`/`FRAME-RATE`
-attributes in `/master.m3u8` come from the exact values GPAC itself
+attributes in `/index.m3u8` come from the exact values GPAC itself
 computed while producing the real segments at bake time (read back from
 its own generated `manifest.mpd` — see `bake.py`'s `read_variant_metadata`
 — never re-derived/guessed).

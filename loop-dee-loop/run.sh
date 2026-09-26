@@ -169,8 +169,8 @@ if [[ "$DISPLAY_HOST" == "0.0.0.0" || "$DISPLAY_HOST" == "::" ]]; then
     DISPLAY_HOST="localhost"
 fi
 echo ""
-echo "    HLS:  http://${DISPLAY_HOST}:${PORT}/master.m3u8"
-echo "    DASH: http://${DISPLAY_HOST}:${PORT}/manifest.mpd"
+echo "    HLS:  http://${DISPLAY_HOST}:${PORT}/index.m3u8"
+echo "    DASH: http://${DISPLAY_HOST}:${PORT}/stream.mpd"
 echo ""
 
 exec "${PYTHON_CMD[@]}" "${SCRIPT_DIR}/serve.py" "$OUTPUT" --epoch-utc "$EPOCH_UTC" --host "$HOST" --port "$PORT" \

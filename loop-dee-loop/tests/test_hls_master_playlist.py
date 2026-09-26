@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import types
 from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serve import Channel  # noqa: E402
+from serve import Channel, LoopPackage  # noqa: E402
 
 
 def _rendition(name, codecs, width, height, frame_rate, bandwidth, audio_variant=None):
@@ -38,13 +39,16 @@ def _rendition(name, codecs, width, height, frame_rate, bandwidth, audio_variant
 
 
 def _fake_package(video_renditions, audio_rendition=None, hls_format="cmaf", hls_ts_mux_audio=True):
-    return SimpleNamespace(
+    package = SimpleNamespace(
         video_renditions=video_renditions,
         audio_rendition=audio_rendition,
         has_audio=audio_rendition is not None,
         hls_format=hls_format,
         hls_ts_mux_audio=hls_ts_mux_audio,
     )
+    package.audio_muxed_in_video = package.has_audio and hls_format == "ts" and hls_ts_mux_audio
+    package.video_playlist_name = types.MethodType(LoopPackage.video_playlist_name, package)
+    return package
 
 
 def test_master_playlist_single_rendition_contains_stream_inf_with_correct_attributes():
@@ -61,7 +65,7 @@ def test_master_playlist_single_rendition_contains_stream_inf_with_correct_attri
     assert 'CODECS="avc1.640028"' in body
     assert "RESOLUTION=1920x1080" in body
     assert "FRAME-RATE=25.000" in body
-    assert body.strip().endswith("1080p/live.m3u8")
+    assert body.strip().endswith("video.m3u8")
 
 
 def test_master_playlist_multi_rendition_has_one_stream_inf_per_rendition():
@@ -75,9 +79,9 @@ def test_master_playlist_multi_rendition_has_one_stream_inf_per_rendition():
     body = channel.build_hls_master_playlist()
 
     assert body.count("#EXT-X-STREAM-INF:") == 3
-    assert "1080p/live.m3u8" in body
-    assert "720p/live.m3u8" in body
-    assert "360p/live.m3u8" in body
+    assert "video_1.m3u8" in body
+    assert "video_2.m3u8" in body
+    assert "video_3.m3u8" in body
     assert "RESOLUTION=1920x1080" in body
     assert "RESOLUTION=1280x720" in body
     assert "RESOLUTION=640x360" in body
@@ -158,5 +162,5 @@ def test_ts_media_playlist_uses_ts_without_init_or_separate_audio_when_muxed(mux
             channel.build_hls_audio_manifest()
     else:
         audio_playlist = channel.build_hls_audio_manifest()
-        assert "/audio/seg/0.ts" in audio_playlist
+        assert "\naudio/seg/0.ts\n" in audio_playlist  # relative, like video
         assert "#EXT-X-MAP" not in audio_playlist

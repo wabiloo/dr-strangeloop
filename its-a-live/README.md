@@ -245,7 +245,7 @@ always `http://localhost:<channel.port>/...`.
   groups created)**, and `aws ecs describe-service-revisions` shows a
   `statusReason` like `ValidationError: Health check path '...' must
   begin with a '/' character ...`: `health_check_path` must be a **bare
-  path** (e.g. `/manifest.mpd`), not a `PROTOCOL:PORT/PATH`-style string
+  path** (e.g. `/stream.mpd`), not a `PROTOCOL:PORT/PATH`-style string
   — despite AWS's docs quoting the *default* as `"HTTP:80/ping"`, which
   reads like that combined format. This doesn't fail cleanly; it retries
   invalid ALB/listener/target-group provisioning indefinitely with no

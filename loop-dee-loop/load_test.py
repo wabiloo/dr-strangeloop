@@ -28,7 +28,7 @@ def viewer_loop(base_url: str, viewer_id: int):
     seen_segments: set[str] = set()
     while not STOP.is_set():
         try:
-            hls = _get(f"{base_url}/live.m3u8").decode("utf-8", "replace")
+            hls = _get(f"{base_url}/video.m3u8").decode("utf-8", "replace")
             with stats_lock:
                 stats["requests"] += 1
                 stats["bytes"] += len(hls)

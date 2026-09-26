@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from serve import (  # noqa: E402
+    LoopPackage,
     Channel,
     LoopPackage,
     compute_asset_boundary_set,
@@ -136,7 +138,7 @@ def _sparse_fake_package(boundaries, gap_ticks_by_index, segment_boundary_ticks,
         segment_boundary_ticks=segment_boundary_ticks,
     )
     boundary_set = compute_asset_boundary_set(boundaries)
-    return SimpleNamespace(
+    package = SimpleNamespace(
         video_renditions=[rendition],
         audio_rendition=None,
         has_audio=False,
@@ -158,6 +160,9 @@ def _sparse_fake_package(boundaries, gap_ticks_by_index, segment_boundary_ticks,
             segments_per_loop, boundary_set, gap_ticks_by_index
         ),
     )
+    package.audio_muxed_in_video = False
+    package.video_playlist_name = types.MethodType(LoopPackage.video_playlist_name, package)
+    return package
 
 
 def test_hls_media_playlist_emits_discontinuity_at_internal_asset_boundary():
@@ -178,7 +183,7 @@ def test_hls_media_playlist_emits_discontinuity_at_internal_asset_boundary():
     assert body.count("#EXT-X-DISCONTINUITY\n") == 1
     lines = body.splitlines()
     disc_pos = lines.index("#EXT-X-DISCONTINUITY")
-    assert lines[disc_pos + 3] == "seg/2.m4s"
+    assert lines[disc_pos + 3] == "archive/seg/2.m4s"
 
 
 def test_hls_media_playlist_declared_pdt_includes_gap_offset():
@@ -250,11 +255,11 @@ def test_per_span_init_is_declared_after_every_discontinuity():
     lines = channel.build_hls_manifest("archive").splitlines()
 
     maps = [l for l in lines if l.startswith("#EXT-X-MAP")]
-    assert maps[0] == '#EXT-X-MAP:URI="init_1.mp4"'  # window opens in span 1 (segments 2..3 of loop 0)
+    assert maps[0] == '#EXT-X-MAP:URI="archive/init_1.mp4"'  # window opens in span 1 (segments 2..3 of loop 0)
     for i, line in enumerate(lines):
         if line == "#EXT-X-DISCONTINUITY":
             assert lines[i + 1].startswith("#EXT-X-MAP")
-    assert 'URI="init_0.mp4"' in "\n".join(maps)
+    assert 'URI="archive/init_0.mp4"' in "\n".join(maps)
 
     mpd = channel.build_dash_manifest()
     assert 'initialization="archive/init_0.mp4"' in mpd and 'initialization="archive/init_1.mp4"' in mpd
@@ -395,7 +400,7 @@ def test_manifest_still_advertises_every_segment_despite_holes(tmp_path):
     app = create_app(tmp_path, epoch_ticks=0, window_segments=3)
     client = app.test_client()
 
-    resp = client.get("/archive/live.m3u8")
+    resp = client.get("/video.m3u8")
 
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
