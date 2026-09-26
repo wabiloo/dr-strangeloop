@@ -884,6 +884,376 @@ def discover_renditions(
     return renditions, markers_json
 
 
+SPARSE_RENDITION_NAME = "archive"
+"""Fixed single-rendition name used by the segment-list ('sparse') bake
+mode (SCOPE.md §11). An archive-derived source has already been reduced to
+one canonical reference rendition upstream (grave-robber/SCOPE.md §8 step
+5, "residual reference pick") before it ever reaches bake.py -- there is
+no ABR ladder concept in this input mode, unlike the normal franken-ts
+rendition-directory path. ABR ladder support for sparse input is a known
+future extension, not attempted here."""
+
+
+def load_segment_list_manifest(path: Path) -> dict:
+    """Parse + validate the segment-list manifest shape (SCOPE.md §11.2):
+
+        {"segments": [{"index", "duration_ticks", "asset_boundary",
+                       "media_file"}, ...],
+         "markers": [...]}   # same .markers.json shape as §2
+
+    Hard-fails (ValidationError) on any structural problem -- same
+    fail-loud-by-default posture as every other bake.py input check. Does
+    NOT check media_file presence/absence here -- that's
+    validate_segment_list_missing_media's job (needs the
+    --allow-missing-segments flag to decide the outcome).
+    """
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not isinstance(data.get("segments"), list) or not data["segments"]:
+        raise ValidationError(
+            f"{path}: segment-list manifest must have a non-empty top-level "
+            f"'segments' list (SCOPE.md §11.2)"
+        )
+    if not isinstance(data.get("markers"), list):
+        raise ValidationError(
+            f"{path}: segment-list manifest must have a top-level 'markers' "
+            f"list (may be empty) -- same .markers.json shape as SCOPE.md §2"
+        )
+
+    segments = data["segments"]
+    required_fields = ("index", "duration_ticks", "asset_boundary", "media_file")
+    for i, seg in enumerate(segments):
+        missing_fields = [f for f in required_fields if f not in seg]
+        if missing_fields:
+            raise ValidationError(
+                f"{path}: segments[{i}] is missing required field(s) "
+                f"{missing_fields} (SCOPE.md §11.2)"
+            )
+        if seg["index"] != i:
+            raise ValidationError(
+                f"{path}: segments[{i}]['index']={seg['index']!r}, expected "
+                f"{i} -- entries must be ordered 0..N-1 with no gaps or "
+                f"duplicates in the index sequence itself (a missing SEGMENT "
+                f"is expressed via media_file=null, never by skipping an "
+                f"index)."
+            )
+        if not isinstance(seg["duration_ticks"], int) or seg["duration_ticks"] <= 0:
+            raise ValidationError(
+                f"{path}: segments[{i}]['duration_ticks'] must be a strictly "
+                f"positive int, got {seg['duration_ticks']!r}"
+            )
+        if not isinstance(seg["asset_boundary"], bool):
+            raise ValidationError(
+                f"{path}: segments[{i}]['asset_boundary'] must be a bool, "
+                f"got {seg['asset_boundary']!r}"
+            )
+        media_file = seg["media_file"]
+        if media_file is not None and not isinstance(media_file, str):
+            raise ValidationError(
+                f"{path}: segments[{i}]['media_file'] must be a string path "
+                f"or null, got {media_file!r}"
+            )
+
+    return data
+
+
+def validate_segment_list_missing_media(
+    segments: list[dict], *, allow_missing_segments: bool
+) -> list[int]:
+    """Returns the list of segment indices with no media_file. Hard-fails
+    unless `allow_missing_segments` is set (SCOPE.md §11.2: "Default:
+    hard-fail... opt-in, never the silent default")."""
+    missing = [s["index"] for s in segments if s["media_file"] is None]
+    if missing and not allow_missing_segments:
+        raise ValidationError(
+            f"{len(missing)} segment(s) have no media_file (index(es): "
+            f"{missing}) -- pass --allow-missing-segments to bake a "
+            f"manifest-complete, media-optional package (SCOPE.md §11.1). "
+            f"Hard failure by default, same fail-loud posture as every "
+            f"other bake.py validation."
+        )
+    return missing
+
+
+def compute_segment_list_boundary_ticks(segments: list[dict]) -> list[int]:
+    """Exclusive-prefix-sum of duration_ticks -- the start tick of each
+    segment, in the same shape VideoRendition.segment_boundary_ticks
+    expects. Ground truth here is the declared ledger itself (there is no
+    "read it back from produced media" step to cross-check against, unlike
+    the normal .ts path's compute_total_loop_duration_ticks -- SCOPE.md
+    §11.2 is explicit that the ledger is always complete regardless of
+    which segments have real media)."""
+    boundaries = []
+    running = 0
+    for seg in segments:
+        boundaries.append(running)
+        running += seg["duration_ticks"]
+    return boundaries
+
+
+def compute_asset_boundary_indices(segments: list[dict]) -> list[int]:
+    return [s["index"] for s in segments if s["asset_boundary"]]
+
+
+def remux_segment_to_self_initializing_fragment(src: Path, dest: Path) -> None:
+    """Container-only remux (ffmpeg stream copy -- no transcode, per
+    SCOPE.md §1's non-goal) of one archive-extracted segment file into a
+    standalone fragmented-MP4 file carrying its own moov -- i.e. playable
+    without a separate shared init segment.
+
+    This is needed because sparse-mode segments come from independently
+    captured archive entries with no guarantee they share one common
+    encoder init the way a single continuous franken-ts encode does (the
+    normal bake path always has exactly one shared init per rendition,
+    produced once by GPAC's dasher over the whole file). Each sparse
+    segment is therefore made self-describing instead.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _run(
+        [
+            "ffmpeg", "-v", "error", "-y",
+            "-i", str(src),
+            # Video only: sparse mode has no separate audio track/
+            # Representation concept (SCOPE.md §11 open item -- a known,
+            # documented v1 limitation, not attempted here). A muxed
+            # TS-sourced segment would otherwise carry an audio stream this
+            # package never declares in its manifest.
+            "-map", "0:v:0",
+            "-c", "copy",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+            "-f", "mp4",
+            str(dest),
+        ]
+    )
+
+
+def remux_segment_to_ts(src: Path, dest: Path) -> None:
+    """Container-only remux to self-contained MPEG-TS (no init-segment
+    concept at all) -- for hls_format='ts' output, same ffmpeg stream-copy
+    style bake_hls_ts_segments already uses for the normal path's CMAF->TS
+    derivation."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _run(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-c", "copy", "-f", "mpegts", str(dest)])
+
+
+# RFC 6381 profile_idc byte for the H.264 profile names ffprobe reports.
+# Best-effort only -- see probe_segment_variant_metadata's docstring.
+_AVC_PROFILE_IDC = {
+    "Constrained Baseline": 0x42,
+    "Baseline": 0x42,
+    "Main": 0x4D,
+    "Extended": 0x58,
+    "High": 0x64,
+    "High 10": 0x6E,
+    "High 4:2:2": 0x7A,
+    "High 4:4:4 Predictive": 0xF4,
+}
+
+
+def _rfc6381_avc1_codec_string(profile: str, level: float) -> str:
+    """Best-effort RFC 6381 'avc1.PPCCLL' codec string from ffprobe's
+    reported profile name + level. Constraint-set flag byte is assumed 0
+    (ffprobe doesn't expose the individual constraint_set flags) -- this is
+    a known simplification, not a guaranteed byte-exact match to the
+    source encoder's real SPS (SCOPE.md §11's "not yet spiked against a
+    real archive" applies here: the normal bake path avoids this whole
+    problem by reading GPAC's own computed value back instead of
+    re-deriving it, which isn't available in sparse mode since no dasher
+    pass runs over the source)."""
+    profile_idc = _AVC_PROFILE_IDC.get(profile)
+    if profile_idc is None:
+        raise RuntimeError(
+            f"Unrecognized H.264 profile {profile!r} for RFC 6381 codec "
+            f"string derivation -- sparse-mode metadata probing only "
+            f"supports H.264 today."
+        )
+    level_idc = round(level * 10)
+    return f"avc1.{profile_idc:02X}0000{level_idc:02X}"
+
+
+def probe_segment_variant_metadata(path: Path) -> dict:
+    """ffprobe-based equivalent of read_variant_metadata for sparse mode,
+    which has no GPAC-generated manifest.mpd to read codec/resolution/
+    frame_rate/bandwidth back from (no dasher pass runs in this mode).
+    Probes one representative present segment file. `bandwidth` is
+    estimated from this one segment's own bitrate (ffprobe stream
+    `bit_rate`, falling back to format-level bit_rate) -- a coarser
+    estimate than the normal path's real encoder-declared value, adequate
+    for the HLS #EXT-X-STREAM-INF / DASH @bandwidth attributes' informational
+    role."""
+    result = _run(
+        [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries",
+            "stream=width,height,r_frame_rate,profile,level,bit_rate",
+            "-show_entries", "format=bit_rate",
+            "-of", "json",
+            str(path),
+        ]
+    )
+    data = json.loads(result.stdout)
+    streams = data.get("streams", [])
+    if not streams:
+        raise RuntimeError(f"No video stream found in {path} for variant metadata probing")
+    stream = streams[0]
+
+    num, den = (int(x) for x in stream["r_frame_rate"].split("/"))
+    frame_rate = num / den if den else 0.0
+
+    bandwidth = stream.get("bit_rate") or data.get("format", {}).get("bit_rate")
+    if bandwidth is None:
+        raise RuntimeError(
+            f"Could not determine a bitrate for {path} (needed for "
+            f"#EXT-X-STREAM-INF/@bandwidth) -- neither the stream nor the "
+            f"format reported bit_rate."
+        )
+
+    return {
+        "video": {
+            "codecs": _rfc6381_avc1_codec_string(stream["profile"], float(stream["level"]) / 10),
+            "width": int(stream["width"]),
+            "height": int(stream["height"]),
+            "frame_rate": frame_rate,
+            "bandwidth": int(bandwidth),
+        },
+        "audio": None,
+    }
+
+
+def bake_segment_list(
+    manifest_path: Path,
+    output_package_dir: Path,
+    *,
+    allow_missing_segments: bool = False,
+    dry_run: bool = False,
+    hls_format: str = "cmaf",
+) -> None:
+    """Bake phase entrypoint for the segment-list ('sparse') input mode
+    (SCOPE.md §11), an alternative to bake()'s single-.ts/rendition-ladder
+    input. Consumes the grave-robber-produced segment-list manifest (§11.2)
+    instead of a franken-ts .ts + markers.json.
+
+    Unlike bake(), there is no GPAC dasher pass and no cues-file/PTS
+    cross-validation against embedded SCTE-35 -- an archive-derived
+    source's markers are already fully decoded (grave-robber/SCOPE.md §5.2)
+    and there is no continuous .ts to re-probe. The "ledger is always
+    complete" governing decision (§11.1) means total_loop_duration_ticks
+    and every segment's boundary tick are derived directly from the
+    manifest's declared duration_ticks, never from reading back produced
+    media -- there may be no media at all for some/most segments.
+    """
+    logger.info(
+        "Sparse bake starting: %s -> %s (allow_missing_segments=%s)",
+        manifest_path, output_package_dir, allow_missing_segments,
+    )
+
+    if hls_format not in ("cmaf", "ts"):
+        raise ValidationError("hls_format must be 'cmaf' or 'ts'")
+
+    manifest = load_segment_list_manifest(manifest_path)
+    segments = manifest["segments"]
+    raw_markers = manifest["markers"]
+
+    missing_indices = validate_segment_list_missing_media(
+        segments, allow_missing_segments=allow_missing_segments
+    )
+
+    segment_boundary_ticks = compute_segment_list_boundary_ticks(segments)
+    total_loop_duration_ticks = sum(s["duration_ticks"] for s in segments)
+    asset_boundaries = compute_asset_boundary_indices(segments)
+    nominal_segment_duration_seconds = (total_loop_duration_ticks / TIMESCALE) / len(segments)
+
+    logger.info(
+        "Sparse bake: %d segment(s) declared, %d missing media, "
+        "%d asset boundary/boundaries, total_loop_duration_ticks=%d",
+        len(segments), len(missing_indices), len(asset_boundaries),
+        total_loop_duration_ticks,
+    )
+
+    output_package_dir.mkdir(parents=True, exist_ok=True)
+    segments_dir = output_package_dir / "segments" / SPARSE_RENDITION_NAME
+    segments_dir.mkdir(parents=True, exist_ok=True)
+    if hls_format == "ts":
+        ts_dir = output_package_dir / "hls-ts" / SPARSE_RENDITION_NAME
+        ts_dir.mkdir(parents=True, exist_ok=True)
+
+    segment_present: list[bool] = []
+    reference_segment_path: Path | None = None
+    for seg in segments:
+        index = seg["index"]
+        media_file = seg["media_file"]
+        present = media_file is not None
+        segment_present.append(present)
+        if not present:
+            continue
+
+        src = Path(media_file)
+        cmaf_dest = segments_dir / f"seg_{index:06d}.m4s"
+        if not dry_run:
+            remux_segment_to_self_initializing_fragment(src, cmaf_dest)
+            if reference_segment_path is None:
+                reference_segment_path = cmaf_dest
+        if hls_format == "ts":
+            ts_dest = output_package_dir / "hls-ts" / SPARSE_RENDITION_NAME / f"{index}.ts"
+            if not dry_run:
+                remux_segment_to_ts(src, ts_dest)
+
+    if dry_run:
+        logger.warning("dry-run: skipping loop_descriptor.json (no real segments produced)")
+        return
+
+    if reference_segment_path is None:
+        raise ValidationError(
+            "Every segment is missing media_file -- cannot probe codec/"
+            "resolution/bandwidth metadata with nothing to probe. At least "
+            "one real segment is required even with --allow-missing-segments."
+        )
+    variant_metadata = probe_segment_variant_metadata(reference_segment_path)
+
+    rendition_result = {
+        "name": SPARSE_RENDITION_NAME,
+        "sparse": True,
+        "video_track_id": None,
+        "audio_track_id": None,
+        "total_loop_duration_ticks": total_loop_duration_ticks,
+        "segment_boundary_ticks": segment_boundary_ticks,
+        "segment_present": segment_present,
+        "audio_segment_boundary_ticks": None,
+        "video_variant": variant_metadata["video"],
+        "audio_variant": None,
+    }
+
+    loop_descriptor = {
+        "version": 2,
+        "created_at": time.time(),
+        "timescale": TIMESCALE,
+        "total_loop_duration_ticks": total_loop_duration_ticks,
+        "segment_duration_seconds": nominal_segment_duration_seconds,
+        "hls_format": hls_format,
+        "hls_ts_mux_audio": True,
+        "daterange_mode": "shared",
+        "cue_tags": "none",
+        "increment_event_ids": False,
+        "daterange_id_format": DATERANGE_ID_FORMAT_DEFAULT,
+        "markers": raw_markers,
+        "asset_boundaries": asset_boundaries,
+        "video_renditions": [rendition_result],
+        "source_input": str(manifest_path),
+        "source_markers_json": str(manifest_path),
+    }
+    descriptor_path = output_package_dir / "loop_descriptor.json"
+    with descriptor_path.open("w", encoding="utf-8") as f:
+        json.dump(loop_descriptor, f, indent=2)
+        f.write("\n")
+
+    logger.info(
+        "Sparse bake complete. %d/%d segment(s) have real media, written to %s",
+        len(segments) - len(missing_indices), len(segments), output_package_dir,
+    )
+
+
 def bake_one_rendition(
     name: str,
     ts_file: Path,
@@ -1164,9 +1534,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "input_path",
         type=Path,
-        help="Path to a franken-ts .ts file, OR a directory containing a "
+        help="Path to a franken-ts .ts file, a directory containing a "
         "rendition ladder (markers.json + one *.ts per rendition -- see "
-        "README.md)",
+        "README.md), OR a segment-list manifest .json (SCOPE.md §11 -- "
+        "selected automatically by this .json extension, not a separate "
+        "flag/binary)",
+    )
+    parser.add_argument(
+        "--allow-missing-segments",
+        action="store_true",
+        help="Segment-list manifest input only (SCOPE.md §11.2): accept "
+        "segments whose media_file is null (no physical media recovered), "
+        "producing a manifest-complete, media-optional package -- a "
+        "request for a missing segment's bytes 404s, but the served "
+        "manifest is otherwise indistinguishable from a fully-populated "
+        "one. Default: hard-fail on any such segment.",
     )
     parser.add_argument(
         "--markers",
@@ -1248,19 +1630,28 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        bake(
-            args.input_path,
-            args.output,
-            segment_duration_seconds=args.segment_duration,
-            dry_run=args.dry_run,
-            markers_override=args.markers,
-            daterange_mode=args.daterange_mode,
-            cue_tags=args.cue_tags,
-            increment_event_ids=args.increment_event_ids,
-            daterange_id_format=args.daterange_id_format,
-            hls_format=args.hls_format,
-            hls_ts_mux_audio=args.hls_ts_mux_audio,
-        )
+        if args.input_path.is_file() and args.input_path.suffix == ".json":
+            bake_segment_list(
+                args.input_path,
+                args.output,
+                allow_missing_segments=args.allow_missing_segments,
+                dry_run=args.dry_run,
+                hls_format=args.hls_format,
+            )
+        else:
+            bake(
+                args.input_path,
+                args.output,
+                segment_duration_seconds=args.segment_duration,
+                dry_run=args.dry_run,
+                markers_override=args.markers,
+                daterange_mode=args.daterange_mode,
+                cue_tags=args.cue_tags,
+                increment_event_ids=args.increment_event_ids,
+                daterange_id_format=args.daterange_id_format,
+                hls_format=args.hls_format,
+                hls_ts_mux_audio=args.hls_ts_mux_audio,
+            )
     except ValidationError as exc:
         logger.error("VALIDATION FAILED: %s", exc)
         return 2

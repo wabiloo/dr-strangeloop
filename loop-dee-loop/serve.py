@@ -124,6 +124,65 @@ def _numeric_segment_index(path: Path) -> int:
     return int(tail)
 
 
+def compute_asset_boundary_set(asset_boundaries: list[int]) -> set[int]:
+    """Every loop always has at least one real asset-boundary discontinuity
+    at local index 0 -- the loop wrap itself (grave-robber/SCOPE.md §6.3:
+    "the loop-wrap boundary is always real") -- whether or not the baked
+    package's own ledger happened to mark index 0 explicitly. Internal
+    boundaries (grave-robber/SCOPE.md §6.1) are every other declared index.
+    """
+    return set(asset_boundaries) | {0}
+
+
+def compute_discontinuity_sequence(
+    global_index: int, segments_per_loop: int, boundaries: set[int]
+) -> int:
+    """Generalizes the original "one discontinuity per loop wrap" counter
+    (which was simply `global_index // segments_per_loop`) to also count
+    internal asset-boundary discontinuities (grave-robber/SCOPE.md §6.1).
+
+    With `boundaries == {0}` (the normal franken-ts-authored case, no
+    internal joins), this reduces exactly to the original formula -- see
+    tests/test_asset_boundary_discontinuity.py.
+    """
+    sorted_boundaries = sorted(boundaries)
+    k = len(sorted_boundaries)
+    loop_number, local_index = divmod(global_index, segments_per_loop)
+    # Number of boundary points <= local_index, i.e. how many of this
+    # loop's own discontinuities have been "reached" by this segment
+    # (inclusive -- a segment sitting exactly on a boundary counts as
+    # having just crossed it, same convention the original loop-only
+    # formula used for local_index 0).
+    local_rank = sum(1 for b in sorted_boundaries if b <= local_index)
+    return loop_number * k + local_rank - 1
+
+
+def compute_declared_offset_ticks_by_local_index(
+    segments_per_loop: int,
+    boundaries: set[int],
+    gap_ticks_by_index: dict[int, int],
+) -> list[int]:
+    """The declared-position accumulator (grave-robber/SCOPE.md §6.2):
+    `declared_offset_ticks[i]` is the sum of every `gap_ticks` crossed by
+    asset boundaries at or before local index `i`, reset every loop
+    iteration (declared position is always loop-relative, computed once
+    here and combined with `loop_number * total_loop_duration_ticks`
+    exactly like the existing serving-position formula --
+    `loop_math.program_date_time_ticks` needs no change, see SCOPE.md §6.2).
+
+    Zero for every index when `gap_ticks_by_index` is empty (the normal,
+    non-archive-derived bake path) -- PDT/Period-start then reduce to
+    today's plain serving-position formula unchanged.
+    """
+    offsets = []
+    running = 0
+    for i in range(segments_per_loop):
+        if i in boundaries:
+            running += gap_ticks_by_index.get(i, 0)
+        offsets.append(running)
+    return offsets
+
+
 class VideoRendition:
     """Read-only view over one rendition's segments within a loop package
     (`<package_dir>/segments/<name>/`). At most one rendition also carries
@@ -131,28 +190,60 @@ class VideoRendition:
 
     def __init__(self, package_dir: Path, rendition: dict):
         self.name: str = rendition["name"]
-        self.video_track_id: int = int(rendition["video_track_id"])
+        self.sparse: bool = bool(rendition.get("sparse", False))
         self.video_variant: dict = rendition["video_variant"]
-
-        self.segments_dir = package_dir / "segments" / self.name
-        self.segment_files: list[Path] = sorted(
-            self.segments_dir.glob(f"*track{self.video_track_id}_*.m4s"),
-            key=_numeric_segment_index,
-        )
-        if not self.segment_files:
-            raise RuntimeError(f"No segment files found in {self.segments_dir}")
 
         self.segment_boundary_ticks: list[int] = [
             int(t) for t in rendition["segment_boundary_ticks"]
         ]
-        if len(self.segment_boundary_ticks) != len(self.segment_files):
-            raise RuntimeError(
-                f"Rendition '{self.name}': loop_descriptor.json declares "
-                f"{len(self.segment_boundary_ticks)} segment boundary "
-                f"tick(s) but {len(self.segment_files)} physical segment "
-                f"file(s) were found on disk -- package is inconsistent, "
-                f"refusing to serve."
+        self.segments_dir = package_dir / "segments" / self.name
+
+        if self.sparse:
+            # SCOPE.md §11: segment-list ('sparse') input mode. Segments
+            # were remuxed one-by-one into standalone, self-initializing
+            # fragments named by their declared ledger index (bake.py's
+            # bake_segment_list) -- never a contiguous glob-and-sort, since
+            # a media_file:null entry leaves a real hole in the index
+            # sequence, not just a shorter list. `segment_present` (also
+            # from loop_descriptor.json) tells us which indices to expect a
+            # file for; a None entry here is exactly what serve.py's 404
+            # guard (segment_path_for_index) checks for.
+            self.video_track_id = None
+            present_flags = rendition.get("segment_present")
+            if present_flags is None or len(present_flags) != len(self.segment_boundary_ticks):
+                raise RuntimeError(
+                    f"Rendition '{self.name}': sparse package must declare "
+                    f"'segment_present' with one entry per segment boundary "
+                    f"tick -- package is inconsistent, refusing to serve."
+                )
+            self.segment_files: list[Path | None] = [
+                (self.segments_dir / f"seg_{i:06d}.m4s") if present else None
+                for i, present in enumerate(present_flags)
+            ]
+            for i, (path, present) in enumerate(zip(self.segment_files, present_flags)):
+                if present and not path.exists():
+                    raise RuntimeError(
+                        f"Rendition '{self.name}': loop_descriptor.json "
+                        f"declares segment {i} present but {path} does not "
+                        f"exist on disk -- package is inconsistent, "
+                        f"refusing to serve."
+                    )
+        else:
+            self.video_track_id = int(rendition["video_track_id"])
+            self.segment_files = sorted(
+                self.segments_dir.glob(f"*track{self.video_track_id}_*.m4s"),
+                key=_numeric_segment_index,
             )
+            if not self.segment_files:
+                raise RuntimeError(f"No segment files found in {self.segments_dir}")
+            if len(self.segment_boundary_ticks) != len(self.segment_files):
+                raise RuntimeError(
+                    f"Rendition '{self.name}': loop_descriptor.json declares "
+                    f"{len(self.segment_boundary_ticks)} segment boundary "
+                    f"tick(s) but {len(self.segment_files)} physical segment "
+                    f"file(s) were found on disk -- package is inconsistent, "
+                    f"refusing to serve."
+                )
 
         self.audio_track_id: int | None = rendition.get("audio_track_id")
         self.audio_variant: dict | None = rendition.get("audio_variant")
@@ -187,10 +278,24 @@ class VideoRendition:
         return self.audio_track_id is not None
 
     def init_path(self) -> Path:
+        if self.sparse:
+            raise RuntimeError(
+                f"Rendition '{self.name}' is sparse (self-initializing "
+                f"segments, SCOPE.md §11) -- it has no shared init segment "
+                f"to serve. Callers must check `.sparse` (or `.self_initializing`, "
+                f"same thing) before requesting one."
+            )
         candidates = list(self.segments_dir.glob(f"*track{self.video_track_id}_init.mp4"))
         if not candidates:
             raise RuntimeError(f"No init segment found for rendition '{self.name}'")
         return candidates[0]
+
+    @property
+    def self_initializing(self) -> bool:
+        """Alias of `.sparse` for readability at call sites that care about
+        the init-segment implication specifically, not the broader
+        "may have holes" meaning."""
+        return self.sparse
 
     def audio_init_path(self) -> Path:
         assert self.audio_track_id is not None
@@ -199,7 +304,10 @@ class VideoRendition:
             raise RuntimeError(f"No audio init segment found for rendition '{self.name}'")
         return candidates[0]
 
-    def segment_path_for_index(self, index: int) -> Path:
+    def segment_path_for_index(self, index: int) -> Path | None:
+        """Returns None for a sparse-mode index with no physical media
+        (SCOPE.md §11.3) -- callers (the segment byte-serving route) must
+        turn that into a 404, never a crash."""
         return self.segment_files[index % len(self.segment_files)]
 
     def audio_segment_path_for_index(self, index: int) -> Path:
@@ -292,6 +400,12 @@ class LoopPackage:
             raise RuntimeError(f"Unsupported HLS format: {self.hls_format!r}")
         if self.hls_format == "ts":
             for rendition in self.video_renditions:
+                if rendition.sparse:
+                    # Sparse-mode TS segments have the same holes as the
+                    # CMAF store (SCOPE.md §11.1) -- checked per-index by
+                    # the segment-serving route (404 guard) instead of a
+                    # blanket count check here.
+                    continue
                 ts_segments = package_dir / "hls-ts" / rendition.name
                 if len(list(ts_segments.glob("*.ts"))) != self.segments_per_loop:
                     raise RuntimeError(f"Missing HLS TS segments for rendition {rendition.name!r}")
@@ -305,6 +419,26 @@ class LoopPackage:
         # video_renditions[0] after the sort above.
         reference = self.video_renditions[0]
         self.segment_boundary_ticks: list[int] = reference.segment_boundary_ticks
+
+        # grave-robber/SCOPE.md §6.1/§6.2: internal asset-boundary
+        # discontinuities + the declared-vs-serving position split. Both
+        # default to a no-op for a normal (non-archive-derived) package:
+        # `asset_boundaries` absent -> only the always-real loop-wrap
+        # boundary at local index 0 (compute_asset_boundary_set), and
+        # `asset_boundary_gap_ticks` absent -> every declared offset is 0,
+        # so PDT/Period-start formulas reduce exactly to today's plain
+        # serving-position value.
+        raw_asset_boundaries = self.descriptor.get("asset_boundaries") or []
+        self.boundaries: set[int] = compute_asset_boundary_set(raw_asset_boundaries)
+        raw_gap_ticks = self.descriptor.get("asset_boundary_gap_ticks") or {}
+        self.asset_boundary_gap_ticks: dict[int, int] = {
+            int(k): int(v) for k, v in raw_gap_ticks.items()
+        }
+        self.declared_offset_ticks_by_local_index: list[int] = (
+            compute_declared_offset_ticks_by_local_index(
+                len(self.segment_boundary_ticks), self.boundaries, self.asset_boundary_gap_ticks
+            )
+        )
 
         segment_durations_ticks = [
             (
@@ -413,9 +547,13 @@ class Channel:
     def build_hls_manifest(self, rendition_name: str, window_segments: int | None = None) -> str:
         rendition = self.package.rendition_by_name(rendition_name)
         is_ts = self.package.hls_format == "ts"
+        # A sparse-mode rendition's segments are self-initializing (SCOPE.md
+        # §11) -- there's no shared init segment to point #EXT-X-MAP at,
+        # same as the "ts" format's own no-init convention.
+        no_init = is_ts or rendition.self_initializing
         return self._build_hls_media_playlist(
             boundary_ticks=rendition.segment_boundary_ticks,
-            init_uri=None if is_ts else "init.mp4",
+            init_uri=None if no_init else "init.mp4",
             seg_uri_template="seg/{index}.ts" if is_ts else "seg/{index}.m4s",
             window_segments=window_segments,
         )
@@ -506,14 +644,21 @@ class Channel:
         # yet -- the window is simply smaller than requested until then,
         # same as any real live stream's startup ramp-up.
         first_global_index = max(0, media_sequence - window_segments + 1)
-        first_loop_number = first_global_index // pkg.segments_per_loop
+        # grave-robber/SCOPE.md §6.1: generalizes the original "one
+        # discontinuity per loop wrap" counter (previously just
+        # `first_global_index // segments_per_loop`) to also count internal
+        # asset-boundary discontinuities -- reduces to exactly that formula
+        # when pkg.boundaries == {0} (see compute_discontinuity_sequence).
+        first_discontinuity_sequence = compute_discontinuity_sequence(
+            first_global_index, pkg.segments_per_loop, pkg.boundaries
+        )
 
         lines = [
             "#EXTM3U",
             "#EXT-X-VERSION:6" if init_uri is None else "#EXT-X-VERSION:7",
             f"#EXT-X-TARGETDURATION:{pkg.max_segment_duration_seconds_rounded_up}",
             f"#EXT-X-MEDIA-SEQUENCE:{first_global_index}",
-            f"#EXT-X-DISCONTINUITY-SEQUENCE:{first_loop_number}",
+            f"#EXT-X-DISCONTINUITY-SEQUENCE:{first_discontinuity_sequence}",
         ]
         if init_uri is not None:
             lines.append(f'#EXT-X-MAP:URI="{init_uri}"')
@@ -551,8 +696,9 @@ class Channel:
             local_index = global_index % pkg.segments_per_loop
             local_loop_number = global_index // pkg.segments_per_loop
 
-            if i > 0 and local_index == 0:
-                # This segment is the first of a new loop iteration and
+            if i > 0 and local_index in pkg.boundaries:
+                # This segment starts a new loop iteration OR an internal
+                # asset-boundary join (grave-robber/SCOPE.md §6.1), and
                 # isn't the very first entry in the window (whose implicit
                 # discontinuity sequence is already covered by the header
                 # above) -- signal the timestamp discontinuity here.
@@ -617,6 +763,28 @@ class Channel:
                     )
                     loop_start_datetime = _dt.datetime.utcfromtimestamp(loop_start_seconds)
                     signaling_markers = markers_to_signaling(matching_markers)
+                    # grave-robber/SCOPE.md §6.2: DATERANGE START-DATE is an
+                    # absolute wall-clock value (unlike DASH's Period-relative
+                    # <Event presentationTime>, which needs no adjustment --
+                    # the Period's own start= already carries the declared
+                    # offset, see build_dash_manifest), so each marker's own
+                    # declared position must be computed individually here:
+                    # real serving-position tick -> whichever segment it
+                    # falls in -> that segment's accumulated declared offset.
+                    # A no-op (0 for every index) for any package with no
+                    # internal asset boundaries.
+                    signaling_markers = [
+                        dataclasses.replace(
+                            sm,
+                            pts_time_ticks=sm.pts_time_ticks
+                            + pkg.declared_offset_ticks_by_local_index[
+                                segment_index_for_position(
+                                    sm.pts_time_ticks, pkg.segment_boundary_ticks
+                                )
+                            ],
+                        )
+                        for sm in signaling_markers
+                    ]
                     if pkg.increment_event_ids:
                         signaling_markers = _remap_signaling_markers(
                             signaling_markers, pkg.markers, local_loop_number
@@ -665,9 +833,19 @@ class Channel:
                         build_cue_out_cont_tag(elapsed_ticks, brk["duration_ticks"], pkg.timescale)
                     )
 
+            # grave-robber/SCOPE.md §6.2: the declared position fed into PDT
+            # is the real serving-position tick PLUS every gap_ticks crossed
+            # by an asset boundary at or before this segment -- the serving
+            # position itself (used for the live-edge/window math above) is
+            # never perturbed. 0 for every index on a package with no
+            # internal asset boundaries, so this is exactly today's value
+            # unchanged in that (the common) case.
+            declared_segment_start_ticks = (
+                segment_start_ticks + pkg.declared_offset_ticks_by_local_index[local_index]
+            )
             program_date_ticks = program_date_time_ticks(
                 local_loop_number,
-                segment_start_ticks,
+                declared_segment_start_ticks,
                 pkg.total_loop_duration_ticks,
                 self.epoch_ticks,
             )
@@ -752,9 +930,6 @@ class Channel:
             _dt.datetime.utcfromtimestamp(now_seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
             + "Z"
         )
-        total_loop_duration_seconds = ticks_to_wall_clock_seconds(
-            pkg.total_loop_duration_ticks, pkg.timescale
-        )
 
         # Build the list of (loop_number, [local_index, ...]) pairs, one per
         # <Period> to emit. Crucially, the CURRENTLY OPEN loop iteration
@@ -790,23 +965,69 @@ class Channel:
         # Used only to pad out extra DVR history when the current loop
         # hasn't yet produced `window_segments` worth of its own segments
         # (e.g. right after a loop wrap).
-        open_count = seg_index + 1
-        periods_plan: list[tuple[int, list[int]]] = []
-        if open_count < window_segments and current_loop_number > 0:
-            needed_from_prev = min(
-                window_segments - open_count, pkg.segments_per_loop
+        # grave-robber/SCOPE.md §6.1: generalizes "one Period per loop
+        # iteration" to "one Period per asset span" -- a span being the run
+        # of segments between consecutive entries of pkg.boundaries (always
+        # includes local index 0, the loop wrap). With no internal asset
+        # boundaries (pkg.boundaries == {0}), there is exactly one span per
+        # loop and every span_bounds/span_index_for_local call below reduces
+        # to the original whole-loop behavior.
+        boundaries_sorted = sorted(pkg.boundaries)
+        spans_per_loop = len(boundaries_sorted)
+
+        def _span_bounds(span_index: int) -> tuple[int, int]:
+            """[start_local, end_local) for asset span `span_index`."""
+            start = boundaries_sorted[span_index]
+            end = (
+                boundaries_sorted[span_index + 1]
+                if span_index + 1 < spans_per_loop
+                else pkg.segments_per_loop
             )
-            prev_loop_number = current_loop_number - 1
-            start_local = pkg.segments_per_loop - needed_from_prev
-            periods_plan.append(
-                (prev_loop_number, list(range(start_local, pkg.segments_per_loop)))
-            )
-        periods_plan.append((current_loop_number, list(range(0, seg_index + 1))))
+            return start, end
+
+        def _span_index_for_local(local_index: int) -> int:
+            idx = 0
+            for i, boundary in enumerate(boundaries_sorted):
+                if boundary <= local_index:
+                    idx = i
+                else:
+                    break
+            return idx
+
+        current_span_index = _span_index_for_local(seg_index)
+        current_span_start, _ = _span_bounds(current_span_index)
+        # Segments served so far in the CURRENT open span -- never
+        # front-pruned (same DASH-client requirement as before, now scoped
+        # to the span rather than the whole loop).
+        open_count = seg_index - current_span_start + 1
+
+        periods_plan: list[tuple[int, int, list[int]]] = []
+        if open_count < window_segments:
+            if current_span_index > 0:
+                prev_loop_number, prev_span_index = current_loop_number, current_span_index - 1
+            elif current_loop_number > 0:
+                prev_loop_number, prev_span_index = current_loop_number - 1, spans_per_loop - 1
+            else:
+                prev_loop_number = None
+            if prev_loop_number is not None:
+                prev_start, prev_end = _span_bounds(prev_span_index)
+                needed_from_prev = min(window_segments - open_count, prev_end - prev_start)
+                start_local = prev_end - needed_from_prev
+                periods_plan.append(
+                    (prev_loop_number, prev_span_index, list(range(start_local, prev_end)))
+                )
+        periods_plan.append(
+            (current_loop_number, current_span_index, list(range(current_span_start, seg_index + 1)))
+        )
 
         def _period_entries(
-            boundary_ticks: list[int], local_indices: list[int]
+            boundary_ticks: list[int], local_indices: list[int], span_start_local: int
         ) -> list[tuple[int, int, int]]:
-            """(segment_start_ticks, duration_ticks, local_index), period-relative."""
+            """(segment_start_ticks, duration_ticks, local_index), relative
+            to this Period's own start (span_start_local's own tick), not
+            the whole loop's -- identical to loop-relative when
+            span_start_local == 0 (the common, no-internal-boundary case)."""
+            span_start_ticks = boundary_ticks[span_start_local]
             entries = []
             for local_index in local_indices:
                 segment_start_ticks = boundary_ticks[local_index]
@@ -815,21 +1036,37 @@ class Channel:
                 else:
                     seg_end_ticks_local = pkg.total_loop_duration_ticks
                 duration_ticks = seg_end_ticks_local - segment_start_ticks
-                entries.append((segment_start_ticks, duration_ticks, local_index))
+                entries.append((segment_start_ticks - span_start_ticks, duration_ticks, local_index))
             return entries
 
         period_xml_parts = []
-        for loop_number, local_indices in periods_plan:
+        for loop_number, span_index, local_indices in periods_plan:
             if not local_indices:
                 continue
-            period_start_seconds = loop_number * total_loop_duration_seconds
+            span_start_local, _ = _span_bounds(span_index)
+            # grave-robber/SCOPE.md §6.2: declared position (real serving
+            # position + every gap_ticks crossed so far) drives the
+            # Period's own start=, exactly mirroring the HLS side's PDT
+            # computation -- 0 offset (i.e. today's plain
+            # loop_number*total_loop_duration value) whenever there are no
+            # internal asset boundaries.
+            period_start_ticks_relative = (
+                loop_number * pkg.total_loop_duration_ticks
+                + pkg.segment_boundary_ticks[span_start_local]
+                + pkg.declared_offset_ticks_by_local_index[span_start_local]
+            )
+            period_start_seconds = ticks_to_wall_clock_seconds(
+                period_start_ticks_relative, pkg.timescale
+            )
             first_number = loop_number * pkg.segments_per_loop + local_indices[0]
 
             # Reference (ad-decision authority) entries for this period,
             # used for marker placement -- loop-relative ticks, since each
             # Period's own <EventStream> is independently time-based from
             # its own start.
-            reference_entries = _period_entries(pkg.segment_boundary_ticks, local_indices)
+            reference_entries = _period_entries(
+                pkg.segment_boundary_ticks, local_indices, span_start_local
+            )
 
             # `id` is the real, plain event_id (as an actual int, matching
             # SCTE-35's own segmentation_event_id / the channel config's
@@ -900,9 +1137,28 @@ class Channel:
                     direction = "out"
                 else:
                     direction = "in"
-                stream_value = f"{loop_number}-{direction}"
+                # Unchanged shape when there's exactly one span per loop
+                # (the common, no-internal-asset-boundary case) -- only
+                # disambiguated by span_index too when grave-robber/
+                # SCOPE.md §6.1 internal boundaries make more than one
+                # Period share the same loop_number, so dash.js's
+                # (EventStream@value, id) dedupe key doesn't fold events
+                # from two different Periods together.
+                stream_value = (
+                    f"{loop_number}-{direction}"
+                    if spans_per_loop == 1
+                    else f"{loop_number}-{span_index}-{direction}"
+                )
+                # Period-relative, like <S t=...> -- subtract this Period's
+                # own start tick (grave-robber/SCOPE.md §6.2's declared
+                # offset lives in the Period's start= instead, see above; a
+                # no-op subtraction of pkg.segment_boundary_ticks[0]==0 in
+                # the common single-span-per-loop case).
+                event_presentation_time = (
+                    marker["pts_time_ticks"] - pkg.segment_boundary_ticks[span_start_local]
+                )
                 event_xml_by_stream.setdefault(stream_value, []).append(
-                    f'    <Event presentationTime="{marker["pts_time_ticks"]}"'
+                    f'    <Event presentationTime="{event_presentation_time}"'
                     f'{duration_attr} id="{event_id_dec}">\n'
                     f'      <Signal xmlns="urn:scte:scte35:2013:xml">\n'
                     f'        <Binary>{splice_command_b64}</Binary>\n'
@@ -912,13 +1168,23 @@ class Channel:
 
             video_representations = []
             for idx, rendition in enumerate(pkg.video_renditions):
-                entries = _period_entries(rendition.segment_boundary_ticks, local_indices)
+                entries = _period_entries(
+                    rendition.segment_boundary_ticks, local_indices, span_start_local
+                )
                 timeline_lines = "\n".join(
                     f'        <S t="{t}" d="{d}" />' for t, d, _ in entries
                 )
                 v = rendition.video_variant
+                # A sparse (self-initializing) rendition's segments carry
+                # their own moov (SCOPE.md §11) -- there's no shared init
+                # segment to point `initialization=` at, same reasoning as
+                # HLS's #EXT-X-MAP omission above.
+                init_attr = (
+                    "" if rendition.self_initializing
+                    else f' initialization="{rendition.name}/init.mp4"'
+                )
                 video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
-        <SegmentTemplate media="{rendition.name}/seg/$Number$.m4s" initialization="{rendition.name}/init.mp4"
+        <SegmentTemplate media="{rendition.name}/seg/$Number$.m4s"{init_attr}
                          timescale="{pkg.timescale}" startNumber="{first_number}">
           <SegmentTimeline>
 {timeline_lines}
@@ -930,7 +1196,7 @@ class Channel:
             if pkg.has_audio:
                 a = pkg.audio_rendition.audio_variant
                 audio_entries = _period_entries(
-                    pkg.audio_rendition.audio_segment_boundary_ticks, local_indices
+                    pkg.audio_rendition.audio_segment_boundary_ticks, local_indices, span_start_local
                 )
                 audio_timeline_lines = "\n".join(
                     f'        <S t="{t}" d="{d}" />' for t, d, _ in audio_entries
@@ -955,7 +1221,12 @@ class Channel:
                 for stream_value, events in event_xml_by_stream.items()
             )
 
-            period_xml_parts.append(f'''  <Period id="loop{loop_number}" start="PT{period_start_seconds}S">
+            period_id = (
+                f"loop{loop_number}"
+                if spans_per_loop == 1
+                else f"loop{loop_number}-{span_start_local}"
+            )
+            period_xml_parts.append(f'''  <Period id="{period_id}" start="PT{period_start_seconds}S">
 {event_streams_xml}
     <AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
 {chr(10).join(video_representations)}
@@ -997,11 +1268,17 @@ class Channel:
         assert self.package.audio_rendition is not None
         return self.package.audio_rendition.audio_segment_path_for_index(physical_index)
 
-    def hls_ts_segment_path(self, rendition_name: str, physical_index: int) -> Path:
+    def hls_ts_segment_path(self, rendition_name: str, physical_index: int) -> Path | None:
+        """Returns None for a sparse-mode index with no physical TS file
+        (SCOPE.md §11.3's 404 guard, applied to the hls_format='ts' store
+        as well as the CMAF one)."""
         rendition = self.package.rendition_by_name(rendition_name)
         if physical_index >= self.package.segments_per_loop:
             raise IndexError(physical_index)
-        return self.package.package_dir / "hls-ts" / rendition.name / f"{physical_index}.ts"
+        path = self.package.package_dir / "hls-ts" / rendition.name / f"{physical_index}.ts"
+        if rendition.sparse and not path.exists():
+            return None
+        return path
 
 
 def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) -> Flask:
@@ -1066,6 +1343,13 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
             rendition = package.rendition_by_name(rendition_name)
         except KeyError:
             abort(404)
+        if rendition.self_initializing:
+            # SCOPE.md §11: a sparse rendition's segments carry their own
+            # moov -- there is no shared init to serve. The manifest never
+            # advertises this URI in that case (see build_hls_manifest's
+            # `no_init` handling), so a real player should never hit this;
+            # 404 defensively rather than raising.
+            abort(404)
         return send_file(rendition.init_path())
 
     @app.get("/<rendition_name>/seg/<int:physical_index>.m4s")
@@ -1073,6 +1357,11 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
         try:
             path = channel.segment_bytes_path(rendition_name, physical_index)
         except (KeyError, IndexError):
+            abort(404)
+        # SCOPE.md §11.3: a sparse-mode index with no physical media 404s --
+        # manifest generation is otherwise completely unaffected (the
+        # manifest always advertised this segment as if it existed).
+        if path is None:
             abort(404)
         return send_file(path, mimetype="video/iso.segment")
 
@@ -1083,6 +1372,8 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
         try:
             path = channel.hls_ts_segment_path(rendition_name, physical_index)
         except (KeyError, IndexError):
+            abort(404)
+        if path is None:
             abort(404)
         return send_file(path, mimetype="video/mp2t")
 

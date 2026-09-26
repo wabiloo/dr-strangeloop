@@ -100,6 +100,50 @@ duplicated per video rendition.
 A single loose `.ts` file remains supported as a lightweight escape hatch
 for quick one-off testing — it degenerates naturally into a ladder of one.
 
+### Segment-list ("sparse") input mode (SCOPE.md §11)
+
+Alongside a `.ts` file/rendition directory, `bake.py` also accepts a
+**segment-list manifest** — a `.json` file (selected automatically by that
+extension, no separate flag/binary) shaped like:
+
+```json
+{
+  "segments": [
+    {"index": 0, "duration_ticks": 540000, "asset_boundary": true,  "media_file": "seg_000.m4s"},
+    {"index": 1, "duration_ticks": 540000, "asset_boundary": false, "media_file": null},
+    {"index": 2, "duration_ticks": 540000, "asset_boundary": false, "media_file": "seg_002.m4s"}
+  ],
+  "markers": [ /* same .markers.json shape as SCOPE.md §2 */ ]
+}
+```
+
+This is the input `grave-robber` produces from a captured HTTP archive
+(HAR/Proxyman log) of a real HLS/DASH session — an inherently sparse
+timeline where some segments' real media bytes were never captured. The
+**ledger is always complete** regardless of media completeness:
+`total_loop_duration_ticks` and every segment's boundary tick are derived
+from the manifest's declared `duration_ticks`, and the served manifest
+always looks fully populated (no `#EXT-X-GAP`, no DASH `SegmentTimeline`
+gap) — a request for a missing segment's bytes 404s instead.
+
+```bash
+# Hard-fails if any segment has media_file: null.
+python3 bake.py archive-manifest.json --output /var/loop-packages/archive-channel
+
+# Accept missing segments (manifest-complete, media-optional):
+python3 bake.py archive-manifest.json --output /var/loop-packages/archive-channel \
+    --allow-missing-segments
+```
+
+Known limitations of this mode (v1): single rendition only (no ABR
+ladder — an archive-derived source has already been reduced to one
+canonical reference rendition upstream, see `grave-robber/SCOPE.md` §8),
+video-only (no separate shared audio track/Representation), and segments
+are remuxed into self-initializing fragments (each carries its own `moov`)
+rather than sharing one init segment, since sparse-mode segments come from
+independently captured archive entries with no guaranteed common encoder
+init.
+
 ### SCTE-35 signaling shape
 
 `bake.py` accepts three flags controlling the shape of the HLS/DASH
@@ -348,3 +392,9 @@ which stopped onboarding new customers April 30, 2026) behind CloudFront.
 - `loop_descriptor.json` is versioned (`"version": 2` for multi-rendition
   support) but there is no migration path from `version: 1` packages —
   rebake with the current `bake.py` if you have an old package.
+- The segment-list ("sparse") input mode (SCOPE.md §11) derives a
+  best-effort RFC 6381 codec string from ffprobe's H.264 profile/level
+  (constraint-set flag byte assumed zero) rather than reading a real
+  encoder-declared value back from a GPAC dasher pass, since no such pass
+  runs in this mode — not yet validated against a real archive capture
+  (SCOPE.md's own "not yet spiked" note applies here too).
