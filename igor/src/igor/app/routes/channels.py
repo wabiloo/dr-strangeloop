@@ -29,6 +29,13 @@ class ChannelCreatePayload(BaseModel):
     bucket_name: str
     content_folder: str
     source_path: str
+    # grave-robber/SCOPE.md §10: [input].allow_missing_segments -- only
+    # meaningful when source_path points at a grave-robber segment-list
+    # manifest (.json) rather than a franken-ts .ts/rendition dir. Defaults
+    # on for archive-import source-kind in ChannelNew.vue, but stays a
+    # plain bake.py-level flag here (no backend distinction once a path is
+    # picked -- see ChannelNew.vue's own comment).
+    allow_missing_segments: bool = False
     segment_duration: float = 4.0
     dvr_window_seconds: float = 30
     hls_format: str = "cmaf"

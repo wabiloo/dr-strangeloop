@@ -1,4 +1,7 @@
 import type {
+  ArchiveCoverage,
+  ArchiveImportStatus,
+  ArchiveListItem,
   BrowseResult,
   ChannelCreatePayload,
   ChannelHealth,
@@ -141,6 +144,36 @@ export function scteVerifyReportUrl(
 ): string {
   const url = `${PLAYLISTS_BASE}/${encodeURIComponent(name)}/scte-verify/report?view=${view}`
   return cacheBust === undefined ? url : `${url}&v=${encodeURIComponent(String(cacheBust))}`
+}
+
+// ---------------------------------------------------------------------------
+// grave-robber archive imports (grave-robber/SCOPE.md §10)
+// ---------------------------------------------------------------------------
+
+const ARCHIVES_BASE = '/api/v1/archives'
+
+export function listArchives(): Promise<ArchiveListItem[]> {
+  return getJson(`${ARCHIVES_BASE}/`)
+}
+
+/** Per-variant wall-clock coverage map for the import wizard's range
+ * picker (SCOPE.md §8 steps 1-2). */
+export function getArchiveCoverage(name: string): Promise<ArchiveCoverage> {
+  return getJson(`${ARCHIVES_BASE}/${encodeURIComponent(name)}/coverage`)
+}
+
+/** Spawns the grave-robber `ingest` job for a human-confirmed reference
+ * variant (SCOPE.md §8 step 5) -- `manifestUrl` is one of the URLs
+ * returned by getArchiveCoverage. */
+export function importArchive(name: string, manifestUrl: string, format?: 'HLS' | 'DASH'): Promise<Job> {
+  return postJson(`${ARCHIVES_BASE}/${encodeURIComponent(name)}/import`, {
+    manifest_url: manifestUrl,
+    format,
+  })
+}
+
+export function getArchiveImportStatus(name: string): Promise<ArchiveImportStatus> {
+  return getJson(`${ARCHIVES_BASE}/${encodeURIComponent(name)}/import/status`)
 }
 
 // ---------------------------------------------------------------------------

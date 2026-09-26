@@ -15,6 +15,47 @@ export interface PlaylistListItem {
   error?: string
 }
 
+/** GET /api/v1/archives/{name}/import/status -- output freshness, mirrors
+ * PlaylistListItem's preview/output status shape. */
+export interface ArchiveImportStatus {
+  exists: boolean
+  stale: boolean
+  manifest_path: string | null
+}
+
+/** One row from GET /api/v1/archives/ (grave-robber/SCOPE.md §10's list view). */
+export interface ArchiveListItem {
+  name: string
+  path: string
+  format: string
+  entry_count?: number
+  variant_count?: number
+  session_duration_seconds?: number | null
+  marker_count?: number | null
+  error?: string
+  import: ArchiveImportStatus | null
+}
+
+/** One [start, end) wall-clock interval a variant was actually captured for. */
+export interface CoverageRange {
+  start: string
+  end: string
+}
+
+/** One variant's entry in GET /api/v1/archives/{name}/coverage. */
+export interface VariantCoverage {
+  manifest_url: string
+  format: 'HLS' | 'DASH'
+  covered_ranges: CoverageRange[]
+}
+
+/** GET /api/v1/archives/{name}/coverage -- SCOPE.md §8 steps 1-2's
+ * per-variant coverage map, for the import wizard's range picker. */
+export interface ArchiveCoverage {
+  name: string
+  variants: VariantCoverage[]
+}
+
 /** franken-ts's franken_ts.config.Config, as raw parsed YAML -- kept as a
  * loose record because the form is schema-driven (see /api/v1/playlists/schema,
  * a live JSON Schema export of the Pydantic model) rather than hand-typed. */
@@ -196,6 +237,10 @@ export interface ChannelCreatePayload {
   bucket_name: string
   content_folder: string
   source_path: string
+  /** grave-robber/SCOPE.md §10: [input].allow_missing_segments -- only
+   * meaningful when source_path is a grave-robber segment-list manifest,
+   * but stays a plain bake.py-level flag regardless of source kind. */
+  allow_missing_segments?: boolean
   segment_duration?: number
   dvr_window_seconds?: number
   hls_format?: 'cmaf' | 'ts'

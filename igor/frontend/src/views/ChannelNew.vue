@@ -5,12 +5,13 @@ import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Select from 'primevue/select'
+import SelectButton from 'primevue/selectbutton'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { buildPlaylist, defineChannel, listPlaylists } from '../api/client'
+import { buildPlaylist, defineChannel, listArchives, listPlaylists } from '../api/client'
 import JobPanel from '../components/JobPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
-import type { ChannelCreatePayload, Job, PlaylistListItem } from '../api/types'
+import type { ArchiveListItem, ChannelCreatePayload, Job, PlaylistListItem } from '../api/types'
 
 const router = useRouter()
 const saving = ref(false)
@@ -20,6 +21,51 @@ const playlists = ref<PlaylistListItem[]>([])
 const selectedPlaylistName = ref<string | null>(null)
 const buildJobId = ref<string | null>(null)
 const building = ref(false)
+
+// ── Source kind: franken-ts playlist vs. grave-robber archive import
+// (grave-robber/SCOPE.md §10) -- both resolve to the same form.source_path
+// field underneath once a path is picked; bake.py/its-a-live only ever see
+// the resulting path, never "playlist" or "archive" as a concept. ─────────
+const sourceKindOptions = [
+  { label: 'franken-ts playlist', value: 'playlist' },
+  { label: 'Archive import', value: 'archive' },
+]
+const sourceKind = ref<'playlist' | 'archive'>('playlist')
+const archives = ref<ArchiveListItem[]>([])
+const selectedArchiveName = ref<string | null>(null)
+const selectedArchive = computed(() => archives.value.find((a) => a.name === selectedArchiveName.value) ?? null)
+const archiveOptions = computed(() =>
+  archives.value.map((a) => ({
+    label: a.import
+      ? `${a.name} -- imported (${a.variant_count ?? 0} variant${a.variant_count === 1 ? '' : 's'})`
+      : `${a.name} -- not yet imported (${a.variant_count ?? 0} variant${a.variant_count === 1 ? '' : 's'})`,
+    value: a.name,
+    disabled: !a.import,
+  })),
+)
+
+function selectArchive(name: string | null) {
+  selectedArchiveName.value = name
+  const a = archives.value.find((ar) => ar.name === name)
+  if (a?.import?.manifest_path) form.source_path = a.import.manifest_path
+}
+
+async function loadArchives() {
+  try {
+    archives.value = await listArchives()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+watch(sourceKind, (kind) => {
+  // Defaults on for archive-import source kind (SCOPE.md §10) -- the
+  // near-certain case (HAR captures are frequently manifest-only), but
+  // stays visible/editable regardless of source kind, since it's a plain
+  // bake.py-level flag, not intrinsically tied to where the content came from.
+  form.allow_missing_segments = kind === 'archive'
+  if (kind === 'archive' && archives.value.length === 0) loadArchives()
+})
 
 const selectedPlaylist = computed(() => playlists.value.find((c) => c.name === selectedPlaylistName.value) ?? null)
 
@@ -49,6 +95,7 @@ const form = reactive<ChannelCreatePayload>({
   bucket_name: '',
   content_folder: 'its-a-live/content',
   source_path: '',
+  allow_missing_segments: false,
   segment_duration: 4.0,
   dvr_window_seconds: 30,
   hls_format: 'cmaf',
@@ -209,6 +256,11 @@ async function submit() {
 
     <h4 class="mb-0 mt-2">Content</h4>
     <div class="flex flex-column gap-1">
+      <label>Source kind</label>
+      <SelectButton v-model="sourceKind" :options="sourceKindOptions" option-label="label" option-value="value" />
+    </div>
+
+    <div v-if="sourceKind === 'playlist'" class="flex flex-column gap-1">
       <label for="source-playlist">Playlist</label>
       <Select
         id="source-playlist"
@@ -227,9 +279,46 @@ async function submit() {
       <JobPanel v-if="buildJobId" :job-id="buildJobId" @finished="onBuildFinished" />
     </div>
 
+    <div v-else class="flex flex-column gap-1">
+      <label for="source-archive">Archive import</label>
+      <Select
+        id="source-archive"
+        :model-value="selectedArchiveName"
+        :options="archiveOptions"
+        option-label="label"
+        option-value="value"
+        placeholder="Pick an imported archive, or enter a manifest.json path manually below"
+        show-clear
+        @update:model-value="selectArchive"
+      />
+      <div v-if="selectedArchive" class="flex align-items-center gap-2 mt-1">
+        <RouterLink :to="`/archives/${selectedArchive.name}`" class="text-sm">
+          {{ selectedArchive.import ? 'Re-run import' : 'Import this archive' }}
+        </RouterLink>
+      </div>
+      <div v-if="archives.length === 0" class="text-color-secondary text-sm">
+        No archives found. Drop a HAR/Proxyman log into <code>data/archives/</code> and visit
+        <RouterLink to="/archives">Archives</RouterLink> to import one first.
+      </div>
+    </div>
+
     <div class="flex flex-column gap-1">
-      <label for="source">franken-ts output path (.ts file or rendition-ladder dir)</label>
+      <label for="source">{{ sourceKind === 'playlist' ? 'franken-ts output path (.ts file or rendition-ladder dir)' : 'grave-robber manifest.json path' }}</label>
       <InputText id="source" v-model="form.source_path" placeholder="../outputs/mychannel" />
+    </div>
+
+    <div class="flex align-items-center gap-2">
+      <Checkbox v-model="form.allow_missing_segments" binary input-id="allow-missing-segments" />
+      <label for="allow-missing-segments">
+        Allow missing segments (manifest-complete, media-optional)
+      </label>
+    </div>
+    <div class="text-color-secondary text-xs">
+      Only meaningful for a grave-robber segment-list manifest (an archive import almost always has
+      some segments with no recovered media -- HAR captures are frequently manifest-only). A
+      request for a missing segment's bytes 404s, but the served manifest is otherwise
+      indistinguishable from a fully-populated one. Off by default for a franken-ts playlist, since
+      that path never has missing segments to begin with.
     </div>
 
     <template v-if="usesChannelSection">

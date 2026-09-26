@@ -5,6 +5,7 @@ import { RouterLink, RouterView, useRoute } from 'vue-router'
 
 const route = useRoute()
 const isPlaylistsActive = computed(() => route.path.startsWith('/playlists'))
+const isArchivesActive = computed(() => route.path.startsWith('/archives'))
 const isChannelsActive = computed(() => route.path.startsWith('/channels'))
 </script>
 
@@ -47,6 +48,9 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
         <nav class="app-nav">
           <RouterLink to="/playlists" class="app-nav-link" :class="{ 'app-nav-link-active': isPlaylistsActive }">
             Playlists
+          </RouterLink>
+          <RouterLink to="/archives" class="app-nav-link" :class="{ 'app-nav-link-active': isArchivesActive }">
+            Archives
           </RouterLink>
           <RouterLink to="/channels" class="app-nav-link" :class="{ 'app-nav-link-active': isChannelsActive }">
             Channels

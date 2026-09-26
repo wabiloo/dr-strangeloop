@@ -63,6 +63,7 @@ content_folder = "{content_folder}"
 
 [input]
 source_path = "{source_path}"
+allow_missing_segments = {allow_missing_segments}
 """
 
 _MARKERS_EXTRA = """
@@ -113,6 +114,7 @@ def generate_toml(
     bucket_name: str,
     content_folder: str,
     source_path: str,
+    allow_missing_segments: bool = False,
     segment_duration: float = 4.0,
     dvr_window_seconds: float = 30,
     hls_format: str = "cmaf",
@@ -135,6 +137,7 @@ def generate_toml(
     content = _TOML_TEMPLATE.format(
         name=name, backend=backend, region=region, bucket_name=bucket_name,
         content_folder=content_folder, source_path=source_path,
+        allow_missing_segments=str(allow_missing_segments).lower(),
     )
     if backend == "ecs-express":
         if port == "auto":

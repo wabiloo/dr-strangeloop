@@ -67,6 +67,12 @@ def spark(cfg, session, channel_name, extra_args=None):
                               "--daterange-id-format", daterange_id_format]
     if increment_event_ids:
         bake_args.append("--increment-event-ids")
+    # grave-robber/SCOPE.md §10: only meaningful when [input].source_path
+    # points at a segment-list manifest (.json) rather than a franken-ts
+    # .ts/rendition dir -- bake.py itself ignores this flag for the normal
+    # input shape, so it's harmless to always pass through when set.
+    if cfg.get("input", {}).get("allow_missing_segments", False):
+        bake_args.append("--allow-missing-segments")
 
     print(f"==> Baking locally: {source_path} -> {local_output_dir}")
     print(f"    {' '.join(bake_args)}")
