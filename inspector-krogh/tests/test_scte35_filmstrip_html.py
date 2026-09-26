@@ -69,3 +69,26 @@ def test_endcap_frames_and_ellipsis():
     assert "00:00:00.000" in html
     assert "00:00:59.960" in html
     assert html.count('<span class="ell-dots">') == 3
+
+
+def test_asset_bars_join_frames_and_durations():
+    markers = [_marker(1, "BRK", "Break", 10.0, 20.0)]
+    frames = {"evt1_start": _shots(10.0, "a"), "evt1_stop": _shots(20.0, "b"),
+              "trans1": _shots(15.0, "t")}
+    report = _report(markers, frames)
+    report["timeline"] = {
+        "assets": [
+            {"asset_id": "a1", "file": "a1.mp4", "start": 0.0, "end": 10.0},
+            {"asset_id": "a2", "file": "a2.mp4", "start": 10.0, "end": 15.0},
+            {"asset_id": "a3", "file": "a3.mp4", "start": 15.0, "end": 20.0},
+        ],
+        "transitions": [{"index": 1, "time": 15.0, "from_asset": "a2", "from_file": "a2.mp4",
+                         "to_asset": "a3", "to_file": "a3.mp4"}],
+    }
+    html = render_filmstrip(report)
+    assert html.count('class="span-bar asset') >= 2
+    assert "a2 · 00:00:05.000" in html
+    assert "Break #1 · 00:00:10.000" in html
+    # only 2 frames before / 1 after the +0 frame are kept for a marker-less join
+    assert "00:00:14.920" in html and "00:00:15.040" in html
+    assert "00:00:14.880" not in html and "00:00:15.080" not in html

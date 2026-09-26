@@ -78,6 +78,19 @@ def _build_columns(report: dict, frame_dur: float, base_dir: Optional[Path]) -> 
             })
             col["is_idr"] = col["is_idr"] or shot.get("is_idr", False)
 
+    for tr in (report.get("timeline") or {}).get("transitions", []):
+        for shot in report.get("frames", {}).get(f"trans{tr['index']}", []):
+            if shot["label"] not in ("-2", "-1", "+0", "+1"):
+                continue
+            idx = round(shot["pts_seconds"] / frame_dur)
+            col = by_pts.setdefault(idx, {
+                "type": "frame", "pts": shot["pts_seconds"],
+                "is_idr": shot.get("is_idr", False),
+                "img": _img_data_uri(shot.get("file"), base_dir),
+                "tags": [], "landing": [],
+            })
+            col["is_idr"] = col["is_idr"] or shot.get("is_idr", False)
+
     ordered = [by_pts[k] for k in sorted(by_pts)]
     if not ordered:
         return []
@@ -91,6 +104,26 @@ def _build_columns(report: dict, frame_dur: float, base_dir: Optional[Path]) -> 
         columns.append(col)
         prev_idx = idx
     return columns
+
+
+def _asset_bars(report: dict, columns: list[dict], frame_dur: float) -> list[dict]:
+    """One bar per asset from its first frame column up to (not including)
+    the next asset's first frame column; the last asset runs to the last
+    frame shown. Assets whose start frame isn't in the strip are skipped."""
+    assets = (report.get("timeline") or {}).get("assets") or []
+    pos_by_idx = {round(c["pts"] / frame_dur): i for i, c in enumerate(columns) if c["type"] == "frame"}
+    starts = [pos_by_idx.get(round(a["start"] / frame_dur)) for a in assets]
+    last_frame_col = max(pos_by_idx.values(), default=-1)
+    bars = []
+    for i, a in enumerate(assets):
+        c0 = starts[i]
+        if c0 is None:
+            continue
+        c1 = starts[i + 1] if i + 1 < len(assets) else last_frame_col + 1
+        if c1 is None or c1 <= c0:
+            continue
+        bars.append({"asset": a, "col_start": c0, "end_col": c1})
+    return bars
 
 
 def _span_bars(report: dict, columns: list[dict], frame_dur: float) -> tuple[list[dict], list[dict]]:
@@ -129,6 +162,8 @@ def _upid_short(ev: Optional[dict]) -> str:
 
 def _bar_label_lines(marker: dict) -> tuple[str, str]:
     line1 = f'{marker["type_name"]} #{marker["event_id"]}'
+    if marker.get("duration_seconds") is not None:
+        line1 += f' · {_fmt_time(marker["duration_seconds"])}'
     seg = marker.get("start") or marker.get("stop") or {}
     parts = []
     if seg.get("segment_num") is not None:
@@ -188,6 +223,11 @@ def render_filmstrip(report: dict, base_dir: Optional[Path] = None) -> str:
     _place_tags(columns)
     spans, pins = _span_bars(report, columns, frame_dur)
     type_codes, span_rows = _assign_rows(spans)
+    asset_bars = _asset_bars(report, columns, frame_dur)
+    asset_rows = 1 if asset_bars else 0
+    for sp in spans:
+        sp["row"] += asset_rows
+    span_rows += asset_rows
 
     colors = type_colors(type_codes)
 
@@ -206,6 +246,14 @@ def render_filmstrip(report: dict, base_dir: Optional[Path] = None) -> str:
     grid_template_rows = " ".join(row_heights)
 
     cells: list[str] = []
+
+    for i, ab in enumerate(asset_bars):
+        a = ab["asset"]
+        dur = _fmt_time(a["end"] - a["start"])
+        cells.append(f"""
+        <div class="span-bar asset a{i % 2}" style="grid-column:{ab['col_start'] + 1} / {ab['end_col'] + 1};grid-row:1" title="{escape(str(a['asset_id']))} ({escape(str(a['file']))})">
+          <span class="sb-l1">{escape(str(a['asset_id'] or a['file']))} · {dur}</span><span class="sb-l2">{escape(str(a['file']))}</span>
+        </div>""")
 
     for sp in spans:
         m = sp["marker"]
@@ -280,6 +328,8 @@ header{{display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;border-botto
 .filmstrip-grid{{display:grid;grid-template-columns:{grid_template_columns};grid-template-rows:{grid_template_rows};column-gap:2px;row-gap:3px;align-items:stretch}}
 
 .span-bar{{border:1px solid;border-radius:4px;display:flex;flex-direction:column;justify-content:center;padding:2px 8px;overflow:hidden;white-space:nowrap;font-size:10px}}
+.span-bar.asset{{background:#22223a;border-color:#3a3a5a;color:#d4d4e4}}
+.span-bar.asset.a1{{background:#2c2c48}}
 .sb-l1{{font-weight:700;text-overflow:ellipsis;overflow:hidden}}
 .sb-l2{{opacity:.75;font-size:9px;text-overflow:ellipsis;overflow:hidden}}
 
