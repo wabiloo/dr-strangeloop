@@ -280,7 +280,7 @@ h1{{font-size:19px;color:#e8e8f4;letter-spacing:-.5px}}
 .badge.bad{{background:#3a0d0d;color:#ff6666}}
 
 .tl-wrap{{margin-bottom:32px}}
-.tl-wrap h2, .checks-wrap h2, .markers-wrap h2{{font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#9a9ab8;margin-bottom:10px}}
+.tl-wrap h2, .checks-wrap h2, .markers-wrap h2{{font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:1.4px;color:#b4b4d0;margin-bottom:12px}}
 .tl-bar{{display:flex;flex-direction:column;gap:2px;background:#0e0e1a;border:1px solid #232336;border-radius:4px;padding:4px}}
 .tl-row{{position:relative;height:22px}}
 .tl-row.ticks{{height:12px}}
@@ -302,8 +302,8 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .checks-table tr.fail td.result{{color:#ff5555}}
 .checks-table tr.fail td{{color:#ff8888}}
 
-.markers-wrap{{display:flex;flex-direction:column;gap:48px}}
 .tp-group{{position:relative}}
+.tp-group + .tp-group{{margin-top:48px}}
 .tp-hdr{{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:8px 0 10px;margin-bottom:8px;background:#0c0c14;border-bottom:2px solid #33334d}}
 .tp-time{{font-size:16px;font-weight:700;color:#e8e8f4;letter-spacing:.5px}}
 .tp-count{{font-size:11px;color:#b0b0cc;margin-right:6px}}
