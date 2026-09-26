@@ -90,15 +90,6 @@ def build_playlist(name: str) -> dict:
     return job.to_dict()
 
 
-@router.post("/{name}/report")
-def build_report(name: str) -> dict:
-    try:
-        job = franken_ts.spawn_report_job(name)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return job.to_dict()
-
-
 @router.get("/{name}/preview/status")
 def get_preview_status(name: str) -> dict:
     """Whether a preview .mp4 exists and whether it's stale (older than
@@ -138,34 +129,11 @@ def get_preview(name: str) -> FileResponse:
     return FileResponse(path, media_type="video/mp4")
 
 
-@router.get("/{name}/report/status")
-def get_report_status(name: str) -> dict:
-    try:
-        return franken_ts.report_status(name)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-@router.get("/{name}/report")
-def get_report(name: str) -> FileResponse:
-    try:
-        path = franken_ts.report_html_path(name)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Report not built yet -- run Assemble first.")
-    return FileResponse(path, media_type="text/html")
-
-
 @router.post("/{name}/scte-verify")
 def build_scte_verify(name: str) -> dict:
     """Spawn an independent scan of the assembled `.ts` for its actual
-    SCTE-35 markers (see `scte_verify.py` -- unlike `/report`, this does
-    not read the playlist at all, only the built file)."""
+    SCTE-35 markers (see `scte_verify.py`). Reads only the built file, and
+    additionally compares against the build's markers.json when present."""
     try:
         job = scte_verify.spawn_scte_verify_job(name)
     except FileNotFoundError as exc:

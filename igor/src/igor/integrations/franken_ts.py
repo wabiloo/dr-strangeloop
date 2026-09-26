@@ -247,49 +247,10 @@ def preview_mp4_path(name: str) -> Path:
     raise ValueError(f"Playlist {name!r} has no output.file or output.dir configured")
 
 
-def report_html_path(name: str) -> Path:
-    """Resolve the verification report produced by ``franken-ts --verify``."""
-    data = get_playlist(name)
-    output = data.get("output", {}) or {}
-    if output.get("file"):
-        p = Path(output["file"])
-        p = p if p.is_absolute() else (paths.REPO_ROOT / p)
-        return p.with_name(p.stem + "_report.html")
-    if output.get("dir"):
-        d = Path(output["dir"])
-        d = d if d.is_absolute() else (paths.REPO_ROOT / d)
-        renditions = output.get("renditions") or []
-        if not renditions:
-            raise ValueError(f"Playlist {name!r} has no renditions configured")
-        return d / f"{renditions[0]['name']}_report.html"
-    raise ValueError(f"Playlist {name!r} has no output.file or output.dir configured")
-
-
-def report_status(name: str) -> dict:
-    playlist_path = _resolve_path(name)
-    output_path = output_ts_path(name)
-    report_path = report_html_path(name)
-    exists = report_path.is_file()
-    # A reassemble replaces the TS without changing the saved playlist YAML.
-    # The report verifies that TS, so an older report must not be shown as
-    # current merely because the playlist itself has not changed.
-    newest_input_mtime = playlist_path.stat().st_mtime
-    if output_path.is_file():
-        newest_input_mtime = max(newest_input_mtime, output_path.stat().st_mtime)
-    stale = (not exists) or report_path.stat().st_mtime < newest_input_mtime
-    return {"exists": exists, "stale": stale}
-
-
 def spawn_build_job(name: str, extra_args: list[str] | None = None) -> Job:
     playlist_path = _resolve_path(name)
     cmd = paths.franken_ts_python() + [str(playlist_path), *(extra_args or [])]
     return runner.spawn("build", cmd, cwd=paths.REPO_ROOT, channel_name=name)
-
-
-def spawn_report_job(name: str) -> Job:
-    playlist_path = _resolve_path(name)
-    cmd = paths.franken_ts_python() + [str(playlist_path), "--report-only"]
-    return runner.spawn("report", cmd, cwd=paths.REPO_ROOT, channel_name=name)
 
 
 def find_playlist_for_source(source_path: str) -> str | None:

@@ -119,6 +119,10 @@ def _marker_card(marker: dict, frames: dict, checks: list[dict], base_dir: Optio
     else:
         body = "".join(blocks)
 
+    assets_str = (
+        '<span class="assets">' + "".join(f'<span class="asset-chip">{escape(a)}</span>' for a in marker["assets"]) + "</span>"
+        if marker.get("assets") else ""
+    )
     type_badge = f'<span class="type-badge">{marker["type_code"]}</span>'
     splice_badge = f'<span class="splice-badge {marker["splice_type"]}">{marker["splice_type"]}</span>'
 
@@ -130,6 +134,7 @@ def _marker_card(marker: dict, frames: dict, checks: list[dict], base_dir: Optio
         {type_badge}{splice_badge}
         <span class="mname">{marker["type_name"]}</span>
         {dur_str}
+        {assets_str}
         <span class="hdr-status">{_check_badge(m_checks)}</span>
       </div>
       <div class="span-row">{body}</div>
@@ -174,7 +179,10 @@ def _upid_panel(ev: dict) -> str:
         parts.append(f'<div class="scte-field"><span class="k">upid</span><span class="v">type={ev.get("upid_type")} · {ev["upid_hex"]}</span></div>')
     if ev.get("segment_num") is not None:
         parts.append(f'<div class="scte-field"><span class="k">segment</span><span class="v">{ev["segment_num"]}/{ev.get("segments_expected") or 0}</span></div>')
-    flags = [k for k, v in (ev.get("flags") or {}).items() if v]
+    flags = [
+        f"{k}={v}" if k == "device_restrictions" else k
+        for k, v in (ev.get("flags") or {}).items() if v
+    ]
     if flags:
         parts.append(f'<div class="scte-field"><span class="k">flags</span><span class="v">{" · ".join(flags)}</span></div>')
     if not parts:
@@ -319,6 +327,8 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .mname{{color:var(--t-fg);font-weight:600}}
 .dur{{color:#b0b0cc;font-size:11px}}
 .hdr-status{{margin-left:auto}}
+.assets{{display:flex;gap:4px;flex-wrap:wrap}}
+.asset-chip{{font-size:10px;padding:1px 7px;border-radius:3px;background:#1d1d33;border:1px solid #33334d;color:#c4c4d4}}
 
 .bh{{display:flex;align-items:center;gap:14px;padding:8px 16px;color:#b0b0cc}}
 .tag{{font-size:10px;font-weight:700;letter-spacing:.9px;padding:2px 7px;border-radius:3px}}
@@ -365,6 +375,7 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
     <span>{_fmt_time(total)}</span>
     <span>{summary.get("marker_count", 0)} marker(s)</span>
     <span>table 0xFC{f" · pid {src.get('scte35_pid')}" if src.get("scte35_pid") else " · all PIDs"}</span>
+    <span>{f"compared with {escape(report['expected']['name'])} ({report['expected']['entries']} entries)" if report.get("expected") else "independent scan only (no markers.json)"}</span>
   </div>
   {overall_badge}
 </header>

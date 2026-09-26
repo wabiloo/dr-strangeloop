@@ -17,4 +17,4 @@ krogh = "krogh:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
-include = ["frame_extractor.py", "krogh.py", "krogh_common.py", "scte35_report_html.py", "scte35_filmstrip_html.py", "scte35_tables.py"]
+include = ["frame_extractor.py", "krogh.py", "krogh_common.py", "krogh_expected.py", "scte35_report_html.py", "scte35_filmstrip_html.py", "scte35_tables.py"]

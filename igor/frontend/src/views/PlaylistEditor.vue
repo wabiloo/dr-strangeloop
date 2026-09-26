@@ -23,7 +23,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
-import { buildPlaylist, buildPlaylistReport, buildScteVerify, getOutputStatus, getPlaylist, getPreviewStatus, getReportStatus, getScteVerifyStatus, playlistPreviewUrl, playlistReportUrl, probeMedia, resolveMarkers, savePlaylist, scteVerifyReportUrl } from '../api/client'
+import { buildPlaylist, buildScteVerify, getOutputStatus, getPlaylist, getPreviewStatus, getScteVerifyStatus, playlistPreviewUrl, probeMedia, resolveMarkers, savePlaylist, scteVerifyReportUrl } from '../api/client'
 import type { Job, ResolvedMarker } from '../api/types'
 import AssetTimeline from '../components/AssetTimeline.vue'
 import AssetFileField from '../components/AssetFileField.vue'
@@ -1640,7 +1640,6 @@ async function load() {
   previewError.value = false
   previewVersion.value = Date.now()
   refreshPreviewStatus()
-  refreshReportStatus()
   refreshScteVerifyStatus()
   refreshOutputStatus()
   if (!props.name) {
@@ -1684,7 +1683,6 @@ async function save() {
     // preview .mp4's -- re-check server-side status so a stale preview
     // (rendered from the pre-save version) gets hidden.
     refreshPreviewStatus()
-    refreshReportStatus()
     refreshOutputStatus()
     toast.add({ severity: 'success', summary: 'Saved', life: 3000 })
     if (isNew.value) {
@@ -1714,8 +1712,6 @@ async function revertChanges() {
 // currently saved on disk, NOT unsaved in-progress edits) ------------------
 const building = ref(false)
 const buildJobId = ref<string | null>(null)
-const checkingGuts = ref(false)
-const reportJobId = ref<string | null>(null)
 const verifyingScte = ref(false)
 const scteVerifyJobId = ref<string | null>(null)
 // True from the moment a build job is spawned until it finishes -- the
@@ -1728,7 +1724,6 @@ const buildRunning = ref(false)
 // other browser tabs/clients editing the same playlist, not just this
 // session's save/build actions.
 const previewStatus = ref<{ exists: boolean; stale: boolean } | null>(null)
-const reportStatus = ref<{ exists: boolean; stale: boolean } | null>(null)
 const scteVerifyStatus = ref<{ exists: boolean; stale: boolean } | null>(null)
 const outputStatus = ref<{ exists: boolean; stale: boolean } | null>(null)
 async function refreshPreviewStatus() {
@@ -1740,17 +1735,6 @@ async function refreshPreviewStatus() {
     previewStatus.value = await getPreviewStatus(props.name)
   } catch {
     previewStatus.value = null
-  }
-}
-async function refreshReportStatus() {
-  if (!props.name) {
-    reportStatus.value = null
-    return
-  }
-  try {
-    reportStatus.value = await getReportStatus(props.name)
-  } catch {
-    reportStatus.value = null
   }
 }
 async function refreshScteVerifyStatus() {
@@ -1780,13 +1764,9 @@ async function refreshOutputStatus() {
 // browser happily keeps showing a stale cached preview after a rebuild
 // (the URL itself never changes across builds).
 const previewVersion = ref(Date.now())
-const reportVersion = ref(Date.now())
 const scteVerifyVersion = ref(Date.now())
 const previewUrl = computed(() =>
   props.name ? playlistPreviewUrl(props.name, previewVersion.value) : null,
-)
-const reportUrl = computed(() =>
-  props.name ? playlistReportUrl(props.name, reportVersion.value) : null,
 )
 const scteVerifyUrl = computed(() =>
   props.name ? scteVerifyReportUrl(props.name, scteVerifyVersion.value) : null,
@@ -1803,10 +1783,8 @@ async function build() {
   building.value = true
   buildRunning.value = true
   previewStatus.value = null
-  reportStatus.value = null
   scteVerifyStatus.value = null
   outputStatus.value = null
-  reportJobId.value = null
   scteVerifyJobId.value = null
   error.value = ''
   try {
@@ -1820,20 +1798,6 @@ async function build() {
   }
 }
 
-async function checkGuts() {
-  if (!props.name || isDirty.value) return
-  checkingGuts.value = true
-  error.value = ''
-  try {
-    const job = await buildPlaylistReport(props.name)
-    reportJobId.value = job.id
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    checkingGuts.value = false
-  }
-}
-
 function onBuildFinished(job: Job) {
   buildRunning.value = false
   if (job.status !== 'succeeded') {
@@ -1841,21 +1805,9 @@ function onBuildFinished(job: Job) {
   } else {
     previewError.value = false
     previewVersion.value = Date.now()
-    reportVersion.value = Date.now()
     refreshPreviewStatus()
-    refreshReportStatus()
     refreshScteVerifyStatus()
     refreshOutputStatus()
-  }
-}
-
-function onReportFinished(job: Job) {
-  if (job.status !== 'succeeded') {
-    error.value = 'Guts check failed -- see log below.'
-  } else {
-    reportVersion.value = Date.now()
-  refreshReportStatus()
-  refreshOutputStatus()
   }
 }
 
@@ -2519,7 +2471,7 @@ function applyHexPopover() {
               have unsaved changes above.
             </p>
             <div class="flex align-items-center gap-2">
-              <Button :label="assembleLabel" icon="pi pi-cog" :loading="building" :disabled="isNew || isDirty || checkingGuts" @click="build" />
+              <Button :label="assembleLabel" icon="pi pi-cog" :loading="building" :disabled="isNew || isDirty || verifyingScte" @click="build" />
               <span v-if="isNew" class="text-color-secondary text-sm">Save the playlist first.</span>
               <span v-else-if="isDirty" class="text-color-secondary text-sm">Save your changes first.</span>
             </div>
@@ -2549,47 +2501,10 @@ function applyHexPopover() {
             <div v-if="outputStatus?.exists && !outputStatus.stale && !buildRunning" class="flex flex-column gap-2">
               <span class="font-bold">Verification</span>
               <span class="text-color-secondary text-sm">
-                Rechecks the saved playlist's source files, rebuilds the expected asset timeline, detects IDR frame
-                timestamps, and verifies that injected SCTE-35 markers match the expected splice boundaries. The
-                generated report includes per-asset timing and marker diagnostics for the assembled TS.
-              </span>
-              <div class="flex align-items-center gap-2">
-                <Button
-                  label="Check its guts"
-                  icon="pi pi-search"
-                  severity="secondary"
-                  outlined
-                  :loading="checkingGuts"
-                  :disabled="isNew || isDirty || building"
-                  @click="checkGuts"
-                  style="width: fit-content"
-                />
-                <Button
-                  v-if="reportStatus?.exists && !reportStatus.stale && reportUrl && !checkingGuts"
-                  as="a"
-                  :href="reportUrl"
-                  target="_blank"
-                  rel="noopener"
-                  label="Open in new tab"
-                  icon="pi pi-external-link"
-                  severity="secondary"
-                  outlined
-                  class="report-open-button"
-                />
-              </div>
-            </div>
-            <JobPanel v-if="reportJobId" :job-id="reportJobId" @finished="onReportFinished" />
-
-            <div v-if="reportStatus?.exists && !reportStatus.stale && reportUrl && !buildRunning && !checkingGuts" class="flex flex-column gap-2">
-              <iframe :src="reportUrl" title="franken-ts verification report" class="report-frame" />
-            </div>
-
-            <div v-if="outputStatus?.exists && !outputStatus.stale && !buildRunning" class="flex flex-column gap-2">
-              <span class="font-bold">Krogh: independent SCTE-35 inspection</span>
-              <span class="text-color-secondary text-sm">
-                Scans the assembled TS itself for its actual SCTE-35 markers -- completely independently of
-                franken-ts (no playlist, no markers.json) -- and extracts frames around every splice boundary, so
-                you can confirm what's really in the file, not just what franken-ts thinks it wrote.
+                Inspector Krogh scans the assembled TS itself for its actual SCTE-35 markers, independently of
+                franken-ts, and extracts frames around every splice boundary. If the build's markers.json sits
+                next to the TS, every marker is also checked against what was intended (time, type, duration,
+                UPID, segment numbers, flags).
               </span>
               <div class="flex align-items-center gap-2">
                 <Button

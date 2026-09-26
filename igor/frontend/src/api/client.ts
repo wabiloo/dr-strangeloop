@@ -83,10 +83,6 @@ export function buildPlaylist(name: string): Promise<Job> {
   return postJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/build`)
 }
 
-export function buildPlaylistReport(name: string): Promise<Job> {
-  return postJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/report`)
-}
-
 export function resolveMarkers(name: string, data?: FrankenTsPlaylist): Promise<MarkersPreview> {
   return postJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/resolve-markers`, data ? { data } : undefined)
 }
@@ -111,15 +107,6 @@ export function getPreviewStatus(name: string): Promise<{ exists: boolean; stale
 
 export function getOutputStatus(name: string): Promise<{ exists: boolean; stale: boolean }> {
   return getJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/output/status`)
-}
-
-export function playlistReportUrl(name: string, cacheBust?: string | number): string {
-  const url = `${PLAYLISTS_BASE}/${encodeURIComponent(name)}/report`
-  return cacheBust === undefined ? url : `${url}?v=${encodeURIComponent(String(cacheBust))}`
-}
-
-export function getReportStatus(name: string): Promise<{ exists: boolean; stale: boolean }> {
-  return getJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/report/status`)
 }
 
 /** Spawns an independent scan of the assembled `.ts` for its actual

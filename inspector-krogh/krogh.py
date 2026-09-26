@@ -23,6 +23,7 @@ Usage
   uv run krogh outputs/my_stream.ts --output outputs/my_stream_scte
   uv run krogh outputs/my_stream.ts --skip-frames   # metadata only
   uv run krogh --render-only outputs/my_stream_scte/scte-report.json
+  uv run krogh outputs/my_stream.ts --expected outputs/my_stream.markers.json   # (auto-discovered if present)
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ from rich.progress import (
 )
 
 import scte35_tables as tables
+from krogh_expected import compare_expected, discover_expected_path, load_expected
 from scte35_filmstrip_html import render_filmstrip
 from scte35_report_html import render_html
 
@@ -212,14 +214,16 @@ def parse_scte35_xml(xml_path: Path) -> list[RawEvent]:
                 upid_type = upid_el.get("type")
                 upid_hex = (upid_el.text or "").strip() or upid_el.get("value")
 
-            flags = {
+            flags: dict = {
                 k: sd.get(k, "").lower() == "true"
-                for k in (
-                    "web_delivery_allowed", "no_regional_blackout",
-                    "archive_allowed", "device_restrictions",
-                )
+                for k in ("web_delivery_allowed", "no_regional_blackout", "archive_allowed")
                 if sd.get(k) is not None
             }
+            if sd.get("device_restrictions") is not None:
+                try:
+                    flags["device_restrictions"] = _parse_int(sd.get("device_restrictions"))
+                except (ValueError, TypeError):
+                    pass
 
             events.append(RawEvent(
                 event_id=event_id,
@@ -464,6 +468,8 @@ def marker_to_dict(m: Marker) -> dict:
         d = {
             "pts_ticks": e.pts_ticks,
             "pts_seconds": round(e.pts_seconds, 6),
+            "type_id": f"0x{e.segmentation_type_id:02X}" if e.segmentation_type_id is not None else None,
+            "segmentation_duration_ticks": e.segmentation_duration_ticks,
             "upid_type": e.upid_type,
             "upid_hex": e.upid_hex,
             "segment_num": e.segment_num,
@@ -498,6 +504,7 @@ def build_report(
     skip_frames: bool = False,
     idr_tolerance_frames: float = 1.0,
     duration_tolerance_frames: float = 2.0,
+    expected_path: Optional[Path] = None,
     progress: Optional[Progress] = None,
 ) -> dict:
     xml_tmp = output_dir / "_splice-info-tables.xml"
@@ -566,6 +573,13 @@ def build_report(
                     })
                 frames_by_marker[key] = shots
 
+    marker_dicts = [marker_to_dict(m) for m in markers]
+    expected_info = None
+    if expected_path is not None:
+        expected_entries = load_expected(expected_path)
+        checks = checks + compare_expected(expected_entries, marker_dicts, info["fps"])
+        expected_info = {"path": str(expected_path), "name": expected_path.name, "entries": len(expected_entries)}
+
     report = {
         "tool": "krogh",
         "report_version": REPORT_VERSION,
@@ -577,7 +591,8 @@ def build_report(
             "scte35_table_id": SCTE35_TABLE_ID,
             "scte35_pid": pid,
         },
-        "markers": [marker_to_dict(m) for m in markers],
+        "markers": marker_dicts,
+        "expected": expected_info,
         "frames": frames_by_marker,
         "checks": checks,
         "summary": {
@@ -616,6 +631,11 @@ def main() -> None:
                     help="Skip scanning entirely; (re)generate HTML from an existing scte-report.json")
     ap.add_argument("--idr-tolerance-frames", type=float, default=1.0)
     ap.add_argument("--duration-tolerance-frames", type=float, default=2.0)
+    ap.add_argument("--expected", metavar="MARKERS_JSON", default=None,
+                    help="Also compare against this franken-ts markers.json (default: auto-discover "
+                         "<stem>.markers.json or markers.json next to the .ts)")
+    ap.add_argument("--no-expected", action="store_true",
+                    help="Don't compare against any markers.json, even if one is next to the .ts")
     args = ap.parse_args()
 
     if args.render_only:
@@ -646,6 +666,16 @@ def main() -> None:
     ))
     console.print()
 
+    expected_path: Optional[Path] = None
+    if args.expected and args.no_expected:
+        ap.error("--expected and --no-expected are mutually exclusive")
+    if args.expected:
+        expected_path = Path(args.expected)
+        if not expected_path.is_file():
+            ap.error(f"--expected file not found: {expected_path}")
+    elif not args.no_expected:
+        expected_path = discover_expected_path(ts_path)
+
     progress = Progress(
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
         BarColumn(bar_width=36), MofNCompleteColumn(), console=console,
@@ -659,6 +689,7 @@ def main() -> None:
             skip_frames=args.skip_frames,
             idr_tolerance_frames=args.idr_tolerance_frames,
             duration_tolerance_frames=args.duration_tolerance_frames,
+            expected_path=expected_path,
             progress=progress,
         )
         progress.update(t1, description=f"[green]✓ {report['summary']['marker_count']} marker(s) found", total=1, completed=1)
@@ -674,6 +705,9 @@ def main() -> None:
     failed = report["summary"]["checks_failed"]
     status = f"[bold red]{failed} check(s) failed[/]" if failed else "[bold green]all checks passed[/]"
     console.print(f"  Markers found: [bold]{report['summary']['marker_count']}[/]   {status}")
+    exp = report.get("expected")
+    console.print(f"  Compared with: [cyan]{exp['name']}[/] ({exp['entries']} expected entries)" if exp
+                  else "  Compared with: [dim]nothing (no markers.json found; independent scan only)[/]")
     console.print(f"  [bold green]JSON:[/] [cyan underline]file://{json_path.resolve()}[/]")
     if not args.skip_html:
         console.print(f"  [bold green]HTML:[/] [cyan underline]file://{(out_dir / 'scte-report.html').resolve()}[/]")

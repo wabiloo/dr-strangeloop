@@ -63,10 +63,15 @@ containing an Ad -- show up with no playlist/`markers.json` involved),
 and extracts frames around every splice boundary so you can eyeball
 exactly what's before/after each splice.
 
-Unlike franken-ts's own `--verify`/`--report-only` (which checks the
-file *against the playlist it was built from*), this only ever looks at
-the `.ts` itself -- it's the tool for "does this file really carry the
-markers it claims to."
+The scan only ever looks at the `.ts` itself -- it's the tool for "does
+this file really carry the markers it claims to." **Optionally**, if the
+build's `markers.json` is available (auto-discovered as
+`<stem>.markers.json` or `markers.json` next to the `.ts`, or given with
+`--expected`; disable with `--no-expected`), each scanned marker is also
+checked against what was *intended*: time, segmentation type, declared
+duration, UPID, segment numbers and flags, plus markers that are missing
+from or unexpected in the stream. This comparison only adds checks and
+asset names to the report -- it never influences the scan.
 
 ### Prerequisites
 
@@ -78,14 +83,18 @@ markers it claims to."
 uv run krogh outputs/my_stream.ts
 uv run krogh outputs/my_stream.ts --output outputs/my_stream_scte
 uv run krogh outputs/my_stream.ts --skip-frames        # metadata-only scan
+uv run krogh outputs/my_stream.ts --expected outputs/my_stream.markers.json
+uv run krogh outputs/my_stream.ts --no-expected        # pure independent scan
 uv run krogh --render-only outputs/my_stream_scte/scte-report.json
 ```
 
 Writes `scte-report.json` (the machine-readable source of truth --
 markers, inferred nesting, per-boundary frame references, and pass/fail
 checks like "splice lands on an IDR frame" / "declared duration matches
-actual") and `scte-report.html` (a self-contained viewer rendered from
-that JSON) into the output directory. The JSON → HTML rendering step
+actual" / "matches markers.json"), plus two self-contained HTML views
+rendered from that JSON into the output directory: `scte-filmstrip.html`
+(every extracted frame in time order with marker spans above) and
+`scte-report.html` (detailed per-marker cards, grouped by start time). The JSON → HTML rendering step
 (`scte35_report_html.render_html`) is a pure function with no
 ffmpeg/tsduck dependency, so it can be re-run standalone (`--render-only`)
 or imported directly by another tool (igor's Assemble tab uses this to
@@ -99,5 +108,6 @@ usage: krogh [-h] [--output OUTPUT] [--pid PID] [--before BEFORE]
                       [--after AFTER] [--width WIDTH] [--skip-frames]
                       [--skip-html] [--render-only JSON_PATH]
                       [--idr-tolerance-frames N] [--duration-tolerance-frames N]
+                      [--expected MARKERS_JSON | --no-expected]
                       [ts]
 ```
