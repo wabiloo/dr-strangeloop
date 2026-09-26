@@ -256,7 +256,11 @@ onBeforeUnmount(() => {
       <Column header="Source">
         <template #body="{ data }">
           <div v-if="data.source_path" class="flex align-items-center gap-2" :title="data.source_path">
-            <i :class="data.source_kind === 'archive' ? 'pi pi-box' : 'pi pi-objects-column'" aria-hidden="true" />
+            <i
+              class="source-kind-icon"
+              :class="data.source_kind === 'archive' ? 'pi pi-box' : 'pi pi-objects-column'"
+              aria-hidden="true"
+            />
             <RouterLink
               v-if="data.archive_name"
               :to="`/archives/${data.archive_name}`"
@@ -342,6 +346,10 @@ onBeforeUnmount(() => {
   color: var(--p-primary-color, #b91c1c);
   text-decoration: none;
   font-weight: 600;
+}
+
+.source-kind-icon {
+  font-size: 1.25rem;
 }
 
 .source-link:hover {
