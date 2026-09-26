@@ -171,11 +171,13 @@ def get_scte_verify_html(name: str, view: str = "filmstrip") -> FileResponse:
     if view not in ("filmstrip", "cards"):
         raise HTTPException(status_code=422, detail="view must be 'filmstrip' or 'cards'")
     try:
-        path = scte_verify.scte_verify_html_path(name, view)
+        path = scte_verify.ensure_html(name, view)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     if not path.is_file():
         raise HTTPException(status_code=404, detail="SCTE-35 verify report not built yet.")
     return FileResponse(path, media_type="text/html")

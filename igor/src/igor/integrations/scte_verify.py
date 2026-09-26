@@ -13,6 +13,7 @@ itself gets nothing else from franken-ts.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from igor import paths
@@ -66,3 +67,32 @@ def spawn_scte_verify_job(name: str) -> Job:
     out_dir = _output_dir(ts_path)
     cmd = paths.scte_verify_python() + [str(ts_path), "--output", str(out_dir)]
     return runner.spawn("scte-verify", cmd, cwd=paths.REPO_ROOT, channel_name=name)
+
+
+def _template_mtime() -> float:
+    """Newest mtime among inspector-krogh's Python sources (the HTML
+    templates live there), so template edits invalidate rendered HTML."""
+    sources = (paths.REPO_ROOT / "inspector-krogh").glob("*.py")
+    return max((p.stat().st_mtime for p in sources), default=0.0)
+
+
+def ensure_html(name: str, view: str = "filmstrip") -> Path:
+    """Path to the rendered HTML, regenerated from the saved JSON first if
+    it is missing or older than the JSON or the report templates. Rendering
+    is a pure JSON -> HTML step (`krogh --render-only`), so this never
+    re-scans the `.ts`. If re-rendering fails, an existing file is served
+    as-is rather than failing the request."""
+    html_path = scte_verify_html_path(name, view)
+    json_path = scte_verify_json_path(name)
+    if not json_path.is_file():
+        return html_path
+    newest_input = max(json_path.stat().st_mtime, _template_mtime())
+    if html_path.is_file() and html_path.stat().st_mtime >= newest_input:
+        return html_path
+    proc = subprocess.run(
+        paths.scte_verify_python() + ["--render-only", str(json_path)],
+        cwd=paths.REPO_ROOT, capture_output=True, text=True, timeout=120,
+    )
+    if proc.returncode != 0 and not html_path.is_file():
+        raise RuntimeError(f"krogh --render-only failed: {proc.stderr.strip() or proc.stdout.strip()}")
+    return html_path
