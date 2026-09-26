@@ -265,9 +265,9 @@ def render_filmstrip(report: dict, base_dir: Optional[Path] = None) -> str:
 *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:#0c0c14;color:#c4c4d4;font-family:"JetBrains Mono","Fira Code","SF Mono",monospace;font-size:12px;padding:24px}}
 header{{display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px;border-bottom:1px solid #252536;padding-bottom:14px;margin-bottom:18px}}
-.meta{{color:#55556a;font-size:11px}}
+.meta{{color:#a0a0be;font-size:11px}}
 .meta span{{margin-right:14px}}
-.legend{{display:flex;gap:16px;margin-bottom:14px;font-size:10px;color:#666;flex-wrap:wrap;align-items:center}}
+.legend{{display:flex;gap:16px;margin-bottom:14px;font-size:11px;color:#b0b0cc;flex-wrap:wrap;align-items:center}}
 .legend .sw{{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:middle}}
 .legend .sw.idr{{background:transparent;border:2px solid #ff3b3b;width:12px;height:9px}}
 
@@ -287,15 +287,15 @@ header{{display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px;border-bottom:
 .thumb img{{width:100%;height:100%;object-fit:cover;display:block;opacity:.9}}
 .no-img{{width:100%;height:100%;background:#111}}
 .land-tags{{display:flex;flex-direction:column;width:100%;gap:1px}}
-.land-tag{{font-size:8px;font-weight:700;padding:0 3px;border-radius:2px;line-height:1.5}}
+.land-tag{{font-size:9px;font-weight:700;padding:0 3px;border-radius:2px;line-height:1.5}}
 .land-tag.start{{align-self:flex-start;background:#0b3318;color:#66ffaa}}
 .land-tag.stop{{align-self:flex-end;background:#3a1810;color:#ff9955}}
 
-.cell.ellipsis{{display:flex;flex-direction:column;align-items:center;justify-content:center;color:#3a3a52}}
+.cell.ellipsis{{display:flex;flex-direction:column;align-items:center;justify-content:center;color:#8f8fae}}
 .ell-dots{{font-size:16px;line-height:1}}
-.ell-gap{{font-size:8px;margin-top:2px}}
+.ell-gap{{font-size:9px;margin-top:2px}}
 
-.cell.time{{font-size:8px;color:#4a4a62;text-align:left;padding-left:2px;padding-top:2px;border-top:1px solid #1a1a28;white-space:nowrap;overflow:hidden;letter-spacing:-.3px}}
+.cell.time{{font-size:9px;color:#a0a0be;text-align:left;padding-left:2px;padding-top:2px;border-top:1px solid #1a1a28;white-space:nowrap;overflow:hidden;letter-spacing:-.3px}}
 {HEADER_CSS}
 </style>
 </head>
