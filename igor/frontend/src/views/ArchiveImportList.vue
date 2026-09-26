@@ -171,18 +171,20 @@ onMounted(load)
         <strong>{{ selectedFile ? selectedFile.name : 'Drop an archive file here' }}</strong>
         <span class="text-sm text-color-secondary">or <label for="archive-file" class="archive-browse-link">browse files</label></span>
       </div>
-      <div class="archive-name-field flex flex-column gap-1">
-        <label for="archive-name" class="text-sm">Archive name</label>
-        <InputText id="archive-name" v-model="archiveName" :disabled="!selectedFile" />
+      <div class="archive-upload-controls">
+        <div class="archive-name-field flex flex-column gap-1">
+          <label for="archive-name" class="text-sm">Archive name</label>
+          <InputText id="archive-name" v-model="archiveName" :disabled="!selectedFile" />
+        </div>
+        <Button
+          class="archive-upload-button"
+          label="Upload archive"
+          icon="pi pi-upload"
+          type="submit"
+          :disabled="!selectedFile || !archiveName.trim()"
+          :loading="uploading"
+        />
       </div>
-      <Button
-        class="archive-upload-button"
-        label="Upload archive"
-        icon="pi pi-upload"
-        type="submit"
-        :disabled="!selectedFile || !archiveName.trim()"
-        :loading="uploading"
-      />
     </form>
 
     <Message v-if="error" severity="error">{{ error }}</Message>
@@ -265,10 +267,17 @@ onMounted(load)
   font-size: 1.5rem;
 }
 
+.archive-upload-controls {
+  flex: 1 1 32rem;
+  min-width: min(100%, 24rem);
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+}
+
 .archive-name-field {
   flex: 1 1 18rem;
-  min-width: 18rem;
-  align-self: center;
+  min-width: 0;
 }
 
 .archive-name-field :deep(input) {
@@ -276,8 +285,7 @@ onMounted(load)
 }
 
 .archive-upload-button {
-  margin-left: auto;
-  align-self: center;
+  flex-shrink: 0;
 }
 
 .archive-file-input {
@@ -299,13 +307,13 @@ onMounted(load)
 }
 
 @media (max-width: 42rem) {
-  .archive-name-field {
+  .archive-upload-controls {
     flex-basis: 100%;
     min-width: 0;
   }
 
-  .archive-upload-button {
-    margin-left: auto;
+  .archive-name-field {
+    min-width: 0;
   }
 }
 </style>
