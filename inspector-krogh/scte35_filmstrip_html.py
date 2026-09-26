@@ -362,8 +362,8 @@ header{{display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;border-botto
 
 <div class="legend">
   <span><span class="sw idr"></span>IDR frame</span>
-  <span><span class="land-tag start" style="padding:1px 4px">TYPE</span>marker starts on this frame</span>
-  <span><span class="land-tag stop" style="padding:1px 4px">TYPE</span>marker ends after this frame</span>
+  <span><span class="land-tag start" style="padding:1px 4px;margin-right:6px">TYPE</span>marker starts on this frame</span>
+  <span><span class="land-tag stop" style="padding:1px 4px;margin-right:6px">TYPE</span>marker ends after this frame</span>
 </div>
 
 <div class="filmstrip-scroll">
