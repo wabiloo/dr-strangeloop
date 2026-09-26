@@ -47,6 +47,54 @@ export interface VariantCoverage {
   manifest_url: string
   format: 'HLS' | 'DASH'
   covered_ranges: CoverageRange[]
+  /** HLS only: each unique wall-clock-positioned segment, and whether its
+   * media bytes exist in the archive. Empty for DASH. */
+  segments: SegmentAvailability[]
+}
+
+export interface SegmentAvailability {
+  start: string
+  end: string
+  has_media: boolean
+}
+
+/** One of the "smart" range suggestions (grave_robber.suggest). */
+export interface RangeSuggestion {
+  id: 'complete' | 'longest' | 'widest'
+  title: string
+  description: string
+  start: string
+  end: string
+  duration_seconds: number
+  manifest_url: string
+  segments_total: number
+  segments_with_media: number
+  survivor_count: number
+  variant_count: number
+}
+
+/** The wizard's persisted choice (data/archives/<name>.selection.json). */
+export interface ArchiveSelection {
+  manifest_url: string | null
+  start: string | null
+  end: string | null
+  suggestion_id: string | null
+}
+
+/** One `#EXT-X-STREAM-INF` rendition advertised by an HLS multivariant playlist. */
+export interface MultivariantRendition {
+  manifest_url: string
+  bandwidth: number | null
+  average_bandwidth: number | null
+  resolution: string | null
+  frame_rate: number | null
+  codecs: string | null
+}
+
+/** An HLS multivariant playlist: segment-less, so informational only (never importable). */
+export interface MultivariantPlaylist {
+  manifest_url: string
+  renditions: MultivariantRendition[]
 }
 
 /** GET /api/v1/archives/{name}/coverage -- SCOPE.md §8 steps 1-2's
@@ -54,6 +102,9 @@ export interface VariantCoverage {
 export interface ArchiveCoverage {
   name: string
   variants: VariantCoverage[]
+  multivariants: MultivariantPlaylist[]
+  suggestions: RangeSuggestion[]
+  selection: ArchiveSelection | null
 }
 
 /** franken-ts's franken_ts.config.Config, as raw parsed YAML -- kept as a

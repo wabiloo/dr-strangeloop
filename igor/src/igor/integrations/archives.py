@@ -15,8 +15,12 @@ subprocess rather than importing pipeline.ingest() in-process.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+from grave_robber.multivariant import find_audio_playlist, is_multivariant_playlist, parse_multivariant_playlist
+from grave_robber.availability import build_variant_segments, combine_audio, covered_ranges
+from grave_robber.suggest import VariantSegments, suggest_ranges
 from grave_robber.coverage import build_dash_variant_coverage, build_hls_variant_coverage
 from trace_shrink import open_trace
 
@@ -112,27 +116,81 @@ def get_coverage(name: str) -> dict:
     urls = trace.get_abr_manifest_urls()
 
     variants = []
+    hls_segments: list[VariantSegments] = []
+    multivariants = []
     for decorated_url in urls:
         manifest_url = str(decorated_url.url)
         entries = trace.get_entries_for_url(manifest_url)
+        if entries and decorated_url.format == "HLS":
+            latest_text = entries[-1].content_bytes.decode("utf-8", errors="replace")
+            if is_multivariant_playlist(latest_text):
+                # No segments of its own: report its renditions as info only,
+                # never as an importable/coverage variant.
+                multivariants.append(
+                    {
+                        "manifest_url": manifest_url,
+                        "renditions": parse_multivariant_playlist(latest_text, manifest_url),
+                    }
+                )
+                continue
         snapshots = [
             (entry.content_bytes.decode("utf-8", errors="replace"), manifest_url) for entry in entries
         ]
-        builder = (
-            build_hls_variant_coverage if decorated_url.format == "HLS" else build_dash_variant_coverage
-        )
-        coverage = builder(manifest_url, snapshots)
+        segments: list = []
+        if decorated_url.format == "HLS":
+            segments = build_variant_segments(trace, manifest_url)
+            audio_info = find_audio_playlist(trace, manifest_url) if segments else None
+            if audio_info and audio_info["manifest_url"] and trace.get_entries_for_url(audio_info["manifest_url"]):
+                segments = combine_audio(segments, build_variant_segments(trace, audio_info["manifest_url"]))
+        if segments:
+            ranges = covered_ranges(segments)
+            hls_segments.append(VariantSegments(manifest_url, segments))
+        else:
+            builder = (
+                build_hls_variant_coverage if decorated_url.format == "HLS" else build_dash_variant_coverage
+            )
+            ranges = builder(manifest_url, snapshots).covered_ranges
         variants.append(
             {
                 "manifest_url": manifest_url,
                 "format": decorated_url.format,
-                "covered_ranges": [
-                    {"start": start.isoformat(), "end": end.isoformat()}
-                    for start, end in coverage.covered_ranges
+                "covered_ranges": [{"start": start.isoformat(), "end": end.isoformat()} for start, end in ranges],
+                "segments": [
+                    {"start": seg.start.isoformat(), "end": seg.end.isoformat(), "has_media": seg.has_media}
+                    for seg in segments
                 ],
             }
         )
-    return {"name": name, "variants": variants}
+    return {
+        "name": name,
+        "variants": variants,
+        "multivariants": multivariants,
+        "suggestions": suggest_ranges(hls_segments),
+        "selection": get_selection(name),
+    }
+
+
+def _selection_path(name: str) -> Path:
+    _resolve_archive_path(name)  # validates the name / existence
+    return paths.ARCHIVES_DIR / f"{name}.selection.json"
+
+
+def get_selection(name: str) -> dict | None:
+    """The wizard's last saved choice (range, variant, which smart option),
+    persisted beside the archive so a page reload restores it."""
+    path = _selection_path(name)
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def save_selection(name: str, selection: dict) -> dict:
+    path = _selection_path(name)
+    path.write_text(json.dumps(selection, indent=2) + "\n")
+    return selection
 
 
 def _import_output_dir(name: str) -> Path:
@@ -148,6 +206,8 @@ def spawn_import_job(
     manifest_url: str,
     *,
     format: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
 ) -> Job:
     """Spawn grave-robber's own CLI (`grave-robber ingest`) as a background
     job (same igor.jobs.runner pattern franken_ts.spawn_build_job uses) --
@@ -166,7 +226,10 @@ def spawn_import_job(
         "ingest", str(archive_path), manifest_url, "--output", str(output_dir),
     ]
     if format:
-        cmd += ["--format", format]
+        # The wizard/trace API uses "HLS"/"DASH"; `ingest --format` wants lowercase.
+        cmd += ["--format", format.lower()]
+    if start and end:
+        cmd += ["--start", start, "--end", end]
     return runner.spawn("archive-import", cmd, cwd=paths.REPO_ROOT, channel_name=name)
 
 

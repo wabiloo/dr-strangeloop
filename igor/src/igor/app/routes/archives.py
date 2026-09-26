@@ -14,6 +14,15 @@ router = APIRouter()
 class ImportPayload(BaseModel):
     manifest_url: str
     format: str | None = None
+    start: str | None = None
+    end: str | None = None
+
+
+class SelectionPayload(BaseModel):
+    manifest_url: str | None = None
+    start: str | None = None
+    end: str | None = None
+    suggestion_id: str | None = None
 
 
 @router.get("/")
@@ -34,7 +43,7 @@ def get_coverage(name: str) -> dict:
 @router.post("/{name}/import")
 def spawn_import(name: str, payload: ImportPayload) -> dict:
     try:
-        job = archives.spawn_import_job(name, payload.manifest_url, format=payload.format)
+        job = archives.spawn_import_job(name, payload.manifest_url, format=payload.format, start=payload.start, end=payload.end)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return job.to_dict()
@@ -45,4 +54,12 @@ def get_import_status(name: str) -> dict:
     try:
         return archives.import_status(name)
     except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/{name}/selection")
+def put_selection(name: str, payload: SelectionPayload) -> dict:
+    try:
+        return archives.save_selection(name, payload.model_dump())
+    except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

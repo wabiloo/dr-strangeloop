@@ -1,5 +1,6 @@
 import type {
   ArchiveCoverage,
+  ArchiveSelection,
   ArchiveImportStatus,
   ArchiveListItem,
   BrowseResult,
@@ -165,11 +166,29 @@ export function getArchiveCoverage(name: string): Promise<ArchiveCoverage> {
 /** Spawns the grave-robber `ingest` job for a human-confirmed reference
  * variant (SCOPE.md §8 step 5) -- `manifestUrl` is one of the URLs
  * returned by getArchiveCoverage. */
-export function importArchive(name: string, manifestUrl: string, format?: 'HLS' | 'DASH'): Promise<Job> {
+export function importArchive(
+  name: string,
+  manifestUrl: string,
+  format?: 'HLS' | 'DASH',
+  range?: { start: string; end: string },
+): Promise<Job> {
   return postJson(`${ARCHIVES_BASE}/${encodeURIComponent(name)}/import`, {
     manifest_url: manifestUrl,
     format,
+    start: range?.start,
+    end: range?.end,
   })
+}
+
+export async function saveArchiveSelection(name: string, selection: ArchiveSelection): Promise<ArchiveSelection> {
+  const res = await handle(
+    await fetch(`${ARCHIVES_BASE}/${encodeURIComponent(name)}/selection`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(selection),
+    }),
+  )
+  return res.json()
 }
 
 export function getArchiveImportStatus(name: string): Promise<ArchiveImportStatus> {

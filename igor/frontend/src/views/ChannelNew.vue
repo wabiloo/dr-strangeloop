@@ -324,11 +324,11 @@ async function submit() {
     <template v-if="usesChannelSection">
       <h4 class="mb-0 mt-2">Packaging</h4>
       <div class="grid">
-        <div class="col-6 flex flex-column gap-1">
+        <div v-if="sourceKind === 'playlist'" class="col-6 flex flex-column gap-1">
           <label for="segdur">Segment duration (s)</label>
           <InputNumber id="segdur" v-model="form.segment_duration" :min-fraction-digits="1" />
         </div>
-        <div class="col-6 flex flex-column gap-1">
+        <div :class="[sourceKind === 'playlist' ? 'col-6' : 'col-12', 'flex flex-column gap-1']">
           <label for="dvr">DVR window (s)</label>
           <InputNumber id="dvr" v-model="form.dvr_window_seconds" />
         </div>
