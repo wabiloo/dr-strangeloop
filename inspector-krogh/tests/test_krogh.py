@@ -1,4 +1,4 @@
-"""Tests for scte35_scan's pure logic: XML parsing, start/stop pairing, and
+"""Tests for krogh's pure logic: XML parsing, start/stop pairing, and
 nesting inference -- all exercised against a synthetic tsduck `--xml` dump
 so they run without `tsp`/`ffmpeg` installed.
 """
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-import scte35_scan as scan
+import krogh as scan
 
 PTS_CLOCK = 90_000
 

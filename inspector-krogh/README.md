@@ -1,4 +1,4 @@
-# frame-extractor
+# inspector-krogh
 
 Extracts every frame from a video, overlays frame number, type (I/P/B), and timestamp, then generates a self-contained interactive HTML timeline viewer.
 
@@ -51,7 +51,7 @@ The generated `index.html` is fully self-contained (no server needed). Open it i
 - Click any frame for a lightbox with prev/next navigation
 - Keyboard shortcuts: `j`/`k` to step frames, `[`/`]` to jump between I-frames, `g` to go to a timestamp
 
-## `scte35-verify` — independent SCTE-35 marker verification
+## `krogh` — independent SCTE-35 marker verification
 
 A second tool in this package, completely independent of franken-ts: it
 scans a built `.ts` for the SCTE-35 markers *actually present in the
@@ -75,10 +75,10 @@ markers it claims to."
 ### Usage
 
 ```bash
-uv run scte35-verify outputs/my_stream.ts
-uv run scte35-verify outputs/my_stream.ts --output outputs/my_stream_scte
-uv run scte35-verify outputs/my_stream.ts --skip-frames        # metadata-only scan
-uv run scte35-verify --render-only outputs/my_stream_scte/scte-report.json
+uv run krogh outputs/my_stream.ts
+uv run krogh outputs/my_stream.ts --output outputs/my_stream_scte
+uv run krogh outputs/my_stream.ts --skip-frames        # metadata-only scan
+uv run krogh --render-only outputs/my_stream_scte/scte-report.json
 ```
 
 Writes `scte-report.json` (the machine-readable source of truth --
@@ -95,7 +95,7 @@ HTML directly).
 ### Options
 
 ```
-usage: scte35-verify [-h] [--output OUTPUT] [--pid PID] [--before BEFORE]
+usage: krogh [-h] [--output OUTPUT] [--pid PID] [--before BEFORE]
                       [--after AFTER] [--width WIDTH] [--skip-frames]
                       [--skip-html] [--render-only JSON_PATH]
                       [--idr-tolerance-frames N] [--duration-tolerance-frames N]

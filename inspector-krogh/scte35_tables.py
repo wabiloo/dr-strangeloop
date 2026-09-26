@@ -3,7 +3,7 @@ and start/end pairing).
 
 This intentionally duplicates the equivalent tables in
 ``franken_ts/config.py`` rather than importing them. The whole point of
-``scte35_scan.py`` is to verify a built ``.ts`` file completely
+``krogh.py`` is to verify a built ``.ts`` file completely
 independently of franken-ts's own bookkeeping (no playlist, no
 ``markers.json``, no shared build state) -- these values come straight from
 the ANSI/SCTE 35 spec, not from franken-ts, so keeping a second, standalone

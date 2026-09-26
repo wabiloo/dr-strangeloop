@@ -1,4 +1,4 @@
-"""Horizontal filmstrip view of a scte35-verify report.
+"""Horizontal filmstrip view of a krogh report.
 
 Shows every extracted frame in one time-ordered strip, with marker spans
 drawn as stacked bars above it (one row per nesting depth), an ellipsis

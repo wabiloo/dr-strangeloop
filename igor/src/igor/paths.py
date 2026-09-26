@@ -43,12 +43,12 @@ def franken_ts_python() -> list[str]:
 
 
 def scte_verify_python() -> list[str]:
-    """frame-extractor (which owns `scte35-verify`) is a repo-root workspace
+    """inspector-krogh (which owns `krogh`) is a repo-root workspace
     member but, unlike franken-ts, is *not* one of igor's own declared
-    dependencies -- deliberately, since the whole point of scte35-verify is
+    dependencies -- deliberately, since the whole point of krogh is
     that it scans a built `.ts` with no franken-ts/playlist involvement, so
     igor shells out to it via `uv run` exactly like it does for the other
     workspace-adjacent tools, rather than importing it."""
     if shutil.which("uv"):
-        return ["uv", "run", "--project", str(REPO_ROOT), "scte35-verify"]
-    return ["scte35-verify"]
+        return ["uv", "run", "--project", str(REPO_ROOT), "krogh"]
+    return ["krogh"]

@@ -1,4 +1,4 @@
-"""Wrapper around `scte35-verify` (frame-extractor's independent SCTE-35
+"""Wrapper around `krogh` (inspector-krogh's independent SCTE-35
 scanner): resolves a playlist's built `.ts`, spawns the scan as a job, and
 resolves its JSON/HTML output for the Assemble tab.
 
@@ -21,7 +21,7 @@ from igor.jobs.runner import Job, runner
 
 
 def _output_dir(ts_path: Path) -> Path:
-    """Mirrors scte35-verify's own default `--output` naming
+    """Mirrors krogh's own default `--output` naming
     (`<ts_stem>_scte/` next to the `.ts`) -- passed explicitly on the job's
     command line rather than relied on, so this stays correct even if the
     CLI's default ever changes."""

@@ -15,7 +15,7 @@ DASH) must appear at the exact, frame-accurate segment boundaries corresponding 
 the markers `franken-ts` already authored — not a generic ad-marker workaround.
 
 This tool is **new** and lives in its own sibling directory, `loop-dee-loop/`,
-next to `franken-ts/`, `frame-extractor/`, `push-to-aws-media/`. It does not
+next to `franken-ts/`, `inspector-krogh/`, `push-to-aws-media/`. It does not
 modify `franken-ts` except for one small, optional addition described in §2.
 It is a self-hosted replacement for what `push-to-aws-media` does today
 (MediaLive/MediaPackage); `push-to-aws-media` is left as-is for anyone who still

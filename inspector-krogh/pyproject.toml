@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "frame-extractor"
+name = "inspector-krogh"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
@@ -13,8 +13,8 @@ dependencies = [
 
 [project.scripts]
 frame-extractor = "frame_extractor:main"
-scte35-verify = "scte35_scan:main"
+krogh = "krogh:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
-include = ["frame_extractor.py", "scte35_scan.py", "scte35_report_html.py", "scte35_filmstrip_html.py", "scte35_tables.py"]
+include = ["frame_extractor.py", "krogh.py", "scte35_report_html.py", "scte35_filmstrip_html.py", "scte35_tables.py"]

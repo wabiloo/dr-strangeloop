@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scte35_scan.py
+krogh.py
 
 Scans a built ``.ts`` file for its *actual* SCTE-35 markers -- completely
 independently of franken-ts (no playlist, no ``.markers.json`` sidecar, no
@@ -19,10 +19,10 @@ Requirements
 
 Usage
 -----
-  uv run scte35-verify outputs/my_stream.ts
-  uv run scte35-verify outputs/my_stream.ts --output outputs/my_stream_scte
-  uv run scte35-verify outputs/my_stream.ts --skip-frames   # metadata only
-  uv run scte35-verify --render-only outputs/my_stream_scte/scte-report.json
+  uv run krogh outputs/my_stream.ts
+  uv run krogh outputs/my_stream.ts --output outputs/my_stream_scte
+  uv run krogh outputs/my_stream.ts --skip-frames   # metadata only
+  uv run krogh --render-only outputs/my_stream_scte/scte-report.json
 """
 
 from __future__ import annotations
@@ -543,7 +543,7 @@ def build_report(
                 progress.advance(task_id)
 
     report = {
-        "tool": "scte35-verify",
+        "tool": "krogh",
         "report_version": REPORT_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": {
@@ -618,7 +618,7 @@ def main() -> None:
     console.print()
     console.print(Panel(
         f"[bold]{ts_path.name}[/]\n[dim]→ {out_dir.resolve()}[/]",
-        title="[bold blue]scte35-verify[/]", border_style="blue", padding=(0, 2),
+        title="[bold blue]krogh[/]", border_style="blue", padding=(0, 2),
     ))
     console.print()
 

@@ -7,7 +7,7 @@ A suite of tools for building broadcast-ready MPEG-TS files with SCTE-35 ad mark
 | Tool | Description |
 |---|---|
 | [`franken-ts/`](./franken-ts/README.md) | Stitch MP4 assets together and inject SCTE-35 markers from a YAML config |
-| [`frame-extractor/`](./frame-extractor/README.md) | Extract every frame from a video and build an interactive HTML timeline viewer |
+| [`inspector-krogh/`](./inspector-krogh/README.md) | Inspect a built `.ts`: `frame-extractor` (every frame + interactive HTML timeline) and `krogh` (independent SCTE-35 examiner: JSON + filmstrip + report) |
 | [`its-a-live/`](./its-a-live/README.md) | Deploy a live looping HLS/DASH stream on one of three backends selected per-channel: **MediaLive + MediaPackage** (`aws-media`), **loop-dee-loop on ECS Express Mode + CloudFront** (`ecs-express`) -- both AWS -- or **loop-dee-loop in a local Docker container** (`local-docker`), no AWS resources at all, good for dev/demo before spending anything on AWS |
 | [`igor/`](./igor/README.md) | Web UI (branded "Dr. Strangeloop", codenamed Igor) to define channels, launch them, and monitor them -- a UI on top of the tools above |
 
@@ -42,7 +42,7 @@ uv sync --all-packages
 ```
 
 This creates a single `.venv` at the root with all dependencies for
-`franken-ts`, `frame-extractor`, and `loop-dee-loop`. `its-a-live` manages
+`franken-ts`, `inspector-krogh`, and `loop-dee-loop`. `its-a-live` manages
 its own separate environment (its own `pyproject.toml`/`uv.lock`/`.venv`,
 since `aws-cdk-lib`/`boto3` don't need to be resolved together with the
 media-processing tooling) — run `cd its-a-live && uv sync` once before

@@ -1,12 +1,12 @@
-"""Pure JSON -> HTML renderer for scte35-verify reports.
+"""Pure JSON -> HTML renderer for krogh reports.
 
 Deliberately has no ffmpeg/tsduck/subprocess dependency: it only reads the
-dict produced by `scte35_scan.build_report()` (or the `scte-report.json`
+dict produced by `krogh.build_report()` (or the `scte-report.json`
 serialization of it) plus whatever frame JPEGs it already points at on
 disk. That split is what lets a consumer like igor re-render the HTML
 (e.g. after a template change) without re-scanning the `.ts`, and lets the
 same function be reused unchanged whether it's called from the CLI
-(`scte35-verify --render-only`) or imported directly.
+(`krogh --render-only`) or imported directly.
 """
 
 from __future__ import annotations
@@ -172,7 +172,7 @@ def _timeline_bar(markers: list[dict], total: float) -> str:
 
 
 def render_html(report: dict, base_dir: Optional[Path] = None) -> str:
-    """Render a self-contained HTML report from a scte35-verify JSON report.
+    """Render a self-contained HTML report from a krogh JSON report.
 
     `base_dir` is the directory `report['frames'][...]['file']` paths are
     relative to (defaults to wherever the report's own frames/ dir would

@@ -8,7 +8,7 @@ from scte35_report_html import render_html
 
 def _minimal_report(**overrides) -> dict:
     report = {
-        "tool": "scte35-verify",
+        "tool": "krogh",
         "report_version": 1,
         "generated_at": "2026-01-01T00:00:00+00:00",
         "source": {

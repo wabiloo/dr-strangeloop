@@ -123,7 +123,7 @@ export function getReportStatus(name: string): Promise<{ exists: boolean; stale:
 }
 
 /** Spawns an independent scan of the assembled `.ts` for its actual
- * SCTE-35 markers (via frame-extractor's `scte35-verify`, not franken-ts --
+ * SCTE-35 markers (via inspector-krogh's `krogh`, not franken-ts --
  * see igor's `scte_verify.py`). */
 export function buildScteVerify(name: string): Promise<Job> {
   return postJson(`${PLAYLISTS_BASE}/${encodeURIComponent(name)}/scte-verify`)
