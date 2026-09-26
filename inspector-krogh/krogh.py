@@ -526,6 +526,7 @@ def build_report(
     duration_tolerance_frames: float = 2.0,
     expected_path: Optional[Path] = None,
     timeline_path: Optional[Path] = None,
+    sidecars_disabled: bool = False,
     progress: Optional[Progress] = None,
 ) -> dict:
     xml_tmp = output_dir / "_splice-info-tables.xml"
@@ -640,6 +641,7 @@ def build_report(
         "markers": marker_dicts,
         "expected": expected_info,
         "timeline": timeline_info,
+        "sidecars_disabled": sidecars_disabled,
         "frames": frames_by_marker,
         "checks": checks,
         "summary": {
@@ -751,6 +753,7 @@ def main() -> None:
             duration_tolerance_frames=args.duration_tolerance_frames,
             expected_path=expected_path,
             timeline_path=timeline_path,
+            sidecars_disabled=args.no_expected,
             progress=progress,
         )
         progress.update(t1, description=f"[green]✓ {report['summary']['marker_count']} marker(s) found", total=1, completed=1)

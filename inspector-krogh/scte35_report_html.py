@@ -68,6 +68,16 @@ def _checks_for(checks: list[dict], event_id: int) -> list[dict]:
     return [c for c in checks if c["event_id"] == event_id]
 
 
+def _sidecar_row(label: str, value: Optional[str], disabled: bool, missing_msg: str) -> tuple:
+    """Header row for an optional franken-ts sidecar: a warning when it
+    wasn't found, a neutral note when it was deliberately switched off."""
+    if value is not None:
+        return (label, value)
+    if disabled:
+        return (label, "not used (--no-expected)")
+    return (label, missing_msg, "warn")
+
+
 def _check_event_label(c: dict) -> str:
     return f"#{c['event_id']}" if c.get("event_id") is not None else f"join {c.get('transition')}"
 
@@ -336,12 +346,15 @@ def render_html(report: dict, base_dir: Optional[Path] = None) -> str:
     tl_info = report.get("timeline")
     exp_info = report.get("expected")
     fps = src.get("fps")
+    disabled = bool(report.get("sidecars_disabled"))
     meta_html = meta_table_html([
         ("Video", f"{src.get('codec', '?')} {src.get('width')}×{src.get('height')}" + (f" @ {fps:g} fps" if fps else "")),
         ("Duration", _fmt_time(total)),
         ("SCTE-35 markers", str(summary.get("marker_count", 0))),
-        ("Asset joins without a marker", str(len(tl_info["transitions"])) if tl_info else "unknown (no timeline.json)"),
-        ("Expected markers", f"{exp_info['name']} ({exp_info['entries']} entries)" if exp_info else "none (independent scan only)"),
+        _sidecar_row("Asset joins without a marker", str(len(tl_info["transitions"])) if tl_info else None,
+                     disabled, "no timeline.json found -- reassemble, or run franken-ts --report-only"),
+        _sidecar_row("Expected markers", f"{exp_info['name']} ({exp_info['entries']} entries)" if exp_info else None,
+                     disabled, "no markers.json found -- independent scan only"),
         ("Scan", "SCTE-35 table 0xFC, " + (f"PID {src['scte35_pid']}" if src.get("scte35_pid") else "all PIDs")),
     ])
 

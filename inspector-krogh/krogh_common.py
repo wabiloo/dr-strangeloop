@@ -53,10 +53,16 @@ table.meta-table{border-collapse:collapse;font-size:12px;margin-left:auto}
 .hdr-status-badge{margin-top:12px}
 .meta-table th{color:#9a9ab8;font-weight:600;text-align:left;padding:2px 16px 2px 0;white-space:nowrap}
 .meta-table td{color:#e0e0f0;padding:2px 0}
+.meta-table td.warn{color:#ffcc66}
+.meta-table td.warn::before{content:"\\26A0\\FE0E";font-weight:700;margin-right:7px}
 """
 
 
-def meta_table_html(rows: list[tuple[str, str]]) -> str:
-    """Labelled key/value table for the page header. Values are HTML-escaped."""
-    body = "".join(f"<tr><th>{escape(k)}</th><td>{escape(v)}</td></tr>" for k, v in rows)
-    return f'<table class="meta-table">{body}</table>'
+def meta_table_html(rows: list[tuple]) -> str:
+    """Labelled key/value table for the page header. Rows are
+    (label, value) or (label, value, "warn"); values are HTML-escaped."""
+    out = []
+    for row in rows:
+        cls = ' class="warn"' if len(row) > 2 and row[2] == "warn" else ""
+        out.append(f"<tr><th>{escape(row[0])}</th><td{cls}>{escape(row[1])}</td></tr>")
+    return f'<table class="meta-table">{"".join(out)}</table>'

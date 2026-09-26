@@ -108,3 +108,13 @@ def test_asset_joins_without_markers_get_cards_and_timeline_row():
     assert 'id="transition-1"' in html and "a1 → a2" in html
     assert 'id="tp-30000"' in html and 'href="#tp-30000"' in html
     assert "join 1" in html and "mark-join" in html
+
+
+def test_missing_sidecars_render_as_warnings_unless_deliberately_disabled():
+    html = render_html(_minimal_report())
+    assert html.count('<td class="warn">') == 2
+    assert "no timeline.json found" in html and "no markers.json found" in html
+
+    quiet = render_html(_minimal_report(sidecars_disabled=True))
+    assert '<td class="warn">' not in quiet
+    assert "not used (--no-expected)" in quiet
