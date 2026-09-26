@@ -256,7 +256,7 @@ onBeforeUnmount(() => {
       <Column header="Source">
         <template #body="{ data }">
           <div v-if="data.source_path" class="flex align-items-center gap-2" :title="data.source_path">
-            <i :class="data.source_kind === 'archive' ? 'pi pi-folder-open' : 'pi pi-list'" aria-hidden="true" />
+            <i :class="data.source_kind === 'archive' ? 'pi pi-box' : 'pi pi-objects-column'" aria-hidden="true" />
             <RouterLink
               v-if="data.archive_name"
               :to="`/archives/${data.archive_name}`"
