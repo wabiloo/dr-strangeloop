@@ -17,23 +17,40 @@ so an already-observed stream (with its own asset joins and SCTE-35
 signaling) can be re-served as a loop, optionally transmuxed to the other
 manifest format (HLS↔DASH), without needing the source's own encode.
 
-**Foundational constraint**: the archive may not contain the actual
-segment media bodies (HAR captures are frequently manifest-only, or
-segment bodies may simply be missing/truncated) — so this tool derives
-**timing and marker structure from manifest text alone**, decoupled from
-whether real segment bytes are present. Pairing the result with real
-playable segment media (from the same capture, or some other source with
-matching timing) is a separate, later concern, out of scope here.
+**Foundational constraint**: timing and marker structure are always
+derived from **manifest text alone**, decoupled from whether real segment
+bytes are present — the archive may not contain every segment body (HAR
+captures are frequently manifest-only, or segment bodies may simply be
+missing/truncated), and manifest-derived timing/markers must not depend on
+having them.
+
+**Segment media, revised stance**: this tool *does* extract real segment
+media from the archive on a **best-effort** basis (§5.3) — wherever the
+archive's captured entries include a matching response body for a segment
+the manifest references, that body is carried through to the output;
+where it doesn't, the segment is simply absent from the baked media. This
+is not a blocking requirement: the point of the tool is a **structurally
+complete, correctly-timed manifest** (right segment count, durations,
+discontinuities, SCTE-35), which downstream systems that only manipulate
+manifests — an SSAI engine, for instance — can consume regardless of
+whether every segment is actually playable end-to-end. See
+`loop-dee-loop/SCOPE.md` §11 for the corresponding "manifest-complete,
+media-optional" serving mode this relies on: manifests always reference
+every segment as if it exists; a request for one with no backing media
+404s, but that never affects manifest content.
 
 ## 2. Relationship to existing tools
 
-- **`loop-dee-loop`**: this tool's output (validated `markers.json`-shaped
-  entries + per-rendition segment boundary ticks + `total_loop_duration_ticks`)
-  is exactly the shape `bake_one_rendition()` normally derives by probing
-  real GPAC-produced segments. Everything downstream of that —
-  `scte35_signaling.py`, `loop_math.py`, `serve.py` — is intended to stay
-  **unmodified**, aside from the declared-vs-serving position split in
-  §6.2, which is a `serve.py` extension.
+- **`loop-dee-loop`**: this tool's output is a **segment-list manifest**
+  (index, `duration_ticks`, `asset_boundary`, an on-disk media file path
+  *or* `null` if no body was recovered for that segment — §5.3) plus the
+  validated `markers.json`-shaped marker entries — consumed by
+  `bake.py`'s new sparse segment-list input mode (`loop-dee-loop/SCOPE.md`
+  §11), not by pretending to be one continuous `.ts`. `scte35_signaling.py`
+  and `loop_math.py` stay **unmodified**; `serve.py` needs the
+  declared-vs-serving position split (§6.2) and, per `loop-dee-loop/SCOPE.md`
+  §11, its segment-byte handler needs a "no file for this index → 404"
+  guard — manifest generation itself is unaffected in both cases.
 - **`trace-shrink`** (`wabiloo/trace-shrink`): supplies archive parsing
   (`open_trace`, `Trace`, `ManifestStream`) — ordered manifest snapshots
   over time, per rendition. It does **not** parse manifest content
@@ -75,11 +92,17 @@ HAR/Proxyman archive
   SCTE-35 binary decode (threefive)   -- unifies b64 AND XML-native cases
         |
         v
-  multi-variant coverage + human-selected range + full-coverage filter   (S7, HLS only)
+  multi-variant coverage + human-selected range + full-coverage filter   (S8, HLS only)
         |
         v
-  markers.json-shaped list[dict] + segment_boundary_ticks + total_loop_duration_ticks
-        |    (exactly what bake_one_rendition() would have produced from a real .ts)
+  media body extraction, best-effort, per TimingSegment.source_uri   (S5.3)
+        |    trace.get_entries_for_url(uri) -> TraceEntry.content_bytes, or None if absent
+        v
+  segment-list manifest (index, duration_ticks, asset_boundary, media_path|None)
+  + markers.json-shaped list[dict] + total_loop_duration_ticks
+        |    (NEW bake.py sparse input mode -- loop-dee-loop/SCOPE.md S11 --
+        |     not "one real .ts", since archive segments are already
+        |     discrete files with holes, never a continuous encode)
         v
   scte35_signaling.markers_to_signaling() / loop_math.py   <- unchanged, existing loop-dee-loop code
 ```
@@ -92,6 +115,9 @@ class TimingSegment:
     index: int
     duration_ticks: int          # at TIMESCALE=90_000, matching loop-dee-loop
     asset_boundary: bool = False # starts a new asset: HLS discontinuity / DASH new Period
+    source_uri: str | None = None  # the manifest-referenced segment URL, for S5.3's
+                                    # archive body lookup; None only if a format's
+                                    # extractor can't recover an absolute URI
 
 @dataclass(frozen=True)
 class AssetSpan:
@@ -167,6 +193,29 @@ the marker's real position, mirroring `bake.py`'s existing
 `_callback` (line ~144) treatment of `threefive`'s decode of a `.ts`: the
 real position always comes from where the message was actually observed
 (there: demuxed PES PTS; here: the manifest-derived position from §5.1).
+
+### 5.3 Media body extraction (best-effort, per segment)
+
+For each `TimingSegment.source_uri`, look it up in the archive directly —
+`trace.get_entries_for_url(source_uri)` (or the format's own resolved
+absolute URL if the manifest used a relative one) — and take the first
+matching entry's `TraceEntry.content_bytes` (works uniformly whether the
+underlying archive is HAR or a Proxyman log; `trace-shrink`'s `TraceEntry`
+abstracts that). Write the bytes to disk at a path this tool controls; set
+`TimingSegment.media_path` to that path.
+
+No match (never requested in this archive, request failed, or the
+capture didn't record bodies) → leave it `None`. This is expected and
+**not an error** — see §1's revised stance. No byte-level validation
+beyond "the entry exists and has a body" (no demux/probe of the segment
+content) — matches this tool's whole posture of trusting manifest text
+over media inspection.
+
+Duplicate entries for the same URL (a segment re-requested across
+manifest refreshes, or on the live edge) are resolved by picking the
+response with the largest `raw_size` / most complete body — a live-edge
+capture sometimes catches a segment mid-download on its first request and
+completes it on a later one.
 
 ## 6. Asset boundaries must round-trip to the output
 
@@ -302,9 +351,15 @@ session).
   content is authored to loop cleanly by construction; an archive is an
   arbitrary captured window with no such guarantee. The wrap point is
   always a real seam (§7).
-- **No attempt to source real playable segment media.** This tool's
-  output is timing + marker metadata only (§1). Pairing it with real
-  segments is separate, later work.
+- **Real segment media is best-effort, not guaranteed.** §5.3 extracts
+  whatever bodies the archive happens to contain; a real player pointed
+  at the resulting channel may see 404s on segments the capture never
+  recorded and simply fail to play through those spans. The manifest
+  itself is never degraded on that account — no `#EXT-X-GAP`, no DASH
+  timeline hole — because the primary consumer this tool targets is
+  manifest-structural (an SSAI engine manipulating cues/discontinuities),
+  not necessarily a real playback client. See `loop-dee-loop/SCOPE.md`
+  §11.
 - **Overlap reproduction is opt-in per §6.2's fidelity risk note**, even
   though it's now mechanically clean on both formats — still a policy
   choice for whoever bakes a given archive, not a default.
@@ -320,13 +375,17 @@ session).
 - Final tool name + repo-root workspace placement (this doc's directory
   name is a placeholder, §0).
 - Exact CLI shape (`bake.py`-style entrypoint vs. library-only).
-- Whether output feeds a new `bake.py` input mode, or stays a standalone
-  converter whose output is handed to `bake.py` unmodified via
-  `--markers-override` (`bake.py`'s existing `markers_override` param) —
-  needs the segment-media-sourcing question from §1/§9 resolved first.
-- `serve.py` changes for §6.1 (multiple discontinuities/Periods per loop)
-  and §6.2 (declared-position accumulator) are real implementation work,
-  not yet scoped in detail.
+- **Decided**: output feeds `bake.py`'s new sparse segment-list input mode
+  (`loop-dee-loop/SCOPE.md` §11), not `--markers-override` — this tool
+  never produces one continuous `.ts`, so the existing "one real .ts, cut
+  by GPAC" contract doesn't fit regardless of media completeness.
+- `serve.py` changes for §6.1 (multiple discontinuities/Periods per loop),
+  §6.2 (declared-position accumulator), and `loop-dee-loop/SCOPE.md` §11's
+  segment-byte 404 guard are real implementation work, not yet scoped in
+  detail.
+- Media-body matching heuristics (§5.3) beyond exact/relative URL lookup
+  and largest-body dedup — e.g. matching across a CDN URL rewrite between
+  manifest and segment requests — not yet spiked against a real archive.
 - Coverage-map visualization: `igor` integration vs. a standalone CLI
   report, for §8 step 2.
 - Testing strategy against real HAR captures (none yet spiked).
