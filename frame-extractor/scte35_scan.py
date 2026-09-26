@@ -49,6 +49,7 @@ from rich.progress import (
 )
 
 import scte35_tables as tables
+from scte35_filmstrip_html import render_filmstrip
 from scte35_report_html import render_html
 
 logger = logging.getLogger(__name__)
@@ -600,6 +601,7 @@ def main() -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         html_path = out_dir / "scte-report.html"
         html_path.write_text(render_html(report, base_dir=json_path.parent), encoding="utf-8")
+        (out_dir / "scte-filmstrip.html").write_text(render_filmstrip(report, base_dir=json_path.parent), encoding="utf-8")
         console.print(f"[green]Rendered:[/] {html_path.resolve()}")
         return
 
@@ -642,6 +644,7 @@ def main() -> None:
         if not args.skip_html:
             html_path = out_dir / "scte-report.html"
             html_path.write_text(render_html(report, base_dir=out_dir), encoding="utf-8")
+            (out_dir / "scte-filmstrip.html").write_text(render_filmstrip(report, base_dir=out_dir), encoding="utf-8")
 
     console.print()
     failed = report["summary"]["checks_failed"]
@@ -650,6 +653,7 @@ def main() -> None:
     console.print(f"  [bold green]JSON:[/] [cyan underline]file://{json_path.resolve()}[/]")
     if not args.skip_html:
         console.print(f"  [bold green]HTML:[/] [cyan underline]file://{(out_dir / 'scte-report.html').resolve()}[/]")
+        console.print(f"  [bold green]Filmstrip:[/] [cyan underline]file://{(out_dir / 'scte-filmstrip.html').resolve()}[/]")
     console.print()
 
 
