@@ -470,7 +470,7 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 <body>
 <header>
   <div class="hdr-left">
-    {header_id_html("SCTE-35 marker verification — detailed report", src.get("name", ""))}
+    {header_id_html("Detailed report — SCTE-35 markers and asset boundaries, checked against the stream", src.get("name", ""))}
     <div class="hdr-status-badge">{overall_badge}</div>
   </div>
   {meta_html}

@@ -2543,7 +2543,7 @@ function applyHexPopover() {
               </div>
             </div>
             <div v-if="scteVerifyStatus?.exists && !scteVerifyStatus.stale && scteVerifyUrl && !buildRunning && !verifyingScte" class="flex flex-column gap-2">
-              <iframe :src="scteVerifyUrl" title="krogh SCTE-35 filmstrip" class="report-frame" @load="fitFrameToContent" />
+              <iframe :src="scteVerifyUrl" title="Inspector Krogh filmstrip" class="report-frame" @load="fitFrameToContent" />
             </div>
             <JobPanel v-if="scteVerifyJobId" :job-id="scteVerifyJobId" @finished="onScteVerifyFinished" />
           </div>

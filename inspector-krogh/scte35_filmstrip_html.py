@@ -356,7 +356,7 @@ header{{display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;border-botto
 </head>
 <body>
 <header>
-  {header_id_html("SCTE-35 marker filmstrip — markers found in the transport stream, with frames at each boundary", src.get("name", ""))}
+  {header_id_html("Filmstrip — SCTE-35 markers and asset boundaries, with frames at each one", src.get("name", ""))}
   {meta_html}
 </header>
 
