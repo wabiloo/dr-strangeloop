@@ -14,7 +14,7 @@ header .ik-id h1,#hdr .ik-id h1{font-size:20px;font-weight:700;color:#e8e8f4;let
 def header_id_html(subtitle: str, filename: str) -> str:
     return (
         '<div class="ik-id">'
-        "<h1>Inspector Krogh</h1>"
+        "<h1>🔍 Inspector Krogh</h1>"
         f'<div class="ik-sub">{escape(subtitle)}</div>'
         f'<div class="ik-file">{escape(filename)}</div>'
         "</div>"
