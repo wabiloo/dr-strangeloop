@@ -133,3 +133,49 @@ def compare_expected(expected: list[dict], markers: list[dict], fps: float) -> l
                 checks.append({**base, "check": "matches_expected", "pass": not bad,
                                "detail": "; ".join(bad) if bad else f"pts {_fmt_delta(delta)} · all fields match markers.json"})
     return checks
+
+
+# ── asset timeline (franken-ts `.timeline.json`) ─────────────────────────────
+
+def discover_timeline_path(ts_path: Path) -> Optional[Path]:
+    for candidate in (ts_path.with_suffix(".timeline.json"), ts_path.parent / "timeline.json"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def load_timeline(path: Path) -> dict:
+    doc = json.loads(path.read_text())
+    if not isinstance(doc, dict) or "entries" not in doc:
+        raise ValueError(f"{path}: expected a franken-ts timeline document")
+    return doc
+
+
+def timeline_assets(doc: dict) -> list[dict]:
+    """Assets as (stream-time) spans."""
+    off = float(doc.get("muxer_offset") or 0.0)
+    return [
+        {"asset_id": e.get("asset_id"), "file": e.get("source_file"),
+         "start": round(e["output_start"] + off, 6), "end": round(e["output_end"] + off, 6)}
+        for e in doc["entries"]
+    ]
+
+
+def find_transitions(assets: list[dict], markers: list[dict], fps: float) -> list[dict]:
+    """Joins between consecutive assets that carry no SCTE-35 marker
+    boundary (within one frame)."""
+    tol = 1.0 / (fps or 25.0)
+    boundary_times = [
+        ev["pts_seconds"] for m in markers for ev in (m.get("start"), m.get("stop")) if ev is not None
+    ]
+    out = []
+    for i in range(1, len(assets)):
+        t = assets[i]["start"]
+        if any(abs(t - b) <= tol for b in boundary_times):
+            continue
+        out.append({
+            "index": len(out) + 1, "time": t,
+            "from_asset": assets[i - 1]["asset_id"], "from_file": assets[i - 1]["file"],
+            "to_asset": assets[i]["asset_id"], "to_file": assets[i]["file"],
+        })
+    return out

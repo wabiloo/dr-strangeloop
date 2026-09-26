@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .pts import PTS_CLOCK
 from .config import is_instant_segmentation, is_segmentation_start_type_id
-from .timeline import AdBoundary, pts_for_boundary
+from .timeline import AdBoundary, TimelineEntry, pts_for_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -124,3 +124,40 @@ def write_markers_sidecar(
         f.write("\n")
 
     logger.info("Wrote markers JSON to %s (%d events)", markers_path, len(markers))
+
+
+def write_timeline_sidecar(
+    entries: list[TimelineEntry],
+    timeline_path: Path,
+    *,
+    framerate: int,
+    muxer_offset: float = 0.0,
+    dry_run: bool = False,
+) -> None:
+    """Write `<output>.timeline.json`: where each source asset sits in the
+    output, so an inspector can show asset joins that carry no SCTE-35
+    marker. Times are output-stream seconds; add `muxer_offset` to get
+    stream (PTS) time."""
+    doc = {
+        "version": 1,
+        "framerate": framerate,
+        "muxer_offset": muxer_offset,
+        "entries": [
+            {
+                "asset_id": e.asset_id,
+                "source_file": e.source_file.name,
+                "output_start": e.output_start,
+                "output_end": e.output_end,
+                "inpoint": e.inpoint,
+                "outpoint": e.outpoint,
+            }
+            for e in entries
+        ],
+    }
+    if dry_run:
+        print(f"[dry-run] would write {len(entries)} timeline entries → {timeline_path}")
+        return
+    with timeline_path.open("w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2)
+        f.write("\n")
+    logger.info("Wrote timeline JSON to %s (%d entries)", timeline_path, len(entries))

@@ -83,6 +83,28 @@ def test_markers_starting_at_the_same_time_are_grouped():
         summary={"marker_count": 3, "checks_total": 0, "checks_failed": 0},
     )
     html = render_html(report)
-    assert html.count('<section class="tp-group">') == 2
-    assert "2 markers" in html and "1 marker<" in html
+    assert html.count('<section class="tp-group"') == 2
+    assert "2 items" in html and "1 item<" in html
     assert html.index('id="marker-2"') < html.index('id="marker-1"')
+
+
+def test_asset_joins_without_markers_get_cards_and_timeline_row():
+    report = _minimal_report(
+        timeline={
+            "name": "x.timeline.json", "path": "x.timeline.json",
+            "assets": [
+                {"asset_id": "a1", "file": "a1.mp4", "start": 0.0, "end": 30.0},
+                {"asset_id": "a2", "file": "a2.mp4", "start": 30.0, "end": 60.0},
+            ],
+            "transitions": [{"index": 1, "time": 30.0, "from_asset": "a1", "from_file": "a1.mp4",
+                             "to_asset": "a2", "to_file": "a2.mp4"}],
+        },
+        frames={"trans1": [{"label": "+0", "pts_seconds": 30.0, "is_idr": True, "file": None}]},
+        checks=[{"event_id": None, "transition": 1, "boundary": "join", "check": "lands_on_idr",
+                 "pass": True, "detail": "ok"}],
+        summary={"marker_count": 0, "checks_total": 1, "checks_failed": 0},
+    )
+    html = render_html(report)
+    assert 'id="transition-1"' in html and "a1 → a2" in html
+    assert 'id="tp-30000"' in html and 'href="#tp-30000"' in html
+    assert "join 1" in html and "mark-join" in html

@@ -161,3 +161,7 @@ Playlist-level `enforce_scte35_marker_semantics` defaults to `true` and computes
 - `.markers.json` is always written alongside `.ts` (or once per ladder
   dir) — the single source of truth for SCTE-35 timing downstream; never
   regenerate it by hand.
+- `<name>.timeline.json` is also written alongside `.ts` (per rendition for
+  ladders): where each source asset sits in the output. Not consumed by
+  loop-dee-loop; `inspector-krogh` uses it to show asset joins that carry no
+  marker. `--report-only` refreshes it without rebuilding.

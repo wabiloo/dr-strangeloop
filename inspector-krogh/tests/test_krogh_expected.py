@@ -79,3 +79,24 @@ def test_discover_expected_path(tmp_path):
     assert discover_expected_path(ts) == tmp_path / "markers.json"
     (tmp_path / "loop.markers.json").write_text("[]")
     assert discover_expected_path(ts) == tmp_path / "loop.markers.json"
+
+
+def test_find_transitions_skips_joins_that_coincide_with_a_marker():
+    from krogh_expected import find_transitions, timeline_assets
+
+    doc = {"muxer_offset": 0.0, "entries": [
+        {"asset_id": "a", "source_file": "a.mp4", "output_start": 0.0, "output_end": 20.0},
+        {"asset_id": "b", "source_file": "b.mp4", "output_start": 20.0, "output_end": 30.0},
+        {"asset_id": "c", "source_file": "c.mp4", "output_start": 30.0, "output_end": 40.0},
+    ]}
+    markers = [{"start": {"pts_seconds": 20.0}, "stop": {"pts_seconds": 40.0}}]
+    (tr,) = find_transitions(timeline_assets(doc), markers, FPS)
+    assert tr["time"] == 30.0 and tr["from_asset"] == "b" and tr["to_asset"] == "c" and tr["index"] == 1
+
+
+def test_timeline_assets_apply_muxer_offset():
+    from krogh_expected import timeline_assets
+
+    (a,) = timeline_assets({"muxer_offset": 1.5, "entries": [
+        {"asset_id": "a", "source_file": "a.mp4", "output_start": 0.0, "output_end": 2.0}]})
+    assert a["start"] == 1.5 and a["end"] == 3.5

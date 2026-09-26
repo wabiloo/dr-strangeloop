@@ -18,7 +18,7 @@ from .config import load_config
 from .diagnostics import build_diag_rows, render_terminal_table, render_html_table
 from .extract import extract_clip
 from .ffmpeg import assemble_ts, generate_preview_mp4, write_concat_playlist
-from .markers import write_markers_sidecar
+from .markers import write_markers_sidecar, write_timeline_sidecar
 from .pts import find_idr_pts
 from .report import generate_report
 from .scte35 import generate_xml
@@ -334,6 +334,10 @@ def _run_report_only(cfg, temp_dir: Path, dry_run: bool = False) -> None:
         pts_map, muxer_offset = find_idr_pts(
             cfg.output.file, boundaries, cfg.output.framerate, cfg.output.gop
         )
+    write_timeline_sidecar(
+        entries, cfg.output.file.with_suffix(".timeline.json"), framerate=cfg.output.framerate,
+        muxer_offset=muxer_offset, dry_run=dry_run,
+    )
     with console.status("  Verifying injected markers...", spinner="dots"):
         if not verify_markers(cfg.output.file, boundaries, temp_dir, dry_run=dry_run):
             raise RuntimeError("Marker verification failed -- check splice-info-tables.xml")
@@ -662,6 +666,13 @@ def _run_pipeline_single(
         f"Output → [bold]{cfg.output.file}[/bold]  "
         f"[dim]({_fmt_elapsed(time.monotonic() - t0)})[/dim]"
     )
+
+    timeline_path = cfg.output.file.with_suffix(".timeline.json")
+    write_timeline_sidecar(
+        entries, timeline_path, framerate=cfg.output.framerate,
+        muxer_offset=muxer_offset, dry_run=dry_run,
+    )
+    _ok(f"Timeline JSON → [dim]{timeline_path.name}[/dim]")
 
     # ── Markers sidecar (always written, not gated behind --debug/--verify) ──
     if write_markers_json:

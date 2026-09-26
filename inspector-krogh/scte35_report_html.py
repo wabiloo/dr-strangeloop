@@ -68,6 +68,10 @@ def _checks_for(checks: list[dict], event_id: int) -> list[dict]:
     return [c for c in checks if c["event_id"] == event_id]
 
 
+def _check_event_label(c: dict) -> str:
+    return f"#{c['event_id']}" if c.get("event_id") is not None else f"join {c.get('transition')}"
+
+
 def _check_badge(checks: list[dict]) -> str:
     if not checks:
         return ""
@@ -146,31 +150,81 @@ def _marker_time(marker: dict) -> float:
     return ev["pts_seconds"]
 
 
-def _grouped_cards(markers: list[dict], frames: dict, checks: list[dict], base_dir: Optional[Path], colors: dict) -> str:
-    """Cards grouped by the timepoint they start (or occur) at, in time order;
-    within a group BRK/PPO/PAD come first, then other types, then event id."""
-    order = {c: i for i, c in enumerate(ordered_type_codes(m["type_code"] for m in markers))}
-    groups: dict[float, list[dict]] = {}
-    for m in sorted(markers, key=lambda m: (round(_marker_time(m), 3), order[m["type_code"]], m["event_id"])):
-        groups.setdefault(round(_marker_time(m), 3), []).append(m)
+def _transition_card(tr: dict, frames: dict, checks: list[dict], base_dir: Optional[Path]) -> str:
+    shots = frames.get(f"trans{tr['index']}", [])
+    frame_html = (
+        "".join(_frame_tag(s, base_dir, "join") for s in shots)
+        if shots else '<div class="no-frames-note">frames not extracted</div>'
+    )
+    t_checks = [c for c in checks if c.get("transition") == tr["index"]]
+    checks_html = "".join(
+        f'<div class="check {"pass" if c["pass"] else "fail"}">'
+        f'<span class="check-name">{c["check"]}</span>'
+        f'<span class="check-detail">{c["detail"]}</span></div>'
+        for c in t_checks
+    )
+    from_a, to_a = escape(str(tr["from_asset"] or tr["from_file"])), escape(str(tr["to_asset"] or tr["to_file"]))
+    return f"""
+    <div class="marker-card transition" id="transition-{tr['index']}" style="--t-bg:#26263a;--t-border:#6a6a8a;--t-fg:#d4d4e4">
+      <div class="marker-hdr">
+        <span class="mid">Asset boundary</span>
+        <span class="type-badge">JOIN</span>
+        <span class="mname">{from_a} → {to_a}</span>
+        <span class="dur">no SCTE-35 marker</span>
+        <span class="hdr-status">{_check_badge(t_checks)}</span>
+      </div>
+      <div class="span-row">
+        <div class="boundary join">
+          <div class="bh">
+            <span class="tag join">JOIN</span>
+            <span class="ts">{_fmt_time(tr["time"])}</span>
+            <span class="pts">{escape(str(tr["from_file"]))} → {escape(str(tr["to_file"]))}</span>
+          </div>
+          <div class="frames">{frame_html}</div>
+          {f'<div class="checks">{checks_html}</div>' if checks_html else ""}
+        </div>
+      </div>
+    </div>"""
 
-    out = []
+
+def _grouped_cards(markers: list[dict], transitions: list[dict], frames: dict, checks: list[dict],
+                   base_dir: Optional[Path], colors: dict) -> tuple[str, set[int]]:
+    """Cards grouped by the timepoint they start (or occur) at, in time order;
+    within a group BRK/PPO/PAD come first, then other types, then event id.
+    Asset joins without a marker sit in their own group at their time.
+    Returns (html, set of group ids in ms, for timeline links)."""
+    order = {c: i for i, c in enumerate(ordered_type_codes(m["type_code"] for m in markers))}
+    items: list[tuple[float, int, int, str, str, str]] = []  # time, rank, id, chip code, chip color, html
+    for m in markers:
+        items.append((round(_marker_time(m), 3), order[m["type_code"]], m["event_id"], m["type_code"],
+                      colors[m["type_code"]][1], _marker_card(m, frames, checks, base_dir, colors)))
+    for tr in transitions:
+        items.append((round(tr["time"], 3), 1000, tr["index"], "ASSET", "#6a6a8a",
+                      _transition_card(tr, frames, checks, base_dir)))
+    items.sort(key=lambda x: (x[0], x[1], x[2]))
+
+    groups: dict[float, list[tuple]] = {}
+    for it in items:
+        groups.setdefault(it[0], []).append(it)
+
+    out, keys = [], set()
     for t, group in groups.items():
+        ms = round(t * 1000)
+        keys.add(ms)
         chips = "".join(
-            f'<span class="tp-chip" style="background:{colors[m["type_code"]][1]}">{escape(m["type_code"])}</span>'
-            for m in group
+            f'<span class="tp-chip" style="background:{it[4]}">{escape(it[3])}</span>' for it in group
         )
-        cards = "".join(_marker_card(m, frames, checks, base_dir, colors) for m in group)
+        cards = "".join(it[5] for it in group)
         out.append(f"""
-    <section class="tp-group">
+    <section class="tp-group" id="tp-{ms}">
       <div class="tp-hdr">
         <span class="tp-time">{_fmt_time(t)}</span>
-        <span class="tp-count">{len(group)} marker{"s" if len(group) != 1 else ""}</span>
+        <span class="tp-count">{len(group)} item{"s" if len(group) != 1 else ""}</span>
         {chips}
       </div>
       <div class="tp-cards">{cards}</div>
     </section>""")
-    return "".join(out)
+    return "".join(out), keys
 
 
 def _upid_panel(ev: dict) -> str:
@@ -190,7 +244,21 @@ def _upid_panel(ev: dict) -> str:
     return f'<div class="scte-panel">{"".join(parts)}</div>'
 
 
-def _timeline_bar(markers: list[dict], total: float) -> str:
+def _assets_row(assets: list[dict], total: float, linkable: set[int]) -> str:
+    segs = []
+    for i, a in enumerate(assets):
+        pct_l = a["start"] / total * 100
+        pct_w = max(0.05, (a["end"] - a["start"]) / total * 100)
+        label = escape(str(a["asset_id"] or a["file"]))
+        title = escape(f'{a["asset_id"]} ({a["file"]}) [{_fmt_time(a["start"])} → {_fmt_time(a["end"])}]')
+        href = f' href="#tp-{round(a["start"] * 1000)}"' if round(a["start"] * 1000) in linkable else ""
+        tag = "a" if href else "div"
+        segs.append(f'<{tag} class="seg asset a{i % 2}"{href} style="left:{pct_l:.4f}%;width:{pct_w:.4f}%" title="{title}">{label}</{tag}>')
+    return f'<div class="tl-row">{"".join(segs)}</div>'
+
+
+def _timeline_bar(markers: list[dict], total: float, assets: Optional[list[dict]] = None,
+                  linkable: Optional[set[int]] = None) -> str:
     if not total:
         return ""
     spans = [m for m in markers if m.get("start") is not None and m.get("stop") is not None]
@@ -199,7 +267,7 @@ def _timeline_bar(markers: list[dict], total: float) -> str:
         by_type.setdefault(m["type_code"], []).append(m)
     colors = type_colors(by_type)
 
-    rows = []
+    rows = [_assets_row(assets, total, linkable or set())] if assets else []
     for code in ordered_type_codes(by_type):
         bg, border, fg = colors[code]
         lane_ends: list[float] = []
@@ -254,12 +322,13 @@ def render_html(report: dict, base_dir: Optional[Path] = None) -> str:
     total = src.get("duration") or 0.0
 
     colors = type_colors(m["type_code"] for m in markers)
-    cards_html = _grouped_cards(markers, frames, checks, base_dir, colors)
-    timeline_html = _timeline_bar(markers, total)
+    tl = report.get("timeline") or {}
+    cards_html, linkable = _grouped_cards(markers, tl.get("transitions", []), frames, checks, base_dir, colors)
+    timeline_html = _timeline_bar(markers, total, tl.get("assets"), linkable)
 
     checks_rows = "".join(
         f'<tr class="{"fail" if not c["pass"] else "pass"}">'
-        f'<td>#{c["event_id"]}</td><td>{c["boundary"]}</td><td>{c["check"]}</td>'
+        f'<td>{_check_event_label(c)}</td><td>{c["boundary"]}</td><td>{c["check"]}</td>'
         f'<td class="result">{"✓ pass" if c["pass"] else "✗ fail"}</td><td>{c["detail"]}</td></tr>'
         for c in checks
     )
@@ -294,6 +363,10 @@ h1{{font-size:19px;color:#e8e8f4;letter-spacing:-.5px}}
 .tl-row.ticks{{height:12px}}
 .seg{{position:absolute;top:0;height:100%;text-decoration:none;cursor:pointer;border:1px solid;border-radius:2px;font-size:9px;display:flex;align-items:center;justify-content:center;overflow:hidden;white-space:nowrap}}
 .seg:hover{{filter:brightness(1.35)}}
+.seg.asset{{background:#22223a;border-color:#3a3a5a;color:#c4c4d4}}
+.seg.asset.a1{{background:#2c2c48}}
+div.seg.asset{{cursor:default}}
+div.seg.asset:hover{{filter:none}}
 .tick{{position:absolute;top:0;width:10px;margin-left:-5px;height:100%;cursor:pointer;background:linear-gradient(#ffaa44,#ffaa44) center/2px 100% no-repeat}}
 .tick:hover{{background:linear-gradient(#ffd08a,#ffd08a) center/4px 100% no-repeat}}
 html{{scroll-behavior:smooth}}
@@ -310,7 +383,7 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .checks-table tr.fail td.result{{color:#ff5555}}
 .checks-table tr.fail td{{color:#ff8888}}
 
-.tp-group{{position:relative}}
+.tp-group{{position:relative;scroll-margin-top:16px}}
 .tp-group + .tp-group{{margin-top:48px}}
 .tp-hdr{{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:8px 0 10px;margin-bottom:8px;background:#0c0c14;border-bottom:2px solid #33334d}}
 .tp-time{{font-size:16px;font-weight:700;color:#e8e8f4;letter-spacing:.5px}}
@@ -334,6 +407,7 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .tag{{font-size:10px;font-weight:700;letter-spacing:.9px;padding:2px 7px;border-radius:3px}}
 .tag.start{{background:#0b3318;color:#66ffaa}}
 .tag.stop{{background:#3a1810;color:#ff9955}}
+.tag.join{{background:#2a2a40;color:#d4d4e4}}
 .pts{{color:#9a9ab8;font-size:11px}}
 
 .frames{{display:flex;align-items:center;gap:4px;padding:10px 16px;overflow-x:auto}}
@@ -343,7 +417,8 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .span-gap .dots{{font-size:22px;line-height:1}}
 .span-gap .gap-dur{{font-size:10px}}
 .frame{{position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0}}
-.frame.mark-start::before,.frame.mark-stop::before{{content:"";position:absolute;left:-3px;top:-6px;bottom:-4px;width:2px;border-radius:1px}}
+.frame.mark-start::before,.frame.mark-stop::before,.frame.mark-join::before{{content:"";position:absolute;left:-3px;top:-6px;bottom:-4px;width:2px;border-radius:1px}}
+.frame.mark-join::before{{background:#d4d4e4}}
 .frame.mark-start::before{{background:#66ffaa}}
 .frame.mark-stop::before{{background:#ff9955}}
 .frame img{{display:block;border-radius:3px;border:2px solid transparent;opacity:.7;width:104px;height:auto}}
@@ -375,6 +450,7 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
     <span>{_fmt_time(total)}</span>
     <span>{summary.get("marker_count", 0)} marker(s)</span>
     <span>table 0xFC{f" · pid {src.get('scte35_pid')}" if src.get("scte35_pid") else " · all PIDs"}</span>
+    <span>{f"{len(report['timeline']['transitions'])} asset join(s) without a marker" if report.get("timeline") else "no asset timeline"}</span>
     <span>{f"compared with {escape(report['expected']['name'])} ({report['expected']['entries']} entries)" if report.get("expected") else "independent scan only (no markers.json)"}</span>
   </div>
   {overall_badge}

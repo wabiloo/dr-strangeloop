@@ -50,7 +50,10 @@ from rich.progress import (
 )
 
 import scte35_tables as tables
-from krogh_expected import compare_expected, discover_expected_path, load_expected
+from krogh_expected import (
+    compare_expected, discover_expected_path, discover_timeline_path, find_transitions,
+    load_expected, load_timeline, timeline_assets,
+)
 from scte35_filmstrip_html import render_filmstrip
 from scte35_report_html import render_html
 
@@ -461,6 +464,23 @@ def build_checks(markers: list[Marker], idr_times: list[float], frame_dur: float
 
 # ── report assembly ────────────────────────────────────────────────────────────
 
+def transition_checks(transitions: list[dict], idr_times: list[float], frame_dur: float,
+                      idr_tolerance_frames: float) -> list[dict]:
+    tol = idr_tolerance_frames * frame_dur
+    out = []
+    for tr in transitions:
+        idr = nearest(idr_times, tr["time"])
+        delta = None if idr is None else abs(idr - tr["time"])
+        ok = delta is not None and delta <= tol
+        out.append({
+            "event_id": None, "transition": tr["index"], "boundary": "join",
+            "check": "lands_on_idr", "pass": ok,
+            "detail": "no IDR frames found" if delta is None
+            else f"nearest IDR {delta:.3f}s away (tolerance {tol:.3f}s)",
+        })
+    return out
+
+
 def marker_to_dict(m: Marker) -> dict:
     def ev_dict(e: Optional[RawEvent]) -> Optional[dict]:
         if e is None:
@@ -505,6 +525,7 @@ def build_report(
     idr_tolerance_frames: float = 1.0,
     duration_tolerance_frames: float = 2.0,
     expected_path: Optional[Path] = None,
+    timeline_path: Optional[Path] = None,
     progress: Optional[Progress] = None,
 ) -> dict:
     xml_tmp = output_dir / "_splice-info-tables.xml"
@@ -580,6 +601,31 @@ def build_report(
         checks = checks + compare_expected(expected_entries, marker_dicts, info["fps"])
         expected_info = {"path": str(expected_path), "name": expected_path.name, "entries": len(expected_entries)}
 
+    timeline_info = None
+    transitions: list[dict] = []
+    if timeline_path is not None:
+        assets = timeline_assets(load_timeline(timeline_path))
+        transitions = find_transitions(assets, marker_dicts, info["fps"])
+        if not skip_frames:
+            for tr in transitions:
+                key = f"trans{tr['index']}"
+                shots = []
+                for off in list(range(-before, 0)) + list(range(0, after + 1)):
+                    t = tr["time"] + off * frame_dur
+                    label = f"{off:+d}" if off != 0 else "+0"
+                    fname = f"{key}_{label.replace('+', 'p').replace('-', 'm')}.jpg"
+                    data = extract_frame(ts_path, t, width) if t >= 0 else None
+                    if data:
+                        (frames_dir / fname).write_bytes(data)
+                    idr = nearest(idr_times, t)
+                    shots.append({"label": label, "pts_seconds": round(t, 6),
+                                  "is_idr": bool(idr is not None and abs(idr - t) <= frame_dur * 0.5),
+                                  "file": f"frames/{fname}" if data else None})
+                frames_by_marker[key] = shots
+        checks = checks + transition_checks(transitions, idr_times, frame_dur, idr_tolerance_frames)
+        timeline_info = {"path": str(timeline_path), "name": timeline_path.name,
+                         "assets": assets, "transitions": transitions}
+
     report = {
         "tool": "krogh",
         "report_version": REPORT_VERSION,
@@ -593,6 +639,7 @@ def build_report(
         },
         "markers": marker_dicts,
         "expected": expected_info,
+        "timeline": timeline_info,
         "frames": frames_by_marker,
         "checks": checks,
         "summary": {
@@ -634,8 +681,11 @@ def main() -> None:
     ap.add_argument("--expected", metavar="MARKERS_JSON", default=None,
                     help="Also compare against this franken-ts markers.json (default: auto-discover "
                          "<stem>.markers.json or markers.json next to the .ts)")
+    ap.add_argument("--timeline", metavar="TIMELINE_JSON", default=None,
+                    help="franken-ts timeline sidecar, used to show asset joins that carry no marker "
+                         "(default: auto-discover <stem>.timeline.json or timeline.json next to the .ts)")
     ap.add_argument("--no-expected", action="store_true",
-                    help="Don't compare against any markers.json, even if one is next to the .ts")
+                    help="Don't use any franken-ts sidecar (markers.json / timeline.json), even if next to the .ts")
     args = ap.parse_args()
 
     if args.render_only:
@@ -676,6 +726,16 @@ def main() -> None:
     elif not args.no_expected:
         expected_path = discover_expected_path(ts_path)
 
+    timeline_path: Optional[Path] = None
+    if args.timeline and args.no_expected:
+        ap.error("--timeline and --no-expected are mutually exclusive")
+    if args.timeline:
+        timeline_path = Path(args.timeline)
+        if not timeline_path.is_file():
+            ap.error(f"--timeline file not found: {timeline_path}")
+    elif not args.no_expected:
+        timeline_path = discover_timeline_path(ts_path)
+
     progress = Progress(
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
         BarColumn(bar_width=36), MofNCompleteColumn(), console=console,
@@ -690,6 +750,7 @@ def main() -> None:
             idr_tolerance_frames=args.idr_tolerance_frames,
             duration_tolerance_frames=args.duration_tolerance_frames,
             expected_path=expected_path,
+            timeline_path=timeline_path,
             progress=progress,
         )
         progress.update(t1, description=f"[green]✓ {report['summary']['marker_count']} marker(s) found", total=1, completed=1)
@@ -705,6 +766,9 @@ def main() -> None:
     failed = report["summary"]["checks_failed"]
     status = f"[bold red]{failed} check(s) failed[/]" if failed else "[bold green]all checks passed[/]"
     console.print(f"  Markers found: [bold]{report['summary']['marker_count']}[/]   {status}")
+    tl = report.get("timeline")
+    if tl:
+        console.print(f"  Asset joins without a marker: [bold]{len(tl['transitions'])}[/] (from [cyan]{tl['name']}[/])")
     exp = report.get("expected")
     console.print(f"  Compared with: [cyan]{exp['name']}[/] ({exp['entries']} expected entries)" if exp
                   else "  Compared with: [dim]nothing (no markers.json found; independent scan only)[/]")

@@ -73,6 +73,14 @@ duration, UPID, segment numbers and flags, plus markers that are missing
 from or unexpected in the stream. This comparison only adds checks and
 asset names to the report -- it never influences the scan.
 
+Similarly, franken-ts writes a `<stem>.timeline.json` sidecar (asset
+boundaries in output time; also refreshable without rebuilding via
+`franken-ts playlist.yaml --report-only`). When krogh finds it (or is given
+`--timeline`), the detailed report also shows every **asset join that has
+no SCTE-35 marker** -- frames around it, an IDR check, and an assets row in
+the timeline. Builds made before this sidecar existed just don't show
+joins until reassembled or re-run with `--report-only`.
+
 ### Prerequisites
 
 - `ffmpeg` + `ffprobe` and `tsduck` (`tsp`) on your `PATH`
@@ -108,6 +116,7 @@ usage: krogh [-h] [--output OUTPUT] [--pid PID] [--before BEFORE]
                       [--after AFTER] [--width WIDTH] [--skip-frames]
                       [--skip-html] [--render-only JSON_PATH]
                       [--idr-tolerance-frames N] [--duration-tolerance-frames N]
-                      [--expected MARKERS_JSON | --no-expected]
+                      [--expected MARKERS_JSON] [--timeline TIMELINE_JSON]
+                      [--no-expected]
                       [ts]
 ```
