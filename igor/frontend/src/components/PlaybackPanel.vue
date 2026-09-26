@@ -1123,10 +1123,6 @@ function reloadPlayers() {
 
 defineExpose({ reloadPlayers })
 
-function openUrl(url?: string | null) {
-  if (url) window.open(url, '_blank')
-}
-
 // Rough estimate of how many wrapped lines a URL needs so the readonly
 // textarea below can sit tall enough to show it in full without
 // scrolling/cropping, without needing to measure actual rendered text
@@ -1135,7 +1131,7 @@ function openUrl(url?: string | null) {
 // a cropped URL.
 function urlRows(url?: string | null): number {
   if (!url) return 1
-  return Math.min(4, Math.max(1, Math.ceil(url.length / 45)))
+  return Math.max(1, Math.ceil(url.length / 40))
 }
 
 /** Fixed-width HH:MM:SS -- unlike a bare seconds count, its length never
@@ -1199,27 +1195,31 @@ async function copyUrl(url?: string | null) {
           <span class="font-semibold text-sm">HLS</span>
           <Button v-if="hlsPlaying" icon="pi pi-stop-circle" text size="small" severity="secondary" label="Stop" @click="destroyHls" />
         </div>
-        <div class="hls-player-shell dash-player-shell">
-          <div class="video-wrapper">
-            <video ref="hlsVideo" muted playsinline class="player-video" />
-            <div v-if="hlsLoading" class="player-overlay"><i class="pi pi-spin pi-spinner" /></div>
-            <button v-if="!hlsPlaying" class="play-overlay" @click="playHls">
-              <i class="pi pi-play-circle" />
-              <span>Play HLS</span>
-            </button>
-            <TransitionGroup
-              name="marker-toast"
-              tag="div"
-              class="marker-toast-stack"
-              :style="{ '--marker-toast-life': `${MARKER_TOAST_LIFE_MS}ms` }"
-            >
-              <div v-for="t in hlsMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`]">
-                <i :class="MARKER_KIND_ICON[t.kind]" />
-                <span>{{ t.label }}</span>
-              </div>
-            </TransitionGroup>
-          </div>
-          <div v-if="hlsPlaying" class="dash-controls" aria-label="HLS playback controls">
+        <div v-if="hlsError" class="player-stack-error">
+          <Message severity="error" :closable="false" class="text-xs">{{ hlsError }}</Message>
+        </div>
+        <div class="player-stack">
+          <div class="hls-player-shell dash-player-shell">
+            <div class="video-wrapper">
+              <video ref="hlsVideo" muted playsinline class="player-video" />
+              <div v-if="hlsLoading" class="player-overlay"><i class="pi pi-spin pi-spinner" /></div>
+              <button v-if="!hlsPlaying" class="play-overlay" @click="playHls">
+                <i class="pi pi-play-circle" />
+                <span>Play HLS</span>
+              </button>
+              <TransitionGroup
+                name="marker-toast"
+                tag="div"
+                class="marker-toast-stack"
+                :style="{ '--marker-toast-life': `${MARKER_TOAST_LIFE_MS}ms` }"
+              >
+                <div v-for="t in hlsMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`]">
+                  <i :class="MARKER_KIND_ICON[t.kind]" />
+                  <span>{{ t.label }}</span>
+                </div>
+              </TransitionGroup>
+            </div>
+            <div v-if="hlsPlaying" class="dash-controls" aria-label="HLS playback controls">
             <button
               class="dash-control-btn"
               :aria-label="hlsIsPlaying ? 'Pause' : 'Play'"
@@ -1285,10 +1285,9 @@ async function copyUrl(url?: string | null) {
             >
               <i :class="hlsFullscreen ? 'pi pi-compress' : 'pi pi-expand'" />
             </button>
+            </div>
           </div>
-        </div>
-        <Message v-if="hlsError" severity="error" :closable="false" class="text-xs">{{ hlsError }}</Message>
-        <div v-if="hlsPlayheadTime || hlsDvrWindowSeconds > 0" class="playback-meta-panel">
+          <div v-if="hlsPlayheadTime || hlsDvrWindowSeconds > 0" class="playback-meta-panel stacked-player-panel">
           <div v-if="hlsDvrWindowSeconds > 0" class="playhead-chip dvr-window-chip">
             <i class="pi pi-history" />
             <span class="playback-meta-label">DVR window</span>
@@ -1299,8 +1298,8 @@ async function copyUrl(url?: string | null) {
             <span class="playback-meta-label">Playhead</span>
             <time class="playback-meta-value">{{ hlsPlayheadTime }}</time>
           </div>
-        </div>
-        <div class="url-row">
+          </div>
+          <div class="url-row stacked-player-panel url-panel">
           <textarea
             class="url-input"
             readonly
@@ -1309,7 +1308,7 @@ async function copyUrl(url?: string | null) {
             @focus="($event.target as HTMLTextAreaElement).select()"
           />
           <Button icon="pi pi-copy" text size="small" title="Copy URL" @click="copyUrl(hlsUrl)" />
-          <Button icon="pi pi-external-link" text size="small" title="Open in new tab" @click="openUrl(hlsUrl)" />
+          </div>
         </div>
       </div>
 
@@ -1318,27 +1317,31 @@ async function copyUrl(url?: string | null) {
           <span class="font-semibold text-sm">DASH</span>
           <Button v-if="dashPlaying" icon="pi pi-stop-circle" text size="small" severity="secondary" label="Stop" @click="destroyDash" />
         </div>
-        <div class="dash-player-shell">
-          <div class="video-wrapper">
-            <video ref="dashVideo" muted playsinline class="player-video" />
-            <div v-if="dashLoading" class="player-overlay"><i class="pi pi-spin pi-spinner" /></div>
-            <button v-if="!dashPlaying" class="play-overlay" @click="playDash">
-              <i class="pi pi-play-circle" />
-              <span>Play DASH</span>
-            </button>
-            <TransitionGroup
-              name="marker-toast"
-              tag="div"
-              class="marker-toast-stack"
-              :style="{ '--marker-toast-life': `${MARKER_TOAST_LIFE_MS}ms` }"
-            >
-              <div v-for="t in dashMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`]">
-                <i :class="MARKER_KIND_ICON[t.kind]" />
-                <span>{{ t.label }}</span>
-              </div>
-            </TransitionGroup>
-          </div>
-          <div v-if="dashPlaying" class="dash-controls" aria-label="DASH playback controls">
+        <div v-if="dashError" class="player-stack-error">
+          <Message severity="error" :closable="false" class="text-xs">{{ dashError }}</Message>
+        </div>
+        <div class="player-stack">
+          <div class="dash-player-shell">
+            <div class="video-wrapper">
+              <video ref="dashVideo" muted playsinline class="player-video" />
+              <div v-if="dashLoading" class="player-overlay"><i class="pi pi-spin pi-spinner" /></div>
+              <button v-if="!dashPlaying" class="play-overlay" @click="playDash">
+                <i class="pi pi-play-circle" />
+                <span>Play DASH</span>
+              </button>
+              <TransitionGroup
+                name="marker-toast"
+                tag="div"
+                class="marker-toast-stack"
+                :style="{ '--marker-toast-life': `${MARKER_TOAST_LIFE_MS}ms` }"
+              >
+                <div v-for="t in dashMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`]">
+                  <i :class="MARKER_KIND_ICON[t.kind]" />
+                  <span>{{ t.label }}</span>
+                </div>
+              </TransitionGroup>
+            </div>
+            <div v-if="dashPlaying" class="dash-controls" aria-label="DASH playback controls">
             <button
               class="dash-control-btn"
               :aria-label="dashIsPlaying ? 'Pause' : 'Play'"
@@ -1404,10 +1407,9 @@ async function copyUrl(url?: string | null) {
             >
               <i :class="dashFullscreen ? 'pi pi-compress' : 'pi pi-expand'" />
             </button>
+            </div>
           </div>
-        </div>
-        <Message v-if="dashError" severity="error" :closable="false" class="text-xs">{{ dashError }}</Message>
-        <div v-if="dashPlayheadTime || dashDvrWindowSeconds > 0" class="playback-meta-panel">
+          <div v-if="dashPlayheadTime || dashDvrWindowSeconds > 0" class="playback-meta-panel stacked-player-panel">
           <div v-if="dashDvrWindowSeconds > 0" class="playhead-chip dvr-window-chip">
             <i class="pi pi-history" />
             <span class="playback-meta-label">DVR window</span>
@@ -1418,8 +1420,8 @@ async function copyUrl(url?: string | null) {
             <span class="playback-meta-label">Playhead</span>
             <time class="playback-meta-value">{{ dashPlayheadTime }}</time>
           </div>
-        </div>
-        <div class="url-row">
+          </div>
+          <div class="url-row stacked-player-panel url-panel">
           <textarea
             class="url-input"
             readonly
@@ -1428,7 +1430,7 @@ async function copyUrl(url?: string | null) {
             @focus="($event.target as HTMLTextAreaElement).select()"
           />
           <Button icon="pi pi-copy" text size="small" title="Copy URL" @click="copyUrl(dashUrl)" />
-          <Button icon="pi pi-external-link" text size="small" title="Open in new tab" @click="openUrl(dashUrl)" />
+          </div>
         </div>
       </div>
     </div>
@@ -1721,10 +1723,27 @@ async function copyUrl(url?: string | null) {
 }
 
 .dash-player-shell {
+  position: relative;
+  z-index: 3;
   width: 100%;
   background: #000;
-  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
   overflow: hidden;
+  box-sizing: border-box;
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.25);
+}
+
+.player-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  overflow: visible;
+}
+
+.player-stack-error {
+  margin-bottom: 0.5rem;
 }
 
 .dash-player-shell:fullscreen {
@@ -1733,6 +1752,7 @@ async function copyUrl(url?: string | null) {
   justify-content: center;
   padding: 1rem;
   background: #020617;
+  border: 0;
   border-radius: 0;
 }
 
@@ -1891,27 +1911,24 @@ async function copyUrl(url?: string | null) {
 
 .playback-meta-panel {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
-  min-height: 58px;
+  gap: 1rem;
+  min-height: 52px;
   width: 100%;
-  padding: 0.65rem 0.9rem;
-  background: #162238;
-  border: 1px solid rgba(96, 165, 250, 0.2);
-  border-radius: 8px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  padding: calc(0.3rem + 6px) 0.8rem 0.3rem;
+  box-sizing: border-box;
+  background: #17243a;
+  border-radius: 0 0 8px 8px;
+  color: #cbd5e1;
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.18);
 }
 
 .playhead-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  min-height: 36px;
-  padding: 0.4rem 0.7rem;
-  background: rgba(7, 14, 28, 0.34);
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  border-radius: 6px;
   color: #94a3b8;
   font-size: 0.7rem;
 }
@@ -1932,10 +1949,6 @@ async function copyUrl(url?: string | null) {
   font-variant-numeric: tabular-nums;
 }
 
-.dvr-window-chip {
-  border-color: rgba(96, 165, 250, 0.24);
-}
-
 .dvr-window-chip > i {
   color: #4ade80;
 }
@@ -1947,12 +1960,10 @@ async function copyUrl(url?: string | null) {
 @media (max-width: 520px) {
   .playback-meta-panel {
     gap: 0.5rem;
-    min-height: 52px;
-    padding: 0.5rem;
+    padding: calc(0.3rem + 6px) 0.6rem 0.3rem;
   }
 
   .playhead-chip {
-    padding-inline: 0.55rem;
     gap: 0.3rem;
   }
 
@@ -1963,12 +1974,31 @@ async function copyUrl(url?: string | null) {
 
 .url-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.25rem;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
-  padding: 0.4rem 0.15rem 0.4rem 0.6rem;
+  min-width: 0;
+  background: #263750;
+  border-radius: 0 0 8px 8px;
+  padding: calc(0.25rem + 6px) 0.3rem 0.25rem 0.75rem;
+  box-sizing: border-box;
+}
+
+/* Each lower panel begins behind the rounded bottom edge above it. No side
+ * border on the lower layers: it would show as a grey stripe beside the row. */
+.stacked-player-panel {
+  position: relative;
+  width: 100%;
+  margin-top: -6px;
+}
+
+.playback-meta-panel.stacked-player-panel {
+  z-index: 2;
+}
+
+.url-panel {
+  width: 100%;
+  background: #263750;
+  z-index: 1;
 }
 
 .url-input {
@@ -1983,7 +2013,7 @@ async function copyUrl(url?: string | null) {
   word-break: break-all;
   line-height: 1.3;
   color: #e2e8f0;
-  font-size: 0.8rem;
+  font-size: 0.7rem;
   font-family: var(--font-mono, monospace);
 }
 </style>
