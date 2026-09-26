@@ -171,11 +171,12 @@ onMounted(load)
         <strong>{{ selectedFile ? selectedFile.name : 'Drop an archive file here' }}</strong>
         <span class="text-sm text-color-secondary">or <label for="archive-file" class="archive-browse-link">browse files</label></span>
       </div>
-      <div class="flex flex-column gap-1">
+      <div class="archive-name-field flex flex-column gap-1">
         <label for="archive-name" class="text-sm">Archive name</label>
         <InputText id="archive-name" v-model="archiveName" :disabled="!selectedFile" />
       </div>
       <Button
+        class="archive-upload-button"
         label="Upload archive"
         icon="pi pi-upload"
         type="submit"
@@ -242,7 +243,7 @@ onMounted(load)
 
 <style scoped>
 .archive-dropzone {
-  min-height: 6rem;
+  min-height: 8rem;
   padding: 1rem 1.25rem;
   display: flex;
   flex-wrap: wrap;
@@ -264,6 +265,21 @@ onMounted(load)
   font-size: 1.5rem;
 }
 
+.archive-name-field {
+  flex: 1 1 18rem;
+  min-width: 18rem;
+  align-self: center;
+}
+
+.archive-name-field :deep(input) {
+  width: 100%;
+}
+
+.archive-upload-button {
+  margin-left: auto;
+  align-self: center;
+}
+
 .archive-file-input {
   position: absolute;
   width: 1px;
@@ -280,5 +296,16 @@ onMounted(load)
   color: var(--p-primary-color);
   text-decoration: underline;
   cursor: pointer;
+}
+
+@media (max-width: 42rem) {
+  .archive-name-field {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .archive-upload-button {
+    margin-left: auto;
+  }
 }
 </style>
