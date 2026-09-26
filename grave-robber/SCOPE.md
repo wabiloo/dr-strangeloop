@@ -1,9 +1,13 @@
-# SCOPE — archive-loop-import (working name)
+# SCOPE — grave-robber
 
-> **Naming**: `archive-loop-import` is a placeholder directory name, not a
-> final decision — this repo's tools all get a deliberate (usually punny)
-> name (`franken-ts`, `loop-dee-loop`, `its-a-live`, `inspector-krogh`,
-> `galvanise.py`). Pick/rename before real implementation starts.
+> **Naming**: this tool was originally scoped under the placeholder
+> directory name `archive-loop-import` — this repo's tools all get a
+> deliberate (usually punny) name (`franken-ts`, `loop-dee-loop`,
+> `its-a-live`, `inspector-krogh`, `galvanise.py`), and it has since been
+> renamed to `grave-robber` (it exhumes a loop's timing/markers from a
+> captured archive). Igor-facing UI terminology ("Archives", "archive
+> import") is unaffected — that's user-facing wording, not the package
+> name.
 
 ## 1. Motivation
 

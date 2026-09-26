@@ -70,10 +70,11 @@ hard error, not something to silently reconcile.
   that's wanted later, treat it as a new phase-0 step that produces a single
   conformed `.ts` + merged `.markers.json`, upstream of everything below. Don't
   design that in now; flag it as a known future direction only.
-  **Superseded in part by §11**: the archive-import tool
-  (`archive-loop-import`, working name) needs a second, sparse input mode
-  that does not fit "exactly one already-baked `.ts`" at all — §11 defines
-  it as an addition, not a relaxation of this v1 constraint.
+  **Superseded in part by §11**: the archive-import tool (`grave-robber`,
+  formerly scoped under the placeholder name `archive-loop-import`) needs
+  a second, sparse input mode that does not fit "exactly one already-baked
+  `.ts`" at all — §11 defines it as an addition, not a relaxation of this
+  v1 constraint.
 - No live per-loop SCTE-35 injection or live per-loop re-segmentation. The
   design is bake-once, loop-forever (see §4). If this constraint is ever
   relaxed, treat it as a different project — the drift and frame-accuracy
@@ -373,8 +374,9 @@ loop-dee-loop/
 
 ## 11. Extension: sparse segment input (manifest-complete, media-optional)
 
-**DECIDED.** Added to support `archive-loop-import` (working name, see its
-own `SCOPE.md`), which derives loop timing + SCTE-35 markers from a
+**DECIDED.** Added to support `grave-robber` (formerly scoped under the
+placeholder name `archive-loop-import`; see its own `SCOPE.md`), which
+derives loop timing + SCTE-35 markers from a
 captured HTTP archive (HAR/Proxyman log) of a real HLS/DASH session
 instead of from a `franken-ts` build. Unlike v1's input (§2/§4.1: exactly
 one continuous, already-baked `.ts`), an archive-derived source is
@@ -438,7 +440,7 @@ Bake behavior:
   true`), is required to accept them. This mode is opt-in, never the
   silent default.
 - `asset_boundary` entries feed the same discontinuity/Period-restart
-  mechanism `archive-loop-import/SCOPE.md` §6.1 asks `serve.py` to extend
+  mechanism `grave-robber/SCOPE.md` §6.1 asks `serve.py` to extend
   to fire at internal boundaries, not just the loop wrap.
 
 ### 11.3 `serve.py` change: 404 on a missing segment, nothing else
