@@ -38,6 +38,8 @@ from rich.progress import (
 )
 from rich.text import Text
 
+from krogh_common import HEADER_CSS, header_id_html
+
 console = Console()
 
 
@@ -262,7 +264,7 @@ def generate_html(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{video_name} — Frame Timeline</title>
+<title>Inspector Krogh — {video_name}</title>
 <style>
 *,::before,::after{{box-sizing:border-box;margin:0;padding:0}}
 html{{font-family:'SF Mono','Menlo','Consolas','Liberation Mono',monospace;font-size:13px}}
@@ -381,12 +383,13 @@ body{{background:#0e0e12;color:#ccc;height:100vh;display:flex;flex-direction:col
 #lb-close:hover{{color:#fff}}
 
 #empty{{display:none;padding:60px;text-align:center;color:#333;font-size:13px}}
+{HEADER_CSS}
 </style>
 </head>
 <body>
 
 <div id="hdr">
-  <h1>&#9654;&nbsp; {video_name}</h1>
+  {header_id_html("Frame timeline — GOP structure and every frame (I/P/B)", video_name)}
   <div id="meta">
     <span><b>Codec</b> {info['codec']} {info['profile']}</span>
     <span><b>Resolution</b> {info['width']}×{info['height']}</span>

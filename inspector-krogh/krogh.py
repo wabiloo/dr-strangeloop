@@ -57,6 +57,7 @@ console = Console()
 
 PTS_CLOCK = 90_000
 REPORT_VERSION = 1
+ENDCAP_FRAMES = 3
 SCTE35_TABLE_ID = "0xFC"  # splice_information_table, per ANSI/SCTE 35
 
 
@@ -359,23 +360,29 @@ def probe_video_info(ts_path: Path) -> dict:
     }
 
 
-def load_idr_timestamps(ts_path: Path) -> list[float]:
+def load_frame_times(ts_path: Path) -> tuple[list[float], list[float]]:
+    """Return (IDR/key-frame timestamps, all frame timestamps), both sorted."""
     proc = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_frames",
          "-show_entries", "frame=key_frame,best_effort_timestamp_time",
          "-of", "csv", str(ts_path)],
         capture_output=True, text=True,
     )
-    out: list[float] = []
+    idr: list[float] = []
+    every: list[float] = []
     for line in proc.stdout.splitlines():
         parts = line.strip().split(",")
-        if len(parts) >= 3 and parts[1] == "1":
+        if len(parts) >= 3:
             try:
-                out.append(float(parts[2]))
+                t = float(parts[2])
             except ValueError:
-                pass
-    out.sort()
-    return out
+                continue
+            every.append(t)
+            if parts[1] == "1":
+                idr.append(t)
+    idr.sort()
+    every.sort()
+    return idr, every
 
 
 def nearest(times: list[float], target: float) -> Optional[float]:
@@ -506,7 +513,7 @@ def build_report(
     markers = pair_events_into_markers(events)
     infer_nesting(markers)
 
-    idr_times = load_idr_timestamps(ts_path)
+    idr_times, all_times = load_frame_times(ts_path)
     checks = build_checks(markers, idr_times, frame_dur, idr_tolerance_frames, duration_tolerance_frames)
 
     frames_by_marker: dict[str, list[dict]] = {}
@@ -541,6 +548,23 @@ def build_report(
             frames_by_marker[key] = shots
             if progress and task_id is not None:
                 progress.advance(task_id)
+
+        if all_times:
+            for key, times in (("asset_start", all_times[:ENDCAP_FRAMES]), ("asset_end", all_times[-ENDCAP_FRAMES:])):
+                shots = []
+                for i, t in enumerate(times):
+                    fname = f"{key}_{i}.jpg"
+                    data = extract_frame(ts_path, t, width)
+                    if data:
+                        (frames_dir / fname).write_bytes(data)
+                    idr = nearest(idr_times, t)
+                    shots.append({
+                        "label": str(i),
+                        "pts_seconds": round(t, 6),
+                        "is_idr": bool(idr is not None and abs(idr - t) <= frame_dur * 0.5),
+                        "file": f"frames/{fname}" if data else None,
+                    })
+                frames_by_marker[key] = shots
 
     report = {
         "tool": "krogh",

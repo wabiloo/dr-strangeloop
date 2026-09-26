@@ -15,6 +15,8 @@ import base64
 from pathlib import Path
 from typing import Optional
 
+from krogh_common import HEADER_CSS, header_id_html
+
 
 def _fmt_time(seconds: float) -> str:
     if seconds is None:
@@ -207,7 +209,7 @@ def render_html(report: dict, base_dir: Optional[Path] = None) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SCTE-35 verify — {src.get("name", "")}</title>
+<title>Inspector Krogh — {src.get("name", "")}</title>
 <style>
 *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:#0c0c14;color:#c4c4d4;font-family:"JetBrains Mono","Fira Code","SF Mono",monospace;font-size:13px;line-height:1.5;padding:28px}}
@@ -273,11 +275,12 @@ table.checks tr.pass td{{color:#8888aa}}
 .scte-field{{display:flex;gap:6px;font-size:11px}}
 .scte-field .k{{color:#2e2e4a}}
 .scte-field .v{{color:#6666aa}}
+{HEADER_CSS}
 </style>
 </head>
 <body>
 <header>
-  <h1>SCTE-35 verify — {src.get("name", "")}</h1>
+  {header_id_html("SCTE-35 marker verification — detailed report", src.get("name", ""))}
   <div class="meta">
     <span>{src.get("codec", "?")} {src.get("width")}×{src.get("height")}</span>
     <span>{_fmt_time(total)}</span>
