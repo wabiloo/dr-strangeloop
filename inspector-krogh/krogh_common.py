@@ -49,7 +49,8 @@ def type_colors(codes) -> dict[str, tuple[str, str, str]]:
 
 
 META_CSS = """
-table.meta-table{border-collapse:collapse;font-size:12px}
+table.meta-table{border-collapse:collapse;font-size:12px;margin-left:auto}
+.hdr-status-badge{margin-top:12px}
 .meta-table th{color:#9a9ab8;font-weight:600;text-align:left;padding:2px 16px 2px 0;white-space:nowrap}
 .meta-table td{color:#e0e0f0;padding:2px 0}
 """

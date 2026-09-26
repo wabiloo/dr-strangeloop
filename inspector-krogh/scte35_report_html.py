@@ -360,7 +360,7 @@ def render_html(report: dict, base_dir: Optional[Path] = None) -> str:
 <style>
 *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:#0c0c14;color:#c4c4d4;font-family:"JetBrains Mono","Fira Code","SF Mono",monospace;font-size:13px;line-height:1.5;padding:28px}}
-header{{display:flex;flex-wrap:wrap;align-items:baseline;gap:16px;border-bottom:1px solid #252536;padding-bottom:16px;margin-bottom:24px}}
+header{{display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;border-bottom:1px solid #252536;padding-bottom:16px;margin-bottom:24px}}
 h1{{font-size:19px;color:#e8e8f4;letter-spacing:-.5px}}
 .badge{{font-size:10px;font-weight:700;letter-spacing:.6px;padding:3px 9px;border-radius:10px;text-transform:uppercase}}
 .badge.ok{{background:#0b3318;color:#66ffaa}}
@@ -454,9 +454,11 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 </head>
 <body>
 <header>
-  {header_id_html("SCTE-35 marker verification — detailed report", src.get("name", ""))}
+  <div class="hdr-left">
+    {header_id_html("SCTE-35 marker verification — detailed report", src.get("name", ""))}
+    <div class="hdr-status-badge">{overall_badge}</div>
+  </div>
   {meta_html}
-  {overall_badge}
 </header>
 
 <div class="tl-wrap">

@@ -271,7 +271,7 @@ def render_filmstrip(report: dict, base_dir: Optional[Path] = None) -> str:
 <style>
 *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:#0c0c14;color:#c4c4d4;font-family:"JetBrains Mono","Fira Code","SF Mono",monospace;font-size:12px;padding:24px}}
-header{{display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px;border-bottom:1px solid #252536;padding-bottom:14px;margin-bottom:18px}}
+header{{display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;border-bottom:1px solid #252536;padding-bottom:14px;margin-bottom:18px}}
 .legend{{display:flex;gap:16px;margin-bottom:14px;font-size:11px;color:#b0b0cc;flex-wrap:wrap;align-items:center}}
 .legend .sw{{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:middle}}
 .legend .sw.idr{{background:transparent;border:2px solid #ff3b3b;width:12px;height:9px}}
