@@ -37,6 +37,10 @@ const dashIsPlaying = ref(false)
 const dashMuted = ref(true)
 const dashVolume = ref(1)
 const dashFullscreen = ref(false)
+const hlsIsPlaying = ref(false)
+const hlsMuted = ref(true)
+const hlsVolume = ref(1)
+const hlsFullscreen = ref(false)
 const hlsPlayheadTime = ref('')
 const dashPlayheadTime = ref('')
 
@@ -68,6 +72,237 @@ const dashSeekPending = ref(false)
 const dashAtLiveEdge = ref(true)
 let dashDvrPollTimer: ReturnType<typeof setInterval> | null = null
 let dashSeekCommitTimer: ReturnType<typeof setTimeout> | null = null
+const hlsSeekMin = ref(0)
+const hlsSeekMax = ref(0)
+const hlsSeekSliderMax = computed(() => Math.max(hlsSeekMin.value, hlsSeekMax.value - 0.1))
+const hlsSeekValue = ref(0)
+const hlsSeekDragging = ref(false)
+const hlsSeekPending = ref(false)
+const hlsAtLiveEdge = ref(true)
+let hlsDvrPollTimer: ReturnType<typeof setInterval> | null = null
+let hlsSeekCommitTimer: ReturnType<typeof setTimeout> | null = null
+let hlsOriginalMaxLatency: number | undefined
+let hlsDvrMode = false
+let hlsGeneration = 0
+let hlsFragProgramDateTime: number | null = null
+let hlsFragStart = 0
+let hlsNativePlayback = false
+
+function onHlsTimeUpdate() {
+  const video = hlsVideo.value
+  if (!video) return
+  updateHlsDvrRange()
+  if (hlsFragProgramDateTime == null) return
+  const wallMs = hlsFragProgramDateTime + (video.currentTime - hlsFragStart) * 1000
+  hlsPlayheadTime.value = new Date(wallMs).toISOString().replace('T', ' ')
+}
+
+function onHlsLoadedMetadata() {
+  const video = hlsVideo.value
+  if (!video) return
+  syncHlsVideoState()
+  if (!hlsNativePlayback) return
+  hlsLoading.value = false
+  video.play().then(syncHlsVideoState).catch(() => {
+    hlsError.value = 'Playback was blocked. Use the play button to start the stream.'
+    hlsLoading.value = false
+    hlsPlaying.value = false
+  })
+}
+
+function updateHlsDvrRange() {
+  const video = hlsVideo.value
+  if (!video || video.seekable.length === 0) {
+    hlsSeekMin.value = 0
+    hlsSeekMax.value = 0
+    hlsSeekValue.value = 0
+    return
+  }
+  const idx = video.seekable.length - 1
+  try {
+    hlsSeekMin.value = video.seekable.start(idx)
+    hlsSeekMax.value = video.seekable.end(idx)
+  } catch {
+    return
+  }
+  if (!hlsSeekDragging.value && !hlsSeekPending.value) {
+    hlsSeekValue.value = Math.min(
+      Math.max(hlsSeekMin.value, video.currentTime),
+      Math.max(hlsSeekMin.value, hlsSeekMax.value - 0.1),
+    )
+  }
+  if (hlsDvrMode && hlsInstance) {
+    hlsInstance.config.liveMaxLatencyDuration =
+      hlsSeekMax.value - hlsSeekMin.value + TARGET_LIVE_DELAY_SECONDS * 2
+  }
+  hlsAtLiveEdge.value = hlsSeekMax.value - video.currentTime <= TARGET_LIVE_DELAY_SECONDS + 1
+}
+
+function hlsBehindLiveLabel(value: number): string {
+  const behind = Math.max(0, hlsSeekMax.value - value)
+  return behind < 1 ? 'LIVE' : `-${behind.toFixed(1)}s`
+}
+
+function onHlsSeekStart() {
+  hlsSeekDragging.value = true
+}
+
+function onHlsSeekInput(value: number) {
+  hlsSeekValue.value = value
+}
+
+function onHlsSeekKeyDown(event: KeyboardEvent) {
+  if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+    onHlsSeekStart()
+  }
+}
+
+function onHlsSeekCommit(value: number) {
+  const video = hlsVideo.value
+  if (video && hlsSeekMax.value > hlsSeekMin.value) {
+    const target = Math.min(hlsSeekSliderMax.value, Math.max(hlsSeekMin.value, value))
+    if (hlsInstance) {
+      // HLS latency control normally jumps playback to liveSyncPosition
+      // once latency exceeds liveMaxLatencyDuration. Let the player use
+      // the full available DVR range until LIVE is explicitly selected.
+      if (hlsOriginalMaxLatency === undefined) {
+        hlsOriginalMaxLatency = hlsInstance.config.liveMaxLatencyDuration
+      }
+      hlsInstance.config.liveMaxLatencyDuration =
+        hlsSeekMax.value - hlsSeekMin.value + TARGET_LIVE_DELAY_SECONDS * 2
+    }
+    hlsDvrMode = true
+    hlsSeekValue.value = target
+    if (Math.abs(video.currentTime - target) < 0.05) {
+      hlsSeekDragging.value = false
+    } else {
+      hlsSeekPending.value = true
+      if (hlsSeekCommitTimer != null) clearTimeout(hlsSeekCommitTimer)
+      hlsSeekCommitTimer = setTimeout(() => {
+        hlsSeekCommitTimer = null
+        hlsSeekPending.value = false
+        hlsSeekDragging.value = false
+        syncHlsVideoState()
+      }, 5000)
+      try {
+        video.currentTime = target
+      } catch {
+        clearTimeout(hlsSeekCommitTimer)
+        hlsSeekCommitTimer = null
+        hlsSeekPending.value = false
+        hlsSeekDragging.value = false
+        syncHlsVideoState()
+      }
+    }
+  }
+  if (!hlsSeekPending.value) hlsSeekDragging.value = false
+}
+
+async function goHlsLive() {
+  const video = hlsVideo.value
+  if (!video) return
+  updateHlsDvrRange()
+  const target = Math.max(hlsSeekMin.value, Math.min(
+    hlsSeekSliderMax.value,
+    hlsSeekMax.value - TARGET_LIVE_DELAY_SECONDS,
+  ))
+  if (hlsInstance && hlsOriginalMaxLatency !== undefined) {
+    hlsInstance.config.liveMaxLatencyDuration = hlsOriginalMaxLatency
+  }
+  hlsDvrMode = false
+  hlsOriginalMaxLatency = undefined
+  hlsDvrMode = false
+  video.currentTime = target
+  hlsSeekValue.value = target
+  hlsSeekDragging.value = false
+  hlsSeekPending.value = false
+  if (hlsSeekCommitTimer != null) {
+    clearTimeout(hlsSeekCommitTimer)
+    hlsSeekCommitTimer = null
+  }
+  if (video.paused) {
+    try {
+      await video.play()
+    } catch (e) {
+      hlsError.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+}
+
+function syncHlsVideoState() {
+  const video = hlsVideo.value
+  if (!video) return
+  hlsIsPlaying.value = !video.paused && !video.ended
+  hlsMuted.value = video.muted
+  hlsVolume.value = video.volume
+  updateHlsDvrRange()
+}
+
+async function toggleHlsPlayback() {
+  const video = hlsVideo.value
+  if (!video) return
+  if (video.paused) {
+    try {
+      await video.play()
+    } catch (e) {
+      hlsError.value = e instanceof Error ? e.message : String(e)
+    }
+  } else {
+    video.pause()
+  }
+}
+
+function toggleHlsMute() {
+  const video = hlsVideo.value
+  if (!video) return
+  video.muted = !video.muted
+  syncHlsVideoState()
+}
+
+function onHlsVolumeInput(value: number) {
+  const video = hlsVideo.value
+  if (!video) return
+  video.volume = Math.min(1, Math.max(0, value))
+  if (video.volume > 0 && video.muted) video.muted = false
+  syncHlsVideoState()
+}
+
+async function toggleHlsFullscreen() {
+  const wrapper = hlsVideo.value?.closest('.hls-player-shell')
+  if (!wrapper) return
+  try {
+    if (document.fullscreenElement === wrapper) await document.exitFullscreen()
+    else await wrapper.requestFullscreen()
+  } catch {
+    hlsError.value = 'Fullscreen is not available in this browser.'
+  }
+}
+
+function onHlsFullscreenChange() {
+  hlsFullscreen.value = document.fullscreenElement === hlsVideo.value?.closest('.hls-player-shell')
+}
+
+function onHlsSeekPointerCancel(event: PointerEvent) {
+  const input = event.currentTarget as HTMLInputElement
+  hlsSeekDragging.value = false
+  hlsSeekPending.value = false
+  if (hlsSeekCommitTimer != null) {
+    clearTimeout(hlsSeekCommitTimer)
+    hlsSeekCommitTimer = null
+  }
+  input.value = String(hlsSeekValue.value)
+  syncHlsVideoState()
+}
+
+function onHlsSeeked() {
+  hlsSeekPending.value = false
+  hlsSeekDragging.value = false
+  if (hlsSeekCommitTimer != null) {
+    clearTimeout(hlsSeekCommitTimer)
+    hlsSeekCommitTimer = null
+  }
+  syncHlsVideoState()
+}
 
 /** Refresh the DVR window + slider position from `video.seekable`. Skips
  * overwriting `dashSeekValue` while the user has the thumb grabbed, so
@@ -491,15 +726,41 @@ function loadScript(src: string, globalName: string): Promise<void> {
 async function playHls() {
   const url = props.hlsUrl
   if (!url) return
+  const existingVideo = hlsVideo.value
+  if (existingVideo && (hlsInstance || hlsNativePlayback) && existingVideo.currentSrc) {
+    hlsError.value = ''
+    hlsPlaying.value = true
+    try {
+      await existingVideo.play()
+      syncHlsVideoState()
+    } catch (e) {
+      hlsPlaying.value = false
+      hlsError.value = e instanceof Error ? e.message : String(e)
+    }
+    return
+  }
+  const generation = ++hlsGeneration
   hlsError.value = ''
   hlsLoading.value = true
   hlsPlaying.value = true
   try {
     await loadScript(HLS_CDN, 'Hls')
+    if (generation !== hlsGeneration) return
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const Hls = (window as any).Hls
     const video = hlsVideo.value
     if (!video) return
+    video.addEventListener('timeupdate', onHlsTimeUpdate)
+    video.addEventListener('progress', updateHlsDvrRange)
+    video.addEventListener('play', syncHlsVideoState)
+    video.addEventListener('playing', syncHlsVideoState)
+    video.addEventListener('pause', syncHlsVideoState)
+    video.addEventListener('ended', syncHlsVideoState)
+    video.addEventListener('volumechange', syncHlsVideoState)
+    video.addEventListener('seeked', onHlsSeeked)
+    video.addEventListener('loadedmetadata', onHlsLoadedMetadata)
+    document.addEventListener('fullscreenchange', onHlsFullscreenChange)
+    hlsDvrPollTimer = setInterval(updateHlsDvrRange, 2000)
     if (Hls.isSupported()) {
       // hls.js's LatencyController targets liveSyncDuration seconds behind
       // the live edge -- an explicit absolute value (rather than
@@ -522,6 +783,7 @@ async function playHls() {
         maxLiveSyncPlaybackRate: 1.5,
         liveMaxLatencyDuration: TARGET_LIVE_DELAY_SECONDS * 2,
       })
+      hlsOriginalMaxLatency = hlsInstance.config.liveMaxLatencyDuration
       hlsInstance.loadSource(url)
       hlsInstance.attachMedia(video)
       attachHlsMetadataCueListener(video)
@@ -530,7 +792,11 @@ async function playHls() {
       })
       hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
         hlsLoading.value = false
-        video.play().catch(() => {})
+        video.play().then(syncHlsVideoState).catch(() => {
+          hlsError.value = 'Playback was blocked. Use the play button to start the stream.'
+          hlsLoading.value = false
+          hlsPlaying.value = false
+        })
       })
       // Playhead position (wall-clock): hls.js exposes the currently-active
       // fragment's own PROGRAM-DATE-TIME (ms epoch) + its start offset on
@@ -538,33 +804,27 @@ async function playHls() {
       // wall-clock instant currently being displayed -- video.currentTime
       // itself is on hls.js's own internal (non-epoch) timeline, not wall
       // clock, so it can't be shown directly (unlike DASH -- see playDash()).
-      let hlsFragProgramDateTime: number | null = null
-      let hlsFragStart = 0
       hlsInstance.on(Hls.Events.FRAG_CHANGED, (_evt: unknown, data: { frag?: { programDateTime?: number | null; start?: number } }) => {
         if (data.frag?.programDateTime != null) {
           hlsFragProgramDateTime = data.frag.programDateTime
           hlsFragStart = data.frag.start ?? video.currentTime
+          onHlsTimeUpdate()
         }
-      })
-      video.addEventListener('timeupdate', () => {
-        if (hlsFragProgramDateTime == null) return
-        const wallMs = hlsFragProgramDateTime + (video.currentTime - hlsFragStart) * 1000
-        hlsPlayheadTime.value = new Date(wallMs).toISOString().replace('T', ' ')
       })
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari: native HLS support, no hls.js needed.
+      hlsNativePlayback = true
       video.src = url
-      video.addEventListener('loadedmetadata', () => {
-        hlsLoading.value = false
-        video.play().catch(() => {})
-      })
     } else {
       hlsError.value = 'HLS is not supported in this browser (and hls.js failed to initialize).'
       hlsLoading.value = false
+      hlsPlaying.value = false
     }
   } catch (e) {
+    if (generation !== hlsGeneration) return
     hlsError.value = e instanceof Error ? e.message : String(e)
     hlsLoading.value = false
+    hlsPlaying.value = false
   }
 }
 
@@ -728,6 +988,24 @@ async function playDash() {
 }
 
 function destroyHls() {
+  hlsGeneration++
+  const video = hlsVideo.value
+  if (video) {
+    video.removeEventListener('timeupdate', onHlsTimeUpdate)
+    video.removeEventListener('progress', updateHlsDvrRange)
+    video.removeEventListener('play', syncHlsVideoState)
+    video.removeEventListener('playing', syncHlsVideoState)
+    video.removeEventListener('pause', syncHlsVideoState)
+    video.removeEventListener('ended', syncHlsVideoState)
+    video.removeEventListener('volumechange', syncHlsVideoState)
+    video.removeEventListener('seeked', onHlsSeeked)
+    video.removeEventListener('loadedmetadata', onHlsLoadedMetadata)
+  }
+  document.removeEventListener('fullscreenchange', onHlsFullscreenChange)
+  if (hlsSeekCommitTimer != null) {
+    clearTimeout(hlsSeekCommitTimer)
+    hlsSeekCommitTimer = null
+  }
   if (hlsInstance) {
     hlsInstance.destroy()
     hlsInstance = null
@@ -736,12 +1014,28 @@ function destroyHls() {
     hlsVideo.value.removeAttribute('src')
     hlsVideo.value.load()
   }
+  if (hlsDvrPollTimer != null) {
+    clearInterval(hlsDvrPollTimer)
+    hlsDvrPollTimer = null
+  }
+  hlsOriginalMaxLatency = undefined
+  hlsNativePlayback = false
+  hlsFragProgramDateTime = null
+  hlsFragStart = 0
   hlsPlaying.value = false
+  hlsIsPlaying.value = false
+  hlsFullscreen.value = false
   hlsLoading.value = false
   hlsError.value = ''
   hlsSeenActivations.clear()
   hlsMarkerToasts.value = []
   hlsPlayheadTime.value = ''
+  hlsSeekMin.value = 0
+  hlsSeekMax.value = 0
+  hlsSeekValue.value = 0
+  hlsSeekDragging.value = false
+  hlsSeekPending.value = false
+  hlsAtLiveEdge.value = true
 }
 
 function destroyDash() {
@@ -896,24 +1190,93 @@ async function copyUrl(url?: string | null) {
           <span class="font-semibold text-sm">HLS</span>
           <Button v-if="hlsPlaying" icon="pi pi-stop-circle" text size="small" severity="secondary" label="Stop" @click="destroyHls" />
         </div>
-        <div class="video-wrapper">
-          <video ref="hlsVideo" controls muted playsinline class="player-video" />
-          <div v-if="hlsLoading" class="player-overlay"><i class="pi pi-spin pi-spinner" /></div>
-          <button v-if="!hlsPlaying" class="play-overlay" @click="playHls">
-            <i class="pi pi-play-circle" />
-            <span>Play HLS</span>
-          </button>
-          <TransitionGroup
-            name="marker-toast"
-            tag="div"
-            class="marker-toast-stack"
-            :style="{ '--marker-toast-life': `${MARKER_TOAST_LIFE_MS}ms` }"
-          >
-            <div v-for="t in hlsMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`]">
-              <i :class="MARKER_KIND_ICON[t.kind]" />
-              <span>{{ t.label }}</span>
+        <div class="hls-player-shell dash-player-shell">
+          <div class="video-wrapper">
+            <video ref="hlsVideo" muted playsinline class="player-video" />
+            <div v-if="hlsLoading" class="player-overlay"><i class="pi pi-spin pi-spinner" /></div>
+            <button v-if="!hlsPlaying" class="play-overlay" @click="playHls">
+              <i class="pi pi-play-circle" />
+              <span>Play HLS</span>
+            </button>
+            <TransitionGroup
+              name="marker-toast"
+              tag="div"
+              class="marker-toast-stack"
+              :style="{ '--marker-toast-life': `${MARKER_TOAST_LIFE_MS}ms` }"
+            >
+              <div v-for="t in hlsMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`]">
+                <i :class="MARKER_KIND_ICON[t.kind]" />
+                <span>{{ t.label }}</span>
+              </div>
+            </TransitionGroup>
+          </div>
+          <div v-if="hlsPlaying" class="dash-controls" aria-label="HLS playback controls">
+            <button
+              class="dash-control-btn"
+              :aria-label="hlsIsPlaying ? 'Pause' : 'Play'"
+              :title="hlsIsPlaying ? 'Pause' : 'Play'"
+              @click="toggleHlsPlayback"
+            >
+              <i :class="hlsIsPlaying ? 'pi pi-pause' : 'pi pi-play'" />
+            </button>
+            <button
+              class="dash-control-btn"
+              :aria-label="hlsMuted || hlsVolume === 0 ? 'Unmute' : 'Mute'"
+              :title="hlsMuted || hlsVolume === 0 ? 'Unmute' : 'Mute'"
+              @click="toggleHlsMute"
+            >
+              <i :class="hlsMuted || hlsVolume === 0 ? 'pi pi-volume-off' : 'pi pi-volume-up'" />
+            </button>
+            <input
+              type="range"
+              class="dash-volume"
+              min="0"
+              max="1"
+              step="0.05"
+              :value="hlsMuted ? 0 : hlsVolume"
+              aria-label="Volume"
+              title="Volume"
+              @input="onHlsVolumeInput(($event.target as HTMLInputElement).valueAsNumber)"
+            />
+            <div v-if="hlsSeekMax > hlsSeekMin" class="dvr-seekbar">
+              <span class="dvr-label" :class="{ 'dvr-label-live': hlsAtLiveEdge && !hlsSeekDragging }">
+                {{ hlsBehindLiveLabel(hlsSeekValue) }}
+              </span>
+              <input
+                type="range"
+                class="dvr-range"
+                :min="hlsSeekMin"
+                :max="hlsSeekSliderMax"
+                step="0.1"
+                :value="hlsSeekValue"
+                aria-label="DVR position, seconds behind live"
+                :aria-valuetext="hlsBehindLiveLabel(hlsSeekValue)"
+                title="Scrub within the DVR window"
+                @pointerdown="onHlsSeekStart"
+                @pointercancel="onHlsSeekPointerCancel"
+                @keydown="onHlsSeekKeyDown"
+                @input="onHlsSeekInput(($event.target as HTMLInputElement).valueAsNumber)"
+                @change="onHlsSeekCommit(($event.target as HTMLInputElement).valueAsNumber)"
+              />
+              <button
+                class="dvr-live-btn"
+                :class="{ 'dvr-live-btn-active': hlsAtLiveEdge && !hlsSeekDragging }"
+                title="Return to live"
+                @click="goHlsLive"
+              >
+                <i class="pi pi-circle-fill" /> LIVE
+              </button>
             </div>
-          </TransitionGroup>
+            <span v-else class="dvr-label dvr-label-waiting">Waiting for DVR window…</span>
+            <button
+              class="dash-control-btn"
+              :aria-label="hlsFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'"
+              :title="hlsFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+              @click="toggleHlsFullscreen"
+            >
+              <i :class="hlsFullscreen ? 'pi pi-compress' : 'pi pi-expand'" />
+            </button>
+          </div>
         </div>
         <Message v-if="hlsError" severity="error" :closable="false" class="text-xs">{{ hlsError }}</Message>
         <div v-if="hlsPlayheadTime" class="playhead-row">
