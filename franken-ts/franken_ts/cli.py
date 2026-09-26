@@ -11,6 +11,7 @@ from typing import Optional
 
 import click
 from rich.console import Console
+from rich.panel import Panel
 from rich.rule import Rule
 from rich.text import Text
 
@@ -144,9 +145,21 @@ def main(
     """Build an MPEG-TS file with SCTE-35 markers from a YAML asset list."""
     _setup_logging(verbose, debug)
 
+    cfg = None
+    cfg_error: Optional[Exception] = None
+    try:
+        cfg = load_config(config)
+    except Exception as exc:
+        cfg_error = exc
+
+    target = output or (cfg.output.file if cfg and not cfg.output.is_multi_rendition else None) \
+        or (cfg.output.dir if cfg else None)
     console.print()
-    console.print(Rule("[bold cyan]🧟 franken-ts[/bold cyan]", style="cyan dim"))
-    console.print(f"  [dim]config:[/dim] {config}")
+    console.print(Panel(
+        f"[bold]{Path(config).name}[/]"
+        + (f"\n[dim]→ {Path(target).resolve()}[/]" if target else ""),
+        title="[bold blue]🧟 franken-ts[/]", border_style="blue", padding=(0, 2),
+    ))
     if dry_run:
         console.print("  [dim yellow]dry-run mode — no files will be written[/dim yellow]")
     console.print()
@@ -160,11 +173,10 @@ def main(
             sys.exit(1)
     _ok("Dependencies found")
 
-    try:
-        cfg = load_config(config)
-    except Exception as exc:
-        _err(f"Config error: {exc}")
+    if cfg_error is not None:
+        _err(f"Config error: {cfg_error}")
         sys.exit(1)
+    assert cfg is not None
 
     if output:
         if cfg.output.is_multi_rendition:

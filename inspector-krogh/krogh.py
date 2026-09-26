@@ -714,7 +714,7 @@ def main() -> None:
     console.print()
     console.print(Panel(
         f"[bold]{ts_path.name}[/]\n[dim]→ {out_dir.resolve()}[/]",
-        title="[bold blue]krogh[/]", border_style="blue", padding=(0, 2),
+        title="[bold blue]🕵️ Inspector Krogh[/]", border_style="blue", padding=(0, 2),
     ))
     console.print()
 
