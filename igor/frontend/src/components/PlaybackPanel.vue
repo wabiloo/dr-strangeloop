@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import Message from 'primevue/message'
 import Button from 'primevue/button'
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import type { ChannelHealth } from '../api/types'
 import { bytesToHex, describeAllMarkers, markerToastLabel, type Scte35MarkerKind } from '../scte35Lite'
@@ -33,13 +33,250 @@ const hlsLoading = ref(false)
 const dashLoading = ref(false)
 const hlsPlaying = ref(false)
 const dashPlaying = ref(false)
+const dashIsPlaying = ref(false)
+const dashMuted = ref(true)
+const dashVolume = ref(1)
+const dashFullscreen = ref(false)
 const hlsPlayheadTime = ref('')
 const dashPlayheadTime = ref('')
+
+// --- DASH custom DVR seekbar -------------------------------------------
+//
+// Why not the native <video controls> scrubber: our MPD's
+// availabilityStartTime is pinned to the Unix epoch (see playDash()'s own
+// comment above, and loop-dee-loop/serve.py), so a long-running channel's
+// nominal MPD duration is "years since 1970" -- dash.js sets that as
+// `video.duration`, and the BROWSER draws its native seekbar's full track
+// across that entire nominal span. The actual DVR window
+// (timeShiftBufferDepth, tens of seconds) is then a fraction of a single
+// pixel of that track, so dragging the native scrubber anywhere visually
+// "back" lands outside `video.seekable` and just snaps back to the live
+// edge -- not a bug in dash.js, just the wrong UI for this kind of stream.
+//
+// `video.seekable` itself is NOT affected by that -- it's a TimeRanges
+// object dash.js keeps accurate to the real buffered/available DVR window
+// (same units as `video.currentTime`) regardless of how large `duration`
+// is, so building our own slider directly off `seekable`/`currentTime` --
+// standard HTMLMediaElement, no dash.js-version-specific API needed --
+// sidesteps the whole problem.
+const dashSeekMin = ref(0)
+const dashSeekMax = ref(0)
+const dashSeekSliderMax = computed(() => Math.max(dashSeekMin.value, dashSeekMax.value - 0.1))
+const dashSeekValue = ref(0)
+const dashSeekDragging = ref(false)
+const dashSeekPending = ref(false)
+const dashAtLiveEdge = ref(true)
+let dashDvrPollTimer: ReturnType<typeof setInterval> | null = null
+let dashSeekCommitTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Refresh the DVR window + slider position from `video.seekable`. Skips
+ * overwriting `dashSeekValue` while the user has the thumb grabbed, so
+ * their drag isn't fought by playback continuing to advance underneath
+ * it. Called from `timeupdate`/`progress` (the window only grows/slides
+ * while segments actually arrive) and from a cheap poll timer as a
+ * fallback -- dash.js can keep the buffer near live topped up via
+ * background fetches even while paused, which doesn't reliably fire
+ * either of those events on the <video> element itself. */
+function updateDashDvrRange() {
+  const video = dashVideo.value
+  if (!video || video.seekable.length === 0) {
+    dashSeekMin.value = 0
+    dashSeekMax.value = 0
+    dashSeekValue.value = 0
+    return
+  }
+  const idx = video.seekable.length - 1
+  try {
+    dashSeekMin.value = video.seekable.start(idx)
+    dashSeekMax.value = video.seekable.end(idx)
+  } catch {
+    // The browser can invalidate a TimeRanges object while the MPD's DVR
+    // window is being replaced. The next poll/event will retry.
+    return
+  }
+  if (!dashSeekDragging.value && !dashSeekPending.value) {
+    dashSeekValue.value = Math.min(
+      Math.max(dashSeekMin.value, video.currentTime),
+      Math.max(dashSeekMin.value, dashSeekMax.value - 0.1),
+    )
+  }
+  dashAtLiveEdge.value = dashSeekMax.value - video.currentTime <= TARGET_LIVE_DELAY_SECONDS + 1
+}
+
+/** Seconds behind the live edge for a given DVR-slider position -- 0 (or
+ * negative, clamped) right at the live edge, growing as you scrub back.
+ * Shown instead of an absolute time: "how far back am I" is what matters
+ * for DVR scrubbing, not the underlying epoch-anchored absolute number. */
+function dashBehindLiveLabel(value: number): string {
+  const behind = Math.max(0, dashSeekMax.value - value)
+  return behind < 1 ? 'LIVE' : `-${behind.toFixed(1)}s`
+}
+
+function onDashSeekStart() {
+  dashSeekDragging.value = true
+}
+
+function onDashSeekInput(value: number) {
+  dashSeekValue.value = value
+}
+
+function onDashSeekKeyDown(event: KeyboardEvent) {
+  if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+    onDashSeekStart()
+  }
+}
+
+function onDashSeekCommit(value: number) {
+  const video = dashVideo.value
+  if (video && dashSeekMax.value > dashSeekMin.value) {
+    const target = Math.min(dashSeekSliderMax.value, Math.max(dashSeekMin.value, value))
+    // A DVR seek is an explicit choice to watch time-shifted content. Turn
+    // off dash.js's live catch-up, or it will undo the seek to meet its
+    // target live delay.
+    dashInstance?.updateSettings({ streaming: { liveCatchup: { enabled: false } } })
+    dashSeekValue.value = target
+    if (Math.abs(video.currentTime - target) < 0.05) {
+      dashSeekDragging.value = false
+    } else {
+      dashSeekPending.value = true
+      if (dashSeekCommitTimer != null) clearTimeout(dashSeekCommitTimer)
+      dashSeekCommitTimer = setTimeout(() => {
+        dashSeekCommitTimer = null
+        dashSeekPending.value = false
+        dashSeekDragging.value = false
+        syncDashVideoState()
+      }, 5000)
+      try {
+        video.currentTime = target
+      } catch {
+        clearTimeout(dashSeekCommitTimer)
+        dashSeekCommitTimer = null
+        dashSeekPending.value = false
+        dashSeekDragging.value = false
+        syncDashVideoState()
+      }
+    }
+  }
+  if (!dashSeekPending.value) dashSeekDragging.value = false
+}
+
+async function goDashLive() {
+  const video = dashVideo.value
+  if (!video) return
+  updateDashDvrRange()
+  const target = Math.max(dashSeekMin.value, Math.min(
+    dashSeekSliderMax.value,
+    dashSeekMax.value - TARGET_LIVE_DELAY_SECONDS,
+  ))
+  // Restore normal live catch-up only when the viewer asks to rejoin live.
+  dashInstance?.updateSettings({ streaming: { liveCatchup: { enabled: true } } })
+  video.currentTime = target
+  dashSeekValue.value = target
+  dashSeekDragging.value = false
+  dashSeekPending.value = false
+  if (dashSeekCommitTimer != null) {
+    clearTimeout(dashSeekCommitTimer)
+    dashSeekCommitTimer = null
+  }
+  if (video.paused) {
+    try {
+      await video.play()
+    } catch (e) {
+      dashError.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+}
+
+function syncDashVideoState() {
+  const video = dashVideo.value
+  if (!video) return
+  dashIsPlaying.value = !video.paused && !video.ended
+  dashMuted.value = video.muted
+  dashVolume.value = video.volume
+  if (Number.isFinite(video.currentTime) && video.currentTime > 0) {
+    dashPlayheadTime.value = new Date(video.currentTime * 1000).toISOString().replace('T', ' ')
+  }
+  updateDashDvrRange()
+}
+
+async function toggleDashPlayback() {
+  const video = dashVideo.value
+  if (!video) return
+  if (video.paused) {
+    try {
+      await video.play()
+    } catch (e) {
+      dashError.value = e instanceof Error ? e.message : String(e)
+    }
+  } else {
+    video.pause()
+  }
+}
+
+function toggleDashMute() {
+  const video = dashVideo.value
+  if (!video) return
+  video.muted = !video.muted
+  syncDashVideoState()
+}
+
+function onDashVolumeInput(value: number) {
+  const video = dashVideo.value
+  if (!video) return
+  video.volume = Math.min(1, Math.max(0, value))
+  if (video.volume > 0 && video.muted) video.muted = false
+  syncDashVideoState()
+}
+
+async function toggleDashFullscreen() {
+  const wrapper = dashVideo.value?.closest('.dash-player-shell')
+  if (!wrapper) return
+  try {
+    if (document.fullscreenElement === wrapper) {
+      await document.exitFullscreen()
+    } else {
+      await wrapper.requestFullscreen()
+    }
+  } catch {
+    dashError.value = 'Fullscreen is not available in this browser.'
+  }
+}
+
+function onDashFullscreenChange() {
+  dashFullscreen.value = document.fullscreenElement === dashVideo.value?.closest('.dash-player-shell')
+}
+
+function onDashSeekPointerCancel(event: PointerEvent) {
+  const input = event.currentTarget as HTMLInputElement
+  dashSeekDragging.value = false
+  dashSeekPending.value = false
+  if (dashSeekCommitTimer != null) {
+    clearTimeout(dashSeekCommitTimer)
+    dashSeekCommitTimer = null
+  }
+  input.value = String(dashSeekValue.value)
+  syncDashVideoState()
+}
+
+function onDashTimeUpdate() {
+  syncDashVideoState()
+}
+
+function onDashSeeked() {
+  dashSeekPending.value = false
+  dashSeekDragging.value = false
+  if (dashSeekCommitTimer != null) {
+    clearTimeout(dashSeekCommitTimer)
+    dashSeekCommitTimer = null
+  }
+  syncDashVideoState()
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let hlsInstance: any = null
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let dashInstance: any = null
+let dashGeneration = 0
 
 const scriptPromises: Record<string, Promise<void> | undefined> = {}
 
@@ -334,11 +571,13 @@ async function playHls() {
 async function playDash() {
   const url = props.dashUrl
   if (!url) return
+  const generation = ++dashGeneration
   dashError.value = ''
   dashLoading.value = true
   dashPlaying.value = true
   try {
     await loadScript(DASH_CDN, 'dashjs')
+    if (generation !== dashGeneration) return
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const dashjs = (window as any).dashjs
     const video = dashVideo.value
@@ -350,10 +589,23 @@ async function playDash() {
     // Unix epoch seconds directly -- no fragment-metadata mapping needed
     // here, unlike hls.js (see playHls()), whose currentTime lives on its
     // own internal, non-epoch timeline.
-    video.addEventListener('timeupdate', () => {
-      if (!Number.isFinite(video.currentTime) || video.currentTime <= 0) return
-      dashPlayheadTime.value = new Date(video.currentTime * 1000).toISOString().replace('T', ' ')
-    })
+    video.addEventListener('timeupdate', onDashTimeUpdate)
+    video.addEventListener('play', syncDashVideoState)
+    video.addEventListener('playing', syncDashVideoState)
+    video.addEventListener('pause', syncDashVideoState)
+    video.addEventListener('ended', syncDashVideoState)
+    video.addEventListener('volumechange', syncDashVideoState)
+    video.addEventListener('seeked', onDashSeeked)
+    video.addEventListener('loadedmetadata', syncDashVideoState)
+    document.addEventListener('fullscreenchange', onDashFullscreenChange)
+    // Custom DVR seekbar (see the block above `dashSeekMin` for why the
+    // native <video controls> scrubber can't be used here) -- `progress`
+    // catches the DVR window sliding forward as new segments append even
+    // between `timeupdate` ticks; the poll timer is a fallback for when
+    // dash.js keeps topping up the live-edge buffer with no DOM event at
+    // all (observed while paused).
+    video.addEventListener('progress', updateDashDvrRange)
+    dashDvrPollTimer = setInterval(updateDashDvrRange, 2000)
     // dash.js's live-catchup (actively nudging playback rate to stay near
     // the live edge) defaults to enabled:null -- auto-on only for
     // low-latency (LL-DASH) manifests. Ours is a regular "dynamic" MPD, so
@@ -468,8 +720,10 @@ async function playDash() {
       },
     )
   } catch (e) {
-    dashError.value = e instanceof Error ? e.message : String(e)
-    dashLoading.value = false
+    if (generation !== dashGeneration) return
+    const message = e instanceof Error ? e.message : String(e)
+    destroyDash()
+    dashError.value = message
   }
 }
 
@@ -491,6 +745,23 @@ function destroyHls() {
 }
 
 function destroyDash() {
+  dashGeneration++
+  const video = dashVideo.value
+  if (video) {
+    video.removeEventListener('timeupdate', onDashTimeUpdate)
+    video.removeEventListener('play', syncDashVideoState)
+    video.removeEventListener('playing', syncDashVideoState)
+    video.removeEventListener('pause', syncDashVideoState)
+    video.removeEventListener('ended', syncDashVideoState)
+    video.removeEventListener('volumechange', syncDashVideoState)
+    video.removeEventListener('seeked', onDashSeeked)
+    video.removeEventListener('loadedmetadata', syncDashVideoState)
+  }
+  document.removeEventListener('fullscreenchange', onDashFullscreenChange)
+  if (dashSeekCommitTimer != null) {
+    clearTimeout(dashSeekCommitTimer)
+    dashSeekCommitTimer = null
+  }
   if (dashInstance) {
     dashInstance.reset()
     dashInstance = null
@@ -499,13 +770,25 @@ function destroyDash() {
     dashVideo.value.removeAttribute('src')
     dashVideo.value.load()
   }
+  if (dashDvrPollTimer != null) {
+    clearInterval(dashDvrPollTimer)
+    dashDvrPollTimer = null
+  }
   dashPlaying.value = false
+  dashIsPlaying.value = false
+  dashFullscreen.value = false
   dashLoading.value = false
   dashError.value = ''
   dashSeenEventKeys.clear()
   dashPendingBatch = null
   dashMarkerToasts.value = []
   dashPlayheadTime.value = ''
+  dashSeekMin.value = 0
+  dashSeekMax.value = 0
+  dashSeekValue.value = 0
+  dashSeekDragging.value = false
+  dashSeekPending.value = false
+  dashAtLiveEdge.value = true
 }
 
 // If the channel gets redeployed/refreshed with new URLs, stop rather than
@@ -655,24 +938,93 @@ async function copyUrl(url?: string | null) {
           <span class="font-semibold text-sm">DASH</span>
           <Button v-if="dashPlaying" icon="pi pi-stop-circle" text size="small" severity="secondary" label="Stop" @click="destroyDash" />
         </div>
-        <div class="video-wrapper">
-          <video ref="dashVideo" controls muted playsinline class="player-video" />
-          <div v-if="dashLoading" class="player-overlay"><i class="pi pi-spin pi-spinner" /></div>
-          <button v-if="!dashPlaying" class="play-overlay" @click="playDash">
-            <i class="pi pi-play-circle" />
-            <span>Play DASH</span>
-          </button>
-          <TransitionGroup
-            name="marker-toast"
-            tag="div"
-            class="marker-toast-stack"
-            :style="{ '--marker-toast-life': `${MARKER_TOAST_LIFE_MS}ms` }"
-          >
-            <div v-for="t in dashMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`]">
-              <i :class="MARKER_KIND_ICON[t.kind]" />
-              <span>{{ t.label }}</span>
+        <div class="dash-player-shell">
+          <div class="video-wrapper">
+            <video ref="dashVideo" muted playsinline class="player-video" />
+            <div v-if="dashLoading" class="player-overlay"><i class="pi pi-spin pi-spinner" /></div>
+            <button v-if="!dashPlaying" class="play-overlay" @click="playDash">
+              <i class="pi pi-play-circle" />
+              <span>Play DASH</span>
+            </button>
+            <TransitionGroup
+              name="marker-toast"
+              tag="div"
+              class="marker-toast-stack"
+              :style="{ '--marker-toast-life': `${MARKER_TOAST_LIFE_MS}ms` }"
+            >
+              <div v-for="t in dashMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`]">
+                <i :class="MARKER_KIND_ICON[t.kind]" />
+                <span>{{ t.label }}</span>
+              </div>
+            </TransitionGroup>
+          </div>
+          <div v-if="dashPlaying" class="dash-controls" aria-label="DASH playback controls">
+            <button
+              class="dash-control-btn"
+              :aria-label="dashIsPlaying ? 'Pause' : 'Play'"
+              :title="dashIsPlaying ? 'Pause' : 'Play'"
+              @click="toggleDashPlayback"
+            >
+              <i :class="dashIsPlaying ? 'pi pi-pause' : 'pi pi-play'" />
+            </button>
+            <button
+              class="dash-control-btn"
+              :aria-label="dashMuted || dashVolume === 0 ? 'Unmute' : 'Mute'"
+              :title="dashMuted || dashVolume === 0 ? 'Unmute' : 'Mute'"
+              @click="toggleDashMute"
+            >
+              <i :class="dashMuted || dashVolume === 0 ? 'pi pi-volume-off' : 'pi pi-volume-up'" />
+            </button>
+            <input
+              type="range"
+              class="dash-volume"
+              min="0"
+              max="1"
+              step="0.05"
+              :value="dashMuted ? 0 : dashVolume"
+              aria-label="Volume"
+              title="Volume"
+              @input="onDashVolumeInput(($event.target as HTMLInputElement).valueAsNumber)"
+            />
+            <div v-if="dashSeekMax > dashSeekMin" class="dvr-seekbar">
+              <span class="dvr-label" :class="{ 'dvr-label-live': dashAtLiveEdge && !dashSeekDragging }">
+                {{ dashBehindLiveLabel(dashSeekValue) }}
+              </span>
+              <input
+                type="range"
+                class="dvr-range"
+                :min="dashSeekMin"
+                :max="dashSeekSliderMax"
+                step="0.1"
+                :value="dashSeekValue"
+                aria-label="DVR position, seconds behind live"
+                :aria-valuetext="dashBehindLiveLabel(dashSeekValue)"
+                title="Scrub within the DVR window"
+                @pointerdown="onDashSeekStart"
+                @pointercancel="onDashSeekPointerCancel"
+                @keydown="onDashSeekKeyDown"
+                @input="onDashSeekInput(($event.target as HTMLInputElement).valueAsNumber)"
+                @change="onDashSeekCommit(($event.target as HTMLInputElement).valueAsNumber)"
+              />
+              <button
+                class="dvr-live-btn"
+                :class="{ 'dvr-live-btn-active': dashAtLiveEdge && !dashSeekDragging }"
+                title="Return to live"
+                @click="goDashLive"
+              >
+                <i class="pi pi-circle-fill" /> LIVE
+              </button>
             </div>
-          </TransitionGroup>
+            <span v-else class="dvr-label dvr-label-waiting">Waiting for DVR window…</span>
+            <button
+              class="dash-control-btn"
+              :aria-label="dashFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'"
+              :title="dashFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+              @click="toggleDashFullscreen"
+            >
+              <i :class="dashFullscreen ? 'pi pi-compress' : 'pi pi-expand'" />
+            </button>
+          </div>
         </div>
         <Message v-if="dashError" severity="error" :closable="false" class="text-xs">{{ dashError }}</Message>
         <div v-if="dashPlayheadTime" class="playhead-row">
@@ -970,6 +1322,183 @@ async function copyUrl(url?: string | null) {
 .marker-toast-leave-to {
   opacity: 0;
   transform: translateX(8px);
+}
+
+.dvr-seekbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.dash-player-shell {
+  width: 100%;
+  background: #000;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.dash-player-shell:fullscreen {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 1rem;
+  background: #020617;
+  border-radius: 0;
+}
+
+.dash-player-shell:fullscreen .video-wrapper {
+  flex: 1;
+  min-height: 0;
+  aspect-ratio: auto;
+}
+
+.dash-player-shell:fullscreen .player-video {
+  object-fit: contain;
+}
+
+.dash-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 42px;
+  padding: 0.35rem 0.6rem;
+  background: #0b1220;
+  color: #e2e8f0;
+}
+
+.dash-control-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: #e2e8f0;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.dash-control-btn:hover,
+.dash-control-btn:focus-visible {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  outline: none;
+}
+
+.dash-volume {
+  flex: none;
+  width: 72px;
+  accent-color: #60a5fa;
+}
+
+.dvr-label-waiting {
+  flex: 1;
+  text-align: left;
+  color: #94a3b8;
+}
+
+.dvr-label {
+  flex: none;
+  min-width: 3.4rem;
+  text-align: right;
+  color: #fbbf24;
+  font-size: 0.75rem;
+  font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.dvr-label-live {
+  color: #4ade80;
+}
+
+/* Custom track/thumb (not the browser default) so this reads as a
+ * distinct, purpose-built DVR control -- not a second, confusingly
+ * redundant copy of the native <video controls> scrubber above it. */
+.dvr-range {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.15);
+  outline: none;
+  cursor: pointer;
+}
+
+.dvr-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #60a5fa;
+  border: 2px solid #0f172a;
+  cursor: pointer;
+}
+
+.dvr-range::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #60a5fa;
+  border: 2px solid #0f172a;
+  cursor: pointer;
+}
+
+.dvr-range:focus-visible,
+.dash-volume:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 4px;
+}
+
+.dvr-live-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  color: #cbd5e1;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.dvr-live-btn i {
+  font-size: 0.5rem;
+  color: #94a3b8;
+}
+
+.dvr-live-btn-active {
+  color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.4);
+}
+
+.dvr-live-btn-active i {
+  color: #ef4444;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@media (max-width: 520px) {
+  .dash-controls {
+    flex-wrap: wrap;
+  }
+
+  .dvr-seekbar {
+    flex-basis: 100%;
+    order: 1;
+  }
+
+  .dvr-label-waiting {
+    flex: 1;
+  }
 }
 
 .playhead-row {
