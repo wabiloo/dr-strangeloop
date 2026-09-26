@@ -23,6 +23,7 @@ from .markers import write_markers_sidecar, write_timeline_sidecar
 from .pts import find_idr_pts
 from .report import generate_report
 from .scte35 import generate_xml
+from .stream_source import is_stream_url, resolve_stream_assets
 from .timeline import build_timeline, all_forced_keyframe_times, pts_for_boundary
 from .tsduck import inject_markers, verify_markers
 from .utils import check_tool
@@ -178,6 +179,14 @@ def main(
         sys.exit(1)
     assert cfg is not None
 
+    if any(is_stream_url(a.file) for a in cfg.assets):
+        try:
+            check_tool("yt-dlp")
+        except RuntimeError as exc:
+            _err(str(exc))
+            sys.exit(1)
+        _ok("yt-dlp found (stream asset(s) present)")
+
     if output:
         if cfg.output.is_multi_rendition:
             _err("--output/-o cannot be used with a multi-rendition config "
@@ -207,6 +216,18 @@ def main(
         _info(f"cache dir: {effective_cache_dir}")
 
     try:
+        # ── Resolve HLS/DASH stream assets to local mp4s ─────────────────────
+        # Always runs for real (not gated behind --dry-run), same as the
+        # ffprobe validation step below -- both need a real answer to build
+        # an accurate plan. Mutates cfg.assets in place; every downstream
+        # step (validate/timeline/extract/cache) then sees a plain local
+        # file, unchanged from how it already handles local/remote mp4s.
+        stream_cache_dir = (effective_cache_dir or temp_dir) / "streams"
+        resolved_streams = resolve_stream_assets(cfg.assets, stream_cache_dir)
+        for r in resolved_streams:
+            status = "cache hit" if r.cached else "downloaded"
+            _ok(f"Stream asset ({status}): {r.url} → {r.local_path.name}")
+
         if report_only:
             _run_report_only(cfg, temp_dir, dry_run=dry_run)
         else:

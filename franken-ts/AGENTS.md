@@ -62,6 +62,21 @@ offset), `duration` (optional length) — omit both to use the whole file.
 Time values accept `HH:MM:SS[.mmm]`, plain seconds, or human phrases like
 `"10 min"` / `"1 hour 30 min"`.
 
+`file` may also be an `http(s)://` URL to an **HLS (`.m3u8`) or DASH
+(`.mpd`) manifest**, in addition to a local path or a flat remote mp4. The
+manifest must be VOD (a closed/finite manifest — `#EXT-X-ENDLIST`/static
+DASH `@type`), never live/open-ended: franken-ts needs a fixed duration to
+trim and stitch, the same as any other asset. On first use, the highest
+available video+audio rendition is downloaded and muxed into a local mp4
+via `yt-dlp` (which must be on `PATH` — same failure mode as a missing
+`ffmpeg`/`tsp`), cached by manifest URL under `<cache-dir>/streams/` so
+repeat builds don't re-fetch it; `start`/`duration` then trim the
+downloaded file exactly like a local/remote mp4 asset, and the same
+manifest URL referenced by more than one asset entry is only downloaded
+once. This resolution step always runs for real, even under `--dry-run`
+(same as the existing ffprobe validation step) — a live manifest fails
+the build immediately with a clear error rather than hanging.
+
 Optional per-asset: `fade_in`/`fade_out` (seconds), `slate_image`
 (per-asset override), `no_osd` (bool, suppresses the OSD entirely for
 this asset regardless of the playlist-level `osd` settings), `osd_label`

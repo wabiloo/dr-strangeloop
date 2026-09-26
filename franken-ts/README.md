@@ -9,6 +9,9 @@ Stitch video assets together, bolt in ad breaks, and inject SCTE-35 markers — 
 - `ffmpeg` + `ffprobe` on your `PATH` — for the OSD overlay's `drawtext` filter,
   this must be a build with `--enable-libfreetype`; see [OSD](#on-screen-display-osd) below
 - `tsp` (tsduck) on your `PATH`
+- `yt-dlp` on your `PATH` — only needed if a playlist uses an HLS/DASH stream
+  as an asset source (see below); installed automatically as a Python
+  dependency, but the CLI itself must resolve on `PATH`
 - Python environment set up from the repo root (`uv sync --all-packages`)
 
 ## Quick start
@@ -130,6 +133,33 @@ markers:
       archive_allowed: false
       device_restrictions: 1
 ```
+
+### Remote and stream (HLS/DASH) asset sources
+
+`file` accepts more than a local path:
+
+```yaml
+assets:
+  - file: https://example.com/movie.mp4          # flat remote mp4 — read directly by ffmpeg
+    duration: "10 min"
+
+  - file: https://example.com/vod/master.m3u8    # HLS manifest
+    id: promo
+    duration: "30s"
+
+  - file: https://example.com/vod/manifest.mpd   # DASH manifest
+    start: "5s"
+```
+
+A `.m3u8`/`.mpd` URL must be a **VOD (closed/finite) manifest** — a live or
+open-ended stream has no fixed duration, so it can't be trimmed/stitched
+like every other asset, and franken-ts refuses it with a clear error rather
+than trying. On first use, the highest-bitrate rendition is downloaded and
+muxed into a local mp4 via `yt-dlp` (must be on `PATH`), cached by manifest
+URL so repeat builds/renditions don't re-fetch it; `start`/`duration` then
+trim the downloaded file exactly like any other asset. This download always
+runs for real, even under `--dry-run` (same as the ffprobe validation step
+that already probes remote mp4s).
 
 ### Nested markers (breaks, placements, ads)
 
