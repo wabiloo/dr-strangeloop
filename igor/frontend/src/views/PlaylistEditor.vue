@@ -1868,12 +1868,12 @@ async function runScteVerify() {
     scteVerifyJobId.value = job.id
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
-  } finally {
     verifyingScte.value = false
   }
 }
 
 function onScteVerifyFinished(job: Job) {
+  verifyingScte.value = false
   if (job.status !== 'succeeded') {
     error.value = 'SCTE-35 verify failed -- see log below.'
   } else {
@@ -2616,11 +2616,10 @@ function applyHexPopover() {
                 />
               </div>
             </div>
-            <JobPanel v-if="scteVerifyJobId" :job-id="scteVerifyJobId" @finished="onScteVerifyFinished" />
-
             <div v-if="scteVerifyStatus?.exists && !scteVerifyStatus.stale && scteVerifyUrl && !buildRunning && !verifyingScte" class="flex flex-column gap-2">
               <iframe :src="scteVerifyUrl" title="krogh SCTE-35 filmstrip" class="report-frame" />
             </div>
+            <JobPanel v-if="scteVerifyJobId" :job-id="scteVerifyJobId" @finished="onScteVerifyFinished" />
           </div>
         </TabPanel>
       </TabPanels>
