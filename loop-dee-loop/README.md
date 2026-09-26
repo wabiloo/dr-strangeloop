@@ -63,6 +63,15 @@ package without re-baking, and auto-adds a locally-built `~/gpac-local/bin`
 to `PATH` if present (see `Dockerfile`/`SCOPE.md` §6 for why a packaged GPAC
 release isn't enough).
 
+### HLS segment format
+
+HLS defaults to CMAF (`.m4s` segments and init files). Select MPEG-TS
+with `bake.py` or `run.sh --hls-format ts`. TS includes video and audio
+in each rendition by default; `--no-hls-ts-mux-audio` produces a shared,
+separate audio TS playlist instead. DASH always uses the CMAF fragments.
+The same choices are available in its-a-live's `[packaging]` section as
+`hls_format = "cmaf" | "ts"` and `hls_ts_mux_audio = true | false`.
+
 ### Multi-rendition (ABR ladder)
 
 `bake.py`/`run.sh` accept either a single `.ts` file (one rendition) or a

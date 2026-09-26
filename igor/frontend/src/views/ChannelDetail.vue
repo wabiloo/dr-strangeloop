@@ -75,6 +75,8 @@ const editForm = reactive<ChannelCreatePayload>({
   source_path: '',
   segment_duration: 4.0,
   dvr_window_seconds: 30,
+  hls_format: 'cmaf',
+  hls_ts_mux_audio: true,
   port: 8080,
   cpu: 256,
   memory: 512,
@@ -86,6 +88,10 @@ const editForm = reactive<ChannelCreatePayload>({
 const editIsEcsExpress = computed(() => editForm.backend === 'ecs-express')
 const editIsLocalDocker = computed(() => editForm.backend === 'local-docker')
 const editUsesChannelSection = computed(() => editIsEcsExpress.value || editIsLocalDocker.value)
+const hlsFormatOptions = [
+  { label: 'CMAF (fragmented MP4)', value: 'cmaf' },
+  { label: 'MPEG-TS', value: 'ts' },
+]
 // Mirrors ChannelNew.vue's autoPort/lastExplicitPort split -- kept as
 // separate UI state so InputNumber always gets a number, and toggling
 // off "auto" restores the last explicit port instead of losing it.
@@ -154,6 +160,8 @@ function startEdit() {
     source_path: String(input.source_path ?? ''),
     segment_duration: Number(packaging.segment_duration ?? 4.0),
     dvr_window_seconds: Number(packaging.dvr_window_seconds ?? 30),
+    hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
+    hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
     port: portSection.port === 'auto' ? 'auto' : Number(portSection.port ?? 8080),
     cpu: Number(express.cpu ?? 256),
     memory: Number(express.memory ?? 512),
@@ -180,7 +188,7 @@ async function saveEdit() {
     await updateChannel(props.name, editForm)
     editing.value = false
     await loadConfig()
-    toast.add({ severity: 'success', summary: 'Config saved', detail: 'Redeploy/Refresh to apply it to a deployed channel.', life: 5000 })
+    toast.add({ severity: 'success', summary: 'Config saved', detail: 'Update content to rebake packaging changes on a running channel.', life: 5000 })
   } catch (e) {
     editError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -189,13 +197,14 @@ async function saveEdit() {
 }
 
 // Flattened "section.key: value" rows for the read-only config panel, in
-// the same section order as the TOML file (deploy, aws, s3, input, bake,
-// markers, packaging, express/docker -- see its-a-live/AGENTS.md's
-// config.toml reference).
+// TOML order. Local Docker configs may still contain placeholder AWS/S3
+// values, but those sections are unused by that backend.
 const configRows = computed(() => {
   if (!config.value) return []
   const rows: { section: string; key: string; value: string }[] = []
+  const isLocalDocker = (config.value.deploy as Record<string, unknown> | undefined)?.backend === 'local-docker'
   for (const [section, fields] of Object.entries(config.value)) {
+    if (isLocalDocker && (section === 'aws' || section === 's3')) continue
     if (!fields || typeof fields !== 'object') continue
     for (const [key, value] of Object.entries(fields as Record<string, unknown>)) {
       rows.push({ section, key, value: String(value) })
@@ -701,8 +710,8 @@ watch(() => props.name, reload)
       :health-error="status?.backend === 'ecs-express' || status?.backend === 'local-docker' ? healthError : ''"
     />
 
-    <div class="flex gap-4 flex-wrap align-items-start">
-      <div class="flex flex-column gap-4" style="flex: 2 1 40rem; min-width: 28rem">
+    <div class="channel-detail-layout">
+      <div class="flex flex-column gap-4 channel-actions">
         <div class="flex flex-column gap-2">
           <h3 class="m-0 text-sm text-color-secondary uppercase">First deploy</h3>
           <div
@@ -796,7 +805,7 @@ watch(() => props.name, reload)
         </div>
       </div>
 
-      <div class="flex flex-column gap-2 p-3 border-round surface-card" style="flex: 1 1 18rem; min-width: 18rem; border: 1px solid var(--surface-border)">
+      <div class="flex flex-column gap-2 p-3 border-round surface-card channel-config" style="border: 1px solid var(--surface-border)">
         <div class="flex align-items-center justify-content-between">
           <h3 class="m-0">Configuration</h3>
           <Button
@@ -820,99 +829,126 @@ watch(() => props.name, reload)
             <div class="text-color-secondary font-semibold mb-1" style="font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase">
               {{ sec.title }}
             </div>
-            <table class="text-sm" style="table-layout: fixed; width: 100%">
+            <table class="text-sm config-table">
               <tbody>
                 <tr v-for="row in sec.rows" :key="row.key">
-                  <td class="pr-3 text-color-secondary white-space-nowrap vertical-align-top" style="width: 9.5rem">{{ row.key }}</td>
-                  <td class="font-mono" style="word-break: break-all">{{ row.value }}</td>
+                  <td class="pr-3 text-color-secondary vertical-align-top config-key">{{ row.key }}</td>
+                  <td class="font-mono config-value">{{ row.value }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
         </div>
 
-        <div v-else class="flex flex-column gap-2">
+        <div v-else class="flex flex-column gap-3">
           <Message v-if="editError" severity="error" :closable="false">{{ editError }}</Message>
 
-          <div class="flex flex-column gap-1">
-            <label class="text-xs text-color-secondary">Backend (immutable)</label>
-            <InputText :model-value="editForm.backend" disabled />
-          </div>
+          <section class="config-group">
+            <h4 class="config-group-title">Channel &amp; source</h4>
+            <div class="config-fields">
+              <div class="flex flex-column gap-1">
+                <label class="text-xs text-color-secondary">Backend (immutable)</label>
+                <InputText :model-value="editForm.backend" disabled />
+              </div>
+              <div class="flex flex-column gap-1 config-field-wide">
+                <label class="text-xs text-color-secondary">Source path</label>
+                <InputText v-model="editForm.source_path" />
+              </div>
+            </div>
+          </section>
 
-          <template v-if="!editIsLocalDocker">
-            <div class="flex flex-column gap-1">
-              <label class="text-xs text-color-secondary">AWS region</label>
-              <InputText v-model="editForm.region" />
+          <section v-if="!editIsLocalDocker" class="config-group">
+            <h4 class="config-group-title">AWS / S3</h4>
+            <div class="config-fields">
+              <div class="flex flex-column gap-1">
+                <label class="text-xs text-color-secondary">AWS region</label>
+                <InputText v-model="editForm.region" />
+              </div>
+              <div class="flex flex-column gap-1">
+                <label class="text-xs text-color-secondary">S3 bucket name</label>
+                <InputText v-model="editForm.bucket_name" />
+              </div>
+              <div class="flex flex-column gap-1 config-field-wide">
+                <label class="text-xs text-color-secondary">S3 content folder</label>
+                <InputText v-model="editForm.content_folder" />
+              </div>
             </div>
-            <div class="flex flex-column gap-1">
-              <label class="text-xs text-color-secondary">S3 bucket name</label>
-              <InputText v-model="editForm.bucket_name" />
-            </div>
-            <div class="flex flex-column gap-1">
-              <label class="text-xs text-color-secondary">S3 content folder</label>
-              <InputText v-model="editForm.content_folder" />
-            </div>
-          </template>
-
-          <div class="flex flex-column gap-1">
-            <label class="text-xs text-color-secondary">Source path</label>
-            <InputText v-model="editForm.source_path" />
-          </div>
+          </section>
 
           <template v-if="editUsesChannelSection">
-            <div class="flex flex-column gap-1">
-              <label class="text-xs text-color-secondary">Segment duration (s)</label>
-              <InputNumber v-model="editForm.segment_duration" :min-fraction-digits="1" />
-            </div>
-            <div class="flex flex-column gap-1">
-              <label class="text-xs text-color-secondary">DVR window (s)</label>
-              <InputNumber v-model="editForm.dvr_window_seconds" />
-            </div>
-            <div class="flex flex-column gap-1">
-              <label class="text-xs text-color-secondary">Serve port</label>
-              <div v-if="editIsLocalDocker" class="flex align-items-center gap-2">
-                <Checkbox v-model="editAutoPort" binary input-id="edit-auto-port" />
-                <label for="edit-auto-port" class="text-sm">Auto-select a free port</label>
+            <section class="config-group">
+              <h4 class="config-group-title">HLS packaging</h4>
+              <div class="config-fields">
+                <div class="flex flex-column gap-1">
+                  <label class="text-xs text-color-secondary">Segment duration (s)</label>
+                  <InputNumber v-model="editForm.segment_duration" :min-fraction-digits="1" fluid />
+                </div>
+                <div class="flex flex-column gap-1">
+                  <label class="text-xs text-color-secondary">DVR window (s)</label>
+                  <InputNumber v-model="editForm.dvr_window_seconds" fluid />
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <label class="text-xs text-color-secondary">HLS segment format</label>
+                  <Select v-model="editForm.hls_format" :options="hlsFormatOptions" option-label="label" option-value="value" fluid />
+                </div>
+                <div v-if="editForm.hls_format === 'ts'" class="flex align-items-center gap-2 config-field-wide">
+                  <Checkbox v-model="editForm.hls_ts_mux_audio" binary input-id="edit-hls-ts-mux-audio" />
+                  <label for="edit-hls-ts-mux-audio" class="text-xs text-color-secondary">Mux audio into each HLS TS video segment</label>
+                </div>
               </div>
-              <InputNumber
-                v-if="!editIsLocalDocker || !editAutoPort"
-                v-model="editForm.port as number"
-                :use-grouping="false"
-              />
-              <div v-else class="text-color-secondary text-xs">
-                A free port (8080-8179) is picked on next start/refresh and reused afterward.
-              </div>
-            </div>
-            <template v-if="editIsEcsExpress">
-              <div class="flex flex-column gap-1">
-                <label class="text-xs text-color-secondary">Express CPU units</label>
-                <InputNumber v-model="editForm.cpu" :use-grouping="false" />
-              </div>
-              <div class="flex flex-column gap-1">
-                <label class="text-xs text-color-secondary">Express memory (MB)</label>
-                <InputNumber v-model="editForm.memory" :use-grouping="false" />
-              </div>
-            </template>
+            </section>
 
-            <div class="flex flex-column gap-1">
-              <label class="text-xs text-color-secondary">HLS DATERANGE mode</label>
-              <Select v-model="editForm.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" />
-            </div>
-            <div class="flex flex-column gap-1">
-              <label class="text-xs text-color-secondary">HLS CUE-OUT/CUE-IN tags</label>
-              <Select v-model="editForm.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" />
-            </div>
-            <div class="flex align-items-center gap-2">
-              <Checkbox v-model="editForm.increment_event_ids" binary input-id="edit-increment-event-ids" />
-              <label for="edit-increment-event-ids" class="text-xs text-color-secondary">Increment SCTE-35 event ids each loop (HLS + DASH)</label>
-            </div>
-            <div class="flex flex-column gap-1">
-              <div class="flex align-items-center gap-1">
-                <label class="text-xs text-color-secondary">HLS DATERANGE ID format</label>
-                <DaterangeIdFormatHelp />
+            <section class="config-group">
+              <h4 class="config-group-title">Serving</h4>
+              <div class="config-fields">
+                <div class="flex flex-column gap-1" :class="{ 'config-field-wide': editIsLocalDocker }">
+                  <label class="text-xs text-color-secondary">Serve port</label>
+                  <div v-if="editIsLocalDocker" class="flex align-items-center gap-2">
+                    <Checkbox v-model="editAutoPort" binary input-id="edit-auto-port" />
+                    <label for="edit-auto-port" class="text-sm">Auto-select a free port</label>
+                  </div>
+                  <InputNumber v-if="!editIsLocalDocker || !editAutoPort" v-model="editForm.port as number" :use-grouping="false" fluid />
+                  <div v-else class="text-color-secondary text-xs">
+                    A free port (8080-8179) is picked on next start/refresh and reused afterward.
+                  </div>
+                </div>
+                <template v-if="editIsEcsExpress">
+                  <div class="flex flex-column gap-1">
+                    <label class="text-xs text-color-secondary">Express CPU units</label>
+                    <InputNumber v-model="editForm.cpu" :use-grouping="false" fluid />
+                  </div>
+                  <div class="flex flex-column gap-1">
+                    <label class="text-xs text-color-secondary">Express memory (MB)</label>
+                    <InputNumber v-model="editForm.memory" :use-grouping="false" fluid />
+                  </div>
+                </template>
               </div>
-              <InputText id="edit-daterange-id-format" v-model="editForm.daterange_id_format" />
-            </div>
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">SCTE-35 signaling</h4>
+              <div class="config-fields">
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <label class="text-xs text-color-secondary">HLS DATERANGE mode</label>
+                  <Select v-model="editForm.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" fluid />
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <label class="text-xs text-color-secondary">HLS CUE-OUT/CUE-IN tags</label>
+                  <Select v-model="editForm.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" fluid />
+                </div>
+                <div class="flex align-items-center gap-2 config-field-wide">
+                  <Checkbox v-model="editForm.increment_event_ids" binary input-id="edit-increment-event-ids" />
+                  <label for="edit-increment-event-ids" class="text-xs text-color-secondary">Increment SCTE-35 event ids each loop (HLS + DASH)</label>
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <div class="flex align-items-center gap-1">
+                    <label class="text-xs text-color-secondary" for="edit-daterange-id-format">HLS DATERANGE ID format</label>
+                    <DaterangeIdFormatHelp />
+                  </div>
+                  <InputText id="edit-daterange-id-format" v-model="editForm.daterange_id_format" />
+                </div>
+              </div>
+            </section>
           </template>
 
           <div class="flex gap-2 mt-1">
@@ -924,7 +960,7 @@ watch(() => props.name, reload)
         <div class="text-color-secondary text-xs mt-2">
           Editing only rewrites configs/{{ name }}.toml -- it does not
           {{ byBackend('touch the running container', 'touch AWS', 'touch AWS') }} by itself.
-          {{ byBackend('Refresh', 'Redeploy', 'Redeploy') }} afterwards to apply the change.
+          Use Update content to rebake HLS packaging after saving.
         </div>
       </div>
     </div>
@@ -936,6 +972,80 @@ watch(() => props.name, reload)
 </template>
 
 <style scoped>
+.channel-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.channel-actions,
+.channel-config {
+  min-width: 0;
+}
+
+.config-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.config-key {
+  width: 11rem;
+  overflow-wrap: anywhere;
+}
+
+.config-value {
+  overflow-wrap: anywhere;
+}
+
+.config-group {
+  padding: 0.85rem;
+  background: var(--p-surface-50, #f8fafc);
+  border: 1px solid var(--surface-border);
+  border-radius: 6px;
+}
+
+.config-group-title {
+  margin: 0 0 0.85rem;
+  color: var(--p-primary-color, #b91c1c);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.config-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.config-fields > div {
+  min-width: 0;
+}
+
+.config-field-wide {
+  grid-column: 1 / -1;
+}
+
+.config-fields .p-inputtext {
+  width: 100%;
+}
+
+@media (max-width: 1050px) {
+  .channel-detail-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .config-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .config-key {
+    width: 7rem;
+  }
+}
+
 /* The fine-grained status text reads as a drawer pulled out from under
    the State tag: tucked slightly behind/under its right edge (negative
    margin + lower z-index), open on the left where it meets the tag (no

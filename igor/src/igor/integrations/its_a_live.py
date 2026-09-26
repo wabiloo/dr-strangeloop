@@ -77,6 +77,8 @@ _ECS_EXPRESS_EXTRA = """
 [packaging]
 segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
+hls_format = "{hls_format}"
+hls_ts_mux_audio = {hls_ts_mux_audio}
 
 [express]
 port   = {port}
@@ -88,6 +90,8 @@ _LOCAL_DOCKER_EXTRA = """
 [packaging]
 segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
+hls_format = "{hls_format}"
+hls_ts_mux_audio = {hls_ts_mux_audio}
 
 [docker]
 port = {port}
@@ -111,6 +115,8 @@ def generate_toml(
     source_path: str,
     segment_duration: float = 4.0,
     dvr_window_seconds: float = 30,
+    hls_format: str = "cmaf",
+    hls_ts_mux_audio: bool = True,
     port: int | str = 8080,
     cpu: int = 256,
     memory: int = 512,
@@ -124,6 +130,8 @@ def generate_toml(
             f"backend must be 'aws-media', 'ecs-express', or 'local-docker', got {backend!r}"
         )
     validate_daterange_id_format(daterange_id_format)
+    if hls_format not in ("cmaf", "ts"):
+        raise ValueError("hls_format must be 'cmaf' or 'ts'")
     content = _TOML_TEMPLATE.format(
         name=name, backend=backend, region=region, bucket_name=bucket_name,
         content_folder=content_folder, source_path=source_path,
@@ -138,6 +146,7 @@ def generate_toml(
         )
         content += _ECS_EXPRESS_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
+            hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
             port=int(port), cpu=cpu, memory=memory,
         )
     elif backend == "local-docker":
@@ -151,6 +160,7 @@ def generate_toml(
         )
         content += _LOCAL_DOCKER_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
+            hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
             port=_format_local_docker_port(port),
         )
     return content

@@ -60,6 +60,8 @@ daterange_id_format = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template, 
 [packaging]
 segment_duration = 4.0
 dvr_window_seconds = 30
+hls_format = "cmaf"          # "cmaf" (default) | "ts"; HLS only, DASH remains CMAF
+hls_ts_mux_audio = true      # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
 
 # `port` lives with whichever backend-specific section already exists for
 # that backend, not a shared section:

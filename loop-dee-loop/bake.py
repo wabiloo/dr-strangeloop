@@ -777,6 +777,65 @@ def read_variant_metadata(gpac_mpd_path: Path) -> dict:
     return {"video": video, "audio": audio}
 
 
+def bake_hls_ts_segments(output_package_dir: Path, renditions: list[dict], *, mux_audio: bool) -> None:
+    """Remux the validated CMAF fragments into HLS MPEG-TS segments.
+
+    DASH keeps the original CMAF fragments. Using those same video samples
+    ensures HLS TS has precisely the already-verified marker boundaries.
+    """
+    ts_dir = output_package_dir / "hls-ts"
+    if ts_dir.exists():
+        shutil.rmtree(ts_dir)
+    ts_dir.mkdir(parents=True)
+
+    reference = renditions[0]
+    audio_id = reference["audio_track_id"]
+    audio_source = output_package_dir / "segments" / reference["name"]
+    audio_init = None
+    audio_segments = []
+    if audio_id is not None:
+        audio_init = next(iter(sorted(audio_source.glob(f"*track{audio_id}_init.mp4"))))
+        audio_segments = sorted(audio_source.glob(f"*track{audio_id}_*.m4s"), key=_numeric_segment_index)
+
+    audio_init_bytes = audio_init.read_bytes() if audio_init is not None else b""
+    with tempfile.TemporaryDirectory() as temp:
+        temp_dir = Path(temp)
+        for rendition in renditions:
+            name = rendition["name"]
+            source = output_package_dir / "segments" / name
+            video_id = rendition["video_track_id"]
+            video_init = next(iter(sorted(source.glob(f"*track{video_id}_init.mp4"))))
+            video_init_bytes = video_init.read_bytes()
+            video_segments = sorted(source.glob(f"*track{video_id}_*.m4s"), key=_numeric_segment_index)
+            if audio_id is not None and len(video_segments) != len(audio_segments):
+                raise RuntimeError(f"Rendition {name!r} has a different segment count from the shared audio")
+            destination = ts_dir / name
+            destination.mkdir()
+            for index, video_segment in enumerate(video_segments):
+                video_input = temp_dir / "video.mp4"
+                video_input.write_bytes(video_init_bytes + video_segment.read_bytes())
+                cmd = ["ffmpeg", "-v", "error", "-y", "-copyts", "-i", str(video_input)]
+                if mux_audio and audio_id is not None:
+                    audio_input = temp_dir / "audio.mp4"
+                    audio_input.write_bytes(audio_init_bytes + audio_segments[index].read_bytes())
+                    cmd += ["-i", str(audio_input)]
+                cmd += ["-map", "0:v:0"]
+                if mux_audio and audio_id is not None:
+                    cmd += ["-map", "1:a:0"]
+                cmd += ["-c", "copy", "-f", "mpegts", str(destination / f"{index}.ts")]
+                _run(cmd)
+
+        if not mux_audio and audio_id is not None:
+            destination = ts_dir / "audio"
+            destination.mkdir()
+            for index, audio_segment in enumerate(audio_segments):
+                audio_input = temp_dir / "audio.mp4"
+                audio_input.write_bytes(audio_init_bytes + audio_segment.read_bytes())
+                _run(["ffmpeg", "-v", "error", "-y", "-copyts", "-i", str(audio_input),
+                      "-map", "0:a:0", "-c", "copy", "-f", "mpegts",
+                      str(destination / f"{index}.ts")])
+
+
 def discover_renditions(
     input_path: Path, markers_override: Path | None = None
 ) -> tuple[list[tuple[str, Path]], Path]:
@@ -977,6 +1036,8 @@ def bake(
     cue_tags: str = "none",
     increment_event_ids: bool = False,
     daterange_id_format: str | None = DATERANGE_ID_FORMAT_DEFAULT,
+    hls_format: str = "cmaf",
+    hls_ts_mux_audio: bool = True,
 ) -> None:
     """Bake phase entrypoint (SCOPE.md §4.1), generalized to a rendition
     ladder auto-discovered from disk (see discover_renditions()).
@@ -993,6 +1054,9 @@ def bake(
     and `cue_tags="only"`'s validation below.
     """
     logger.info("Bake starting: %s -> %s", input_path, output_package_dir)
+
+    if hls_format not in ("cmaf", "ts"):
+        raise ValidationError("hls_format must be 'cmaf' or 'ts'")
 
     try:
         validate_daterange_id_format(daterange_id_format)
@@ -1053,6 +1117,12 @@ def bake(
 
     assert reference is not None
 
+    if hls_format == "ts":
+        bake_hls_ts_segments(output_package_dir, rendition_results, mux_audio=hls_ts_mux_audio)
+    else:
+        # Re-baking into an existing package must not leave stale TS files.
+        shutil.rmtree(output_package_dir / "hls-ts", ignore_errors=True)
+
     # Step 6: write the immutable loop package.
     loop_descriptor = {
         "version": 2,
@@ -1060,6 +1130,8 @@ def bake(
         "timescale": TIMESCALE,
         "total_loop_duration_ticks": reference["total_loop_duration_ticks"],
         "segment_duration_seconds": segment_duration_seconds,
+        "hls_format": hls_format,
+        "hls_ts_mux_audio": hls_ts_mux_audio,
         "daterange_mode": daterange_mode,
         "cue_tags": cue_tags,
         "increment_event_ids": increment_event_ids,
@@ -1104,6 +1176,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", type=Path, required=True, help="Output loop package directory")
     parser.add_argument("--segment-duration", type=float, default=4.0)
+    parser.add_argument("--hls-format", choices=("cmaf", "ts"), default="cmaf")
+    parser.add_argument("--hls-ts-mux-audio", action=argparse.BooleanOptionalAction, default=True,
+                        help="For HLS TS, mux audio with video (default) or serve a separate TS audio playlist")
     parser.add_argument(
         "--daterange-mode",
         choices=("grouped", "shared", "narrowed"),
@@ -1183,6 +1258,8 @@ def main(argv: list[str] | None = None) -> int:
             cue_tags=args.cue_tags,
             increment_event_ids=args.increment_event_ids,
             daterange_id_format=args.daterange_id_format,
+            hls_format=args.hls_format,
+            hls_ts_mux_audio=args.hls_ts_mux_audio,
         )
     except ValidationError as exc:
         logger.error("VALIDATION FAILED: %s", exc)

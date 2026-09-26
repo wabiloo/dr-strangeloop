@@ -37,6 +37,7 @@ def spark(cfg, session, channel_name, extra_args=None):
     bucket_name = cfg.get("s3", {}).get("bucket_name", "")
     folder = cfg.get("s3", {}).get("content_folder", "its-a-live/content").strip("/")
     segment_duration = str(cfg.get("packaging", {}).get("segment_duration", 4.0))
+    packaging = cfg.get("packaging", {})
     local_output_dir = cfg.get("bake", {}).get(
         "local_output_dir", os.path.join(os.path.dirname(__file__), ".local-loop-package", channel_name)
     )
@@ -58,7 +59,9 @@ def spark(cfg, session, channel_name, extra_args=None):
     python_cmd = _resolve_python_cmd()
     bake_script = os.path.join(_LOOP_DEE_LOOP_DIR, "bake.py")
     bake_args = python_cmd + [bake_script, source_path, "--output", local_output_dir,
-                              "--segment-duration", segment_duration,
+                               "--segment-duration", segment_duration,
+                               "--hls-format", packaging.get("hls_format", "cmaf"),
+                               "--hls-ts-mux-audio" if packaging.get("hls_ts_mux_audio", True) else "--no-hls-ts-mux-audio",
                               "--daterange-mode", daterange_mode,
                               "--cue-tags", cue_tags,
                               "--daterange-id-format", daterange_id_format]

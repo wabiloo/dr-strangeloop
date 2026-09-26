@@ -139,6 +139,7 @@ def spark(cfg, session, channel_name, extra_args=None):
     source_path = os.path.abspath(source_path)
     local_output_dir = _local_output_dir(cfg, channel_name)
     segment_duration = str(cfg.get("packaging", {}).get("segment_duration", 4.0))
+    packaging = cfg.get("packaging", {})
     markers_cfg = cfg.get("markers", {})
     daterange_mode = markers_cfg.get("daterange_mode", "shared")
     cue_tags = markers_cfg.get("cue_tags", "none")
@@ -151,7 +152,9 @@ def spark(cfg, session, channel_name, extra_args=None):
     python_cmd = _resolve_python_cmd()
     bake_script = os.path.join(_LOOP_DEE_LOOP_DIR, "bake.py")
     bake_args = python_cmd + [bake_script, source_path, "--output", local_output_dir,
-                              "--segment-duration", segment_duration,
+                               "--segment-duration", segment_duration,
+                               "--hls-format", packaging.get("hls_format", "cmaf"),
+                               "--hls-ts-mux-audio" if packaging.get("hls_ts_mux_audio", True) else "--no-hls-ts-mux-audio",
                               "--daterange-mode", daterange_mode,
                               "--cue-tags", cue_tags,
                               "--daterange-id-format", daterange_id_format]

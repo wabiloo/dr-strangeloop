@@ -51,6 +51,8 @@ const form = reactive<ChannelCreatePayload>({
   source_path: '',
   segment_duration: 4.0,
   dvr_window_seconds: 30,
+  hls_format: 'cmaf',
+  hls_ts_mux_audio: true,
   port: 8080,
   cpu: 256,
   memory: 512,
@@ -133,6 +135,10 @@ watch(
 // section, this form just shows one `port` field either way). Only
 // ecs-express additionally needs Fargate cpu/memory (also in [express]).
 const usesChannelSection = computed(() => isEcsExpress.value || isLocalDocker.value)
+const hlsFormatOptions = [
+  { label: 'CMAF (fragmented MP4)', value: 'cmaf' },
+  { label: 'MPEG-TS', value: 'ts' },
+]
 
 const daterangeModeOptions = [
   { label: 'shared -- one DATERANGE per descriptor, full shared payload (default)', value: 'shared' },
@@ -236,6 +242,14 @@ async function submit() {
         <div class="col-6 flex flex-column gap-1">
           <label for="dvr">DVR window (s)</label>
           <InputNumber id="dvr" v-model="form.dvr_window_seconds" />
+        </div>
+        <div class="col-12 flex flex-column gap-1">
+          <label for="hls-format">HLS segment format</label>
+          <Select id="hls-format" v-model="form.hls_format" :options="hlsFormatOptions" option-label="label" option-value="value" />
+        </div>
+        <div v-if="form.hls_format === 'ts'" class="col-12 flex align-items-center gap-2">
+          <Checkbox v-model="form.hls_ts_mux_audio" binary input-id="hls-ts-mux-audio" />
+          <label for="hls-ts-mux-audio">Mux audio into each HLS TS video segment</label>
         </div>
         <div class="col-12 flex flex-column gap-1">
           <label for="port">Serve port{{ isLocalDocker ? ' (also the host port -- http://localhost:<port>)' : '' }}</label>

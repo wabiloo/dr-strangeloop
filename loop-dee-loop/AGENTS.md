@@ -31,6 +31,7 @@ tool's scripts directly only for:
 
 # Or separately:
 python3 bake.py <input.ts | rendition-dir> --output /var/loop-packages/<name>
+# Optional: --hls-format ts --no-hls-ts-mux-audio (default: CMAF HLS; TS muxed audio)
 python3 serve.py /var/loop-packages/<name> --epoch-utc <ISO8601>
 ```
 

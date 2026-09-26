@@ -286,6 +286,18 @@ class LoopPackage:
         self.audio_rendition: VideoRendition | None = (
             audio_renditions[0] if audio_renditions else None
         )
+        self.hls_format: str = self.descriptor.get("hls_format", "cmaf")
+        self.hls_ts_mux_audio: bool = self.descriptor.get("hls_ts_mux_audio", True)
+        if self.hls_format not in ("cmaf", "ts"):
+            raise RuntimeError(f"Unsupported HLS format: {self.hls_format!r}")
+        if self.hls_format == "ts":
+            for rendition in self.video_renditions:
+                ts_segments = package_dir / "hls-ts" / rendition.name
+                if len(list(ts_segments.glob("*.ts"))) != self.segments_per_loop:
+                    raise RuntimeError(f"Missing HLS TS segments for rendition {rendition.name!r}")
+            if self.has_audio and not self.hls_ts_mux_audio:
+                if len(list((package_dir / "hls-ts" / "audio").glob("*.ts"))) != self.segments_per_loop:
+                    raise RuntimeError("Missing separate HLS TS audio segments")
 
         # Reference rendition for boundary-tick-derived quantities that are
         # conceptually shared across the whole ladder (ad-decision timeline,
@@ -367,18 +379,20 @@ class Channel:
         """
         pkg = self.package
 
-        lines = ["#EXTM3U", "#EXT-X-VERSION:7"]
+        lines = ["#EXTM3U", "#EXT-X-VERSION:6" if pkg.hls_format == "ts" else "#EXT-X-VERSION:7"]
 
         audio_codecs: list[str] = []
         audio_bandwidth = 0
+        separate_audio = pkg.has_audio and (pkg.hls_format == "cmaf" or not pkg.hls_ts_mux_audio)
         if pkg.has_audio and pkg.audio_rendition.audio_variant is not None:
             a = pkg.audio_rendition.audio_variant
             audio_codecs = [a["codecs"]]
             audio_bandwidth = a["bandwidth"]
-            lines.append(
-                '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Default",'
-                'DEFAULT=YES,AUTOSELECT=YES,URI="audio.m3u8"'
-            )
+            if separate_audio:
+                lines.append(
+                    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Default",'
+                    'DEFAULT=YES,AUTOSELECT=YES,URI="audio.m3u8"'
+                )
 
         for rendition in pkg.video_renditions:
             v = rendition.video_variant
@@ -388,7 +402,7 @@ class Channel:
                 f"RESOLUTION={v['width']}x{v['height']}",
                 f"FRAME-RATE={v['frame_rate']:.3f}",
             ]
-            if audio_codecs:
+            if separate_audio:
                 stream_inf_attrs.append('AUDIO="audio"')
 
             lines.append("#EXT-X-STREAM-INF:" + ",".join(stream_inf_attrs))
@@ -398,10 +412,11 @@ class Channel:
 
     def build_hls_manifest(self, rendition_name: str, window_segments: int | None = None) -> str:
         rendition = self.package.rendition_by_name(rendition_name)
+        is_ts = self.package.hls_format == "ts"
         return self._build_hls_media_playlist(
             boundary_ticks=rendition.segment_boundary_ticks,
-            init_uri="init.mp4",
-            seg_uri_template="seg/{index}.m4s",
+            init_uri=None if is_ts else "init.mp4",
+            seg_uri_template="seg/{index}.ts" if is_ts else "seg/{index}.m4s",
             window_segments=window_segments,
         )
 
@@ -409,10 +424,13 @@ class Channel:
         pkg = self.package
         if not pkg.has_audio:
             raise RuntimeError("This loop package has no audio track to serve.")
+        if pkg.hls_format == "ts" and pkg.hls_ts_mux_audio:
+            raise RuntimeError("Audio is muxed into the HLS TS video segments.")
+        is_ts = pkg.hls_format == "ts"
         return self._build_hls_media_playlist(
             boundary_ticks=pkg.audio_rendition.audio_segment_boundary_ticks,
-            init_uri="audio/init.mp4",
-            seg_uri_template="/audio/seg/{index}.m4s",
+            init_uri=None if is_ts else "audio/init.mp4",
+            seg_uri_template="/audio/seg/{index}.ts" if is_ts else "/audio/seg/{index}.m4s",
             window_segments=window_segments,
         )
 
@@ -420,7 +438,7 @@ class Channel:
         self,
         *,
         boundary_ticks: list[int],
-        init_uri: str,
+        init_uri: str | None,
         seg_uri_template: str,
         window_segments: int | None = None,
     ) -> str:
@@ -492,12 +510,13 @@ class Channel:
 
         lines = [
             "#EXTM3U",
-            "#EXT-X-VERSION:7",
+            "#EXT-X-VERSION:6" if init_uri is None else "#EXT-X-VERSION:7",
             f"#EXT-X-TARGETDURATION:{pkg.max_segment_duration_seconds_rounded_up}",
             f"#EXT-X-MEDIA-SEQUENCE:{first_global_index}",
             f"#EXT-X-DISCONTINUITY-SEQUENCE:{first_loop_number}",
-            f'#EXT-X-MAP:URI="{init_uri}"',
         ]
+        if init_uri is not None:
+            lines.append(f'#EXT-X-MAP:URI="{init_uri}"')
 
         # An EXT-X-DATERANGE describes one point on the presentation
         # timeline; it must appear exactly ONCE per manifest response, on
@@ -978,6 +997,12 @@ class Channel:
         assert self.package.audio_rendition is not None
         return self.package.audio_rendition.audio_segment_path_for_index(physical_index)
 
+    def hls_ts_segment_path(self, rendition_name: str, physical_index: int) -> Path:
+        rendition = self.package.rendition_by_name(rendition_name)
+        if physical_index >= self.package.segments_per_loop:
+            raise IndexError(physical_index)
+        return self.package.package_dir / "hls-ts" / rendition.name / f"{physical_index}.ts"
+
 
 def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) -> Flask:
     package = LoopPackage(package_dir)
@@ -1012,6 +1037,8 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
             "uptime_seconds": (now_ticks - process_start_ticks) / package.timescale,
             "renditions": [r.name for r in package.video_renditions],
             "has_audio": package.has_audio,
+            "hls_format": package.hls_format,
+            "hls_ts_mux_audio": package.hls_ts_mux_audio,
             "window_segments": channel.window_segments,
         }
 
@@ -1049,9 +1076,21 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
             abort(404)
         return send_file(path, mimetype="video/iso.segment")
 
+    @app.get("/<rendition_name>/seg/<int:physical_index>.ts")
+    def hls_ts_segment(rendition_name: str, physical_index: int):
+        if package.hls_format != "ts":
+            abort(404)
+        try:
+            path = channel.hls_ts_segment_path(rendition_name, physical_index)
+        except (KeyError, IndexError):
+            abort(404)
+        return send_file(path, mimetype="video/mp2t")
+
     if package.has_audio:
         @app.get("/audio.m3u8")
         def hls_audio_manifest():
+            if package.hls_format == "ts" and package.hls_ts_mux_audio:
+                abort(404)
             body = channel.build_hls_audio_manifest()
             return Response(body, mimetype="application/vnd.apple.mpegurl")
 
@@ -1066,6 +1105,13 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
             except IndexError:
                 abort(404)
             return send_file(path, mimetype="audio/iso.segment")
+
+        @app.get("/audio/seg/<int:physical_index>.ts")
+        def hls_ts_audio_segment(physical_index: int):
+            if package.hls_format != "ts" or package.hls_ts_mux_audio or physical_index >= package.segments_per_loop:
+                abort(404)
+            return send_file(package.package_dir / "hls-ts" / "audio" / f"{physical_index}.ts",
+                             mimetype="video/mp2t")
 
     return app
 

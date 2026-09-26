@@ -31,6 +31,8 @@ class ChannelCreatePayload(BaseModel):
     source_path: str
     segment_duration: float = 4.0
     dvr_window_seconds: float = 30
+    hls_format: str = "cmaf"
+    hls_ts_mux_audio: bool = True
     # int to pin an explicit host port, "auto" (local-docker only) to let
     # it self-select a free one at start/refresh time -- see
     # its-a-live/AGENTS.md and _local_docker_ops._resolve_port.
@@ -75,6 +77,13 @@ class ChannelCreatePayload(BaseModel):
     def _validate_cue_tags(cls, v: str) -> str:
         if v not in ("none", "alongside", "only"):
             raise ValueError("cue_tags must be 'none', 'alongside', or 'only'")
+        return v
+
+    @field_validator("hls_format")
+    @classmethod
+    def _validate_hls_format(cls, v: str) -> str:
+        if v not in ("cmaf", "ts"):
+            raise ValueError("hls_format must be 'cmaf' or 'ts'")
         return v
 
     @field_validator("daterange_id_format")

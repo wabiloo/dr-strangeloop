@@ -23,6 +23,9 @@
 #   --segment-duration N   Nominal segment duration in seconds passed to
 #                          bake.py (default: 4.0). Real segments are
 #                          cue-driven and may be longer -- see SCOPE.md §4.1.
+#   --hls-format FORMAT    cmaf (default) or ts; DASH remains CMAF.
+#   --no-hls-ts-mux-audio  Separate audio TS playlist instead of muxing audio
+#                          into each video TS segment (TS only).
 #   --epoch-utc TIMESTAMP  Channel epoch, ISO8601 UTC, e.g.
 #                          2026-01-01T00:00:00Z (default: now, i.e. the
 #                          channel's loop 0 starts the moment serve starts).
@@ -63,6 +66,8 @@ INPUT_PATH=""
 MARKERS=""
 OUTPUT="${SCRIPT_DIR}/loop-package"
 SEGMENT_DURATION="4.0"
+HLS_FORMAT="cmaf"
+HLS_TS_MUX_AUDIO="1"
 EPOCH_UTC=""
 HOST="0.0.0.0"
 PORT="8080"
@@ -81,6 +86,8 @@ while [[ $# -gt 0 ]]; do
         --markers) MARKERS="$2"; shift 2 ;;
         --output) OUTPUT="$2"; shift 2 ;;
         --segment-duration) SEGMENT_DURATION="$2"; shift 2 ;;
+        --hls-format) HLS_FORMAT="$2"; shift 2 ;;
+        --no-hls-ts-mux-audio) HLS_TS_MUX_AUDIO="0"; shift ;;
         --epoch-utc) EPOCH_UTC="$2"; shift 2 ;;
         --host) HOST="$2"; shift 2 ;;
         --port) PORT="$2"; shift 2 ;;
@@ -138,6 +145,8 @@ fi
 
 if [[ "$SKIP_BAKE" != "1" ]]; then
     BAKE_ARGS=("$INPUT_PATH" --output "$OUTPUT" --segment-duration "$SEGMENT_DURATION")
+    BAKE_ARGS+=(--hls-format "$HLS_FORMAT")
+    [[ "$HLS_TS_MUX_AUDIO" == "0" ]] && BAKE_ARGS+=(--no-hls-ts-mux-audio)
     [[ -n "$MARKERS" ]] && BAKE_ARGS+=(--markers "$MARKERS")
     [[ "$VERBOSE" == "1" ]] && BAKE_ARGS+=(-v)
 

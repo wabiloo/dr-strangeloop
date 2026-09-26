@@ -87,6 +87,8 @@ export interface ProbeResult {
   video_codec: string | null
   frame_rate: number | null
   has_audio: boolean
+  hls_format: 'cmaf' | 'ts'
+  hls_ts_mux_audio: boolean
   audio_codec: string | null
   format_name: string | null
   size_bytes: number | null
@@ -177,6 +179,8 @@ export interface ChannelCreatePayload {
   source_path: string
   segment_duration?: number
   dvr_window_seconds?: number
+  hls_format?: 'cmaf' | 'ts'
+  hls_ts_mux_audio?: boolean
   // int to pin an explicit host port, "auto" (local-docker only) to let
   // it self-select a free one at start/refresh time.
   port?: number | 'auto'
