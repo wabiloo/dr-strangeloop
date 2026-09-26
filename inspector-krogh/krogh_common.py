@@ -19,3 +19,30 @@ def header_id_html(subtitle: str, filename: str) -> str:
         f'<div class="ik-file">{escape(filename)}</div>'
         "</div>"
     )
+
+
+TYPE_ORDER = ["BRK", "PPO", "PAD"]
+_TYPE_COLORS = {
+    "BRK": ("#1c3f66", "#2a5788", "#8fc4ff"),
+    "PPO": ("#3a2a5c", "#5c4088", "#c9a8ff"),
+    "PAD": ("#5c2a3a", "#884058", "#ffa8c4"),
+}
+_FALLBACK_COLORS = [
+    ("#2a5c3a", "#408858", "#a8ffc4"),
+    ("#5c4a1c", "#88702a", "#ffdf8f"),
+    ("#1c5c5c", "#2a8888", "#8ffff0"),
+]
+
+
+def ordered_type_codes(codes) -> list[str]:
+    """BRK/PPO/PAD first, then any other marker types alphabetically."""
+    present = set(codes)
+    return [c for c in TYPE_ORDER if c in present] + sorted(present - set(TYPE_ORDER))
+
+
+def type_colors(codes) -> dict[str, tuple[str, str, str]]:
+    """(background, border, text) per marker type code, stable across reports."""
+    out: dict[str, tuple[str, str, str]] = {}
+    for code in ordered_type_codes(codes):
+        out[code] = _TYPE_COLORS.get(code) or _FALLBACK_COLORS[len(out) % len(_FALLBACK_COLORS)]
+    return out

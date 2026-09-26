@@ -53,8 +53,11 @@ def test_render_html_with_a_marker_and_checks():
     assert "BRK" in html
     assert "lands_on_idr" in html
     assert "all checks passed" in html
-    assert "depth 0" in html
-    assert "contains #2" in html
+    assert "depth" not in html
+    assert "Inspector Krogh" in html
+    assert "span-gap" in html
+    assert "mark-start" in html
+    assert 'class="checks-table"' in html
 
 
 def test_render_html_flags_failed_checks():

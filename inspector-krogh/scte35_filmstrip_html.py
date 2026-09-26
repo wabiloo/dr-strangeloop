@@ -16,7 +16,7 @@ from html import escape
 from pathlib import Path
 from typing import Optional
 
-from krogh_common import HEADER_CSS, header_id_html
+from krogh_common import HEADER_CSS, header_id_html, ordered_type_codes, type_colors
 
 COL_W_FRAME = 68
 COL_W_ELLIPSIS = 52
@@ -120,19 +120,6 @@ def _span_bars(report: dict, columns: list[dict], frame_dur: float) -> tuple[lis
     return spans, pins
 
 
-_TYPE_ORDER = ["BRK", "PPO", "PAD"]
-_TYPE_COLORS = {
-    "BRK": ("#1c3f66", "#2a5788", "#8fc4ff"),
-    "PPO": ("#3a2a5c", "#5c4088", "#c9a8ff"),
-    "PAD": ("#5c2a3a", "#884058", "#ffa8c4"),
-}
-_FALLBACK_COLORS = [
-    ("#2a5c3a", "#408858", "#a8ffc4"),
-    ("#5c4a1c", "#88702a", "#ffdf8f"),
-    ("#1c5c5c", "#2a8888", "#8ffff0"),
-]
-
-
 def _upid_short(ev: Optional[dict]) -> str:
     if not ev or not ev.get("upid_hex"):
         return ""
@@ -174,7 +161,7 @@ def _assign_rows(spans: list[dict]) -> tuple[list[str], int]:
     by_type: dict[str, list[dict]] = {}
     for sp in spans:
         by_type.setdefault(sp["marker"]["type_code"], []).append(sp)
-    codes = [c for c in _TYPE_ORDER if c in by_type] + sorted(c for c in by_type if c not in _TYPE_ORDER)
+    codes = ordered_type_codes(by_type)
     row = 0
     for code in codes:
         lane_ends: list[int] = []
@@ -202,9 +189,7 @@ def render_filmstrip(report: dict, base_dir: Optional[Path] = None) -> str:
     spans, pins = _span_bars(report, columns, frame_dur)
     type_codes, span_rows = _assign_rows(spans)
 
-    colors: dict[str, tuple[str, str, str]] = {}
-    for code in type_codes:
-        colors[code] = _TYPE_COLORS.get(code) or _FALLBACK_COLORS[len(colors) % len(_FALLBACK_COLORS)]
+    colors = type_colors(type_codes)
 
     n_cols = len(columns)
     col_widths = [COL_W_ELLIPSIS if c["type"] == "ellipsis" else COL_W_FRAME for c in columns]
