@@ -125,7 +125,7 @@ def _marker_card(marker: dict, frames: dict, checks: list[dict], base_dir: Optio
 
     bg, border, fg = colors[marker["type_code"]]
     return f"""
-    <div class="marker-card" style="--t-bg:{bg};--t-border:{border};--t-fg:{fg}">
+    <div class="marker-card" id="marker-{eid}" style="--t-bg:{bg};--t-border:{border};--t-fg:{fg}">
       <div class="marker-hdr">
         <span class="mid">Event #{eid}</span>
         {type_badge}{splice_badge}{instant_badge}
@@ -181,7 +181,7 @@ def _timeline_bar(markers: list[dict], total: float) -> str:
             pct_w = max(0.05, (hi - lo) / total * 100)
             title = escape(f'#{m["event_id"]} {m["type_name"]} [{_fmt_time(lo)} → {_fmt_time(hi)}]')
             lanes[lane].append(
-                f'<div class="seg" style="left:{pct_l:.4f}%;width:{pct_w:.4f}%;background:{bg};border-color:{border};color:{fg}" title="{title}">{escape(code)}</div>'
+                f'<a class="seg" href="#marker-{m["event_id"]}" style="left:{pct_l:.4f}%;width:{pct_w:.4f}%;background:{bg};border-color:{border};color:{fg}" title="{title}">{escape(code)}</a>'
             )
         rows.extend(f'<div class="tl-row">{"".join(segs)}</div>' for segs in lanes)
 
@@ -192,7 +192,7 @@ def _timeline_bar(markers: list[dict], total: float) -> str:
             continue
         pct_l = m["start"]["pts_seconds"] / total * 100
         title = escape(f'#{m["event_id"]} {m["type_name"]} @ {_fmt_time(m["start"]["pts_seconds"])}')
-        ticks.append(f'<div class="tick" style="left:{pct_l:.4f}%" title="{title}"></div>')
+        ticks.append(f'<a class="tick" href="#marker-{m["event_id"]}" style="left:{pct_l:.4f}%" title="{title}"></a>')
     if ticks:
         rows.append(f'<div class="tl-row ticks">{"".join(ticks)}</div>')
 
@@ -253,8 +253,14 @@ h1{{font-size:19px;color:#e8e8f4;letter-spacing:-.5px}}
 .tl-bar{{display:flex;flex-direction:column;gap:2px;background:#0e0e1a;border:1px solid #232336;border-radius:4px;padding:4px}}
 .tl-row{{position:relative;height:22px}}
 .tl-row.ticks{{height:12px}}
-.seg{{position:absolute;top:0;height:100%;border:1px solid;border-radius:2px;font-size:9px;display:flex;align-items:center;justify-content:center;overflow:hidden;white-space:nowrap}}
-.tick{{position:absolute;top:0;width:2px;height:100%;background:#ffaa44}}
+.seg{{position:absolute;top:0;height:100%;text-decoration:none;cursor:pointer;border:1px solid;border-radius:2px;font-size:9px;display:flex;align-items:center;justify-content:center;overflow:hidden;white-space:nowrap}}
+.seg:hover{{filter:brightness(1.35)}}
+.tick{{position:absolute;top:0;width:10px;margin-left:-5px;height:100%;cursor:pointer;background:linear-gradient(#ffaa44,#ffaa44) center/2px 100% no-repeat}}
+.tick:hover{{background:linear-gradient(#ffd08a,#ffd08a) center/4px 100% no-repeat}}
+html{{scroll-behavior:smooth}}
+.marker-card{{scroll-margin-top:16px}}
+.marker-card:target{{animation:flash 1.6s ease-out}}
+@keyframes flash{{0%{{box-shadow:0 0 0 3px var(--t-fg),0 4px 18px rgba(0,0,0,.45)}}100%{{box-shadow:0 0 0 3px transparent,0 4px 18px rgba(0,0,0,.45)}}}}
 
 .checks-wrap{{margin-bottom:32px}}
 table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}

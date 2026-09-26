@@ -56,6 +56,7 @@ def test_render_html_with_a_marker_and_checks():
     assert "depth" not in html
     assert "Inspector Krogh" in html
     assert "span-gap" in html
+    assert 'href="#marker-1"' in html and 'id="marker-1"' in html
     assert "mark-start" in html
     assert 'class="checks-table"' in html
 
