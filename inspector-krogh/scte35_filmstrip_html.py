@@ -206,7 +206,6 @@ def render_filmstrip(report: dict, base_dir: Optional[Path] = None) -> str:
     colors: dict[str, tuple[str, str, str]] = {}
     for code in type_codes:
         colors[code] = _TYPE_COLORS.get(code) or _FALLBACK_COLORS[len(colors) % len(_FALLBACK_COLORS)]
-    type_names = {sp["marker"]["type_code"]: sp["marker"]["type_name"] for sp in spans}
 
     n_cols = len(columns)
     col_widths = [COL_W_ELLIPSIS if c["type"] == "ellipsis" else COL_W_FRAME for c in columns]
@@ -272,11 +271,6 @@ def render_filmstrip(report: dict, base_dir: Optional[Path] = None) -> str:
     src = report["source"]
     name = escape(src.get("name", ""))
 
-    type_legend = "".join(
-        f'<span><span class="sw" style="background:{colors[c][0]};border:1px solid {colors[c][1]}"></span>{escape(type_names[c])}</span>'
-        for c in type_codes
-    )
-
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -333,7 +327,6 @@ header{{display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px;border-bottom:
 </header>
 
 <div class="legend">
-  {type_legend}
   <span><span class="sw idr"></span>IDR frame</span>
   <span><span class="land-tag start" style="padding:1px 4px">TYPE</span>marker starts on this frame</span>
   <span><span class="land-tag stop" style="padding:1px 4px">TYPE</span>marker ends after this frame</span>
