@@ -3,7 +3,7 @@ mirrors playlists.py's shape (grave-robber/SCOPE.md §10's endpoint table)."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from igor.integrations import archives
@@ -28,6 +28,31 @@ class SelectionPayload(BaseModel):
 @router.get("/")
 def list_archives() -> list[dict]:
     return archives.list_archives()
+
+
+@router.post("/upload")
+async def upload_archive(
+    request: Request,
+    name: str = Query(...),
+    filename: str = Query(...),
+) -> dict:
+    """Upload a HAR/Proxyman capture and store it under the chosen name."""
+    try:
+        return await archives.save_uploaded_archive(name, filename, request.stream())
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/{name}", status_code=204)
+def delete_archive(name: str) -> None:
+    try:
+        archives.delete_archive(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{name}/coverage")

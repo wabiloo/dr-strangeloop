@@ -5,6 +5,7 @@ ARCHIVE_IMPORTS_DIR so nothing touches the real repo-root data/ tree."""
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 from pathlib import Path
 
@@ -50,6 +51,35 @@ def test_list_archives_empty_store_creates_dir_and_returns_empty(tmp_path, monke
     assert archives_dir.is_dir()
 
 
+def test_save_uploaded_archive_uses_custom_name_and_original_extension(archive_store):
+    async def chunks():
+        yield b"archive-data"
+
+    result = asyncio.run(archives.save_uploaded_archive("customer-session", "capture.HAR", chunks()))
+
+    assert result == {
+        "name": "customer-session",
+        "path": str(archive_store / "customer-session.har"),
+        "format": "har",
+    }
+    assert (archive_store / "customer-session.har").read_bytes() == b"archive-data"
+    assert archives.find_archive_for_source("outputs/archives/customer-session/manifest.json") == "customer-session"
+
+
+def test_save_uploaded_archive_rejects_invalid_name_extension_and_duplicate(archive_store):
+    async def chunks():
+        yield b"archive-data"
+
+    with pytest.raises(ValueError, match="Archive name"):
+        asyncio.run(archives.save_uploaded_archive("../escape", "capture.har", chunks()))
+    with pytest.raises(ValueError, match="Unsupported archive format"):
+        asyncio.run(archives.save_uploaded_archive("capture", "capture.txt", chunks()))
+
+    (archive_store / "capture.zip").write_bytes(b"existing")
+    with pytest.raises(FileExistsError, match="already exists"):
+        asyncio.run(archives.save_uploaded_archive("capture", "new.har", chunks()))
+
+
 def test_list_archives_reports_metadata_for_a_real_har(archive_store):
     if not GRAVE_ROBBER_FIXTURE.exists():
         pytest.skip("grave-robber HAR fixture not found")
@@ -62,6 +92,34 @@ def test_list_archives_reports_metadata_for_a_real_har(archive_store):
     assert entry["format"] == "har"
     assert entry["variant_count"] == 3
     assert entry["import"] is None  # nothing imported yet
+
+
+def test_find_archive_for_source_resolves_generated_manifest(archive_store):
+    (archive_store / "session.har").write_bytes(b"archive")
+
+    assert archives.find_archive_for_source("outputs/archives/session/manifest.json") == "session"
+    assert archives.find_archive_for_source("/tmp/outputs/archives/session/manifest.json") == "session"
+    assert archives.find_archive_for_source("outputs/archives/missing/manifest.json") is None
+    assert archives.find_archive_for_source("outputs/playlist/manifest.json") is None
+
+
+def test_delete_archive_removes_capture_and_selection_but_keeps_import(archive_store, monkeypatch):
+    (archive_store / "session.har").write_bytes(b"archive")
+    (archive_store / "session.selection.json").write_text('{"manifest_url": null}')
+    imported = archives.paths.ARCHIVE_IMPORTS_DIR / "session" / "manifest.json"
+    imported.parent.mkdir(parents=True)
+    imported.write_text('{"segments": []}')
+
+    archives.delete_archive("session")
+
+    assert not (archive_store / "session.har").exists()
+    assert not (archive_store / "session.selection.json").exists()
+    assert imported.is_file()
+
+
+def test_delete_archive_rejects_unknown_name(archive_store):
+    with pytest.raises(FileNotFoundError):
+        archives.delete_archive("missing")
 
 
 def test_get_coverage_reports_every_variant(archive_store):
@@ -140,6 +198,29 @@ def test_spawn_import_job_unknown_archive_raises(tmp_path, monkeypatch):
 def test_route_list_archives(archive_store):
     resp = client.get("/api/v1/archives/")
     assert resp.status_code == 200
+
+
+def test_route_delete_archive(archive_store):
+    (archive_store / "remove-me.har").write_bytes(b"archive")
+    response = client.delete("/api/v1/archives/remove-me")
+
+    assert response.status_code == 204
+    assert not (archive_store / "remove-me.har").exists()
+
+    response = client.delete("/api/v1/archives/remove-me")
+    assert response.status_code == 404
+
+
+def test_route_upload_archive_uses_selected_name(archive_store):
+    response = client.post(
+        "/api/v1/archives/upload",
+        params={"name": "named-capture", "filename": "browser-export.har"},
+        content=b"capture-bytes",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "named-capture"
+    assert (archive_store / "named-capture.har").read_bytes() == b"capture-bytes"
 
 
 def test_route_coverage_404_for_unknown_archive(archive_store):

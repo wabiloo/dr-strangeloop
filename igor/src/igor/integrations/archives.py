@@ -16,7 +16,9 @@ subprocess rather than importing pipeline.ingest() in-process.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import re
+from pathlib import Path, PurePosixPath
+from collections.abc import AsyncIterable
 
 from grave_robber.multivariant import find_audio_playlist, is_multivariant_playlist, parse_multivariant_playlist
 from grave_robber.availability import build_variant_segments, combine_audio, covered_ranges
@@ -28,6 +30,37 @@ from igor import paths
 from igor.jobs.runner import Job, runner
 
 ARCHIVE_EXTENSIONS = (".har", ".proxymanlogv2", ".log", ".barc", ".zip")
+_ARCHIVE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$")
+
+
+async def save_uploaded_archive(name: str, filename: str, chunks: AsyncIterable[bytes]) -> dict:
+    """Save an uploaded capture under its user-selected archive name."""
+    if not _ARCHIVE_NAME_RE.fullmatch(name) or name in {".", ".."}:
+        raise ValueError("Archive name must start with a letter or digit and contain only letters, digits, dots, underscores, or hyphens (max 180 characters).")
+    extension = Path(filename).suffix.lower()
+    if extension not in ARCHIVE_EXTENSIONS:
+        raise ValueError(f"Unsupported archive format {extension or '(no extension)'!r}; supported formats: {', '.join(ARCHIVE_EXTENSIONS)}.")
+
+    paths.ARCHIVES_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        _resolve_archive_path(name)
+    except FileNotFoundError:
+        pass
+    else:
+        raise FileExistsError(f"An archive named {name!r} already exists.")
+
+    destination = paths.ARCHIVES_DIR / f"{name}{extension}"
+    created = False
+    try:
+        with destination.open("xb") as output:
+            created = True
+            async for chunk in chunks:
+                output.write(chunk)
+    except Exception:
+        if created:
+            destination.unlink(missing_ok=True)
+        raise
+    return {"name": name, "path": str(destination), "format": extension.lstrip(".")}
 
 
 def list_archives() -> list[dict]:
@@ -103,6 +136,39 @@ def _resolve_archive_path(name: str) -> Path:
         if candidate.is_file():
             return candidate
     raise FileNotFoundError(f"No such archive: {name}")
+
+
+def delete_archive(name: str) -> None:
+    """Delete the original capture and its saved wizard selection.
+
+    Imported output is intentionally retained: an existing channel config
+    may still use outputs/archives/<name>/manifest.json as its input.
+    """
+    archive_path = _resolve_archive_path(name)
+    selection_path = paths.ARCHIVES_DIR / f"{name}.selection.json"
+    archive_path.unlink()
+    selection_path.unlink(missing_ok=True)
+
+
+def find_archive_for_source(source_path: str) -> str | None:
+    """Best-effort reverse lookup for an archive import manifest path.
+
+    Channel configs store the generated ``outputs/archives/<name>/manifest.json``
+    path, while the archive itself lives separately under ``data/archives``.
+    Resolve by that stable path suffix and only return a link target when the
+    source archive still exists.
+    """
+    if not source_path:
+        return None
+    parts = PurePosixPath(source_path.replace("\\", "/")).parts
+    if len(parts) < 3 or parts[-3] != "archives" or parts[-1] != "manifest.json":
+        return None
+    name = parts[-2]
+    try:
+        _resolve_archive_path(name)
+    except (FileNotFoundError, ValueError):
+        return None
+    return name
 
 
 def get_coverage(name: str) -> dict:

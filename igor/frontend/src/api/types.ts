@@ -217,7 +217,9 @@ export interface ChannelListItem {
   container_name?: string | null
   stack_status: string | null
   source_path?: string
+  source_kind?: 'playlist' | 'archive'
   playlist_name?: string | null
+  archive_name?: string | null
   // Live running/stopped signal, fetched by `channel.py list` once the
   // CloudFormation stack has settled -- stack_status alone can't tell
   // "deployed" apart from "deployed but scaled to 0 / IDLE". Absent

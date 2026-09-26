@@ -253,19 +253,28 @@ onBeforeUnmount(() => {
     <DataTable :value="channels" :loading="loading" data-key="name" @row-click="(e) => router.push(`/channels/${e.data.name}`)" class="cursor-pointer">
       <Column field="name" header="Name" />
       <Column field="backend" header="Backend" />
-      <Column header="Playlist">
+      <Column header="Source">
         <template #body="{ data }">
-          <RouterLink
-            v-if="data.playlist_name"
-            :to="`/playlists/${data.playlist_name}`"
-            class="playlist-link"
-            @click.stop
-          >
-            {{ data.playlist_name }}
-          </RouterLink>
-          <span v-else-if="data.source_path" class="text-color-secondary text-sm" :title="data.source_path">
-            {{ data.source_path }}
-          </span>
+          <div v-if="data.source_path" class="flex align-items-center gap-2" :title="data.source_path">
+            <i :class="data.source_kind === 'archive' ? 'pi pi-folder-open' : 'pi pi-list'" aria-hidden="true" />
+            <RouterLink
+              v-if="data.archive_name"
+              :to="`/archives/${data.archive_name}`"
+              class="source-link"
+              @click.stop
+            >
+              {{ data.archive_name }}
+            </RouterLink>
+            <RouterLink
+              v-else-if="data.playlist_name"
+              :to="`/playlists/${data.playlist_name}`"
+              class="source-link"
+              @click.stop
+            >
+              {{ data.playlist_name }}
+            </RouterLink>
+            <span v-else class="text-color-secondary text-sm">{{ data.source_path }}</span>
+          </div>
           <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>
@@ -329,13 +338,13 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.playlist-link {
+.source-link {
   color: var(--p-primary-color, #b91c1c);
   text-decoration: none;
   font-weight: 600;
 }
 
-.playlist-link:hover {
+.source-link:hover {
   text-decoration: underline;
 }
 </style>

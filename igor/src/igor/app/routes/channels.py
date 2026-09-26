@@ -8,7 +8,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator, model_validator
 
-from igor.integrations import franken_ts, its_a_live
+from igor.integrations import archives, franken_ts, its_a_live
 from igor.integrations.its_a_live import DEFAULT_DATERANGE_ID_FORMAT, validate_daterange_id_format
 from igor.store import channels as channel_store
 
@@ -138,19 +138,23 @@ def list_channels() -> list[dict]:
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    # Enrich with the franken-ts playlist each channel's [input].source_path
-    # was (probably) built from -- channels only store the resolved output
-    # path, not which playlist produced it, so this is a best-effort reverse
-    # lookup (see find_playlist_for_source) purely for display in the list.
+    # Enrich each channel with its source identity. Playlist configs store
+    # only the resolved output path, so those use a best-effort reverse
+    # lookup; archive imports have a stable outputs/archives/<name> path.
     for channel in channels:
         source_path = ""
+        source_kind = "playlist"
         try:
             cfg = channel_store.read_channel_config(channel["name"])
-            source_path = cfg.get("input", {}).get("source_path", "")
+            source = cfg.get("input", {})
+            source_path = source.get("source_path", "")
+            source_kind = source.get("source_kind", "playlist")
         except FileNotFoundError:
             pass
         channel["source_path"] = source_path
         channel["playlist_name"] = franken_ts.find_playlist_for_source(source_path)
+        channel["archive_name"] = archives.find_archive_for_source(source_path)
+        channel["source_kind"] = "archive" if channel["archive_name"] else source_kind
 
     return channels
 

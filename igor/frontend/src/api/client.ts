@@ -157,6 +157,22 @@ export function listArchives(): Promise<ArchiveListItem[]> {
   return getJson(`${ARCHIVES_BASE}/`)
 }
 
+export async function uploadArchive(file: File, name: string): Promise<ArchiveListItem> {
+  const query = new URLSearchParams({ name, filename: file.name })
+  const res = await handle(
+    await fetch(`${ARCHIVES_BASE}/upload?${query}`, {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    }),
+  )
+  return res.json()
+}
+
+export async function deleteArchive(name: string): Promise<void> {
+  await handle(await fetch(`${ARCHIVES_BASE}/${encodeURIComponent(name)}`, { method: 'DELETE' }))
+}
+
 /** Per-variant wall-clock coverage map for the import wizard's range
  * picker (SCOPE.md §8 steps 1-2). */
 export function getArchiveCoverage(name: string): Promise<ArchiveCoverage> {

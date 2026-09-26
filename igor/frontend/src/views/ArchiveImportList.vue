@@ -1,19 +1,116 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
 import Column from 'primevue/column'
+import ConfirmPopup from 'primevue/confirmpopup'
 import DataTable from 'primevue/datatable'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
+import InputText from 'primevue/inputtext'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { listArchives } from '../api/client'
+import { useConfirm } from 'primevue/useconfirm'
+import { useToast } from 'primevue/usetoast'
+import { deleteArchive, listArchives, uploadArchive } from '../api/client'
 import type { ArchiveListItem } from '../api/types'
+import { alignConfirmPopup } from '../utils/confirmPopup'
 
 const router = useRouter()
+const confirm = useConfirm()
+const toast = useToast()
 
 const archives = ref<ArchiveListItem[]>([])
 const loading = ref(true)
 const error = ref('')
+const fileInput = ref<HTMLInputElement | null>(null)
+const selectedFile = ref<File | null>(null)
+const archiveName = ref('')
+const uploading = ref(false)
+const isDraggingFile = ref(false)
+
+function fileExtensionSupported(file: File): boolean {
+  return /\.(har|proxymanlogv2|log|barc|zip)$/i.test(file.name)
+}
+
+function setSelectedFile(file: File | null) {
+  selectedFile.value = file
+  if (file) {
+    archiveName.value = file.name
+      .replace(/\.[^.]+$/, '')
+      .replace(/[^A-Za-z0-9._-]/g, '_')
+  }
+}
+
+function chooseFile(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0] ?? null
+  if (file && !fileExtensionSupported(file)) {
+    error.value = 'Choose a HAR, Proxyman log, BARC, or ZIP archive.'
+    setSelectedFile(null)
+    return
+  }
+  error.value = ''
+  setSelectedFile(file)
+}
+
+function onDragOver(event: DragEvent) {
+  event.preventDefault()
+  isDraggingFile.value = true
+}
+
+function onDragLeave(event: DragEvent) {
+  if (!event.currentTarget || !(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) {
+    isDraggingFile.value = false
+  }
+}
+
+function onDrop(event: DragEvent) {
+  event.preventDefault()
+  isDraggingFile.value = false
+  const file = event.dataTransfer?.files[0] ?? null
+  if (!file) return
+  if (!fileExtensionSupported(file)) {
+    error.value = 'Choose a HAR, Proxyman log, BARC, or ZIP archive.'
+    setSelectedFile(null)
+    return
+  }
+  error.value = ''
+  setSelectedFile(file)
+}
+
+async function upload() {
+  if (!selectedFile.value || !archiveName.value.trim()) return
+  uploading.value = true
+  error.value = ''
+  try {
+    const archive = await uploadArchive(selectedFile.value, archiveName.value.trim())
+    selectedFile.value = null
+    archiveName.value = ''
+    if (fileInput.value) fileInput.value.value = ''
+    await load()
+    await router.push(`/archives/${archive.name}`)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    uploading.value = false
+  }
+}
+
+function confirmDelete(event: MouseEvent, archive: ArchiveListItem) {
+  const target = (event.target as HTMLElement).closest('button') ?? (event.target as HTMLElement)
+  confirm.require({
+    target,
+    message: `Delete archive "${archive.name}"? This removes the original capture and saved selection. Existing imported output used by channels is kept.`,
+    accept: async () => {
+      try {
+        await deleteArchive(archive.name)
+        await load()
+        toast.add({ severity: 'success', summary: 'Archive deleted', detail: archive.name, life: 4000 })
+      } catch (e) {
+        toast.add({ severity: 'error', summary: 'Delete failed', detail: e instanceof Error ? e.message : String(e), life: 6000 })
+      }
+    },
+  })
+  alignConfirmPopup(target)
+}
 
 async function load() {
   loading.value = true
@@ -47,11 +144,45 @@ onMounted(load)
     </div>
 
     <Message severity="info" :closable="false">
-      Drop a captured HAR (Chrome DevTools/Fiddler) or Proxyman log into <code>data/archives/</code>,
-      then click one below to review its variants and import a loop timeline from it -- an
+      Upload a captured HAR (Chrome DevTools/Fiddler) or Proxyman log below, or copy it into
+      <code>data/archives/</code>. Review its variants and import a loop timeline from it -- an
       alternative to authoring a franken-ts playlist, for re-serving an already-observed real
       HLS/DASH session.
     </Message>
+
+    <form
+      class="archive-dropzone"
+      :class="{ 'archive-dropzone-active': isDraggingFile }"
+      @submit.prevent="upload"
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+      @drop="onDrop"
+    >
+      <input
+        id="archive-file"
+        ref="fileInput"
+        class="archive-file-input"
+        type="file"
+        accept=".har,.proxymanlogv2,.log,.barc,.zip"
+        @change="chooseFile"
+      />
+      <i class="pi pi-cloud-upload archive-dropzone-icon" aria-hidden="true" />
+      <div class="flex flex-column gap-1">
+        <strong>{{ selectedFile ? selectedFile.name : 'Drop an archive file here' }}</strong>
+        <span class="text-sm text-color-secondary">or <label for="archive-file" class="archive-browse-link">browse files</label></span>
+      </div>
+      <div class="flex flex-column gap-1">
+        <label for="archive-name" class="text-sm">Archive name</label>
+        <InputText id="archive-name" v-model="archiveName" :disabled="!selectedFile" />
+      </div>
+      <Button
+        label="Upload archive"
+        icon="pi pi-upload"
+        type="submit"
+        :disabled="!selectedFile || !archiveName.trim()"
+        :loading="uploading"
+      />
+    </form>
 
     <Message v-if="error" severity="error">{{ error }}</Message>
 
@@ -90,6 +221,14 @@ onMounted(load)
               size="small"
               @click="router.push(`/archives/${data.name}`)"
             />
+            <Button
+              icon="pi pi-trash"
+              severity="danger"
+              text
+              rounded
+              title="Delete archive"
+              @click="confirmDelete($event, data)"
+            />
           </div>
         </template>
       </Column>
@@ -97,5 +236,49 @@ onMounted(load)
         No archives found in <code>data/archives/</code>. Drop a HAR/Proxyman log there and click Refresh.
       </template>
     </DataTable>
+    <ConfirmPopup />
   </div>
 </template>
+
+<style scoped>
+.archive-dropzone {
+  min-height: 6rem;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  border: 2px dashed var(--p-surface-300);
+  border-radius: var(--p-border-radius);
+  background: var(--p-surface-0);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.archive-dropzone-active {
+  border-color: var(--p-primary-color);
+  background: var(--p-primary-50);
+}
+
+.archive-dropzone-icon {
+  color: var(--p-primary-color);
+  font-size: 1.5rem;
+}
+
+.archive-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.archive-browse-link {
+  color: var(--p-primary-color);
+  text-decoration: underline;
+  cursor: pointer;
+}
+</style>
