@@ -70,6 +70,10 @@ hard error, not something to silently reconcile.
   that's wanted later, treat it as a new phase-0 step that produces a single
   conformed `.ts` + merged `.markers.json`, upstream of everything below. Don't
   design that in now; flag it as a known future direction only.
+  **Superseded in part by §11**: the archive-import tool
+  (`archive-loop-import`, working name) needs a second, sparse input mode
+  that does not fit "exactly one already-baked `.ts`" at all — §11 defines
+  it as an addition, not a relaxation of this v1 constraint.
 - No live per-loop SCTE-35 injection or live per-loop re-segmentation. The
   design is bake-once, loop-forever (see §4). If this constraint is ever
   relaxed, treat it as a different project — the drift and frame-accuracy
@@ -366,3 +370,101 @@ loop-dee-loop/
       `serve`, and confirm with a real HLS/DASH player that playback loops
       seamlessly and ad markers fire at the right point on at least two
       consecutive loop iterations.
+
+## 11. Extension: sparse segment input (manifest-complete, media-optional)
+
+**DECIDED.** Added to support `archive-loop-import` (working name, see its
+own `SCOPE.md`), which derives loop timing + SCTE-35 markers from a
+captured HTTP archive (HAR/Proxyman log) of a real HLS/DASH session
+instead of from a `franken-ts` build. Unlike v1's input (§2/§4.1: exactly
+one continuous, already-baked `.ts`), an archive-derived source is
+inherently a set of **independently captured, already-segmented files
+with holes** — the archive may simply never have recorded the response
+body for some referenced segments. There is no continuous stream to
+re-cut, and no guarantee every segment's bytes exist at all.
+
+### 11.1 Governing decision: manifests are always complete
+
+**The served manifest must always look exactly like a normal, fully
+populated manifest** — every segment in `loop_descriptor.json`'s boundary
+list gets a normal `EXTINF`/segment URI (HLS) or `<S>` entry (DASH),
+whether or not real media backs it. **No `#EXT-X-GAP`, no DASH
+`SegmentTimeline` coverage hole, no other manifest-visible signal that a
+segment might not be playable.** A real player may fail to play through a
+missing span; that is accepted. The primary consumer this mode is built
+for is not necessarily a playback client — it's tooling (an SSAI engine,
+for instance) that inspects/manipulates manifest structure (segment
+timing, discontinuities, SCTE-35 cues) and doesn't require every
+referenced segment to actually resolve.
+
+This means **no change to manifest generation** in `serve.py` at all: it
+already builds every manifest field purely from `loop_descriptor.json`'s
+segment/marker lists, never by checking whether a physical file exists.
+The only things that need to change are input (bake) and one narrow
+serving-time guard (below).
+
+### 11.2 New `bake.py` input mode: segment-list manifest
+
+Alongside the existing "one `.ts` + `.markers.json`" input (§4.1), accept
+a second input shape: a **segment-list manifest** — one entry per output
+segment, in order:
+
+```json
+{
+  "segments": [
+    {"index": 0, "duration_ticks": 540000, "asset_boundary": true,  "media_file": "seg_000.m4s"},
+    {"index": 1, "duration_ticks": 540000, "asset_boundary": false, "media_file": null},
+    {"index": 2, "duration_ticks": 540000, "asset_boundary": false, "media_file": "seg_002.m4s"}
+  ],
+  "markers": [ /* same .markers.json shape as §2 */ ]
+}
+```
+
+Bake behavior:
+
+- For every entry with a real `media_file`, GPAC-remux/concat it into the
+  loop package's segment store exactly as today (container-only, no
+  transcode — §1's non-goal still holds).
+- For every entry with `media_file: null`, write **no physical segment**
+  for that index — but its `duration_ticks` and `asset_boundary` still
+  contribute to `loop_descriptor.json`'s segment boundary list and to
+  `total_loop_duration_ticks` (computed the normal way, §4.1 step 4's
+  ground-truth requirement is unaffected: the *ledger* is always complete,
+  only the *media* is sometimes absent).
+- **Default: hard-fail** on any `media_file: null` entry, same
+  fail-loud-by-default posture as every other `bake.py` validation (§4.1
+  step 1). A new flag, `--allow-missing-segments` (or the equivalent
+  its-a-live channel-config toggle, e.g. `[input] allow_missing_segments =
+  true`), is required to accept them. This mode is opt-in, never the
+  silent default.
+- `asset_boundary` entries feed the same discontinuity/Period-restart
+  mechanism `archive-loop-import/SCOPE.md` §6.1 asks `serve.py` to extend
+  to fire at internal boundaries, not just the loop wrap.
+
+### 11.3 `serve.py` change: 404 on a missing segment, nothing else
+
+The only `serve.py` change this mode needs: the segment **byte-serving**
+handler, on a request for an index that has no physical file in the loop
+package, returns a plain 404 instead of raising/crashing. Manifest
+generation (§11.1) takes no part of this — it hands out the same segment
+URI whether or not that lookup will succeed. This is intentionally the
+smallest possible change to `serve.py`'s serving path.
+
+### 11.4 Acceptance checklist for this extension
+
+- [ ] `bake.py` accepts the segment-list input shape (§11.2) as an
+      alternative to the single-`.ts` input, selected by input shape
+      (directory/file vs. segment-list JSON), not a separate binary.
+- [ ] `bake.py` hard-fails on any `media_file: null` entry unless
+      `--allow-missing-segments` is passed.
+- [ ] With `--allow-missing-segments`, `total_loop_duration_ticks` and
+      every segment's position in `loop_descriptor.json` are correct and
+      complete, including for indices with no physical media — verified
+      against a segment-list input with at least one `null` entry in the
+      middle of the sequence (not just at the end).
+- [ ] The served manifest for such a package is indistinguishable in
+      structure from one with full media (same segment count, `EXTINF`/`<S>`
+      entries, discontinuities, SCTE-35) — no `#EXT-X-GAP`, no DASH
+      timeline gap, anywhere.
+- [ ] Requesting a segment with no physical file returns 404; requesting
+      any other segment in the same package still succeeds normally.
