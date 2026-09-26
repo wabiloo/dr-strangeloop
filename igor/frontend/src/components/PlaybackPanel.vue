@@ -1920,6 +1920,8 @@ async function copyUrl(url?: string | null) {
   padding: calc(0.3rem + 6px) 0.8rem 0.3rem;
   box-sizing: border-box;
   background: #17243a;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-top: 0;
   border-radius: 0 0 8px 8px;
   color: #cbd5e1;
   box-shadow: 0 3px 6px rgba(0, 0, 0, 0.18);
@@ -1978,13 +1980,15 @@ async function copyUrl(url?: string | null) {
   gap: 0.25rem;
   min-width: 0;
   background: #263750;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-top: 0;
   border-radius: 0 0 8px 8px;
   padding: calc(0.25rem + 6px) 0.3rem 0.25rem 0.75rem;
   box-sizing: border-box;
 }
 
-/* Each lower panel begins behind the rounded bottom edge above it. No side
- * border on the lower layers: it would show as a grey stripe beside the row. */
+/* Each lower panel begins behind the rounded bottom edge above it. Their
+ * light side/bottom borders follow the shared width; no top border shows. */
 .stacked-player-panel {
   position: relative;
   width: 100%;
@@ -1996,7 +2000,9 @@ async function copyUrl(url?: string | null) {
 }
 
 .url-panel {
-  width: 100%;
+  width: calc(100% - 2px);
+  margin-left: auto;
+  margin-right: auto;
   background: #263750;
   z-index: 1;
 }
