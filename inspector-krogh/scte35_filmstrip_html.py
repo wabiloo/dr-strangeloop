@@ -24,11 +24,10 @@ THUMB_H = 40
 
 
 def _fmt_time(seconds: float) -> str:
-    h, rem = divmod(seconds, 3600)
-    m, s = divmod(rem, 60)
-    if h:
-        return f"{int(h)}:{int(m):02d}:{s:05.2f}"
-    return f"{int(m)}:{s:05.2f}" if m else f"{s:.2f}s"
+    total_ms = round(seconds * 1000)
+    h, rem = divmod(total_ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    return f"{h:02d}:{m:02d}:{rem // 1000:02d}.{rem % 1000:03d}"
 
 
 def _img_data_uri(rel_path: Optional[str], base_dir: Optional[Path]) -> Optional[str]:
@@ -311,7 +310,7 @@ header{{display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px;border-bottom:
 .ell-dots{{font-size:16px;line-height:1}}
 .ell-gap{{font-size:8px;margin-top:2px}}
 
-.cell.time{{font-size:9px;color:#4a4a62;text-align:center;padding-top:2px;border-top:1px solid #1a1a28;white-space:nowrap;overflow:hidden}}
+.cell.time{{font-size:8px;color:#4a4a62;text-align:left;padding-left:2px;padding-top:2px;border-top:1px solid #1a1a28;white-space:nowrap;overflow:hidden;letter-spacing:-.3px}}
 {HEADER_CSS}
 </style>
 </head>
