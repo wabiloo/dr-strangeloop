@@ -17,7 +17,7 @@ from typing import Optional
 
 from html import escape
 
-from krogh_common import HEADER_CSS, header_id_html, ordered_type_codes, type_colors
+from krogh_common import HEADER_CSS, META_CSS, header_id_html, meta_table_html, ordered_type_codes, type_colors
 
 
 def _fmt_time(seconds: float) -> str:
@@ -333,6 +333,18 @@ def render_html(report: dict, base_dir: Optional[Path] = None) -> str:
         for c in checks
     )
 
+    tl_info = report.get("timeline")
+    exp_info = report.get("expected")
+    fps = src.get("fps")
+    meta_html = meta_table_html([
+        ("Video", f"{src.get('codec', '?')} {src.get('width')}×{src.get('height')}" + (f" @ {fps:g} fps" if fps else "")),
+        ("Duration", _fmt_time(total)),
+        ("SCTE-35 markers", str(summary.get("marker_count", 0))),
+        ("Asset joins without a marker", str(len(tl_info["transitions"])) if tl_info else "unknown (no timeline.json)"),
+        ("Expected markers", f"{exp_info['name']} ({exp_info['entries']} entries)" if exp_info else "none (independent scan only)"),
+        ("Scan", "SCTE-35 table 0xFC, " + (f"PID {src['scte35_pid']}" if src.get("scte35_pid") else "all PIDs")),
+    ])
+
     failed = summary.get("checks_failed", 0)
     overall_badge = (
         f'<span class="badge bad">{failed} check(s) failed</span>' if failed
@@ -350,8 +362,6 @@ def render_html(report: dict, base_dir: Optional[Path] = None) -> str:
 body{{background:#0c0c14;color:#c4c4d4;font-family:"JetBrains Mono","Fira Code","SF Mono",monospace;font-size:13px;line-height:1.5;padding:28px}}
 header{{display:flex;flex-wrap:wrap;align-items:baseline;gap:16px;border-bottom:1px solid #252536;padding-bottom:16px;margin-bottom:24px}}
 h1{{font-size:19px;color:#e8e8f4;letter-spacing:-.5px}}
-.meta{{color:#a0a0be;font-size:12px}}
-.meta span{{margin-right:16px}}
 .badge{{font-size:10px;font-weight:700;letter-spacing:.6px;padding:3px 9px;border-radius:10px;text-transform:uppercase}}
 .badge.ok{{background:#0b3318;color:#66ffaa}}
 .badge.bad{{background:#3a0d0d;color:#ff6666}}
@@ -439,20 +449,13 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .scte-field .v{{color:#b0b0f0}}
 #zoom{{position:fixed;z-index:1000;pointer-events:none;display:none;border:2px solid #ff3b3b;border-radius:4px;background:#000;box-shadow:0 8px 32px rgba(0,0,0,.7)}}
 #zoom img{{display:block;width:320px;height:auto}}
-{HEADER_CSS}
+{HEADER_CSS}{META_CSS}
 </style>
 </head>
 <body>
 <header>
   {header_id_html("SCTE-35 marker verification — detailed report", src.get("name", ""))}
-  <div class="meta">
-    <span>{src.get("codec", "?")} {src.get("width")}×{src.get("height")}</span>
-    <span>{_fmt_time(total)}</span>
-    <span>{summary.get("marker_count", 0)} marker(s)</span>
-    <span>table 0xFC{f" · pid {src.get('scte35_pid')}" if src.get("scte35_pid") else " · all PIDs"}</span>
-    <span>{f"{len(report['timeline']['transitions'])} asset join(s) without a marker" if report.get("timeline") else "no asset timeline"}</span>
-    <span>{f"compared with {escape(report['expected']['name'])} ({report['expected']['entries']} entries)" if report.get("expected") else "independent scan only (no markers.json)"}</span>
-  </div>
+  {meta_html}
   {overall_badge}
 </header>
 

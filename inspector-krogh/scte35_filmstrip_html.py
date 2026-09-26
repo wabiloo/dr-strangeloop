@@ -16,7 +16,7 @@ from html import escape
 from pathlib import Path
 from typing import Optional
 
-from krogh_common import HEADER_CSS, header_id_html, ordered_type_codes, type_colors
+from krogh_common import HEADER_CSS, META_CSS, header_id_html, meta_table_html, ordered_type_codes, type_colors
 
 COL_W_FRAME = 68
 COL_W_ELLIPSIS = 52
@@ -255,6 +255,13 @@ def render_filmstrip(report: dict, base_dir: Optional[Path] = None) -> str:
     src = report["source"]
     name = escape(src.get("name", ""))
 
+    meta_html = meta_table_html([
+        ("Video", f"{src.get('codec', '?')} {src.get('width')}×{src.get('height')} @ {fps:g} fps"),
+        ("Duration", _fmt_time(src.get("duration") or 0)),
+        ("SCTE-35 markers", str(report["summary"]["marker_count"])),
+        ("Frames shown", str(sum(1 for c in columns if c["type"] == "frame"))),
+    ])
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -265,8 +272,6 @@ def render_filmstrip(report: dict, base_dir: Optional[Path] = None) -> str:
 *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:#0c0c14;color:#c4c4d4;font-family:"JetBrains Mono","Fira Code","SF Mono",monospace;font-size:12px;padding:24px}}
 header{{display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px;border-bottom:1px solid #252536;padding-bottom:14px;margin-bottom:18px}}
-.meta{{color:#a0a0be;font-size:11px}}
-.meta span{{margin-right:14px}}
 .legend{{display:flex;gap:16px;margin-bottom:14px;font-size:11px;color:#b0b0cc;flex-wrap:wrap;align-items:center}}
 .legend .sw{{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:middle}}
 .legend .sw.idr{{background:transparent;border:2px solid #ff3b3b;width:12px;height:9px}}
@@ -296,18 +301,13 @@ header{{display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px;border-bottom:
 .ell-gap{{font-size:9px;margin-top:2px}}
 
 .cell.time{{font-size:9px;color:#a0a0be;text-align:left;padding-left:2px;padding-top:2px;border-top:1px solid #1a1a28;white-space:nowrap;overflow:hidden;letter-spacing:-.3px}}
-{HEADER_CSS}
+{HEADER_CSS}{META_CSS}
 </style>
 </head>
 <body>
 <header>
   {header_id_html("SCTE-35 marker filmstrip — markers found in the transport stream, with frames at each boundary", src.get("name", ""))}
-  <div class="meta">
-    <span>{escape(str(src.get("codec", "?")))} {src.get("width")}×{src.get("height")} @ {fps}fps</span>
-    <span>{_fmt_time(src.get("duration") or 0)}</span>
-    <span>{report["summary"]["marker_count"]} marker(s)</span>
-    <span>{sum(1 for c in columns if c["type"] == "frame")} frames shown</span>
-  </div>
+  {meta_html}
 </header>
 
 <div class="legend">
