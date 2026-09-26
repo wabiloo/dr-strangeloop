@@ -68,14 +68,14 @@ def _checks_for(checks: list[dict], event_id: int) -> list[dict]:
     return [c for c in checks if c["event_id"] == event_id]
 
 
-def _sidecar_row(label: str, value: Optional[str], disabled: bool, missing_msg: str) -> tuple:
+def _sidecar_row(label: str, value: Optional[str], disabled: bool, missing: str, hint: str) -> tuple:
     """Header row for an optional franken-ts sidecar: a warning when it
     wasn't found, a neutral note when it was deliberately switched off."""
     if value is not None:
         return (label, value)
     if disabled:
         return (label, "not used (--no-expected)")
-    return (label, missing_msg, "warn")
+    return (label, missing, "warn", hint)
 
 
 def _check_event_label(c: dict) -> str:
@@ -352,9 +352,11 @@ def render_html(report: dict, base_dir: Optional[Path] = None) -> str:
         ("Duration", _fmt_time(total)),
         ("SCTE-35 markers", str(summary.get("marker_count", 0))),
         _sidecar_row("Asset joins without a marker", str(len(tl_info["transitions"])) if tl_info else None,
-                     disabled, "no timeline.json found -- reassemble, or run franken-ts --report-only"),
+                     disabled, "no timeline.json found",
+                     "Reassemble the playlist, or run franken-ts <playlist> --report-only, to write the timeline sidecar next to the .ts."),
         _sidecar_row("Expected markers", f"{exp_info['name']} ({exp_info['entries']} entries)" if exp_info else None,
-                     disabled, "no markers.json found -- independent scan only"),
+                     disabled, "no markers.json found",
+                     "Only the independent scan ran: markers were not compared against what the build intended. Reassemble to write the sidecar next to the .ts."),
         ("Scan", "SCTE-35 table 0xFC, " + (f"PID {src['scte35_pid']}" if src.get("scte35_pid") else "all PIDs")),
     ])
 

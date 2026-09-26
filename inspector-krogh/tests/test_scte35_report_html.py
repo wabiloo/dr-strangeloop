@@ -112,9 +112,10 @@ def test_asset_joins_without_markers_get_cards_and_timeline_row():
 
 def test_missing_sidecars_render_as_warnings_unless_deliberately_disabled():
     html = render_html(_minimal_report())
-    assert html.count('<td class="warn">') == 2
+    assert html.count('<td class="warn"') == 2
     assert "no timeline.json found" in html and "no markers.json found" in html
+    assert html.count('data-tip="') == 2 and "report-only" in html
 
     quiet = render_html(_minimal_report(sidecars_disabled=True))
-    assert '<td class="warn">' not in quiet
+    assert '<td class="warn"' not in quiet
     assert "not used (--no-expected)" in quiet

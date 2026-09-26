@@ -53,16 +53,23 @@ table.meta-table{border-collapse:collapse;font-size:12px;margin-left:auto}
 .hdr-status-badge{margin-top:12px}
 .meta-table th{color:#9a9ab8;font-weight:600;text-align:left;padding:2px 16px 2px 0;white-space:nowrap}
 .meta-table td{color:#e0e0f0;padding:2px 0}
-.meta-table td.warn{color:#ffcc66}
+.meta-table td.warn{color:#ffcc66;position:relative}
+.meta-table td.warn[data-tip]{cursor:help}
+.meta-table td.warn[data-tip]:hover::after{content:attr(data-tip);position:absolute;right:0;top:100%;z-index:20;width:max-content;max-width:340px;padding:7px 10px;margin-top:4px;background:#1d1d33;border:1px solid #ffcc66;border-radius:5px;color:#e8e8f4;font-weight:400;white-space:normal;box-shadow:0 6px 20px rgba(0,0,0,.6)}
 .meta-table td.warn::before{content:"\\26A0\\FE0E";font-weight:700;margin-right:7px}
 """
 
 
 def meta_table_html(rows: list[tuple]) -> str:
     """Labelled key/value table for the page header. Rows are
-    (label, value) or (label, value, "warn"); values are HTML-escaped."""
+    (label, value), (label, value, "warn") or (label, value, "warn", hint);
+    a hint shows in a tooltip on hover. All text is HTML-escaped."""
     out = []
     for row in rows:
-        cls = ' class="warn"' if len(row) > 2 and row[2] == "warn" else ""
-        out.append(f"<tr><th>{escape(row[0])}</th><td{cls}>{escape(row[1])}</td></tr>")
+        attrs = ""
+        if len(row) > 2 and row[2] == "warn":
+            attrs = ' class="warn"'
+            if len(row) > 3 and row[3]:
+                attrs += f' data-tip="{escape(row[3], quote=True)}"'
+        out.append(f"<tr><th>{escape(row[0])}</th><td{attrs}>{escape(row[1])}</td></tr>")
     return f'<table class="meta-table">{"".join(out)}</table>'
