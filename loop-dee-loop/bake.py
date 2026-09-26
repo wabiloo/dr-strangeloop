@@ -954,6 +954,23 @@ def load_segment_list_manifest(path: Path) -> dict:
                 f"{path}: segments[{i}]['media_file'] must be a string path "
                 f"or null, got {media_file!r}"
             )
+        # Optional field, additive to §11.2's documented shape (needed by
+        # grave-robber/SCOPE.md §6.2's declared-vs-serving position split --
+        # a signed tick offset recorded at an asset-boundary segment, dead
+        # time if positive / overlap if negative). Absent or 0 everywhere
+        # is the common case (no internal asset joins at all, e.g. a plain
+        # franken-ts-authored source), which round-trips as a no-op.
+        gap_ticks = seg.get("gap_ticks", 0)
+        if not isinstance(gap_ticks, int):
+            raise ValidationError(
+                f"{path}: segments[{i}]['gap_ticks'] must be an int, got {gap_ticks!r}"
+            )
+        if gap_ticks != 0 and not seg["asset_boundary"]:
+            raise ValidationError(
+                f"{path}: segments[{i}] declares gap_ticks={gap_ticks} but "
+                f"asset_boundary=False -- a gap/overlap only means anything "
+                f"at an asset boundary."
+            )
 
     return data
 
@@ -994,6 +1011,20 @@ def compute_segment_list_boundary_ticks(segments: list[dict]) -> list[int]:
 
 def compute_asset_boundary_indices(segments: list[dict]) -> list[int]:
     return [s["index"] for s in segments if s["asset_boundary"]]
+
+
+def compute_asset_boundary_gap_ticks(segments: list[dict]) -> dict[str, int]:
+    """{str(index): gap_ticks} for every asset-boundary segment with a
+    nonzero declared gap/overlap -- feeds serve.py's declared-position
+    accumulator (grave-robber/SCOPE.md §6.2). String keys because this is
+    serialized straight into loop_descriptor.json (JSON object keys are
+    always strings; serve.py's LoopPackage.__init__ converts them back to
+    int on load)."""
+    return {
+        str(s["index"]): s["gap_ticks"]
+        for s in segments
+        if s["asset_boundary"] and s.get("gap_ticks", 0) != 0
+    }
 
 
 def remux_segment_to_self_initializing_fragment(src: Path, dest: Path) -> None:
@@ -1163,6 +1194,7 @@ def bake_segment_list(
     segment_boundary_ticks = compute_segment_list_boundary_ticks(segments)
     total_loop_duration_ticks = sum(s["duration_ticks"] for s in segments)
     asset_boundaries = compute_asset_boundary_indices(segments)
+    asset_boundary_gap_ticks = compute_asset_boundary_gap_ticks(segments)
     nominal_segment_duration_seconds = (total_loop_duration_ticks / TIMESCALE) / len(segments)
 
     logger.info(
@@ -1239,6 +1271,7 @@ def bake_segment_list(
         "daterange_id_format": DATERANGE_ID_FORMAT_DEFAULT,
         "markers": raw_markers,
         "asset_boundaries": asset_boundaries,
+        "asset_boundary_gap_ticks": asset_boundary_gap_ticks,
         "video_renditions": [rendition_result],
         "source_input": str(manifest_path),
         "source_markers_json": str(manifest_path),

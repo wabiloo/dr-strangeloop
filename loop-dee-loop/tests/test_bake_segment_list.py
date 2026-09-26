@@ -25,6 +25,7 @@ import bake  # noqa: E402
 from bake import (  # noqa: E402
     ValidationError,
     bake_segment_list,
+    compute_asset_boundary_gap_ticks,
     compute_asset_boundary_indices,
     compute_segment_list_boundary_ticks,
     load_segment_list_manifest,
@@ -32,13 +33,16 @@ from bake import (  # noqa: E402
 )
 
 
-def _segment(index, duration_ticks=360_000, asset_boundary=False, media_file="seg.bin"):
-    return {
+def _segment(index, duration_ticks=360_000, asset_boundary=False, media_file="seg.bin", gap_ticks=0):
+    seg = {
         "index": index,
         "duration_ticks": duration_ticks,
         "asset_boundary": asset_boundary,
         "media_file": media_file,
     }
+    if gap_ticks:
+        seg["gap_ticks"] = gap_ticks
+    return seg
 
 
 def _write_manifest(path: Path, segments: list[dict], markers: list[dict] | None = None) -> Path:
@@ -192,6 +196,34 @@ def test_asset_boundary_indices():
     assert compute_asset_boundary_indices(segments) == [0, 2]
 
 
+def test_load_segment_list_manifest_rejects_non_int_gap_ticks(tmp_path):
+    segments = [_segment(0, asset_boundary=True)]
+    segments[0]["gap_ticks"] = "45000"
+    manifest_path = _write_manifest(tmp_path, segments)
+
+    with pytest.raises(ValidationError, match="gap_ticks"):
+        load_segment_list_manifest(manifest_path)
+
+
+def test_load_segment_list_manifest_rejects_gap_ticks_without_asset_boundary(tmp_path):
+    segments = [_segment(0, asset_boundary=False, gap_ticks=1000)]
+    manifest_path = _write_manifest(tmp_path, segments)
+
+    with pytest.raises(ValidationError, match="asset_boundary=False"):
+        load_segment_list_manifest(manifest_path)
+
+
+def test_asset_boundary_gap_ticks_map():
+    segments = [
+        _segment(0, asset_boundary=True),
+        _segment(1),
+        _segment(2, asset_boundary=True, gap_ticks=45_000),
+        _segment(3, asset_boundary=True, gap_ticks=-9_000),
+    ]
+
+    assert compute_asset_boundary_gap_ticks(segments) == {"2": 45_000, "3": -9_000}
+
+
 # ── bake_segment_list end-to-end (ffmpeg/ffprobe mocked out) ─────────────
 
 
@@ -257,7 +289,10 @@ def test_bake_segment_list_with_middle_null_entry_produces_complete_ledger(tmp_p
     segments = [
         _segment(0, duration_ticks=100, media_file=_write_source_segment(tmp_path, "s0.bin")),
         _segment(1, duration_ticks=200, media_file=None),
-        _segment(2, duration_ticks=50, media_file=_write_source_segment(tmp_path, "s2.bin"), asset_boundary=True),
+        _segment(
+            2, duration_ticks=50, media_file=_write_source_segment(tmp_path, "s2.bin"),
+            asset_boundary=True, gap_ticks=45_000,
+        ),
     ]
     manifest_path = _write_manifest(tmp_path, segments, markers=[{"event_id": "0x1", "pts_time_ticks": 300}])
     output_dir = tmp_path / "out"
@@ -267,6 +302,7 @@ def test_bake_segment_list_with_middle_null_entry_produces_complete_ledger(tmp_p
     descriptor = json.loads((output_dir / "loop_descriptor.json").read_text())
     assert descriptor["total_loop_duration_ticks"] == 350
     assert descriptor["asset_boundaries"] == [2]
+    assert descriptor["asset_boundary_gap_ticks"] == {"2": 45_000}
     assert descriptor["markers"] == [{"event_id": "0x1", "pts_time_ticks": 300}]
 
     rendition = descriptor["video_renditions"][0]
