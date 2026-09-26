@@ -132,6 +132,7 @@ def _sparse_fake_package(boundaries, gap_ticks_by_index, segment_boundary_ticks,
         has_audio=False,
         sparse=True,
         self_initializing=True,
+        shared_init=False,
         segment_boundary_ticks=segment_boundary_ticks,
     )
     boundary_set = compute_asset_boundary_set(boundaries)
@@ -229,6 +230,34 @@ def test_hls_media_playlist_no_internal_boundaries_matches_original_behavior():
 
     assert body.count("#EXT-X-DISCONTINUITY\n") == 1  # only the loop-1 wrap
     assert "#EXT-X-DISCONTINUITY-SEQUENCE:0" in body
+
+
+def test_per_span_init_is_declared_after_every_discontinuity():
+    """Proper CMAF from an archive: one init per output span -- HLS repeats
+    #EXT-X-MAP after each #EXT-X-DISCONTINUITY (loop wrap AND asset boundary),
+    DASH names a different `initialization` per Period."""
+    boundary_ticks = [0, 90_000, 180_000, 270_000]
+    package = _sparse_fake_package(
+        boundaries=[2], gap_ticks_by_index={}, segment_boundary_ticks=boundary_ticks,
+        total_loop_duration_ticks=360_000,
+    )
+    rendition = package.video_renditions[0]
+    rendition.self_initializing = False
+    rendition.shared_init = True
+    channel = Channel(package, epoch_ticks=0, window_segments=4)
+    channel.now_ticks = lambda: 360_000 + 90_000  # loop 1, local segment 1
+
+    lines = channel.build_hls_manifest("archive").splitlines()
+
+    maps = [l for l in lines if l.startswith("#EXT-X-MAP")]
+    assert maps[0] == '#EXT-X-MAP:URI="init_1.mp4"'  # window opens in span 1 (segments 2..3 of loop 0)
+    for i, line in enumerate(lines):
+        if line == "#EXT-X-DISCONTINUITY":
+            assert lines[i + 1].startswith("#EXT-X-MAP")
+    assert 'URI="init_0.mp4"' in "\n".join(maps)
+
+    mpd = channel.build_dash_manifest()
+    assert 'initialization="archive/init_0.mp4"' in mpd and 'initialization="archive/init_1.mp4"' in mpd
 
 
 # ── DASH manifest: internal Period split + declared Period start= ───────

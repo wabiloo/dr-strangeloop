@@ -30,8 +30,10 @@ def _rendition(name, codecs, width, height, frame_rate, bandwidth, audio_variant
         },
         audio_variant=audio_variant,
         has_audio=audio_variant is not None,
+        audio_sparse=False,
         sparse=False,
         self_initializing=False,
+        shared_init=False,
     )
 
 

@@ -23,12 +23,14 @@ never duplicated per video rendition.
 from __future__ import annotations
 
 import argparse
+import bisect
 import dataclasses
 import datetime as _dt
 import json
 import logging
 import math
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from flask import Flask, Response, abort, send_file
@@ -191,6 +193,14 @@ class VideoRendition:
     def __init__(self, package_dir: Path, rendition: dict):
         self.name: str = rendition["name"]
         self.sparse: bool = bool(rendition.get("sparse", False))
+        # Sparse packages baked as proper CMAF carry one init per span
+        # (output period / discontinuity): `init_files[k]` serves segments from
+        # `init_span_starts[k]` up to the next span start (None = no media in
+        # that span, so its init 404s like its segments). Older sparse
+        # packages (no key) have self-initializing segments instead.
+        self.init_span_starts: list[int] = [int(i) for i in rendition.get("init_span_starts") or []]
+        self.init_files: list[str | None] = list(rendition.get("init_files") or [])
+        self.shared_init: bool = bool(self.init_files)
         self.video_variant: dict = rendition["video_variant"]
 
         self.segment_boundary_ticks: list[int] = [
@@ -249,6 +259,25 @@ class VideoRendition:
         self.audio_variant: dict | None = rendition.get("audio_variant")
         self.audio_segment_files: list[Path] = []
         self.audio_segment_boundary_ticks: list[int] = []
+        # Sparse (archive) audio: one audio init per span, per-index files that
+        # may be missing (404) independently of the video's.
+        self.audio_sparse: bool = self.sparse and bool(rendition.get("audio_sparse"))
+        self.audio_init_files: list[str | None] = []
+        if self.audio_sparse:
+            self.audio_init_files = list(rendition["audio_init_files"])
+            audio_present = rendition["audio_segment_present"]
+            self.audio_segment_boundary_ticks = [int(t) for t in rendition["audio_segment_boundary_ticks"]]
+            if len(audio_present) != len(self.segment_boundary_ticks) or len(
+                self.audio_segment_boundary_ticks
+            ) != len(self.segment_boundary_ticks):
+                raise RuntimeError(
+                    f"Rendition '{self.name}': sparse audio must declare one entry per video "
+                    f"segment -- package is inconsistent, refusing to serve."
+                )
+            self.audio_segment_files = [
+                (self.segments_dir / f"seg_a_{i:06d}.m4s") if present else None
+                for i, present in enumerate(audio_present)
+            ]
         if self.audio_track_id is not None:
             self.audio_segment_files = sorted(
                 self.segments_dir.glob(f"*track{self.audio_track_id}_*.m4s"),
@@ -275,7 +304,11 @@ class VideoRendition:
 
     @property
     def has_audio(self) -> bool:
-        return self.audio_track_id is not None
+        return self.audio_track_id is not None or self.audio_sparse
+
+    def audio_init_path_for_span(self, span: int) -> Path | None:
+        name = self.audio_init_files[span] if 0 <= span < len(self.audio_init_files) else None
+        return self.segments_dir / name if name else None
 
     def init_path(self) -> Path:
         if self.sparse:
@@ -290,12 +323,18 @@ class VideoRendition:
             raise RuntimeError(f"No init segment found for rendition '{self.name}'")
         return candidates[0]
 
+    def init_path_for_span(self, span: int) -> Path | None:
+        """Init segment of output span `span` (sparse CMAF only); None if that
+        span has no recovered media."""
+        name = self.init_files[span] if 0 <= span < len(self.init_files) else None
+        return self.segments_dir / name if name else None
+
     @property
     def self_initializing(self) -> bool:
         """Alias of `.sparse` for readability at call sites that care about
         the init-segment implication specifically, not the broader
         "may have holes" meaning."""
-        return self.sparse
+        return self.sparse and not self.shared_init
 
     def audio_init_path(self) -> Path:
         assert self.audio_track_id is not None
@@ -310,7 +349,7 @@ class VideoRendition:
         turn that into a 404, never a crash."""
         return self.segment_files[index % len(self.segment_files)]
 
-    def audio_segment_path_for_index(self, index: int) -> Path:
+    def audio_segment_path_for_index(self, index: int) -> Path | None:
         return self.audio_segment_files[index % len(self.audio_segment_files)]
 
 
@@ -551,9 +590,11 @@ class Channel:
         # §11) -- there's no shared init segment to point #EXT-X-MAP at,
         # same as the "ts" format's own no-init convention.
         no_init = is_ts or rendition.self_initializing
+        per_span = not is_ts and rendition.shared_init
         return self._build_hls_media_playlist(
             boundary_ticks=rendition.segment_boundary_ticks,
-            init_uri=None if no_init else "init.mp4",
+            init_uri=None if no_init or per_span else "init.mp4",
+            span_init_uri=(lambda k: f"init_{k}.mp4") if per_span else None,
             seg_uri_template="seg/{index}.ts" if is_ts else "seg/{index}.m4s",
             window_segments=window_segments,
         )
@@ -567,7 +608,8 @@ class Channel:
         is_ts = pkg.hls_format == "ts"
         return self._build_hls_media_playlist(
             boundary_ticks=pkg.audio_rendition.audio_segment_boundary_ticks,
-            init_uri=None if is_ts else "audio/init.mp4",
+            init_uri=None if is_ts or pkg.audio_rendition.audio_sparse else "audio/init.mp4",
+            span_init_uri=(lambda k: f"audio/init_{k}.mp4") if pkg.audio_rendition.audio_sparse and not is_ts else None,
             seg_uri_template="/audio/seg/{index}.ts" if is_ts else "/audio/seg/{index}.m4s",
             window_segments=window_segments,
         )
@@ -579,6 +621,7 @@ class Channel:
         init_uri: str | None,
         seg_uri_template: str,
         window_segments: int | None = None,
+        span_init_uri: Callable[[int], str] | None = None,
     ) -> str:
         """Shared builder for every video rendition's HLS media playlist and
         for the (single, shared) audio HLS media playlist.
@@ -655,12 +698,22 @@ class Channel:
 
         lines = [
             "#EXTM3U",
-            "#EXT-X-VERSION:6" if init_uri is None else "#EXT-X-VERSION:7",
+            "#EXT-X-VERSION:6" if init_uri is None and span_init_uri is None else "#EXT-X-VERSION:7",
             f"#EXT-X-TARGETDURATION:{pkg.max_segment_duration_seconds_rounded_up}",
             f"#EXT-X-MEDIA-SEQUENCE:{first_global_index}",
             f"#EXT-X-DISCONTINUITY-SEQUENCE:{first_discontinuity_sequence}",
         ]
-        if init_uri is not None:
+        sorted_boundaries = sorted(pkg.boundaries)
+
+        def _span_map_line(local_index: int) -> str:
+            # One init per output span (discontinuity): the MAP must follow
+            # every #EXT-X-DISCONTINUITY and lead the playlist.
+            span = bisect.bisect_right(sorted_boundaries, local_index) - 1
+            return f'#EXT-X-MAP:URI="{span_init_uri(span)}"'
+
+        if span_init_uri is not None:
+            lines.append(_span_map_line(first_global_index % pkg.segments_per_loop))
+        elif init_uri is not None:
             lines.append(f'#EXT-X-MAP:URI="{init_uri}"')
 
         # An EXT-X-DATERANGE describes one point on the presentation
@@ -703,6 +756,8 @@ class Channel:
                 # discontinuity sequence is already covered by the header
                 # above) -- signal the timestamp discontinuity here.
                 lines.append("#EXT-X-DISCONTINUITY")
+                if span_init_uri is not None:
+                    lines.append(_span_map_line(local_index))
 
             # This playlist's own segment start/end (for PDT/EXTINF).
             segment_start_ticks = boundary_ticks[local_index]
@@ -1179,10 +1234,13 @@ class Channel:
                 # their own moov (SCOPE.md §11) -- there's no shared init
                 # segment to point `initialization=` at, same reasoning as
                 # HLS's #EXT-X-MAP omission above.
-                init_attr = (
-                    "" if rendition.self_initializing
-                    else f' initialization="{rendition.name}/init.mp4"'
-                )
+                if rendition.self_initializing:
+                    init_attr = ""
+                elif rendition.shared_init:
+                    init_attr = f' initialization="{rendition.name}/init_{span_index}.mp4"'
+                else:
+                    init_attr = f' initialization="{rendition.name}/init.mp4"'
+
                 video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
         <SegmentTemplate media="{rendition.name}/seg/$Number$.m4s"{init_attr}
                          timescale="{pkg.timescale}" startNumber="{first_number}">
@@ -1195,6 +1253,9 @@ class Channel:
             audio_adaptation_set = ""
             if pkg.has_audio:
                 a = pkg.audio_rendition.audio_variant
+                audio_init = (
+                    f"audio/init_{span_index}.mp4" if pkg.audio_rendition.audio_sparse else "audio/init.mp4"
+                )
                 audio_entries = _period_entries(
                     pkg.audio_rendition.audio_segment_boundary_ticks, local_indices, span_start_local
                 )
@@ -1204,7 +1265,7 @@ class Channel:
                 audio_adaptation_set = f'''
     <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
       <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
-        <SegmentTemplate media="audio/seg/$Number$.m4s" initialization="audio/init.mp4"
+        <SegmentTemplate media="audio/seg/$Number$.m4s" initialization="{audio_init}"
                          timescale="{pkg.timescale}" startNumber="{first_number}">
           <SegmentTimeline>
 {audio_timeline_lines}
@@ -1352,6 +1413,17 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
             abort(404)
         return send_file(rendition.init_path())
 
+    @app.get("/<rendition_name>/init_<int:span>.mp4")
+    def span_init_segment(rendition_name: str, span: int):
+        try:
+            rendition = package.rendition_by_name(rendition_name)
+        except KeyError:
+            abort(404)
+        path = rendition.init_path_for_span(span) if rendition.shared_init else None
+        if path is None:
+            abort(404)
+        return send_file(path)
+
     @app.get("/<rendition_name>/seg/<int:physical_index>.m4s")
     def segment(rendition_name: str, physical_index: int):
         try:
@@ -1387,13 +1459,24 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
 
         @app.get("/audio/init.mp4")
         def audio_init_segment():
+            if package.audio_rendition.audio_sparse:
+                abort(404)
             return send_file(package.audio_rendition.audio_init_path())
+
+        @app.get("/audio/init_<int:span>.mp4")
+        def audio_span_init_segment(span: int):
+            path = package.audio_rendition.audio_init_path_for_span(span) if package.audio_rendition.audio_sparse else None
+            if path is None:
+                abort(404)
+            return send_file(path)
 
         @app.get("/audio/seg/<int:physical_index>.m4s")
         def audio_segment(physical_index: int):
             try:
                 path = channel.audio_segment_bytes_path(physical_index)
             except IndexError:
+                abort(404)
+            if path is None:  # sparse audio hole
                 abort(404)
             return send_file(path, mimetype="audio/iso.segment")
 

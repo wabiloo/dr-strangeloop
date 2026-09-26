@@ -36,6 +36,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import cmaf
 from gpac_pipeline import (
     AudioTrackParams,
     build_cues_xml,
@@ -1027,6 +1028,29 @@ def compute_asset_boundary_gap_ticks(segments: list[dict]) -> dict[str, int]:
     }
 
 
+def remux_segment_to_fragmented_mp4(src: Path, dest: Path, *, stream: str = "v") -> None:
+    """Container-only remux (ffmpeg stream copy -- no transcode) of one
+    archive-extracted segment into a fragmented MP4 with a 90 kHz video track
+    timescale (so `tfdt` values are directly loop-ledger ticks). Video only:
+    sparse mode has no audio Representation (SCOPE.md §11 open item)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _run(
+        [
+            "ffmpeg", "-v", "error", "-y",
+            "-i", str(src),
+            "-map", f"0:{stream}:0",
+            "-c", "copy",
+            *(["-video_track_timescale", str(TIMESCALE)] if stream == "v" else ["-bsf:a", "aac_adtstoasc"]),
+            # delay_moov (audio): with a plain empty_moov the moov is written before
+            # aac_adtstoasc has produced the AudioSpecificConfig, so the esds ends up
+            # without it and browsers reject the init segment.
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof" + ("" if stream == "v" else "+delay_moov"),
+            "-f", "mp4",
+            str(dest),
+        ]
+    )
+
+
 def remux_segment_to_self_initializing_fragment(src: Path, dest: Path) -> None:
     """Container-only remux (ffmpeg stream copy -- no transcode, per
     SCOPE.md §1's non-goal) of one archive-extracted segment file into a
@@ -1100,10 +1124,67 @@ def _rfc6381_avc1_codec_string(profile: str, level: float) -> str:
             f"supports H.264 today."
         )
     level_idc = round(level * 10)
-    return f"avc1.{profile_idc:02X}0000{level_idc:02X}"
+    return f"avc1.{profile_idc:02X}00{level_idc:02X}"
 
 
-def probe_segment_variant_metadata(path: Path) -> dict:
+def apply_declared_variant(video: dict, declared: dict | None) -> None:
+    """Prefer the exact video codec string / bandwidth the source's own
+    multivariant playlist declared (grave-robber's optional `variant` key)
+    over the ffprobe-derived approximation. The declared `codecs` may also
+    list audio (e.g. "avc1.4D401F,mp4a.40.2"); sparse mode is video-only, so
+    only the video entry is taken."""
+    if not declared:
+        return
+    codecs = [c.strip() for c in (declared.get("codecs") or "").split(",")]
+    video_codec = next((c for c in codecs if c.startswith(("avc1", "avc3", "hvc1", "hev1"))), None)
+    if video_codec:
+        video["codecs"] = video_codec
+    if declared.get("bandwidth"):
+        video["bandwidth"] = int(declared["bandwidth"])
+
+
+def probe_has_audio(path: Path) -> bool:
+    result = _run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)]
+    )
+    return bool(result.stdout.strip())
+
+
+def probe_audio_variant(path: Path) -> dict:
+    """{"codecs", "bandwidth"} of the first audio stream (best effort: AAC
+    profile -> RFC 6381 object type; AC-3/E-AC-3 by name)."""
+    data = json.loads(
+        _run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=codec_name,profile,bit_rate", "-show_entries", "format=bit_rate",
+             "-of", "json", str(path)]
+        ).stdout
+    )
+    stream = (data.get("streams") or [{}])[0]
+    name, profile = stream.get("codec_name"), stream.get("profile") or ""
+    if name == "aac":
+        codecs = {"HE-AAC": "mp4a.40.5", "HE-AACv2": "mp4a.40.29"}.get(profile, "mp4a.40.2")
+    elif name in ("ac3", "eac3"):
+        codecs = "ac-3" if name == "ac3" else "ec-3"
+    else:
+        raise RuntimeError(f"Unsupported audio codec {name!r} in {path} for sparse-mode CMAF audio")
+    bandwidth = int(stream.get("bit_rate") or data.get("format", {}).get("bit_rate") or 128_000)
+    return {"codecs": codecs, "bandwidth": bandwidth}
+
+
+def read_avcc_codec_string(path: Path) -> str | None:
+    """Exact RFC 6381 'avc1.PPCCLL' string read from the fMP4's own `avcC`
+    box (profile_idc, constraint flags, level_idc as the encoder wrote them)
+    -- no guessing. None if the file has no avcC (e.g. not H.264)."""
+    data = path.read_bytes()
+    pos = data.find(b"avcC")
+    if pos < 0 or pos + 8 > len(data):
+        return None
+    profile, constraints, level = data[pos + 5], data[pos + 6], data[pos + 7]
+    return f"avc1.{profile:02X}{constraints:02X}{level:02X}"
+
+
+def probe_segment_variant_metadata(path: Path, init_path: Path | None = None) -> dict:
     """ffprobe-based equivalent of read_variant_metadata for sparse mode,
     which has no GPAC-generated manifest.mpd to read codec/resolution/
     frame_rate/bandwidth back from (no dasher pass runs in this mode).
@@ -1143,7 +1224,8 @@ def probe_segment_variant_metadata(path: Path) -> dict:
 
     return {
         "video": {
-            "codecs": _rfc6381_avc1_codec_string(stream["profile"], float(stream["level"]) / 10),
+            "codecs": read_avcc_codec_string(init_path or path)
+            or _rfc6381_avc1_codec_string(stream["profile"], float(stream["level"]) / 10),
             "width": int(stream["width"]),
             "height": int(stream["height"]),
             "frame_rate": frame_rate,
@@ -1213,20 +1295,110 @@ def bake_segment_list(
 
     segment_present: list[bool] = []
     reference_segment_path: Path | None = None
+    # Proper CMAF: ONE init per output period / discontinuity (= per asset
+    # span: a span starts at index 0 and at every asset boundary) + bare
+    # moof+mdat segments whose tfdt is relative to their span's start (what
+    # DASH's Period-relative SegmentTimeline and HLS's per-discontinuity
+    # timestamp reset both expect). Every segment in a span must share one
+    # decoder config (avcC) or a single init can't describe the span; a
+    # config change needs a real discontinuity (asset boundary) to carry it.
+    span_starts = sorted({0} | set(asset_boundaries))
+    span_of = {i: max(k for k, s in enumerate(span_starts) if s <= i) for i in range(len(segments))}
+    span_init_avcc: dict[int, bytes | None] = {}
+    init_files: list[str | None] = [None] * len(span_starts)
+    next_sequence_number = 1
+    segment_starts = compute_segment_list_boundary_ticks(segments)
+
+    # Audio: a separate playlist's segments (per-entry `audio_media_file`), or
+    # audio muxed into the video segments (detected by probing). Same span/init
+    # scheme as video; audio has its own ledger only when separately sourced.
+    audio_separate = bool((manifest.get("audio") or {}).get("separate"))
+    if audio_separate and hls_format == "ts":
+        raise ValidationError(
+            "A separate audio playlist can't be baked into HLS TS output yet (TS carries audio "
+            "muxed); use hls_format='cmaf'."
+        )
+    audio_durations = [
+        s.get("audio_duration_ticks", s["duration_ticks"]) if audio_separate else s["duration_ticks"]
+        for s in segments
+    ]
+    audio_starts = [sum(audio_durations[:i]) for i in range(len(segments))]
+    audio_dir = segments_dir  # audio files live beside video, distinguished by name
+    audio_present: list[bool] = [False] * len(segments)
+    audio_span_avcc: dict[int, bytes | None] = {}
+    audio_init_files: list[str | None] = [None] * len(span_starts)
+    audio_next_sequence_number = 1
+    audio_reference: Path | None = None
+    audio_muxed: bool | None = None if not audio_separate else False
+
+    def _bake_audio(index: int, audio_src: Path) -> None:
+        nonlocal audio_next_sequence_number, audio_reference
+        tmp = audio_dir / f"seg_a_{index:06d}.tmp.mp4"
+        remux_segment_to_fragmented_mp4(audio_src, tmp, stream="a")
+        a_init, a_fragments = cmaf.split_init_and_fragments(tmp.read_bytes())
+        tmp.unlink()
+        config = cmaf.stsd_config(a_init)
+        span = span_of[index]
+        if span not in audio_span_avcc:
+            audio_span_avcc[span] = config
+            audio_init_files[span] = f"audio_init_{span}.mp4"
+            (audio_dir / audio_init_files[span]).write_bytes(a_init)
+        elif config != audio_span_avcc[span]:
+            raise ValidationError(
+                f"Audio of segment {index} has a different codec config from the rest of its span "
+                f"with no discontinuity between them. Narrow the imported range."
+            )
+        timescale = cmaf.track_timescale(a_init) or TIMESCALE
+        relative_ticks = audio_starts[index] - audio_starts[span_starts[span]]
+        body, audio_next_sequence_number = cmaf.rebase_fragments(
+            a_fragments, round(relative_ticks * timescale / TIMESCALE), audio_next_sequence_number
+        )
+        (audio_dir / f"seg_a_{index:06d}.m4s").write_bytes(body)
+        audio_present[index] = True
+        if audio_reference is None:
+            audio_reference = audio_src
     for seg in segments:
         index = seg["index"]
         media_file = seg["media_file"]
         present = media_file is not None
         segment_present.append(present)
+        if audio_separate and not dry_run and seg.get("audio_media_file"):
+            _bake_audio(index, Path(seg["audio_media_file"]))  # independent of the video's presence
         if not present:
             continue
 
         src = Path(media_file)
         cmaf_dest = segments_dir / f"seg_{index:06d}.m4s"
         if not dry_run:
-            remux_segment_to_self_initializing_fragment(src, cmaf_dest)
+            tmp_dest = cmaf_dest.with_suffix(".tmp.mp4")
+            remux_segment_to_fragmented_mp4(src, tmp_dest)
+            init, fragments = cmaf.split_init_and_fragments(tmp_dest.read_bytes())
+            tmp_dest.unlink()
+            avcc = cmaf.avcc_config(init)
+            span = span_of[index]
+            if span not in span_init_avcc:
+                span_init_avcc[span] = avcc
+                init_files[span] = f"init_{span}.mp4"
+                (segments_dir / init_files[span]).write_bytes(init)
+            elif avcc != span_init_avcc[span]:
+                raise ValidationError(
+                    f"Segment {index} ({src}) has a different decoder config (SPS/PPS) from the "
+                    f"other segments of its span (segments {span_starts[span]}..), but there is no "
+                    f"discontinuity between them, so one CMAF init can't describe both. Narrow the "
+                    f"imported range to a stretch with a single encoder config."
+                )
+            body, next_sequence_number = cmaf.rebase_fragments(
+                fragments, segment_starts[index] - segment_starts[span_starts[span]], next_sequence_number
+            )
+            cmaf_dest.write_bytes(body)
             if reference_segment_path is None:
-                reference_segment_path = cmaf_dest
+                reference_segment_path = src
+            # Audio muxed into this video segment.
+            if not audio_separate:
+                if audio_muxed is None:
+                    audio_muxed = probe_has_audio(src)
+                if audio_muxed:
+                    _bake_audio(index, src)
         if hls_format == "ts":
             ts_dest = output_package_dir / "hls-ts" / SPARSE_RENDITION_NAME / f"{index}.ts"
             if not dry_run:
@@ -1242,20 +1414,42 @@ def bake_segment_list(
             "resolution/bandwidth metadata with nothing to probe. At least "
             "one real segment is required even with --allow-missing-segments."
         )
-    variant_metadata = probe_segment_variant_metadata(reference_segment_path)
+    first_init = next(f for f in init_files if f)
+    variant_metadata = probe_segment_variant_metadata(reference_segment_path, segments_dir / first_init)
+    apply_declared_variant(variant_metadata["video"], manifest.get("variant"))
+
+    audio_variant = None
+    if audio_reference is not None:
+        audio_variant = probe_audio_variant(audio_reference)
+        declared_codecs = [c.strip() for c in ((manifest.get("variant") or {}).get("codecs") or "").split(",")]
+        declared_audio = next((c for c in declared_codecs if c.startswith(("mp4a", "ac-3", "ec-3"))), None)
+        if declared_audio:
+            audio_variant["codecs"] = declared_audio
+        # A declared BANDWIDTH covers video + audio; serve.py adds audio's back on.
+        variant_metadata["video"]["bandwidth"] = max(
+            1, variant_metadata["video"]["bandwidth"] - audio_variant["bandwidth"]
+        )
 
     rendition_result = {
         "name": SPARSE_RENDITION_NAME,
         "sparse": True,
+        "init_span_starts": span_starts,
+        "init_files": init_files,
         "video_track_id": None,
         "audio_track_id": None,
         "total_loop_duration_ticks": total_loop_duration_ticks,
         "segment_boundary_ticks": segment_boundary_ticks,
         "segment_present": segment_present,
-        "audio_segment_boundary_ticks": None,
+        "audio_segment_boundary_ticks": audio_starts if audio_variant else None,
         "video_variant": variant_metadata["video"],
-        "audio_variant": None,
+        "audio_variant": audio_variant,
     }
+    if audio_variant:
+        rendition_result.update(
+            audio_sparse=True,
+            audio_init_files=audio_init_files,
+            audio_segment_present=audio_present,
+        )
 
     loop_descriptor = {
         "version": 2,

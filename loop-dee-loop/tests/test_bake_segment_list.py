@@ -14,6 +14,7 @@ data, not real media round-trips).
 from __future__ import annotations
 
 import json
+import struct
 import sys
 from pathlib import Path
 
@@ -227,6 +228,23 @@ def test_asset_boundary_gap_ticks_map():
 # ── bake_segment_list end-to-end (ffmpeg/ffprobe mocked out) ─────────────
 
 
+def _box(box_type: bytes, payload: bytes) -> bytes:
+    import struct
+
+    return struct.pack(">I", 8 + len(payload)) + box_type + payload
+
+
+def _fake_fmp4() -> bytes:
+    """Smallest fragmented MP4 cmaf.py can split: ftyp + moov(avcC) + moof(mfhd, traf/tfdt) + mdat."""
+    import struct
+
+    mfhd = _box(b"mfhd", struct.pack(">II", 0, 1))
+    tfdt = _box(b"tfdt", struct.pack(">IQ", 1 << 24, 7777))
+    moof = _box(b"moof", mfhd + _box(b"traf", tfdt))
+    moov = _box(b"moov", _box(b"avcC", b"\x01\x4d\x40\x1f"))
+    return _box(b"ftyp", b"isom0000") + moov + moof + _box(b"mdat", b"x")
+
+
 @pytest.fixture()
 def _stub_media_io(monkeypatch):
     """Replace every ffmpeg/ffprobe-invoking helper with a fast fake that
@@ -239,7 +257,7 @@ def _stub_media_io(monkeypatch):
 
     def _fake_remux(src, dest):
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(b"fake-cmaf-fragment")
+        dest.write_bytes(_fake_fmp4())
         remux_calls.append((Path(src), dest))
 
     def _fake_remux_ts(src, dest):
@@ -247,7 +265,7 @@ def _stub_media_io(monkeypatch):
         dest.write_bytes(b"fake-ts-segment")
         ts_calls.append((Path(src), dest))
 
-    def _fake_probe(path):
+    def _fake_probe(path, init_path=None):
         return {
             "video": {
                 "codecs": "avc1.640028",
@@ -259,9 +277,10 @@ def _stub_media_io(monkeypatch):
             "audio": None,
         }
 
-    monkeypatch.setattr(bake, "remux_segment_to_self_initializing_fragment", _fake_remux)
+    monkeypatch.setattr(bake, "remux_segment_to_fragmented_mp4", _fake_remux)
     monkeypatch.setattr(bake, "remux_segment_to_ts", _fake_remux_ts)
     monkeypatch.setattr(bake, "probe_segment_variant_metadata", _fake_probe)
+    monkeypatch.setattr(bake, "probe_has_audio", lambda path: False)
     return remux_calls, ts_calls
 
 
@@ -314,6 +333,16 @@ def test_bake_segment_list_with_middle_null_entry_produces_complete_ledger(tmp_p
     assert (segments_dir / "seg_000000.m4s").exists()
     assert not (segments_dir / "seg_000001.m4s").exists()
     assert (segments_dir / "seg_000002.m4s").exists()
+
+    # Proper CMAF: one init per span (an asset boundary starts a new one),
+    # bare moof+mdat segments with tfdt relative to their span's start.
+    assert rendition["init_span_starts"] == [0, 2]
+    assert rendition["init_files"] == ["init_0.mp4", "init_1.mp4"]
+    for init_name in rendition["init_files"]:
+        assert (segments_dir / init_name).read_bytes()[4:8] == b"ftyp"
+    seg2 = (segments_dir / "seg_000002.m4s").read_bytes()
+    assert seg2[4:8] == b"moof" and b"moov" not in seg2 and b"ftyp" not in seg2
+    assert struct.pack(">Q", 0) in seg2  # segment 2 opens span 1: tfdt restarts at 0
 
 
 def test_bake_segment_list_hls_ts_format_also_writes_ts_store(tmp_path, _stub_media_io):
