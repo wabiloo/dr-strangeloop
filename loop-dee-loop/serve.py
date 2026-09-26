@@ -95,6 +95,20 @@ def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: in
     return seg_start_ticks <= start < seg_end_ticks
 
 
+def _asset_ids_starting_in_segment(
+    asset_boundaries: list[dict], seg_start_ticks: int, seg_end_ticks: int
+) -> list[str]:
+    """Asset ids (in timeline order) whose `start_ticks` falls inside
+    [seg_start_ticks, seg_end_ticks) -- i.e. every new asset that begins
+    somewhere within this one segment. Unlike marker placement, this is a
+    plain point-in-interval test: an asset boundary is a single instant
+    (where the new asset's content starts), never a signaled interval."""
+    return [
+        b["asset_id"] for b in asset_boundaries
+        if seg_start_ticks <= b["start_ticks"] < seg_end_ticks
+    ]
+
+
 def _remap_signaling_markers(
     signaling_markers: list[SignalingMarker], all_markers: list[dict], loop_number: int
 ) -> list[SignalingMarker]:
@@ -248,6 +262,11 @@ class LoopPackage:
         self.daterange_id_format: str | None = self.descriptor.get("daterange_id_format")
         self.dash_signal_format: str = self.descriptor.get("dash_signal_format", "binary")
         self.dash_descriptor_mode: str = self.descriptor.get("dash_descriptor_mode", "shared")
+        # Loop-relative {asset_id, start_ticks} boundaries from franken-ts's
+        # .timeline.json (see bake.py's load_asset_boundaries) -- [] for
+        # packages baked without one, so HLS/DASH simply author no
+        # asset-boundary comments.
+        self.asset_boundaries: list[dict] = self.descriptor.get("asset_boundaries", [])
 
         # Precomputed once (not per-request): see build_cue_breaks for
         # what this holds and why it's splice_insert-only.
@@ -669,6 +688,20 @@ class Channel:
                         build_cue_out_cont_tag(elapsed_ticks, brk["duration_ticks"], pkg.timescale)
                     )
 
+            # Asset-boundary comments (from franken-ts's .timeline.json, see
+            # bake.py's load_asset_boundaries): plain `#` playlist comments
+            # -- ignored by every HLS client -- naming which playlist asset
+            # starts in this segment. Decided from the reference rendition's
+            # timeline, same as markers, so every playlist (and the audio
+            # playlist) places the same asset's comment at the same segment
+            # index. Not deduped across polls (unlike DATERANGE): re-emitting
+            # a comment for a segment still in the window on every poll is
+            # harmless, exactly like PROGRAM-DATE-TIME itself.
+            for asset_id in _asset_ids_starting_in_segment(
+                pkg.asset_boundaries, ref_seg_start_ticks, ref_seg_end_ticks
+            ):
+                lines.append(f"# asset: {asset_id}")
+
             program_date_ticks = program_date_time_ticks(
                 local_loop_number,
                 segment_start_ticks,
@@ -835,6 +868,28 @@ class Channel:
             # its own start.
             reference_entries = _period_entries(pkg.segment_boundary_ticks, local_indices)
 
+            # Asset-boundary comments (from franken-ts's .timeline.json, see
+            # bake.py's load_asset_boundaries): decided once from the
+            # reference rendition's timeline, keyed by local_index so every
+            # rendition's own <SegmentTimeline> (and audio's) places the
+            # same asset's comment at the same segment index -- same
+            # pattern as marker placement above.
+            asset_ids_by_local_index: dict[int, list[str]] = {}
+            for seg_start_local, duration_ticks, local_index in reference_entries:
+                asset_ids = _asset_ids_starting_in_segment(
+                    pkg.asset_boundaries, seg_start_local, seg_start_local + duration_ticks
+                )
+                if asset_ids:
+                    asset_ids_by_local_index[local_index] = asset_ids
+
+            def _segment_timeline_xml(entries: list[tuple[int, int, int]]) -> str:
+                lines = []
+                for t, d, local_index in entries:
+                    for asset_id in asset_ids_by_local_index.get(local_index, []):
+                        lines.append(f'        <!-- asset: {asset_id} -->')
+                    lines.append(f'        <S t="{t}" d="{d}" />')
+                return "\n".join(lines)
+
             # `id` is a per-Period-unique synthetic id, never the raw
             # event_id directly -- see DIRECTION_CODE below. A player
             # decodes the Signal payload itself (via the `scte35` npm
@@ -952,9 +1007,7 @@ class Channel:
             video_representations = []
             for idx, rendition in enumerate(pkg.video_renditions):
                 entries = _period_entries(rendition.segment_boundary_ticks, local_indices)
-                timeline_lines = "\n".join(
-                    f'        <S t="{t}" d="{d}" />' for t, d, _ in entries
-                )
+                timeline_lines = _segment_timeline_xml(entries)
                 v = rendition.video_variant
                 video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
         <SegmentTemplate media="{rendition.name}/seg/$Number$.m4s" initialization="{rendition.name}/init.mp4"
@@ -971,9 +1024,7 @@ class Channel:
                 audio_entries = _period_entries(
                     pkg.audio_rendition.audio_segment_boundary_ticks, local_indices
                 )
-                audio_timeline_lines = "\n".join(
-                    f'        <S t="{t}" d="{d}" />' for t, d, _ in audio_entries
-                )
+                audio_timeline_lines = _segment_timeline_xml(audio_entries)
                 audio_adaptation_set = f'''
     <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
       <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">

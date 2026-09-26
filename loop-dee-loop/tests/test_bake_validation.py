@@ -8,6 +8,7 @@ tests/fixtures/README.md for how to add those for full end-to-end coverage).
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -18,7 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bake import (  # noqa: E402
     DecodedMarker,
     ValidationError,
+    discover_asset_timeline,
     discover_renditions,
+    load_asset_boundaries,
     validate_cue_tags_only,
     validate_increment_event_ids,
     validate_markers_against_ts,
@@ -272,6 +275,91 @@ def test_discover_renditions_respects_markers_override(tmp_path):
     renditions, markers_json = discover_renditions(tmp_path, markers_override=custom_markers)
 
     assert markers_json == custom_markers
+
+
+# ── discover_asset_timeline / load_asset_boundaries (asset-boundary comments) ──
+
+
+def test_discover_asset_timeline_single_file_mode(tmp_path):
+    ts_file = tmp_path / "myoutput.ts"
+    ts_file.write_bytes(b"fake")
+    (tmp_path / "myoutput.timeline.json").write_text("{}")
+
+    assert discover_asset_timeline(ts_file) == tmp_path / "myoutput.timeline.json"
+
+
+def test_discover_asset_timeline_directory_mode(tmp_path):
+    (tmp_path / "timeline.json").write_text("{}")
+
+    assert discover_asset_timeline(tmp_path) == tmp_path / "timeline.json"
+
+
+def test_discover_asset_timeline_missing_returns_none(tmp_path):
+    ts_file = tmp_path / "myoutput.ts"
+    ts_file.write_bytes(b"fake")
+
+    assert discover_asset_timeline(ts_file) is None
+
+
+def test_discover_asset_timeline_respects_override(tmp_path):
+    ts_file = tmp_path / "myoutput.ts"
+    ts_file.write_bytes(b"fake")
+    custom = tmp_path / "custom.timeline.json"
+    custom.write_text("{}")
+
+    assert discover_asset_timeline(ts_file, timeline_override=custom) == custom
+
+
+def test_load_asset_boundaries_converts_seconds_to_ticks_and_applies_muxer_offset(tmp_path):
+    timeline_path = tmp_path / "myoutput.timeline.json"
+    timeline_path.write_text(json.dumps({
+        "version": 1, "framerate": 25, "muxer_offset": 1.0,
+        "entries": [
+            {"asset_id": "asset-1", "source_file": "a.mp4", "output_start": 0.0, "output_end": 10.0},
+            {"asset_id": "ad1", "source_file": "b.mp4", "output_start": 10.0, "output_end": 20.0},
+        ],
+    }))
+
+    boundaries = load_asset_boundaries(timeline_path, timescale=90_000)
+
+    assert boundaries == [
+        {"asset_id": "asset-1", "start_ticks": 90_000},
+        {"asset_id": "ad1", "start_ticks": 990_000},
+    ]
+
+
+def test_load_asset_boundaries_collapses_consecutive_entries_sharing_one_asset_id(tmp_path):
+    """One asset split around a nested ad break (two TimelineEntry's, same
+    asset_id) is not a new asset starting the second time -- only the
+    first entry's start should produce a boundary."""
+    timeline_path = tmp_path / "myoutput.timeline.json"
+    timeline_path.write_text(json.dumps({
+        "version": 1, "framerate": 25, "muxer_offset": 0.0,
+        "entries": [
+            {"asset_id": "bg", "source_file": "a.mp4", "output_start": 0.0, "output_end": 5.0},
+            {"asset_id": "ad1", "source_file": "b.mp4", "output_start": 5.0, "output_end": 10.0},
+            {"asset_id": "bg", "source_file": "a.mp4", "output_start": 10.0, "output_end": 15.0},
+        ],
+    }))
+
+    boundaries = load_asset_boundaries(timeline_path, timescale=90_000)
+
+    assert [b["asset_id"] for b in boundaries] == ["bg", "ad1", "bg"]
+
+
+def test_load_asset_boundaries_skips_entries_with_no_asset_id(tmp_path):
+    timeline_path = tmp_path / "myoutput.timeline.json"
+    timeline_path.write_text(json.dumps({
+        "version": 1, "framerate": 25, "muxer_offset": 0.0,
+        "entries": [
+            {"asset_id": None, "source_file": "slate.png", "output_start": 0.0, "output_end": 1.0},
+            {"asset_id": "asset-1", "source_file": "a.mp4", "output_start": 1.0, "output_end": 10.0},
+        ],
+    }))
+
+    boundaries = load_asset_boundaries(timeline_path, timescale=90_000)
+
+    assert [b["asset_id"] for b in boundaries] == ["asset-1"]
 
 
 def _splice_insert_marker(event_id: str, pts_time_ticks: int) -> dict:

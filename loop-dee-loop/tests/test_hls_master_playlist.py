@@ -140,6 +140,7 @@ def test_ts_media_playlist_uses_ts_without_init_or_separate_audio_when_muxed(mux
     package.max_segment_duration_seconds_rounded_up = 5
     package.markers = []
     package.cue_tags = "none"
+    package.asset_boundaries = []
     channel = Channel(package, 0, window_segments=2)
     channel.now_ticks = lambda: 360_000
 

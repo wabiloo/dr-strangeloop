@@ -908,6 +908,59 @@ def discover_renditions(
     return renditions, markers_json
 
 
+def discover_asset_timeline(
+    input_path: Path, timeline_override: Path | None = None
+) -> Path | None:
+    """Locate franken-ts's `.timeline.json` sidecar (see franken_ts/markers.py's
+    `write_timeline_sidecar` -- always written alongside `.markers.json`),
+    following the same directory-vs-single-file convention as
+    `discover_renditions`'s own `markers.json` lookup.
+
+    Unlike markers.json, this is OPTIONAL: it only powers the asset-boundary
+    comments in HLS/DASH output (see `load_asset_boundaries` and
+    scte35_signaling.py's `ASSET_BOUNDARY_COMMENT` usage), not core SCTE-35
+    signaling -- content baked before this sidecar existed, or from a
+    non-franken-ts source, simply gets none. Returns None if not found.
+    """
+    if timeline_override is not None:
+        return timeline_override if timeline_override.exists() else None
+    if input_path.is_dir():
+        candidate = input_path / "timeline.json"
+    else:
+        candidate = input_path.with_suffix(".timeline.json")
+    return candidate if candidate.exists() else None
+
+
+def load_asset_boundaries(timeline_path: Path, timescale: int) -> list[dict]:
+    """Convert franken-ts's `.timeline.json` entries into loop-relative
+    `{"asset_id": ..., "start_ticks": ...}` boundaries, one per genuine
+    asset transition (consecutive entries sharing the same `asset_id` --
+    e.g. one asset split around a nested ad break -- are NOT a new asset
+    starting, so collapse to a single boundary at the first one).
+
+    `output_start` is in output-stream SECONDS; `+ muxer_offset` converts
+    to the same stream/PTS-time base krogh's own `timeline_assets` uses
+    (see inspector-krogh/krogh_expected.py), which -- like every other
+    tick this module computes -- already lines up with loop-relative
+    tick 0 by construction (franken-ts's output always starts there).
+    Entries with no `asset_id` (e.g. a fade slate) carry no label and are
+    skipped.
+    """
+    doc = json.loads(timeline_path.read_text())
+    muxer_offset = float(doc.get("muxer_offset") or 0.0)
+    boundaries: list[dict] = []
+    previous_asset_id: object = object()  # sentinel, never equal to a real id
+    for entry in doc.get("entries", []):
+        asset_id = entry.get("asset_id")
+        if asset_id is None or asset_id == previous_asset_id:
+            previous_asset_id = asset_id
+            continue
+        previous_asset_id = asset_id
+        start_ticks = round((float(entry["output_start"]) + muxer_offset) * timescale)
+        boundaries.append({"asset_id": asset_id, "start_ticks": start_ticks})
+    return boundaries
+
+
 def bake_one_rendition(
     name: str,
     ts_file: Path,
@@ -1056,6 +1109,7 @@ def bake(
     segment_duration_seconds: float = 4.0,
     dry_run: bool = False,
     markers_override: Path | None = None,
+    timeline_override: Path | None = None,
     daterange_mode: str = "shared",
     cue_tags: str = "none",
     increment_event_ids: bool = False,
@@ -1096,6 +1150,16 @@ def bake(
 
     renditions, markers_json = discover_renditions(input_path, markers_override)
     raw_markers = load_markers(markers_json)
+
+    timeline_json = discover_asset_timeline(input_path, timeline_override)
+    asset_boundaries = load_asset_boundaries(timeline_json, TIMESCALE) if timeline_json else []
+    if timeline_json:
+        logger.info(
+            "Found asset timeline %s: %d asset boundary comment(s) will be authored",
+            timeline_json, len(asset_boundaries),
+        )
+    else:
+        logger.info("No .timeline.json found -- no asset-boundary comments will be authored")
 
     if cue_tags == "only":
         validate_cue_tags_only(raw_markers)
@@ -1171,12 +1235,14 @@ def bake(
         "daterange_id_format": daterange_id_format,
         "dash_signal_format": dash_signal_format,
         "dash_descriptor_mode": dash_descriptor_mode,
+        "asset_boundaries": asset_boundaries,
         "markers": reference["markers"],
         "video_renditions": [
             {k: v for k, v in r.items() if k != "markers"} for r in rendition_results
         ],
         "source_input": str(input_path),
         "source_markers_json": str(markers_json),
+        "source_timeline_json": str(timeline_json) if timeline_json else None,
     }
     descriptor_path = output_package_dir / "loop_descriptor.json"
     with descriptor_path.open("w", encoding="utf-8") as f:
@@ -1206,6 +1272,14 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help="Override the auto-discovered markers.json path",
+    )
+    parser.add_argument(
+        "--timeline",
+        type=Path,
+        default=None,
+        help="Override the auto-discovered .timeline.json path (asset "
+        "boundaries for HLS/DASH comments). Optional -- omit entirely for "
+        "no asset-boundary comments.",
     )
     parser.add_argument("--output", type=Path, required=True, help="Output loop package directory")
     parser.add_argument("--segment-duration", type=float, default=4.0)
@@ -1309,6 +1383,7 @@ def main(argv: list[str] | None = None) -> int:
             segment_duration_seconds=args.segment_duration,
             dry_run=args.dry_run,
             markers_override=args.markers,
+            timeline_override=args.timeline,
             daterange_mode=args.daterange_mode,
             cue_tags=args.cue_tags,
             increment_event_ids=args.increment_event_ids,
