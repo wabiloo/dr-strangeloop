@@ -98,8 +98,8 @@ def _boundary_block(marker: dict, boundary: str, frames: dict, m_checks: list[di
             <span class="pts">PTS {ev["pts_ticks"]:,}</span>
           </div>
           <div class="frames">{frame_html}</div>
-          {f'<div class="checks">{checks_html}</div>' if checks_html else ""}
           {_upid_panel(ev)}
+          {f'<div class="checks">{checks_html}</div>' if checks_html else ""}
         </div>"""
 
 
@@ -107,7 +107,7 @@ def _marker_card(marker: dict, frames: dict, checks: list[dict], base_dir: Optio
     eid = marker["event_id"]
     m_checks = _checks_for(checks, eid)
     dur = marker.get("duration_seconds")
-    dur_str = f'<span class="dur">{_fmt_time(dur)}</span>' if dur is not None else ""
+    dur_str = f'<span class="dur">{dur:g}s · {_fmt_time(dur)}</span>' if dur is not None else ""
 
     blocks = [
         _boundary_block(marker, boundary, frames, m_checks, base_dir)
@@ -121,17 +121,16 @@ def _marker_card(marker: dict, frames: dict, checks: list[dict], base_dir: Optio
 
     type_badge = f'<span class="type-badge">{marker["type_code"]}</span>'
     splice_badge = f'<span class="splice-badge {marker["splice_type"]}">{marker["splice_type"]}</span>'
-    instant_badge = '<span class="instant-badge">instant</span>' if marker["is_instant"] else ""
 
     bg, border, fg = colors[marker["type_code"]]
     return f"""
     <div class="marker-card" id="marker-{eid}" style="--t-bg:{bg};--t-border:{border};--t-fg:{fg}">
       <div class="marker-hdr">
         <span class="mid">Event #{eid}</span>
-        {type_badge}{splice_badge}{instant_badge}
+        {type_badge}{splice_badge}
         <span class="mname">{marker["type_name"]}</span>
         {dur_str}
-        {_check_badge(m_checks)}
+        <span class="hdr-status">{_check_badge(m_checks)}</span>
       </div>
       <div class="span-row">{body}</div>
     </div>"""
@@ -279,9 +278,9 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .splice-badge{{font-size:9px;padding:2px 7px;border-radius:3px;text-transform:uppercase;background:#162016;color:#55bb55}}
 .splice-badge.splice_insert{{background:#162016;color:#55bb55}}
 .splice-badge.time_signal{{background:#141428;color:#5577cc}}
-.instant-badge{{font-size:9px;padding:2px 7px;border-radius:3px;background:#332200;color:#ffbb44;text-transform:uppercase}}
 .mname{{color:var(--t-fg);font-weight:600}}
-.dur{{color:#555;font-size:11px;margin-left:auto}}
+.dur{{color:#7a7a98;font-size:11px}}
+.hdr-status{{margin-left:auto}}
 
 .bh{{display:flex;align-items:center;gap:14px;padding:8px 16px;color:#7a7a9a}}
 .tag{{font-size:10px;font-weight:700;letter-spacing:.9px;padding:2px 7px;border-radius:3px}}
@@ -305,7 +304,7 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .idr-badge{{font-size:8px;background:#2e1010;color:#e05555;border:1px solid #5c1a1a;padding:0 4px;border-radius:2px}}
 .no-frame, .no-frames-note{{color:#333;font-size:11px;padding:8px}}
 
-.checks{{display:flex;flex-direction:column;gap:2px;padding:0 16px 8px}}
+.checks{{display:flex;flex-direction:column;gap:2px;padding:0 16px 10px}}
 .check{{display:flex;gap:10px;font-size:11px}}
 .check.pass .check-name{{color:#55bb55}}
 .check.fail .check-name{{color:#ff6666}}
@@ -315,6 +314,8 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .scte-field{{display:flex;gap:6px;font-size:11px}}
 .scte-field .k{{color:#2e2e4a}}
 .scte-field .v{{color:#6666aa}}
+#zoom{{position:fixed;z-index:1000;pointer-events:none;display:none;border:2px solid #ff3b3b;border-radius:4px;background:#000;box-shadow:0 8px 32px rgba(0,0,0,.7)}}
+#zoom img{{display:block;width:320px;height:auto}}
 {HEADER_CSS}
 </style>
 </head>
@@ -347,5 +348,21 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
   <h2>Markers</h2>
   {cards_html or '<div class="no-frame">No SCTE-35 markers found in this file.</div>'}
 </div>
+<div id="zoom"><img alt=""></div>
+<script>
+(function(){{
+  var z=document.getElementById('zoom'), zi=z.querySelector('img');
+  document.addEventListener('mouseover',function(e){{
+    var img=e.target.closest&&e.target.closest('.frame img');
+    if(!img){{z.style.display='none';return;}}
+    zi.src=img.src; z.style.display='block';
+    var r=img.getBoundingClientRect(), w=z.offsetWidth, h=z.offsetHeight;
+    var x=Math.max(8,Math.min(innerWidth-w-8,r.left+r.width/2-w/2));
+    var y=r.top-h-8; if(y<8) y=Math.min(innerHeight-h-8,r.bottom+8);
+    z.style.left=x+'px'; z.style.top=y+'px';
+  }});
+  document.addEventListener('scroll',function(){{z.style.display='none';}},true);
+}})();
+</script>
 </body>
 </html>"""
