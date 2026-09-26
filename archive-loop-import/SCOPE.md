@@ -370,7 +370,66 @@ session).
   real target capture actually carries before relying on this tool for
   it.
 
-## 10. Open items
+## 10. Igor UI integration
+
+**Decision**: a new top-level section in `igor`, parallel to Playlists and
+Channels — not folded into `PlaylistEditor`, since the interaction (parse
+an archive → per-variant coverage map → human-selected range → confirm)
+is one-shot wizard-style triage, not ongoing document editing, and would
+fight `PlaylistEditor`'s schema-driven form generation
+(`franken_ts.config.Config.model_json_schema()`) which has nothing to do
+with this tool's inputs.
+
+**List view** (`ArchiveImportList.vue`, mirroring `PlaylistList.vue`):
+available archives (HAR/Proxyman logs dropped into a store this tool
+owns, e.g. `data/archives/`) plus already-completed imports, with basic
+metadata (session duration, detected variant/rendition count, marker
+count) — same shape as `igor/src/igor/integrations/franken_ts.py`'s
+`list_playlists()`.
+
+**Import wizard view** (`ArchiveImportEditor.vue`): parse the archive,
+render the per-variant coverage map from §8 step 2 as a timeline picker
+(reusing `AssetTimeline.vue`'s existing lane-rendering infrastructure
+rather than building a new visualization from scratch), let the human
+drag-select the target range (§8 step 3), show which variants survive
+the full-coverage filter (§8 step 4) and which are dropped and why,
+preview detected `AssetSpan`/`AssetBoundary`/marker overlays for the
+selected range, then confirm — which spawns a job (same
+`igor.jobs.runner` pattern `franken_ts.spawn_build_job` uses) that runs
+this tool's full pipeline (§4) and writes the segment-list manifest +
+extracted media (§5.3) + `markers.json`-shaped output to disk.
+
+**Backend API surface** (new `igor/src/igor/app/routes/archives.py`,
+mirroring `playlists.py`'s shape):
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v1/archives/` | list available archives + prior imports |
+| `GET /api/v1/archives/{name}/coverage` | parse + return the per-variant coverage map for the wizard's range picker (analogous to `resolve_markers_preview`) |
+| `POST /api/v1/archives/{name}/import` | spawn the import job for a human-confirmed range + variant selection; writes the segment-list manifest/markers/media, returns a `Job` (same shape `build_playlist` returns) |
+| `GET /api/v1/archives/{name}/import/status` | output freshness (exists/stale vs. the archive or a re-run of the wizard), mirroring `output_status` |
+
+**`ChannelNew.vue` change**: the existing "Content" section's `Playlist`
+`Select` (today purely a `form.source_path` autofill + "Edit"/"Build now"
+convenience links, per `ChannelNew.vue` lines 210-233 — `bake.py`/
+`its-a-live` only ever see the resulting path, never "playlist" as a
+concept) gets a source-kind toggle above it: **franken-ts playlist** /
+**archive import**. Switching it swaps which `Select` + convenience links
+are shown (Playlist's existing pair, or a new one backed by the
+`/api/v1/archives/` list above with "Edit this import"/"Re-run import"
+links); both still resolve to the same `form.source_path` field
+underneath — no backend distinction between the two once a path is
+picked.
+
+A new checkbox, **"Allow missing segments (manifest-complete,
+media-optional)"**, maps to the `allow_missing_segments` channel-config
+flag (`loop-dee-loop/SCOPE.md` §11.2's `bake.py --allow-missing-segments`
+equivalent). Defaults **on** when source-kind is archive import (the
+near-certain case per §5.3/§9), but stays visible and editable regardless
+of source kind — it's a `bake.py`-level flag, not intrinsically tied to
+where the content came from.
+
+## 11. Open items
 
 - Final tool name + repo-root workspace placement (this doc's directory
   name is a placeholder, §0).
@@ -386,6 +445,7 @@ session).
 - Media-body matching heuristics (§5.3) beyond exact/relative URL lookup
   and largest-body dedup — e.g. matching across a CDN URL rewrite between
   manifest and segment requests — not yet spiked against a real archive.
-- Coverage-map visualization: `igor` integration vs. a standalone CLI
-  report, for §8 step 2.
+- **Decided**: coverage-map visualization is an `igor` UI (§10), not a
+  standalone CLI report — the timeline-picker interaction for §8 step 3
+  needs a human dragging a range, not just reading a table.
 - Testing strategy against real HAR captures (none yet spiked).
