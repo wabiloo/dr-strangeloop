@@ -16,6 +16,7 @@ Usage
   uv run frame-extractor video.mp4 --no-overlay --output ./out/
 """
 
+import os
 import sys
 
 import argparse
@@ -27,6 +28,7 @@ from pathlib import Path
 from rich.columns import Columns
 from rich.console import Console
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -823,13 +825,8 @@ def main() -> None:
     html_path  = out_root / "index.html"
 
     console.print()
-    console.print(Panel(
-        f"[bold]{video_path.name}[/]\n"
-        f"[dim]→ {out_root.resolve()}[/]",
-        title="[bold blue]🕵️ Frame Extractor[/]",
-        border_style="blue",
-        padding=(0, 2),
-    ))
+    console.print(Rule("[bold blue]🕵️ Frame Extractor[/]", align="left", style="blue"))
+    console.print(f"  [bold]{video_path.name}[/]\n  [dim]→ {os.path.relpath(out_root)}[/]")
     console.print()
 
     progress = Progress(

@@ -2508,7 +2508,7 @@ function applyHexPopover() {
               </span>
               <div class="flex align-items-center gap-2">
                 <Button
-                  label="Verify SCTE-35 markers"
+                  label="Check the monster's guts"
                   icon="pi pi-shield"
                   severity="secondary"
                   outlined

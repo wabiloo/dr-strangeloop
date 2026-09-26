@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import logging
 import shutil
 import subprocess
@@ -11,7 +12,6 @@ from typing import Optional
 
 import click
 from rich.console import Console
-from rich.panel import Panel
 from rich.rule import Rule
 from rich.text import Text
 
@@ -155,11 +155,11 @@ def main(
     target = output or (cfg.output.file if cfg and not cfg.output.is_multi_rendition else None) \
         or (cfg.output.dir if cfg else None)
     console.print()
-    console.print(Panel(
-        f"[bold]{Path(config).name}[/]"
-        + (f"\n[dim]→ {Path(target).resolve()}[/]" if target else ""),
-        title="[bold blue]🧟 franken-ts[/]", border_style="blue", padding=(0, 2),
-    ))
+    console.print(Rule("[bold blue]🧟 franken-ts[/]", align="left", style="blue"))
+    console.print(
+        f"  [bold]{Path(config).name}[/]"
+        + (f"\n  [dim]→ {os.path.relpath(target)}[/]" if target else "")
+    )
     if dry_run:
         console.print("  [dim yellow]dry-run mode — no files will be written[/dim yellow]")
     console.print()

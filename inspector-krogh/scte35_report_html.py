@@ -198,7 +198,8 @@ def _transition_card(tr: dict, frames: dict, checks: list[dict], base_dir: Optio
 
 
 def _grouped_cards(markers: list[dict], transitions: list[dict], frames: dict, checks: list[dict],
-                   base_dir: Optional[Path], colors: dict) -> tuple[str, set[int]]:
+                   base_dir: Optional[Path], colors: dict, assets: Optional[list[dict]] = None,
+                   fps: Optional[float] = None) -> tuple[str, set[int]]:
     """Cards grouped by the timepoint they start (or occur) at, in time order;
     within a group BRK/PPO/PAD come first, then other types, then event id.
     Asset joins without a marker sit in their own group at their time.
@@ -217,10 +218,18 @@ def _grouped_cards(markers: list[dict], transitions: list[dict], frames: dict, c
     for it in items:
         groups.setdefault(it[0], []).append(it)
 
+    tol = 1.0 / (fps or 25.0)
     out, keys = [], set()
     for t, group in groups.items():
         ms = round(t * 1000)
         keys.add(ms)
+        join = next(
+            ((assets[i - 1], assets[i]) for i in range(1, len(assets or []))
+             if abs(assets[i]["start"] - t) <= tol), None)
+        join_html = (
+            f'<span class="tp-join">Asset boundary: {escape(str(join[0]["asset_id"] or join[0]["file"]))}'
+            f' → {escape(str(join[1]["asset_id"] or join[1]["file"]))}</span>'
+        ) if join else ""
         chips = "".join(
             f'<span class="tp-chip" style="background:{it[4]}">{escape(it[3])}</span>' for it in group
         )
@@ -231,6 +240,7 @@ def _grouped_cards(markers: list[dict], transitions: list[dict], frames: dict, c
         <span class="tp-time">{_fmt_time(t)}</span>
         <span class="tp-count">{len(group)} item{"s" if len(group) != 1 else ""}</span>
         {chips}
+        {join_html}
       </div>
       <div class="tp-cards">{cards}</div>
     </section>""")
@@ -333,7 +343,8 @@ def render_html(report: dict, base_dir: Optional[Path] = None) -> str:
 
     colors = type_colors(m["type_code"] for m in markers)
     tl = report.get("timeline") or {}
-    cards_html, linkable = _grouped_cards(markers, tl.get("transitions", []), frames, checks, base_dir, colors)
+    cards_html, linkable = _grouped_cards(markers, tl.get("transitions", []), frames, checks, base_dir, colors,
+                                        tl.get("assets"), src.get("fps"))
     timeline_html = _timeline_bar(markers, total, tl.get("assets"), linkable)
 
     checks_rows = "".join(
@@ -413,6 +424,7 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .tp-hdr{{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:8px 0 10px;margin-bottom:8px;background:#0c0c14;border-bottom:2px solid #33334d}}
 .tp-time{{font-size:16px;font-weight:700;color:#e8e8f4;letter-spacing:.5px}}
 .tp-count{{font-size:11px;color:#b0b0cc;margin-right:6px}}
+.tp-join{{font-size:12px;font-weight:600;color:#d4d4e4;margin-left:auto}}
 .tp-chip{{font-size:10px;font-weight:700;padding:1px 7px;border-radius:3px;color:#fff}}
 .tp-cards{{display:flex;flex-direction:column;gap:18px}}
 .marker-card{{border:1px solid #33334d;border-left:6px solid var(--t-border);border-radius:8px;overflow:hidden;background:#0f0f1a;box-shadow:0 4px 18px rgba(0,0,0,.45)}}

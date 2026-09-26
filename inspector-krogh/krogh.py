@@ -28,6 +28,7 @@ Usage
 
 from __future__ import annotations
 
+import os
 import argparse
 import json
 import logging
@@ -40,7 +41,7 @@ from typing import Optional
 from xml.etree import ElementTree as ET
 
 from rich.console import Console
-from rich.panel import Panel
+from rich.rule import Rule
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -712,10 +713,8 @@ def main() -> None:
     out_dir = Path(args.output) if args.output else ts_path.parent / f"{ts_path.stem}_scte"
 
     console.print()
-    console.print(Panel(
-        f"[bold]{ts_path.name}[/]\n[dim]→ {out_dir.resolve()}[/]",
-        title="[bold blue]🕵️ Inspector Krogh[/]", border_style="blue", padding=(0, 2),
-    ))
+    console.print(Rule("[bold blue]🕵️ Inspector Krogh[/]", align="left", style="blue"))
+    console.print(f"  [bold]{ts_path.name}[/]\n  [dim]→ {os.path.relpath(out_dir)}[/]")
     console.print()
 
     expected_path: Optional[Path] = None
