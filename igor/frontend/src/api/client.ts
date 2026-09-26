@@ -157,8 +157,8 @@ export function listArchives(): Promise<ArchiveListItem[]> {
   return getJson(`${ARCHIVES_BASE}/`)
 }
 
-export async function uploadArchive(file: File, name: string): Promise<ArchiveListItem> {
-  const query = new URLSearchParams({ name, filename: file.name })
+export async function uploadArchive(file: File): Promise<ArchiveListItem> {
+  const query = new URLSearchParams({ filename: file.name })
   const res = await handle(
     await fetch(`${ARCHIVES_BASE}/upload?${query}`, {
       method: 'POST',
@@ -171,6 +171,17 @@ export async function uploadArchive(file: File, name: string): Promise<ArchiveLi
 
 export async function deleteArchive(name: string): Promise<void> {
   await handle(await fetch(`${ARCHIVES_BASE}/${encodeURIComponent(name)}`, { method: 'DELETE' }))
+}
+
+export async function renameArchive(name: string, displayName: string): Promise<{ name: string; display_name: string }> {
+  const res = await handle(
+    await fetch(`${ARCHIVES_BASE}/${encodeURIComponent(name)}/name`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ display_name: displayName }),
+    }),
+  )
+  return res.json()
 }
 
 /** Per-variant wall-clock coverage map for the import wizard's range

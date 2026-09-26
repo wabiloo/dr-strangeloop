@@ -1,28 +1,51 @@
 output:
-  file: outputs/short-loop-1min.ts
-  resolution: 1280x720
   framerate: 25
   bitrate_kbps: 4000
-  gop: 50
   service_provider: broadpeak
   service_name: broadpeak.io
-normalize: true
+  gop: 50
+  file: outputs/short-loop-1min.ts
+  resolution: 1280x720
 assets:
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+  id: asset-1
   duration: 20s
 - file: /Users/fabrelambeau/Broadpeak/Resources/Video Idents/broadpeakio-promo-1080p_5000k.mp4
   id: ad1
   duration: 10s
+- file: /Users/fabrelambeau/Broadpeak/Resources/Video Idents/broadpeakio-promo-1080p_5000k.mp4
+  id: asset-4
+  duration: 10s
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
+  id: asset-2
   duration: 20s
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+  id: asset-3
   start: 20s
   duration: 10s
+normalize: true
+osd:
+  enabled: true
+  countdown:
+    enabled: true
+    height_pct: 5
+  text_size_pct: 4
+  text_color: '#FFFFFF'
+  ad_break_label: ad break
+  corner_box:
+    enabled: true
+    color: '#000000'
+  corners:
+    top_left: null
+    top_right: scte35_spans
+    bottom_left: asset_id
+    bottom_right: next_asset_id
 markers:
 - event_id: 1
   splice_type: time_signal
   assets:
   - ad1
+  - asset-4
   segmentation:
     type_id: '0x22'
     upid_type: '0x0C'
@@ -31,7 +54,3 @@ markers:
     no_regional_blackout: false
     archive_allowed: false
     device_restrictions: 1
-osd:
-  enabled: true
-  corners:
-    top_right: next_asset_id

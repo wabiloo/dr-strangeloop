@@ -155,6 +155,9 @@ def list_channels() -> list[dict]:
         channel["playlist_name"] = franken_ts.find_playlist_for_source(source_path)
         channel["archive_name"] = archives.find_archive_for_source(source_path)
         channel["source_kind"] = "archive" if channel["archive_name"] else source_kind
+        channel["archive_display_name"] = (
+            archives.get_display_name(channel["archive_name"]) if channel["archive_name"] else None
+        )
 
     return channels
 

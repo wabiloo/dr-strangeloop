@@ -21,6 +21,22 @@ assets:
   start: 10s
   duration: 10s
 normalize: true
+osd:
+  enabled: true
+  countdown:
+    enabled: false
+    height_pct: 5
+  text_size_pct: 2
+  text_color: '#FFFFFF'
+  ad_break_label: ad break
+  corner_box:
+    enabled: true
+    color: '#2FCC32'
+  corners:
+    top_left: null
+    top_right: null
+    bottom_left: asset_id
+    bottom_right: time
 markers:
 - event_id: 12
   splice_type: splice_insert

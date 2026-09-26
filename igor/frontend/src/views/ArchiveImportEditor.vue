@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
+import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import RadioButton from 'primevue/radiobutton'
 import Slider from 'primevue/slider'
 import Tag from 'primevue/tag'
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { getArchiveCoverage, importArchive, saveArchiveSelection } from '../api/client'
+import { getArchiveCoverage, importArchive, renameArchive, saveArchiveSelection } from '../api/client'
 import JobPanel from '../components/JobPanel.vue'
 import type { ArchiveCoverage, Job, RangeSuggestion, VariantCoverage } from '../api/types'
 
@@ -16,12 +17,16 @@ const router = useRouter()
 const coverage = ref<ArchiveCoverage | null>(null)
 const loading = ref(true)
 const error = ref('')
+const displayName = ref('')
+const savingDisplayName = ref(false)
+const displayNameError = ref('')
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
     coverage.value = await getArchiveCoverage(props.name)
+    displayName.value = coverage.value.display_name || props.name
     // Skip variants with no coverage (e.g. a multivariant playlist, which has no segments of its own).
     const usable = coverage.value.variants.find((v) => v.covered_ranges.length > 0)
     if (usable) selectedVariantUrl.value = usable.manifest_url
@@ -33,6 +38,21 @@ async function load() {
   }
 }
 onMounted(load)
+
+async function saveDisplayName() {
+  if (!displayName.value.trim()) return
+  savingDisplayName.value = true
+  displayNameError.value = ''
+  try {
+    const result = await renameArchive(props.name, displayName.value.trim())
+    displayName.value = result.display_name
+    if (coverage.value) coverage.value.display_name = result.display_name
+  } catch (e) {
+    displayNameError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    savingDisplayName.value = false
+  }
+}
 
 // ── Overall session span (union of every variant's own covered ranges) ────
 // grave-robber/SCOPE.md §7's own loop-boundary rule (full captured span,
@@ -213,8 +233,17 @@ function onImportFinished(job: Job) {
   <div class="flex flex-column gap-3">
     <div class="flex align-items-center gap-2">
       <Button icon="pi pi-arrow-left" text severity="secondary" @click="router.push('/archives')" />
-      <h2 class="m-0">Import: {{ name }}</h2>
+      <h2 class="m-0">{{ coverage?.display_name || name }}</h2>
     </div>
+
+    <form class="flex flex-wrap align-items-end gap-2" @submit.prevent="saveDisplayName">
+      <div class="flex flex-column gap-1 archive-display-name-field">
+        <label for="archive-display-name">Archive name</label>
+        <InputText id="archive-display-name" v-model="displayName" maxlength="200" :disabled="loading" />
+      </div>
+      <Button label="Save name" icon="pi pi-check" type="submit" :loading="savingDisplayName" :disabled="loading || !displayName.trim()" />
+    </form>
+    <Message v-if="displayNameError" severity="error">{{ displayNameError }}</Message>
 
     <Message v-if="error" severity="error">{{ error }}</Message>
     <Message v-if="!loading && coverage && coverage.variants.length === 0" severity="warn">
@@ -337,6 +366,12 @@ function onImportFinished(job: Job) {
     </template>
   </div>
 </template>
+
+<style scoped>
+.archive-display-name-field {
+  width: min(100%, 32rem);
+}
+</style>
 
 <style scoped>
 .coverage-lane {

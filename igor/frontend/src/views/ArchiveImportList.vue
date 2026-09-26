@@ -5,7 +5,6 @@ import ConfirmPopup from 'primevue/confirmpopup'
 import DataTable from 'primevue/datatable'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
-import InputText from 'primevue/inputtext'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
@@ -23,21 +22,14 @@ const loading = ref(true)
 const error = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
-const archiveName = ref('')
 const uploading = ref(false)
 const isDraggingFile = ref(false)
-
 function fileExtensionSupported(file: File): boolean {
   return /\.(har|proxymanlogv2|log|barc|zip)$/i.test(file.name)
 }
 
 function setSelectedFile(file: File | null) {
   selectedFile.value = file
-  if (file) {
-    archiveName.value = file.name
-      .replace(/\.[^.]+$/, '')
-      .replace(/[^A-Za-z0-9._-]/g, '_')
-  }
 }
 
 function chooseFile(event: Event) {
@@ -77,13 +69,12 @@ function onDrop(event: DragEvent) {
 }
 
 async function upload() {
-  if (!selectedFile.value || !archiveName.value.trim()) return
+  if (!selectedFile.value) return
   uploading.value = true
   error.value = ''
   try {
-    const archive = await uploadArchive(selectedFile.value, archiveName.value.trim())
+    const archive = await uploadArchive(selectedFile.value)
     selectedFile.value = null
-    archiveName.value = ''
     if (fileInput.value) fileInput.value.value = ''
     await load()
     await router.push(`/archives/${archive.name}`)
@@ -171,20 +162,14 @@ onMounted(load)
         <strong>{{ selectedFile ? selectedFile.name : 'Drop an archive file here' }}</strong>
         <span class="text-sm text-color-secondary">or <label for="archive-file" class="archive-browse-link">browse files</label></span>
       </div>
-      <div class="archive-upload-controls">
-        <div class="archive-name-field flex flex-column gap-1">
-          <label for="archive-name" class="text-sm">Archive name</label>
-          <InputText id="archive-name" v-model="archiveName" :disabled="!selectedFile" />
-        </div>
-        <Button
-          class="archive-upload-button"
-          label="Upload archive"
-          icon="pi pi-upload"
-          type="submit"
-          :disabled="!selectedFile || !archiveName.trim()"
-          :loading="uploading"
-        />
-      </div>
+      <Button
+        class="archive-upload-button"
+        label="Upload archive"
+        icon="pi pi-upload"
+        type="submit"
+        :disabled="!selectedFile"
+        :loading="uploading"
+      />
     </form>
 
     <Message v-if="error" severity="error">{{ error }}</Message>
@@ -197,7 +182,9 @@ onMounted(load)
       class="cursor-pointer"
       @row-click="({ data }) => router.push(`/archives/${data.name}`)"
     >
-      <Column field="name" header="Name" />
+      <Column header="Name">
+        <template #body="{ data }">{{ data.display_name || data.name }}</template>
+      </Column>
       <Column header="Format">
         <template #body="{ data }">
           <span class="uppercase">{{ data.format }}</span>
@@ -207,7 +194,11 @@ onMounted(load)
         <template #body="{ data }">{{ formatDuration(data.session_duration_seconds) }}</template>
       </Column>
       <Column field="variant_count" header="Variants" />
-      <Column field="marker_count" header="Markers (approx.)" />
+      <Column field="marker_count">
+        <template #header>
+          <span title="Approximate marker count, based on the latest snapshot of the first detected variant.">Markers</span>
+        </template>
+      </Column>
       <Column header="Import">
         <template #body="{ data }">
           <Tag v-if="!data.import" severity="secondary" value="Not imported" />
@@ -236,7 +227,7 @@ onMounted(load)
         </template>
       </Column>
       <template #empty>
-        No archives found in <code>data/archives/</code>. Drop a HAR/Proxyman log there and click Refresh.
+        No archives found in <code>data/archives/</code>. Upload a capture above or copy one there and click Refresh.
       </template>
     </DataTable>
     <ConfirmPopup />
@@ -267,25 +258,9 @@ onMounted(load)
   font-size: 1.5rem;
 }
 
-.archive-upload-controls {
-  flex: 1 1 32rem;
-  min-width: min(100%, 24rem);
-  display: flex;
-  align-items: flex-end;
-  gap: 1rem;
-}
-
-.archive-name-field {
-  flex: 1 1 18rem;
-  min-width: 0;
-}
-
-.archive-name-field :deep(input) {
-  width: 100%;
-}
-
 .archive-upload-button {
   flex-shrink: 0;
+  margin-left: auto;
 }
 
 .archive-file-input {
@@ -307,13 +282,6 @@ onMounted(load)
 }
 
 @media (max-width: 42rem) {
-  .archive-upload-controls {
-    flex-basis: 100%;
-    min-width: 0;
-  }
-
-  .archive-name-field {
-    min-width: 0;
-  }
+  .archive-upload-button { margin-left: auto; }
 }
 </style>

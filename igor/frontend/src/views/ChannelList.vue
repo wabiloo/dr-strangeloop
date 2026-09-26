@@ -267,7 +267,7 @@ onBeforeUnmount(() => {
               class="source-link"
               @click.stop
             >
-              {{ data.archive_name }}
+              {{ data.archive_display_name || data.archive_name }}
             </RouterLink>
             <RouterLink
               v-else-if="data.playlist_name"

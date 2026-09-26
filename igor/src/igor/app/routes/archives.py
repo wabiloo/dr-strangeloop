@@ -25,6 +25,10 @@ class SelectionPayload(BaseModel):
     suggestion_id: str | None = None
 
 
+class RenamePayload(BaseModel):
+    display_name: str
+
+
 @router.get("/")
 def list_archives() -> list[dict]:
     return archives.list_archives()
@@ -33,10 +37,10 @@ def list_archives() -> list[dict]:
 @router.post("/upload")
 async def upload_archive(
     request: Request,
-    name: str = Query(...),
     filename: str = Query(...),
+    name: str | None = Query(default=None),
 ) -> dict:
-    """Upload a HAR/Proxyman capture and store it under the chosen name."""
+    """Upload a capture, defaulting its stable ID from the filename."""
     try:
         return await archives.save_uploaded_archive(name, filename, request.stream())
     except FileExistsError as exc:
@@ -53,6 +57,16 @@ def delete_archive(name: str) -> None:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/{name}/name")
+def rename_archive(name: str, payload: RenamePayload) -> dict:
+    try:
+        return archives.rename_archive(name, payload.display_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/{name}/coverage")

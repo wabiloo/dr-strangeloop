@@ -37,8 +37,8 @@ const selectedArchive = computed(() => archives.value.find((a) => a.name === sel
 const archiveOptions = computed(() =>
   archives.value.map((a) => ({
     label: a.import
-      ? `${a.name} -- imported (${a.variant_count ?? 0} variant${a.variant_count === 1 ? '' : 's'})`
-      : `${a.name} -- not yet imported (${a.variant_count ?? 0} variant${a.variant_count === 1 ? '' : 's'})`,
+      ? `${a.display_name || a.name} -- imported (${a.variant_count ?? 0} variant${a.variant_count === 1 ? '' : 's'})`
+      : `${a.display_name || a.name} -- not yet imported (${a.variant_count ?? 0} variant${a.variant_count === 1 ? '' : 's'})`,
     value: a.name,
     disabled: !a.import,
   })),

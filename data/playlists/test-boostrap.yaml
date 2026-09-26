@@ -1,0 +1,60 @@
+output:
+  framerate: 25
+  bitrate_kbps: 10000
+  service_provider: broadpeak
+  service_name: broadpeak.io
+  gop: 48
+  file: outputs/test-boostrap.ts
+  resolution: 1920x1080
+assets:
+- file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+  id: asset-1
+  duration: 30
+  fade_out: 1.5
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/slates/test_cards/grid_h264_1080p_7000k_eng_aac_192k.mp4
+  id: asset-2
+  duration: 10
+  osd_label: grid_h264_1080p_7000k_eng_aac_192k.mp4
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-1-10s/ad-1-10s_h264_1080p_5000k_eng_aac_128k.mp4
+  id: asset-3
+  duration: 10
+  osd_label: ad-1-10s_h264_1080p_5000k_eng_aac_128k.mp4
+- file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-2-15s/ad-2-15s_h264_1080p_5000k_eng_aac_128k.mp4
+  id: asset-4
+  duration: 15
+  osd_label: ad-2-15s_h264_1080p_5000k_eng_aac_128k.mp4
+- file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
+  id: asset-5
+  duration: 20
+  fade_in: 1.5
+osd:
+  enabled: true
+  countdown:
+    enabled: true
+    height_pct: 2
+  text_size_pct: 3
+  text_color: '#FFFFFF'
+  ad_break_label: ad break
+  corner_box:
+    enabled: true
+    color: '#0834D4'
+  corners:
+    top_left: null
+    top_right: asset_id
+    bottom_left: asset_id
+    bottom_right: time
+markers:
+- event_id: 1
+  splice_type: time_signal
+  assets:
+  - asset-2
+  - asset-3
+  - asset-4
+  segmentation:
+    type_id: '0x22'
+    upid_type: '0x09'
+    upid_hex: ''
+    web_delivery_allowed: true
+    no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1

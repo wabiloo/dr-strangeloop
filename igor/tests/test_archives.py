@@ -59,11 +59,45 @@ def test_save_uploaded_archive_uses_custom_name_and_original_extension(archive_s
 
     assert result == {
         "name": "customer-session",
+        "display_name": "customer-session",
         "path": str(archive_store / "customer-session.har"),
         "format": "har",
     }
     assert (archive_store / "customer-session.har").read_bytes() == b"archive-data"
     assert archives.find_archive_for_source("outputs/archives/customer-session/manifest.json") == "customer-session"
+    assert archives.get_display_name("customer-session") == "customer-session"
+
+
+def test_save_uploaded_archive_defaults_id_from_filename(archive_store):
+    async def chunks():
+        yield b"archive-data"
+
+    result = asyncio.run(archives.save_uploaded_archive(None, "A customer capture.har", chunks()))
+
+    assert result["name"] == "A_customer_capture"
+    assert result["display_name"] == "A_customer_capture"
+    assert (archive_store / "A_customer_capture.har").read_bytes() == b"archive-data"
+
+
+def test_rename_archive_persists_display_name_without_changing_archive_id(archive_store):
+    (archive_store / "stable-id.har").write_bytes(b"archive")
+
+    result = archives.rename_archive("stable-id", "Customer capture")
+
+    assert result == {"name": "stable-id", "display_name": "Customer capture"}
+    assert archives.get_display_name("stable-id") == "Customer capture"
+    assert archives.find_archive_for_source("outputs/archives/stable-id/manifest.json") == "stable-id"
+    listed_archive = next(item for item in archives.list_archives() if item["name"] == "stable-id")
+    assert listed_archive["display_name"] == "Customer capture"
+    assert (archive_store / "stable-id.metadata.json").is_file()
+
+
+@pytest.mark.parametrize("display_name", ["", "   ", "x" * 201, "invalid\nname"])
+def test_rename_archive_rejects_invalid_display_name(archive_store, display_name):
+    (archive_store / "stable-id.har").write_bytes(b"archive")
+
+    with pytest.raises(ValueError):
+        archives.rename_archive("stable-id", display_name)
 
 
 def test_save_uploaded_archive_rejects_invalid_name_extension_and_duplicate(archive_store):
@@ -106,6 +140,7 @@ def test_find_archive_for_source_resolves_generated_manifest(archive_store):
 def test_delete_archive_removes_capture_and_selection_but_keeps_import(archive_store, monkeypatch):
     (archive_store / "session.har").write_bytes(b"archive")
     (archive_store / "session.selection.json").write_text('{"manifest_url": null}')
+    (archive_store / "session.metadata.json").write_text('{"display_name": "Session"}')
     imported = archives.paths.ARCHIVE_IMPORTS_DIR / "session" / "manifest.json"
     imported.parent.mkdir(parents=True)
     imported.write_text('{"segments": []}')
@@ -114,6 +149,7 @@ def test_delete_archive_removes_capture_and_selection_but_keeps_import(archive_s
 
     assert not (archive_store / "session.har").exists()
     assert not (archive_store / "session.selection.json").exists()
+    assert not (archive_store / "session.metadata.json").exists()
     assert imported.is_file()
 
 
@@ -211,16 +247,25 @@ def test_route_delete_archive(archive_store):
     assert response.status_code == 404
 
 
-def test_route_upload_archive_uses_selected_name(archive_store):
+def test_route_rename_archive(archive_store):
+    (archive_store / "stable.har").write_bytes(b"archive")
+    response = client.put("/api/v1/archives/stable/name", json={"display_name": "Friendly name"})
+
+    assert response.status_code == 200
+    assert response.json() == {"name": "stable", "display_name": "Friendly name"}
+    assert (archive_store / "stable.metadata.json").read_text() == '{\n  "display_name": "Friendly name"\n}\n'
+
+
+def test_route_upload_archive_defaults_name_from_filename(archive_store):
     response = client.post(
         "/api/v1/archives/upload",
-        params={"name": "named-capture", "filename": "browser-export.har"},
+        params={"filename": "Browser export.har"},
         content=b"capture-bytes",
     )
 
     assert response.status_code == 200
-    assert response.json()["name"] == "named-capture"
-    assert (archive_store / "named-capture.har").read_bytes() == b"capture-bytes"
+    assert response.json()["name"] == "Browser_export"
+    assert (archive_store / "Browser_export.har").read_bytes() == b"capture-bytes"
 
 
 def test_route_coverage_404_for_unknown_archive(archive_store):

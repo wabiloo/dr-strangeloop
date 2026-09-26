@@ -26,6 +26,7 @@ export interface ArchiveImportStatus {
 /** One row from GET /api/v1/archives/ (grave-robber/SCOPE.md §10's list view). */
 export interface ArchiveListItem {
   name: string
+  display_name: string
   path: string
   format: string
   entry_count?: number
@@ -101,6 +102,7 @@ export interface MultivariantPlaylist {
  * per-variant coverage map, for the import wizard's range picker. */
 export interface ArchiveCoverage {
   name: string
+  display_name: string
   variants: VariantCoverage[]
   multivariants: MultivariantPlaylist[]
   suggestions: RangeSuggestion[]
@@ -220,6 +222,7 @@ export interface ChannelListItem {
   source_kind?: 'playlist' | 'archive'
   playlist_name?: string | null
   archive_name?: string | null
+  archive_display_name?: string | null
   // Live running/stopped signal, fetched by `channel.py list` once the
   // CloudFormation stack has settled -- stack_status alone can't tell
   // "deployed" apart from "deployed but scaled to 0 / IDLE". Absent

@@ -1,5 +1,5 @@
 [deploy]
-name = "break-and-ppos-short-local"
+name = "test-bootstrap"
 backend = "local-docker"
 
 [aws]
@@ -10,19 +10,16 @@ bucket_name = ""
 content_folder = "its-a-live/content"
 
 [input]
-source_path = "../outputs/break-and-ppos-short.ts"
+source_path = "/Users/fabrelambeau/Broadpeak/Code/dr-strangeloop/outputs/test-boostrap.ts"
 
 [markers]
 daterange_mode      = "shared"
 cue_tags            = "none"
-increment_event_ids = true
-daterange_id_format = "{segcode}-{eventid}-{loop}"
+increment_event_ids = false
 
 [packaging]
-segment_duration   = 4.0
+segment_duration   = 3.0
 dvr_window_seconds = 30.0
-hls_format = "cmaf"
-hls_ts_mux_audio = true
 
 [docker]
-port = 8092
+port = "auto"

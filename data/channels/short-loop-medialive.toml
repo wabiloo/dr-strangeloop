@@ -1,0 +1,13 @@
+[deploy]
+name = "short-loop-medialive"
+backend = "aws-media"
+
+[aws]
+region = "eu-west-1"
+
+[s3]
+bucket_name = "bpkio-cs-demos"
+content_folder = "its-a-live/content"
+
+[input]
+source_path = "/Users/fabrelambeau/Broadpeak/Code/dr-strangeloop/outputs/short-loop-splice-insert.ts"

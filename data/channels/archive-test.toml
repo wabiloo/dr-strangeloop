@@ -1,5 +1,5 @@
 [deploy]
-name = "break-and-ppos-short-local"
+name = "archive-test"
 backend = "local-docker"
 
 [aws]
@@ -10,19 +10,20 @@ bucket_name = ""
 content_folder = "its-a-live/content"
 
 [input]
-source_path = "../outputs/break-and-ppos-short.ts"
+source_path = "/Users/fabrelambeau/Broadpeak/Code/dr-strangeloop/outputs/archives/d1uz2gd9rhh5xg.cloudfront.net_09-26-2026-18-49-26/manifest.json"
+allow_missing_segments = false
 
 [markers]
 daterange_mode      = "shared"
 cue_tags            = "none"
-increment_event_ids = true
+increment_event_ids = false
 daterange_id_format = "{segcode}-{eventid}-{loop}"
 
 [packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30.0
-hls_format = "cmaf"
-hls_ts_mux_audio = true
+hls_format = "ts"
+hls_ts_mux_audio = false
 
 [docker]
-port = 8092
+port = "auto"

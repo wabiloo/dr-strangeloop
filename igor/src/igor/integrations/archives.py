@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path, PurePosixPath
 from collections.abc import AsyncIterable
+from pathlib import Path, PurePosixPath
 
 from grave_robber.multivariant import find_audio_playlist, is_multivariant_playlist, parse_multivariant_playlist
 from grave_robber.availability import build_variant_segments, combine_audio, covered_ranges
@@ -31,10 +31,15 @@ from igor.jobs.runner import Job, runner
 
 ARCHIVE_EXTENSIONS = (".har", ".proxymanlogv2", ".log", ".barc", ".zip")
 _ARCHIVE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$")
+_DISPLAY_NAME_MAX_LENGTH = 200
 
 
-async def save_uploaded_archive(name: str, filename: str, chunks: AsyncIterable[bytes]) -> dict:
-    """Save an uploaded capture under its user-selected archive name."""
+async def save_uploaded_archive(name: str | None, filename: str, chunks: AsyncIterable[bytes]) -> dict:
+    """Save a capture using a supplied stable ID or a safe filename-derived one."""
+    if not name:
+        stem = Path(filename).stem
+        name = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")[:180]
+        name = re.sub(r"^[^A-Za-z0-9]+", "", name) or "archive"
     if not _ARCHIVE_NAME_RE.fullmatch(name) or name in {".", ".."}:
         raise ValueError("Archive name must start with a letter or digit and contain only letters, digits, dots, underscores, or hyphens (max 180 characters).")
     extension = Path(filename).suffix.lower()
@@ -60,7 +65,42 @@ async def save_uploaded_archive(name: str, filename: str, chunks: AsyncIterable[
         if created:
             destination.unlink(missing_ok=True)
         raise
-    return {"name": name, "path": str(destination), "format": extension.lstrip(".")}
+    return {
+        "name": name,
+        "display_name": name,
+        "path": str(destination),
+        "format": extension.lstrip("."),
+    }
+
+
+def _metadata_path(name: str) -> Path:
+    return paths.ARCHIVES_DIR / f"{name}.metadata.json"
+
+
+def get_display_name(name: str) -> str:
+    """Return the persisted display name, falling back to the archive ID."""
+    _resolve_archive_path(name)
+    try:
+        metadata = json.loads(_metadata_path(name).read_text())
+    except (OSError, ValueError):
+        return name
+    display_name = metadata.get("display_name") if isinstance(metadata, dict) else None
+    return display_name if isinstance(display_name, str) and display_name.strip() else name
+
+
+def rename_archive(name: str, display_name: str) -> dict:
+    """Persist a user-facing name without changing the archive's stable ID."""
+    _resolve_archive_path(name)
+    display_name = display_name.strip()
+    if not display_name or len(display_name) > _DISPLAY_NAME_MAX_LENGTH:
+        raise ValueError(f"Archive display name must be 1-{_DISPLAY_NAME_MAX_LENGTH} characters.")
+    if any(ord(char) < 32 or ord(char) == 127 for char in display_name):
+        raise ValueError("Archive display name cannot contain control characters.")
+    metadata_path = _metadata_path(name)
+    temporary_path = metadata_path.with_suffix(".metadata.json.tmp")
+    temporary_path.write_text(json.dumps({"display_name": display_name}, indent=2) + "\n")
+    temporary_path.replace(metadata_path)
+    return {"name": name, "display_name": display_name}
 
 
 def list_archives() -> list[dict]:
@@ -74,7 +114,12 @@ def list_archives() -> list[dict]:
     for path in sorted(paths.ARCHIVES_DIR.iterdir()):
         if path.is_dir() or path.suffix.lower() not in ARCHIVE_EXTENSIONS:
             continue
-        entry: dict = {"name": path.stem, "path": str(path), "format": path.suffix.lstrip(".")}
+        entry: dict = {
+            "name": path.stem,
+            "display_name": get_display_name(path.stem),
+            "path": str(path),
+            "format": path.suffix.lstrip("."),
+        }
         try:
             entry.update(_archive_summary(path))
         except Exception as exc:  # noqa: BLE001 -- surface as a per-row error, not a 500 for everyone
@@ -146,8 +191,10 @@ def delete_archive(name: str) -> None:
     """
     archive_path = _resolve_archive_path(name)
     selection_path = paths.ARCHIVES_DIR / f"{name}.selection.json"
+    metadata_path = _metadata_path(name)
     archive_path.unlink()
     selection_path.unlink(missing_ok=True)
+    metadata_path.unlink(missing_ok=True)
 
 
 def find_archive_for_source(source_path: str) -> str | None:
@@ -229,6 +276,7 @@ def get_coverage(name: str) -> dict:
         )
     return {
         "name": name,
+        "display_name": get_display_name(name),
         "variants": variants,
         "multivariants": multivariants,
         "suggestions": suggest_ranges(hls_segments),
