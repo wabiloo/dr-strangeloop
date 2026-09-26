@@ -1791,6 +1791,9 @@ const reportUrl = computed(() =>
 const scteVerifyUrl = computed(() =>
   props.name ? scteVerifyReportUrl(props.name, scteVerifyVersion.value) : null,
 )
+const scteVerifyCardsUrl = computed(() =>
+  props.name ? scteVerifyReportUrl(props.name, scteVerifyVersion.value, 'cards') : null,
+)
 const assembleLabel = computed(() =>
   outputStatus.value?.exists && !outputStatus.value.stale ? 'Reassemble' : 'Assemble',
 )
@@ -2571,7 +2574,7 @@ function applyHexPopover() {
             </div>
 
             <div v-if="outputStatus?.exists && !outputStatus.stale && !buildRunning" class="flex flex-column gap-2">
-              <span class="font-bold">Independent SCTE-35 verification</span>
+              <span class="font-bold">Krogh: independent SCTE-35 inspection</span>
               <span class="text-color-secondary text-sm">
                 Scans the assembled TS itself for its actual SCTE-35 markers -- completely independently of
                 franken-ts (no playlist, no markers.json) -- and extracts frames around every splice boundary, so
@@ -2600,12 +2603,23 @@ function applyHexPopover() {
                   outlined
                   class="report-open-button"
                 />
+                <Button
+                  v-if="scteVerifyStatus?.exists && !scteVerifyStatus.stale && scteVerifyCardsUrl && !verifyingScte"
+                  as="a"
+                  :href="scteVerifyCardsUrl"
+                  target="_blank"
+                  rel="noopener"
+                  label="Detailed report"
+                  icon="pi pi-list"
+                  severity="secondary"
+                  text
+                />
               </div>
             </div>
             <JobPanel v-if="scteVerifyJobId" :job-id="scteVerifyJobId" @finished="onScteVerifyFinished" />
 
             <div v-if="scteVerifyStatus?.exists && !scteVerifyStatus.stale && scteVerifyUrl && !buildRunning && !verifyingScte" class="flex flex-column gap-2">
-              <iframe :src="scteVerifyUrl" title="independent SCTE-35 verification report" class="report-frame" />
+              <iframe :src="scteVerifyUrl" title="krogh SCTE-35 filmstrip" class="report-frame" />
             </div>
           </div>
         </TabPanel>

@@ -139,9 +139,13 @@ export function getScteVerifyReport(name: string): Promise<Record<string, unknow
 }
 
 /** URL for the self-contained HTML rendering of the same report (iframe use). */
-export function scteVerifyReportUrl(name: string, cacheBust?: string | number): string {
-  const url = `${PLAYLISTS_BASE}/${encodeURIComponent(name)}/scte-verify/report`
-  return cacheBust === undefined ? url : `${url}?v=${encodeURIComponent(String(cacheBust))}`
+export function scteVerifyReportUrl(
+  name: string,
+  cacheBust?: string | number,
+  view: 'filmstrip' | 'cards' = 'filmstrip',
+): string {
+  const url = `${PLAYLISTS_BASE}/${encodeURIComponent(name)}/scte-verify/report?view=${view}`
+  return cacheBust === undefined ? url : `${url}&v=${encodeURIComponent(String(cacheBust))}`
 }
 
 // ---------------------------------------------------------------------------

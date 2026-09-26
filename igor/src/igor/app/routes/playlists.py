@@ -197,10 +197,13 @@ def get_scte_verify_report(name: str) -> dict:
 
 
 @router.get("/{name}/scte-verify/report")
-def get_scte_verify_html(name: str) -> FileResponse:
-    """The self-contained HTML rendering of the same report, for iframe use."""
+def get_scte_verify_html(name: str, view: str = "filmstrip") -> FileResponse:
+    """Self-contained HTML rendering of the report, for iframe use.
+    `view` is "filmstrip" (default) or "cards" (per-marker detail report)."""
+    if view not in ("filmstrip", "cards"):
+        raise HTTPException(status_code=422, detail="view must be 'filmstrip' or 'cards'")
     try:
-        path = scte_verify.scte_verify_html_path(name)
+        path = scte_verify.scte_verify_html_path(name, view)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

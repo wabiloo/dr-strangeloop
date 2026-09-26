@@ -33,9 +33,10 @@ def scte_verify_json_path(name: str) -> Path:
     return _output_dir(ts_path) / "scte-report.json"
 
 
-def scte_verify_html_path(name: str) -> Path:
+def scte_verify_html_path(name: str, view: str = "filmstrip") -> Path:
     ts_path = franken_ts.output_ts_path(name)
-    return _output_dir(ts_path) / "scte-report.html"
+    filename = "scte-report.html" if view == "cards" else "scte-filmstrip.html"
+    return _output_dir(ts_path) / filename
 
 
 def scte_verify_status(name: str) -> dict:
