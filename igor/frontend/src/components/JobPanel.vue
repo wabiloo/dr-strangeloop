@@ -33,10 +33,22 @@ function scrollToBottom() {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-const elapsedLabel = computed(() => {
-  const m = Math.floor(elapsedSeconds.value / 60)
-  const s = elapsedSeconds.value % 60
-  return `${m}:${String(s).padStart(2, '0')}`
+function formatDuration(totalSeconds: number): string {
+  const h = Math.floor(totalSeconds / 3600)
+  const m = Math.floor((totalSeconds % 3600) / 60)
+  const s = totalSeconds % 60
+  const ss = String(s).padStart(2, '0')
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`
+}
+
+const elapsedLabel = computed(() => formatDuration(elapsedSeconds.value))
+
+// Server-recorded run time, kept on screen after the job finishes.
+const tookLabel = computed(() => {
+  const j = job.value
+  if (!j || (j.status !== 'succeeded' && j.status !== 'failed')) return ''
+  if (j.started_at == null || j.finished_at == null) return ''
+  return formatDuration(Math.max(0, Math.round(j.finished_at - j.started_at)))
 })
 
 function statusSeverity(status?: string) {
@@ -113,6 +125,9 @@ onBeforeUnmount(stop)
       <ProgressSpinner v-if="job?.status === 'running' || !job" style="width: 1.25rem; height: 1.25rem" stroke-width="6" />
       <Tag v-if="job" :value="job.status" :severity="statusSeverity(job.status)" />
       <span v-if="job?.status === 'running'" class="text-sm text-color-secondary">elapsed {{ elapsedLabel }}</span>
+      <span v-else-if="tookLabel" class="text-sm text-color-secondary">
+        {{ job?.status === 'succeeded' ? 'took' : 'failed after' }} {{ tookLabel }}
+      </span>
       <span class="text-sm text-color-secondary">job {{ jobId }}</span>
     </div>
     <Message v-if="job?.status === 'running' && etaHint" severity="info" :closable="false">

@@ -111,13 +111,15 @@ class JobRunner:
                 job.log.append(line.rstrip("\n"))
             proc.wait()
             job.return_code = proc.returncode
+            # finished_at must be set before the final status: pollers stop on
+            # the first terminal status they see and never re-read the job.
+            job.finished_at = time.time()
             job.status = "succeeded" if proc.returncode == 0 else "failed"
         except Exception as exc:  # noqa: BLE001 -- surface any launch failure into the job log
             job.log.append(f"igor: failed to run job: {exc!r}")
+            job.finished_at = time.time()
             job.status = "failed"
             job.return_code = -1
-        finally:
-            job.finished_at = time.time()
 
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
