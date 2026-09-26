@@ -1872,6 +1872,17 @@ async function runScteVerify() {
   }
 }
 
+// The report is served same-origin, so the frame can be sized to its content
+// (and kept in sync if the content reflows, e.g. on window resize).
+function fitFrameToContent(e: Event) {
+  const frame = e.target as HTMLIFrameElement
+  const body = frame.contentDocument?.body
+  if (!body) return
+  const fit = () => { frame.style.height = `${body.offsetHeight + 2}px` }
+  fit()
+  new ResizeObserver(fit).observe(body)
+}
+
 function onScteVerifyFinished(job: Job) {
   verifyingScte.value = false
   if (job.status !== 'succeeded') {
@@ -2617,7 +2628,7 @@ function applyHexPopover() {
               </div>
             </div>
             <div v-if="scteVerifyStatus?.exists && !scteVerifyStatus.stale && scteVerifyUrl && !buildRunning && !verifyingScte" class="flex flex-column gap-2">
-              <iframe :src="scteVerifyUrl" title="krogh SCTE-35 filmstrip" class="report-frame" />
+              <iframe :src="scteVerifyUrl" title="krogh SCTE-35 filmstrip" class="report-frame" @load="fitFrameToContent" />
             </div>
             <JobPanel v-if="scteVerifyJobId" :job-id="scteVerifyJobId" @finished="onScteVerifyFinished" />
           </div>
