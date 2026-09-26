@@ -12,11 +12,20 @@ REPO_ROOT = IGOR_DIR.parent
 FRANKEN_TS_DIR = REPO_ROOT / "franken-ts"
 ITS_A_LIVE_DIR = REPO_ROOT / "its-a-live"
 LOOP_DEE_LOOP_DIR = REPO_ROOT / "loop-dee-loop"
+GRAVE_ROBBER_DIR = REPO_ROOT / "grave-robber"
 
 FRANKEN_TS_PLAYLISTS_DIR = REPO_ROOT / "data" / "playlists"
 ITS_A_LIVE_CONFIGS_DIR = REPO_ROOT / "data" / "channels"
 ASSET_UPLOADS_DIR = REPO_ROOT / "data" / "assets"
 OUTPUTS_DIR = REPO_ROOT / "outputs"
+
+# grave-robber/SCOPE.md §10: "available archives (HAR/Proxyman logs dropped
+# into a store this tool owns, e.g. data/archives/)".
+ARCHIVES_DIR = REPO_ROOT / "data" / "archives"
+# Import output lands alongside franken-ts's own outputs/ tree, in its own
+# subdirectory so a grave-robber import (manifest.json + media/) never
+# collides with a franken-ts playlist's own <name>.ts/<name>/ output.
+ARCHIVE_IMPORTS_DIR = OUTPUTS_DIR / "archives"
 
 
 def its_a_live_python() -> list[str]:
@@ -40,6 +49,15 @@ def franken_ts_python() -> list[str]:
     if shutil.which("uv"):
         return ["uv", "run", "--project", str(REPO_ROOT), "franken-ts"]
     return ["franken-ts"]
+
+
+def grave_robber_python() -> list[str]:
+    """grave-robber is a workspace member sharing igor's own venv (like
+    franken-ts) -- `uv run` for parity/robustness across environments,
+    same reasoning as franken_ts_python()."""
+    if shutil.which("uv"):
+        return ["uv", "run", "--project", str(REPO_ROOT), "grave-robber"]
+    return ["grave-robber"]
 
 
 def scte_verify_python() -> list[str]:

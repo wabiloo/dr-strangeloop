@@ -12,10 +12,12 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "httpx>=0.28.1",
     "franken-ts",
+    "grave-robber",
 ]
 
 [tool.uv.sources]
 franken-ts = { workspace = true }
+grave-robber = { workspace = true }
 
 [dependency-groups]
 dev = [
