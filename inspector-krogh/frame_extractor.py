@@ -826,7 +826,7 @@ def main() -> None:
     console.print(Panel(
         f"[bold]{video_path.name}[/]\n"
         f"[dim]→ {out_root.resolve()}[/]",
-        title="[bold blue]Frame Extractor[/]",
+        title="[bold blue]🕵️ Frame Extractor[/]",
         border_style="blue",
         padding=(0, 2),
     ))
