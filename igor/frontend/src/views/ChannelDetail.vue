@@ -84,6 +84,8 @@ const editForm = reactive<ChannelCreatePayload>({
   cue_tags: 'none',
   increment_event_ids: false,
   daterange_id_format: '{segcode}-{eventid}-{loop}',
+  dash_signal_format: 'binary',
+  dash_descriptor_mode: 'shared',
 })
 const editIsEcsExpress = computed(() => editForm.backend === 'ecs-express')
 const editIsLocalDocker = computed(() => editForm.backend === 'local-docker')
@@ -123,6 +125,14 @@ const cueTagsOptions = [
   { label: 'none -- DATERANGE only (default)', value: 'none' },
   { label: 'alongside -- also emit EXT-X-CUE-OUT/-CONT/-IN for splice_insert markers, next to DATERANGE', value: 'alongside' },
   { label: 'only -- EXT-X-CUE-OUT/-CONT/-IN only, no DATERANGE (splice_insert-only channels)', value: 'only' },
+]
+const dashSignalFormatOptions = [
+  { label: 'binary -- raw SCTE-35 payload in a <Binary> element (default)', value: 'binary' },
+  { label: 'xml -- full decoded <SpliceInfoSection> per the SCTE-35 XML binding', value: 'xml' },
+]
+const dashDescriptorModeOptions = [
+  { label: 'shared -- full multi-descriptor message on every coincident event (default)', value: 'shared' },
+  { label: 'narrowed -- each event carries only its own descriptor, re-encoded', value: 'narrowed' },
 ]
 
 const toast = useToast()
@@ -169,6 +179,8 @@ function startEdit() {
     cue_tags: (markers.cue_tags as ChannelCreatePayload['cue_tags']) ?? 'none',
     increment_event_ids: Boolean(markers.increment_event_ids ?? false),
     daterange_id_format: String(markers.daterange_id_format ?? '{segcode}-{eventid}-{loop}'),
+    dash_signal_format: (markers.dash_signal_format as ChannelCreatePayload['dash_signal_format']) ?? 'binary',
+    dash_descriptor_mode: (markers.dash_descriptor_mode as ChannelCreatePayload['dash_descriptor_mode']) ?? 'shared',
   })
   editAutoPort.value = editForm.port === 'auto'
   editLastExplicitPort.value = typeof editForm.port === 'number' ? editForm.port : editLastExplicitPort.value
@@ -935,6 +947,14 @@ watch(() => props.name, reload)
                 <div class="flex flex-column gap-1 config-field-wide">
                   <label class="text-xs text-color-secondary">HLS CUE-OUT/CUE-IN tags</label>
                   <Select v-model="editForm.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" fluid />
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <label class="text-xs text-color-secondary">DASH SCTE-35 signal format</label>
+                  <Select v-model="editForm.dash_signal_format" :options="dashSignalFormatOptions" option-label="label" option-value="value" fluid />
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <label class="text-xs text-color-secondary">DASH coincident descriptor mode</label>
+                  <Select v-model="editForm.dash_descriptor_mode" :options="dashDescriptorModeOptions" option-label="label" option-value="value" fluid />
                 </div>
                 <div class="flex align-items-center gap-2 config-field-wide">
                   <Checkbox v-model="editForm.increment_event_ids" binary input-id="edit-increment-event-ids" />

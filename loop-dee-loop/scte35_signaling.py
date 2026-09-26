@@ -105,6 +105,12 @@ DATERANGE_ID_FIELDS = frozenset({
     "loop", "eventid", "segid", "seghex", "segcode", "segname", "epoch", "pd",
 })
 
+DASH_SIGNAL_FORMATS = frozenset({"binary", "xml"})
+DASH_SIGNAL_FORMAT_DEFAULT = "binary"
+DASH_DESCRIPTOR_MODES = frozenset({"shared", "narrowed"})
+DASH_DESCRIPTOR_MODE_DEFAULT = "shared"
+SCTE35_XML_NAMESPACE = "urn:scte:scte35:2013:xml"
+
 
 def validate_daterange_id_format(value: str | None) -> str | None:
     """Validate template fields and reject format conversions/specifiers."""
@@ -130,6 +136,233 @@ def validate_daterange_id_format(value: str | None) -> str | None:
     except Exception as exc:
         raise ValueError(f"invalid daterange_id_format: {exc}") from exc
     return value
+
+
+def validate_dash_signal_format(value: str | None) -> str:
+    """[markers].dash_signal_format: shape of the DASH <EventStream>'s
+    <Signal> children -- the raw base64 splice command
+    (schemeIdUri="...2014:xml+bin", <Binary>, today's only behavior) or
+    each marker's full decoded <SpliceInfoSection> per the SCTE-35 XML
+    binding (schemeIdUri="...2013:xml"). `None` marks packages baked
+    before this setting existed and preserves their "binary" behavior."""
+    if value is None:
+        return DASH_SIGNAL_FORMAT_DEFAULT
+    if value not in DASH_SIGNAL_FORMATS:
+        raise ValueError(f"dash_signal_format must be 'binary' or 'xml', got {value!r}")
+    return value
+
+
+def validate_dash_descriptor_mode(value: str | None) -> str:
+    """[markers].dash_descriptor_mode: whether each DASH <Event>'s Signal
+    payload is the full *shared* multi-descriptor message (default -- same
+    bytes for every marker coincident at that PTS, today's only behavior),
+    or a *narrowed*, per-event re-encode carrying only that marker's own
+    descriptor (see bake.py's `decode_embedded_scte35`). Independent of
+    HLS's `daterange_mode` -- a channel can run HLS "shared" and DASH
+    "narrowed" (or vice versa) at the same time. `None` marks packages
+    baked before this setting existed and preserves their "shared"
+    behavior."""
+    if value is None:
+        return DASH_DESCRIPTOR_MODE_DEFAULT
+    if value not in DASH_DESCRIPTOR_MODES:
+        raise ValueError(f"dash_descriptor_mode must be 'shared' or 'narrowed', got {value!r}")
+    return value
+
+
+_DEVICE_RESTRICTIONS_CODES = {
+    "Restrict Group 0": 0,
+    "Restrict Group 1": 1,
+    "Restrict Group 2": 2,
+    "None": 3,
+}
+
+
+def _xml_ticks(seconds: float) -> int:
+    # threefive's own decode normalizes pts/duration fields to seconds
+    # (float) -- SCTE-35 stores them as integer 90kHz ticks on the wire,
+    # which is also this module's own tick domain (DEFAULT_TIMESCALE),
+    # so round-tripping back is just the inverse of that decode step.
+    return round(seconds * DEFAULT_TIMESCALE)
+
+
+def _xml_bool(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def _xml_attrs(pairs: list[tuple[str, object]]) -> str:
+    return "".join(f' {key}="{value}"' for key, value in pairs if value is not None)
+
+
+def _hex_field(value: str | int) -> int:
+    return int(value, 16) if isinstance(value, str) else value
+
+
+def _splice_insert_xml(command) -> str:
+    attrs = [
+        ("spliceEventId", command.splice_event_id),
+        ("spliceEventCancelIndicator", _xml_bool(command.splice_event_cancel_indicator)),
+    ]
+    if command.splice_event_cancel_indicator:
+        return f"<scte35:SpliceInsert{_xml_attrs(attrs)}/>"
+    attrs += [
+        ("outOfNetworkIndicator", _xml_bool(command.out_of_network_indicator)),
+        ("spliceImmediateFlag", _xml_bool(command.splice_immediate_flag)),
+        ("eventIdComplianceFlag", _xml_bool(command.event_id_compliance_flag)),
+        ("uniqueProgramId", command.unique_program_id),
+        ("availNum", command.avail_num),
+        ("availsExpected", command.avails_expected),
+    ]
+    children = []
+    if command.time_specified_flag:
+        children.append(
+            f'<scte35:Program><scte35:SpliceTime ptsTime="{_xml_ticks(command.pts_time)}"/></scte35:Program>'
+        )
+    if command.duration_flag:
+        children.append(
+            f'<scte35:BreakDuration autoReturn="{_xml_bool(command.break_auto_return)}" '
+            f'duration="{_xml_ticks(command.break_duration)}"/>'
+        )
+    if not children:
+        return f"<scte35:SpliceInsert{_xml_attrs(attrs)}/>"
+    return f"<scte35:SpliceInsert{_xml_attrs(attrs)}>" + "".join(children) + "</scte35:SpliceInsert>"
+
+
+def _time_signal_xml(command) -> str:
+    if not command.time_specified_flag:
+        return "<scte35:TimeSignal/>"
+    return f'<scte35:TimeSignal><scte35:SpliceTime ptsTime="{_xml_ticks(command.pts_time)}"/></scte35:TimeSignal>'
+
+
+def _avail_descriptor_xml(descriptor) -> str:
+    return f'<scte35:AvailDescriptor providerAvailId="{descriptor.provider_avail_id}"/>'
+
+
+def _segmentation_upid_xml(descriptor) -> str:
+    upid = descriptor.segmentation_upid
+    upid_type = descriptor.segmentation_upid_type
+    if isinstance(upid, dict) and "format_identifier" in upid:
+        # MPU (type 0x0c): threefive decodes the format_identifier's 4
+        # ASCII bytes and the trailing private_data hex string
+        # separately -- the wire text content is their concatenation,
+        # `formatIdentifier`/`privateData` are each's own decimal value.
+        format_id_bytes = upid["format_identifier"].encode("ascii")
+        private_data_hex = upid["private_data"][2:]  # strip "0x"
+        format_id = int.from_bytes(format_id_bytes, "big")
+        private_data = int(private_data_hex, 16)
+        text = format_id_bytes.hex() + private_data_hex
+        attrs = _xml_attrs([
+            ("segmentationUpidType", upid_type),
+            ("segmentationUpidFormat", "hexbinary"),
+            ("formatIdentifier", format_id),
+            ("privateData", private_data),
+        ])
+        return f"<scte35:SegmentationUpid{attrs}>{text}</scte35:SegmentationUpid>"
+    if isinstance(upid, str):
+        attrs = _xml_attrs([
+            ("segmentationUpidType", upid_type),
+            ("segmentationUpidFormat", "text"),
+        ])
+        return f"<scte35:SegmentationUpid{attrs}>{escape(upid)}</scte35:SegmentationUpid>"
+    raise RuntimeError(
+        f"dash_signal_format='xml': unsupported segmentation_upid shape for "
+        f"segmentation_upid_type={upid_type}: {upid!r} -- loop-dee-loop's XML "
+        f"renderer only covers the UPID shapes this repo actually produces "
+        f"(text/ADI and MPU)."
+    )
+
+
+def _segmentation_descriptor_xml(descriptor) -> str:
+    attrs = [
+        ("segmentationEventId", _hex_field(descriptor.segmentation_event_id)),
+        ("segmentationEventCancelIndicator", _xml_bool(descriptor.segmentation_event_cancel_indicator)),
+    ]
+    if descriptor.segmentation_event_cancel_indicator:
+        return f"<scte35:SegmentationDescriptor{_xml_attrs(attrs)}/>"
+    attrs += [
+        ("segmentationEventIdComplianceIndicator", _xml_bool(descriptor.segmentation_event_id_compliance_indicator)),
+        ("segmentationTypeId", descriptor.segmentation_type_id),
+        ("segmentNum", descriptor.segment_num),
+        ("segmentsExpected", descriptor.segments_expected),
+    ]
+    if descriptor.sub_segment_num is not None:
+        attrs += [
+            ("subSegmentNum", descriptor.sub_segment_num),
+            ("subSegmentsExpected", descriptor.sub_segments_expected),
+        ]
+    if descriptor.segmentation_duration_flag:
+        attrs.append(("segmentationDuration", _xml_ticks(descriptor.segmentation_duration)))
+
+    children = []
+    if not descriptor.delivery_not_restricted_flag:
+        device_restrictions = _DEVICE_RESTRICTIONS_CODES[descriptor.device_restrictions]
+        children.append(
+            f'<scte35:DeliveryRestrictions webDeliveryAllowedFlag="{_xml_bool(descriptor.web_delivery_allowed_flag)}" '
+            f'noRegionalBlackoutFlag="{_xml_bool(descriptor.no_regional_blackout_flag)}" '
+            f'archiveAllowedFlag="{_xml_bool(descriptor.archive_allowed_flag)}" '
+            f'deviceRestrictions="{device_restrictions}"/>'
+        )
+    children.append(_segmentation_upid_xml(descriptor))
+    return f"<scte35:SegmentationDescriptor{_xml_attrs(attrs)}>" + "".join(children) + "</scte35:SegmentationDescriptor>"
+
+
+def build_scte35_full_xml(splice_command_b64: str) -> str:
+    """Decode `splice_command_b64` and render it as a full
+    <scte35:SpliceInfoSection> element per the SCTE-35 XML binding, for
+    `dash_signal_format = "xml"`. Covers whatever this marker's payload
+    actually carries -- a bare splice_insert (+ AvailDescriptor), or a
+    time_signal + segmentation_descriptor(s) -- since loop-dee-loop only
+    ever produces those two shapes (see this module's docstring).
+
+    Every element uses the `scte35:` prefix rather than redeclaring
+    `xmlns="..."` on each one -- the caller (serve.py's build_dash_manifest)
+    declares `xmlns:scte35` exactly once, on the MPD root.
+
+    Deliberately hand-rolls the XML from threefive's *decode*-side
+    attributes (`Cue.decode()`, then plain attribute access) rather than
+    calling threefive's own `Cue.xml()` -- that serializer's behavior was
+    found to vary/break release-to-release (mis-cased attributes,
+    silently dropped fields, a duplicate xmlns attribute, depending on
+    the exact threefive version resolved), where the decode-side
+    attributes this function reads are the same simple, stable API
+    `reencode_event_ids` above already depends on.
+    """
+    try:
+        import threefive  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "threefive is required for dash_signal_format='xml' (pip install threefive)"
+        ) from exc
+    cue = threefive.Cue(splice_command_b64)
+    cue.decode()
+
+    if cue.command.command_type == 5:  # Splice Insert
+        command_xml = _splice_insert_xml(cue.command)
+    elif cue.command.command_type == 6:  # Time Signal
+        command_xml = _time_signal_xml(cue.command)
+    else:
+        raise RuntimeError(
+            f"dash_signal_format='xml': unsupported splice_command_type "
+            f"{cue.command.command_type} ({cue.command.name!r}) -- "
+            f"loop-dee-loop's XML renderer only covers splice_insert and "
+            f"time_signal, the two shapes this repo actually produces."
+        )
+
+    descriptors_xml = "".join(
+        _avail_descriptor_xml(d) if d.tag == 0 else _segmentation_descriptor_xml(d)
+        for d in cue.descriptors
+    )
+
+    info = cue.info_section
+    sis_attrs = _xml_attrs([
+        ("ptsAdjustment", _xml_ticks(info.pts_adjustment)),
+        ("protocolVersion", info.protocol_version),
+        ("sapType", _hex_field(info.sap_type)),
+        ("tier", _hex_field(info.tier)),
+    ])
+    return (
+        f"<scte35:SpliceInfoSection{sis_attrs}>"
+        f"{command_xml}{descriptors_xml}</scte35:SpliceInfoSection>"
+    )
 
 
 def _segmentation_type_id(marker: SignalingMarker) -> int:

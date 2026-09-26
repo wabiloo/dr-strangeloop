@@ -41,6 +41,7 @@ from loop_math import (
     ticks_to_wall_clock_seconds,
 )
 from scte35_signaling import (
+    SCTE35_XML_NAMESPACE,
     SignalingMarker,
     build_cue_breaks,
     build_cue_in_tag,
@@ -49,6 +50,7 @@ from scte35_signaling import (
     build_daterange_tags,
     build_event_id_map,
     build_grouped_daterange_tags,
+    build_scte35_full_xml,
     is_instant_segmentation,
     is_out_marker,
     markers_to_signaling,
@@ -244,6 +246,8 @@ class LoopPackage:
         self.cue_tags: str = self.descriptor.get("cue_tags", "none")
         self.increment_event_ids: bool = self.descriptor.get("increment_event_ids", False)
         self.daterange_id_format: str | None = self.descriptor.get("daterange_id_format")
+        self.dash_signal_format: str = self.descriptor.get("dash_signal_format", "binary")
+        self.dash_descriptor_mode: str = self.descriptor.get("dash_descriptor_mode", "shared")
 
         # Precomputed once (not per-request): see build_cue_breaks for
         # what this holds and why it's splice_insert-only.
@@ -831,40 +835,50 @@ class Channel:
             # its own start.
             reference_entries = _period_entries(pkg.segment_boundary_ticks, local_indices)
 
-            # `id` is the real, plain event_id (as an actual int, matching
-            # SCTE-35's own segmentation_event_id / the channel config's
-            # `event_id` -- never a compound string): a player decodes the
-            # <Binary> payload itself (via the `scte35` npm package, same
-            # as HLS -- see igor's scte35Lite.ts describeAllMarkers()) to
-            # get the segmentation/splice type, rather than us encoding it
-            # into `id`.
+            # `id` is a per-Period-unique synthetic id, never the raw
+            # event_id directly -- see DIRECTION_CODE below. A player
+            # decodes the Signal payload itself (via the `scte35` npm
+            # package, same as HLS -- see igor's scte35Lite.ts
+            # describeAllMarkers()) to get the real segmentation/splice
+            # event id and type, rather than reading `id`.
             #
             # A Start/End pair SHARES one event_id by design (see the
             # module docstring on event_id reuse), and once enough of a
             # loop iteration has played out that BOTH halves sit inside the
             # currently-open Period's never-pruned segment range (see the
-            # comment above `periods_plan`), they're both due in the SAME
-            # <EventStream> -- if `id` alone had to disambiguate them,
+            # comment above `periods_plan`), they're both due in the same
+            # single <EventStream> -- if `id` were the raw event_id,
             # dash.js's EventController (confirmed against its own source)
-            # would see the second one as a duplicate of the first
-            # (same id) and silently drop it, so the End marker would
-            # never fire. Likewise the exact same marker recurring next
-            # loop, with the exact same id, needs to be recognized as a
-            # NEW occurrence, not a dup of the one already scheduled --
-            # EventController's dedupe key isn't `id` alone though, it's
-            # `(EventStream@value, id)` (`(!value || eventStream.value ===
-            # value) && e.id === id`), so both problems are solved the
-            # DASH-native way: by grouping Events into separate
-            # <EventStream> elements whose own `@value` differs per
-            # (loop_number, start/end/instant) -- never by smuggling that
-            # information into `id`.
+            # would see the second one as a duplicate of the first (same
+            # id) and silently drop it, so the End marker would never
+            # fire. `DIRECTION_CODE` gives each direction (out/in/instant)
+            # its own multiple of the base event id, so the two halves of
+            # one break -- and the exact same marker recurring next loop --
+            # always get distinct, but still fully deterministic (no
+            # runtime counter), ids. Base event ids must stay well under
+            # 2**30 for this to fit `id`'s xs:unsignedInt range once
+            # multiplied -- true for every id this codebase's channel
+            # configs actually assign.
             # [markers].increment_event_ids: one id map per Period, keyed
             # by that Period's own loop_number (same helper HLS uses, see
             # _remap_signaling_markers) -- {} when the setting is off, so
             # the lookups below become no-ops via dict.get() fallback.
             event_id_map = build_event_id_map(pkg.markers, loop_number) if pkg.increment_event_ids else {}
+            DIRECTION_CODE = {"out": 0, "in": 1, "instant": 2}
 
-            event_xml_by_stream: dict[str, list[str]] = {}
+            # [markers].dash_signal_format: "binary" (default) carries the
+            # raw base64 splice command in a <scte35:Binary> element; "xml"
+            # carries each marker's full decoded <scte35:SpliceInfoSection>
+            # instead (see build_scte35_full_xml). schemeIdUri distinguishes
+            # the two per the SCTE-35 XML binding, constant for the whole
+            # manifest.
+            scheme_id_uri = (
+                SCTE35_XML_NAMESPACE
+                if pkg.dash_signal_format == "xml"
+                else "urn:scte:scte35:2014:xml+bin"
+            )
+
+            event_xml: list[str] = []
             for marker in pkg.markers:
                 # A single <Event> element describes the whole
                 # [presentationTime, presentationTime+duration) interval on
@@ -889,10 +903,21 @@ class Channel:
                 )
                 event_id_hex = event_id_map.get(marker["event_id"], marker["event_id"])
                 event_id_dec = int(event_id_hex, 16)
-                splice_command_b64 = (
-                    reencode_event_ids(marker["splice_command_b64"], event_id_map)
-                    if pkg.increment_event_ids
+                # [markers].dash_descriptor_mode: "shared" (default) embeds
+                # the same full multi-descriptor message every coincident
+                # marker carries; "narrowed" embeds the per-event,
+                # single-descriptor re-encode instead -- independent of
+                # whatever daterange_mode HLS is using (see bake.py's
+                # DecodedMarker.splice_command_b64_narrowed).
+                base_b64 = (
+                    marker["splice_command_b64_narrowed"]
+                    if pkg.dash_descriptor_mode == "narrowed"
                     else marker["splice_command_b64"]
+                )
+                splice_command_b64 = (
+                    reencode_event_ids(base_b64, event_id_map)
+                    if pkg.increment_event_ids
+                    else base_b64
                 )
                 if is_instant_segmentation(marker):
                     direction = "instant"
@@ -900,13 +925,27 @@ class Channel:
                     direction = "out"
                 else:
                     direction = "in"
-                stream_value = f"{loop_number}-{direction}"
-                event_xml_by_stream.setdefault(stream_value, []).append(
+                synthetic_id = event_id_dec * 4 + DIRECTION_CODE[direction]
+                if pkg.dash_signal_format == "xml":
+                    full_xml = build_scte35_full_xml(splice_command_b64)
+                    indented_xml = "\n".join(
+                        f"        {line}" for line in full_xml.splitlines()
+                    )
+                    signal_xml = (
+                        f"      <scte35:Signal>\n"
+                        f"{indented_xml}\n"
+                        f"      </scte35:Signal>"
+                    )
+                else:
+                    signal_xml = (
+                        f"      <scte35:Signal>\n"
+                        f"        <scte35:Binary>{splice_command_b64}</scte35:Binary>\n"
+                        f"      </scte35:Signal>"
+                    )
+                event_xml.append(
                     f'    <Event presentationTime="{marker["pts_time_ticks"]}"'
-                    f'{duration_attr} id="{event_id_dec}">\n'
-                    f'      <Signal xmlns="urn:scte:scte35:2013:xml">\n'
-                    f'        <Binary>{splice_command_b64}</Binary>\n'
-                    f"      </Signal>\n"
+                    f'{duration_attr} id="{synthetic_id}">\n'
+                    f"{signal_xml}\n"
                     f"    </Event>"
                 )
 
@@ -947,12 +986,11 @@ class Channel:
       </Representation>
     </AdaptationSet>'''
 
-            event_streams_xml = "\n".join(
-                f'    <EventStream schemeIdUri="urn:scte:scte35:2014:xml+bin" '
-                f'timescale="{pkg.timescale}" value="{stream_value}">\n'
-                + "\n".join(events)
+            event_streams_xml = (
+                f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}">\n'
+                + "\n".join(event_xml)
                 + "\n    </EventStream>"
-                for stream_value, events in event_xml_by_stream.items()
+                if event_xml else ""
             )
 
             period_xml_parts.append(f'''  <Period id="loop{loop_number}" start="PT{period_start_seconds}S">
@@ -977,6 +1015,7 @@ class Channel:
         # conservative, standard buffer for this.
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     xmlns:scte35="{SCTE35_XML_NAMESPACE}"
      profiles="urn:mpeg:dash:profile:isoff-live:2011"
      type="dynamic"
      availabilityStartTime="{availability_start_time}"

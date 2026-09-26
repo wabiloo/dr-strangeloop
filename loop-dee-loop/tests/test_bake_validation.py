@@ -37,8 +37,8 @@ def _marker(event_id: str, pts_time_ticks: int) -> dict:
 def test_validation_passes_on_exact_match():
     markers = [_marker("0x00000001", 5_400_000), _marker("0x00000002", 9_000_000)]
     decoded = [
-        DecodedMarker("0x00000001", 5_400_000, "AAAA"),
-        DecodedMarker("0x00000002", 9_000_000, "BBBB"),
+        DecodedMarker("0x00000001", 5_400_000, "AAAA", "AAAA"),
+        DecodedMarker("0x00000002", 9_000_000, "BBBB", "BBBB"),
     ]
 
     result = validate_markers_against_ts(markers, decoded)
@@ -59,7 +59,7 @@ def test_validation_fails_on_missing_event_in_ts():
 
 def test_validation_fails_on_extra_event_in_ts():
     markers: list[dict] = []
-    decoded = [DecodedMarker("0x00000001", 5_400_000, "AAAA")]
+    decoded = [DecodedMarker("0x00000001", 5_400_000, "AAAA", "AAAA")]
 
     with pytest.raises(ValidationError, match="not declared in markers.json"):
         validate_markers_against_ts(markers, decoded)
@@ -68,7 +68,7 @@ def test_validation_fails_on_extra_event_in_ts():
 def test_validation_fails_on_one_tick_pts_mismatch():
     """Even a single-tick PTS drift must be a hard failure -- no tolerance."""
     markers = [_marker("0x00000001", 5_400_000)]
-    decoded = [DecodedMarker("0x00000001", 5_400_001, "AAAA")]
+    decoded = [DecodedMarker("0x00000001", 5_400_001, "AAAA", "AAAA")]
 
     with pytest.raises(ValidationError, match="off by 1 tick"):
         validate_markers_against_ts(markers, decoded)
@@ -77,7 +77,7 @@ def test_validation_fails_on_one_tick_pts_mismatch():
 def test_validation_fails_on_segmentation_type_mismatch():
     marker = _marker("0x00000001", 5_400_000)
     marker["segmentation_type_id"] = "0x11"
-    decoded = [DecodedMarker("0x00000001", 5_400_000, "AAAA", segmentation_type_id=0x12)]
+    decoded = [DecodedMarker("0x00000001", 5_400_000, "AAAA", "AAAA", segmentation_type_id=0x12)]
 
     with pytest.raises(ValidationError, match="segmentation_type_id=0x11.*0x12"):
         validate_markers_against_ts([marker], decoded)

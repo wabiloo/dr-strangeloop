@@ -82,13 +82,16 @@ def parse_hls_media_sequence(body: str) -> int:
 
 
 def parse_dash_event_ids_and_times(body: str) -> list[tuple[int, int]]:
-    """`id` is the real, plain event_id as a decimal int (see serve.py's
-    DASH <Event> authoring -- Start/End and loop-iteration disambiguation
-    live on the enclosing <EventStream>'s own `value` attribute, never in
-    `id` itself)."""
+    """`id` is a synthetic per-direction value, `event_id * 4 +
+    direction_code` (direction_code: out=0, in=1, instant=2 -- see
+    serve.py's DASH <Event> authoring), not the real event_id directly --
+    Start/End sharing one event_id would otherwise collide in the single
+    <EventStream> every marker now lands in. Undo the encoding here so
+    this function returns the same real event_ids as HLS's DATERANGE
+    parsing, for an apples-to-apples multiset comparison."""
     return [
-        (int(event_id), int(pts))
-        for pts, event_id in re.findall(
+        (int(synthetic_id) // 4, int(pts))
+        for pts, synthetic_id in re.findall(
             r'<Event presentationTime="(\d+)"[^>]*id="([^"]+)"', body
         )
     ]

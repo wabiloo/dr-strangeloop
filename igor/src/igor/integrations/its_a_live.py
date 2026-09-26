@@ -71,6 +71,8 @@ daterange_mode      = "{daterange_mode}"
 cue_tags            = "{cue_tags}"
 increment_event_ids = {increment_event_ids}
 daterange_id_format = "{daterange_id_format}"
+dash_signal_format  = "{dash_signal_format}"
+dash_descriptor_mode = "{dash_descriptor_mode}"
 """
 
 _ECS_EXPRESS_EXTRA = """
@@ -124,6 +126,8 @@ def generate_toml(
     cue_tags: str = "none",
     increment_event_ids: bool = False,
     daterange_id_format: str = DEFAULT_DATERANGE_ID_FORMAT,
+    dash_signal_format: str = "binary",
+    dash_descriptor_mode: str = "shared",
 ) -> str:
     if backend not in ("aws-media", "ecs-express", "local-docker"):
         raise ValueError(
@@ -132,6 +136,10 @@ def generate_toml(
     validate_daterange_id_format(daterange_id_format)
     if hls_format not in ("cmaf", "ts"):
         raise ValueError("hls_format must be 'cmaf' or 'ts'")
+    if dash_signal_format not in ("binary", "xml"):
+        raise ValueError("dash_signal_format must be 'binary' or 'xml'")
+    if dash_descriptor_mode not in ("shared", "narrowed"):
+        raise ValueError("dash_descriptor_mode must be 'shared' or 'narrowed'")
     content = _TOML_TEMPLATE.format(
         name=name, backend=backend, region=region, bucket_name=bucket_name,
         content_folder=content_folder, source_path=source_path,
@@ -143,6 +151,8 @@ def generate_toml(
             daterange_mode=daterange_mode, cue_tags=cue_tags,
             increment_event_ids=str(increment_event_ids).lower(),
             daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
+            dash_signal_format=dash_signal_format,
+            dash_descriptor_mode=dash_descriptor_mode,
         )
         content += _ECS_EXPRESS_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
@@ -157,6 +167,8 @@ def generate_toml(
             daterange_mode=daterange_mode, cue_tags=cue_tags,
             increment_event_ids=str(increment_event_ids).lower(),
             daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
+            dash_signal_format=dash_signal_format,
+            dash_descriptor_mode=dash_descriptor_mode,
         )
         content += _LOCAL_DOCKER_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,

@@ -209,6 +209,8 @@ export interface ChannelCreatePayload {
   cue_tags?: 'none' | 'alongside' | 'only'
   increment_event_ids?: boolean
   daterange_id_format?: string
+  dash_signal_format?: 'binary' | 'xml'
+  dash_descriptor_mode?: 'shared' | 'narrowed'
 }
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed'
