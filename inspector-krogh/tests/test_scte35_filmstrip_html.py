@@ -92,3 +92,11 @@ def test_asset_bars_join_frames_and_durations():
     # only 2 frames before / 1 after the +0 frame are kept for a marker-less join
     assert "00:00:14.920" in html and "00:00:15.040" in html
     assert "00:00:14.880" not in html and "00:00:15.080" not in html
+
+
+def test_instant_markers_get_their_own_blue_tag_and_pin():
+    markers = [_marker(5, "CAS", "Call Ad Server", 10.0, None)]
+    html = render_filmstrip(_report(markers, {"evt5_start": _shots(10.0, "a")}))
+    assert '<span class="land-tag instant"' in html
+    assert 'class="land-tag start" title=' not in html
+    assert "#ffbb55" not in html

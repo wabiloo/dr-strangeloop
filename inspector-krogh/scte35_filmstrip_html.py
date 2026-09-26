@@ -65,6 +65,7 @@ def _build_columns(report: dict, frame_dur: float, base_dir: Optional[Path]) -> 
                     col["landing"].append({
                         "event_id": marker["event_id"], "boundary": boundary,
                         "type_code": marker["type_code"], "type_name": marker["type_name"],
+                        "instant": bool(marker.get("is_instant")),
                     })
 
     for key in ("asset_start", "asset_end"):
@@ -287,7 +288,7 @@ def render_filmstrip(report: dict, base_dir: Optional[Path] = None) -> str:
             continue
 
         tags = "".join(
-            f'<span class="land-tag {t["side"]}" title="{escape(t["type_name"])} #{t["event_id"]} {t["side"]}">{escape(t["type_code"])}</span>'
+            f'<span class="land-tag {"instant" if t.get("instant") else t["side"]}" title="{escape(t["type_name"])} #{t["event_id"]} {t["side"]}">{escape(t["type_code"])}</span>'
             for t in col["tags"]
         )
         img = f'<img src="{col["img"]}" alt="frame">' if col["img"] else '<div class="no-img"></div>'
@@ -333,8 +334,8 @@ header{{display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;border-botto
 .sb-l1{{font-weight:700;text-overflow:ellipsis;overflow:hidden}}
 .sb-l2{{opacity:.75;font-size:9px;text-overflow:ellipsis;overflow:hidden}}
 
-.pin{{display:flex;align-items:center;gap:4px;font-size:9px;color:#ffbb55;white-space:nowrap}}
-.pin-dot{{width:6px;height:6px;border-radius:50%;background:#ffbb55;flex-shrink:0}}
+.pin{{display:flex;align-items:center;gap:4px;font-size:9px;color:#7ec0ff;white-space:nowrap}}
+.pin-dot{{width:6px;height:6px;border-radius:50%;background:#7ec0ff;flex-shrink:0}}
 
 .cell.frame{{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:2px;padding:0 2px}}
 .thumb{{width:100%;height:{THUMB_H}px;border-radius:3px;overflow:hidden;border:2px solid transparent;background:#050508}}
@@ -345,6 +346,7 @@ header{{display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;border-botto
 .land-tag{{font-size:9px;font-weight:700;padding:0 3px;border-radius:2px;line-height:1.5}}
 .land-tag.start{{align-self:flex-start;background:#0b3318;color:#66ffaa}}
 .land-tag.stop{{align-self:flex-end;background:#3a1810;color:#ff9955}}
+.land-tag.instant{{align-self:flex-start;background:#12294a;color:#7ec0ff}}
 
 .cell.ellipsis{{display:flex;flex-direction:column;align-items:center;justify-content:center;color:#8f8fae}}
 .ell-dots{{font-size:16px;line-height:1}}
@@ -364,6 +366,7 @@ header{{display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;border-botto
   <span><span class="sw idr"></span>IDR frame</span>
   <span><span class="land-tag start" style="padding:1px 4px;margin-right:6px">TYPE</span>marker starts on this frame</span>
   <span><span class="land-tag stop" style="padding:1px 4px;margin-right:6px">TYPE</span>marker ends after this frame</span>
+  <span><span class="land-tag instant" style="padding:1px 4px;margin-right:6px">TYPE</span>instant marker (no end)</span>
 </div>
 
 <div class="filmstrip-scroll">
