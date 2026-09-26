@@ -399,7 +399,7 @@ html{{scroll-behavior:smooth}}
 .marker-card:target{{animation:flash 1.6s ease-out}}
 @keyframes flash{{0%{{box-shadow:0 0 0 3px var(--t-fg),0 4px 18px rgba(0,0,0,.45)}}100%{{box-shadow:0 0 0 3px transparent,0 4px 18px rgba(0,0,0,.45)}}}}
 
-.checks-wrap{{margin-bottom:32px}}
+.checks-wrap{{margin-top:56px}}
 table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .checks-table th{{background:#161626;color:#b4b4e0;text-align:left;font-weight:600;padding:6px 10px;border-bottom:2px solid #2a2a3d}}
 .checks-table td{{padding:5px 10px;border-bottom:1px solid #1a1a28;color:#b8b8d0;text-align:left}}
@@ -481,17 +481,16 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
   {timeline_html}
 </div>
 
+<div class="markers-wrap">
+  <h2>Markers</h2>
+  {cards_html or '<div class="no-frame">No SCTE-35 markers found in this file.</div>'}
+</div>
 <div class="checks-wrap">
   <h2>Checks</h2>
   <table class="checks-table">
     <thead><tr><th>Event</th><th>Boundary</th><th>Check</th><th>Result</th><th>Detail</th></tr></thead>
     <tbody>{checks_rows or '<tr><td colspan="5" class="no-frame">no checks (no markers found)</td></tr>'}</tbody>
   </table>
-</div>
-
-<div class="markers-wrap">
-  <h2>Markers</h2>
-  {cards_html or '<div class="no-frame">No SCTE-35 markers found in this file.</div>'}
 </div>
 <div id="zoom"><img alt=""></div>
 <script>
