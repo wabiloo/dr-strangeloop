@@ -63,6 +63,7 @@ content_folder = "{content_folder}"
 
 [input]
 source_path = "{source_path}"
+source_kind = "{source_kind}"
 allow_missing_segments = {allow_missing_segments}
 """
 
@@ -116,6 +117,7 @@ def generate_toml(
     bucket_name: str,
     content_folder: str,
     source_path: str,
+    source_kind: str = "playlist",
     allow_missing_segments: bool = False,
     segment_duration: float = 4.0,
     dvr_window_seconds: float = 30,
@@ -135,9 +137,13 @@ def generate_toml(
         raise ValueError(
             f"backend must be 'aws-media', 'ecs-express', or 'local-docker', got {backend!r}"
         )
+    if source_kind not in ("playlist", "archive"):
+        raise ValueError("source_kind must be 'playlist' or 'archive'")
     validate_daterange_id_format(daterange_id_format)
     if hls_format not in ("cmaf", "ts"):
         raise ValueError("hls_format must be 'cmaf' or 'ts'")
+    if source_kind not in ("playlist", "archive"):
+        raise ValueError("source_kind must be 'playlist' or 'archive'")
     if dash_signal_format not in ("binary", "xml"):
         raise ValueError("dash_signal_format must be 'binary' or 'xml'")
     if dash_descriptor_mode not in ("shared", "narrowed"):
@@ -145,6 +151,7 @@ def generate_toml(
     content = _TOML_TEMPLATE.format(
         name=name, backend=backend, region=region, bucket_name=bucket_name,
         content_folder=content_folder, source_path=source_path,
+        source_kind=source_kind,
         allow_missing_segments=str(allow_missing_segments).lower(),
     )
     if backend == "ecs-express":

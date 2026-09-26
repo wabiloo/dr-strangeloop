@@ -21,6 +21,26 @@ def test_channel_hls_packaging_roundtrip(backend, hls_format, mux_audio):
     assert config["packaging"]["hls_ts_mux_audio"] is mux_audio
 
 
+@pytest.mark.parametrize("source_kind", ["playlist", "archive"])
+def test_channel_source_kind_roundtrip(source_kind):
+    payload = ChannelCreatePayload(
+        name="test-channel", backend="local-docker", region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/manifest.json",
+        source_kind=source_kind,
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["input"]["source_kind"] == source_kind
+
+
+def test_invalid_channel_source_kind_rejected():
+    with pytest.raises(ValueError, match="source_kind"):
+        ChannelCreatePayload(
+            name="test-channel", backend="local-docker", region="eu-west-1",
+            bucket_name="test-bucket", content_folder="content", source_path="outputs/manifest.json",
+            source_kind="unknown",
+        )
+
+
 def test_invalid_hls_format_rejected():
     with pytest.raises(ValueError, match="hls_format"):
         ChannelCreatePayload(

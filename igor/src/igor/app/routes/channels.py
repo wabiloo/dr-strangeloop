@@ -29,6 +29,9 @@ class ChannelCreatePayload(BaseModel):
     bucket_name: str
     content_folder: str
     source_path: str
+    # UI/source provenance metadata: archive segment-list inputs use source
+    # segment durations rather than packaging.segment_duration.
+    source_kind: str = "playlist"
     # grave-robber/SCOPE.md §10: [input].allow_missing_segments -- only
     # meaningful when source_path points at a grave-robber segment-list
     # manifest (.json) rather than a franken-ts .ts/rendition dir. Defaults
@@ -93,6 +96,13 @@ class ChannelCreatePayload(BaseModel):
     def _validate_hls_format(cls, v: str) -> str:
         if v not in ("cmaf", "ts"):
             raise ValueError("hls_format must be 'cmaf' or 'ts'")
+        return v
+
+    @field_validator("source_kind")
+    @classmethod
+    def _validate_source_kind(cls, v: str) -> str:
+        if v not in ("playlist", "archive"):
+            raise ValueError("source_kind must be 'playlist' or 'archive'")
         return v
 
     @field_validator("daterange_id_format")

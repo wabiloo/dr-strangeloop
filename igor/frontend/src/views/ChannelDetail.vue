@@ -73,6 +73,7 @@ const editForm = reactive<ChannelCreatePayload>({
   bucket_name: '',
   content_folder: '',
   source_path: '',
+  source_kind: 'playlist',
   segment_duration: 4.0,
   dvr_window_seconds: 30,
   hls_format: 'cmaf',
@@ -90,6 +91,7 @@ const editForm = reactive<ChannelCreatePayload>({
 const editIsEcsExpress = computed(() => editForm.backend === 'ecs-express')
 const editIsLocalDocker = computed(() => editForm.backend === 'local-docker')
 const editUsesChannelSection = computed(() => editIsEcsExpress.value || editIsLocalDocker.value)
+const editIsArchiveSource = computed(() => editForm.source_kind === 'archive')
 const hlsFormatOptions = [
   { label: 'CMAF (fragmented MP4)', value: 'cmaf' },
   { label: 'MPEG-TS', value: 'ts' },
@@ -168,6 +170,9 @@ function startEdit() {
     bucket_name: String(s3.bucket_name ?? ''),
     content_folder: String(s3.content_folder ?? ''),
     source_path: String(input.source_path ?? ''),
+    source_kind: input.source_kind === 'archive' || /(?:^|[\\/])manifest\.json$/i.test(String(input.source_path ?? ''))
+      ? 'archive'
+      : 'playlist',
     segment_duration: Number(packaging.segment_duration ?? 4.0),
     dvr_window_seconds: Number(packaging.dvr_window_seconds ?? 30),
     hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
@@ -215,11 +220,21 @@ const configRows = computed(() => {
   if (!config.value) return []
   const rows: { section: string; key: string; value: string }[] = []
   const isLocalDocker = (config.value.deploy as Record<string, unknown> | undefined)?.backend === 'local-docker'
+  const input = config.value.input as Record<string, unknown> | undefined
+  const sourcePath = String(input?.source_path ?? '')
+  // Archive imports use grave-robber's segment-list manifest.json. Sparse
+  // baking preserves each segment's declared source duration; the channel's
+  // packaging.segment_duration value is not used for this input mode. The
+  // path match supports configs created before input.source_kind was added.
+  const isArchiveSegmentList = input?.source_kind === 'archive' || /(?:^|[\\/])manifest\.json$/i.test(sourcePath)
   for (const [section, fields] of Object.entries(config.value)) {
     if (isLocalDocker && (section === 'aws' || section === 's3')) continue
     if (!fields || typeof fields !== 'object') continue
     for (const [key, value] of Object.entries(fields as Record<string, unknown>)) {
-      rows.push({ section, key, value: String(value) })
+      const displayValue = isArchiveSegmentList && section === 'packaging' && key === 'segment_duration'
+        ? 'as source'
+        : String(value)
+      rows.push({ section, key, value: displayValue })
     }
   }
   return rows
@@ -862,6 +877,10 @@ watch(() => props.name, reload)
                 <label class="text-xs text-color-secondary">Backend (immutable)</label>
                 <InputText :model-value="editForm.backend" disabled />
               </div>
+              <div class="flex flex-column gap-1">
+                <label class="text-xs text-color-secondary">Source kind (immutable)</label>
+                <InputText :model-value="editForm.source_kind" disabled />
+              </div>
               <div class="flex flex-column gap-1 config-field-wide">
                 <label class="text-xs text-color-secondary">Source path</label>
                 <InputText v-model="editForm.source_path" />
@@ -893,7 +912,8 @@ watch(() => props.name, reload)
               <div class="config-fields">
                 <div class="flex flex-column gap-1">
                   <label class="text-xs text-color-secondary">Segment duration (s)</label>
-                  <InputNumber v-model="editForm.segment_duration" :min-fraction-digits="1" fluid />
+                  <div v-if="editIsArchiveSource" class="text-color-secondary p-2 surface-ground border-round">As source</div>
+                  <InputNumber v-else v-model="editForm.segment_duration" :min-fraction-digits="1" fluid />
                 </div>
                 <div class="flex flex-column gap-1">
                   <label class="text-xs text-color-secondary">DVR window (s)</label>

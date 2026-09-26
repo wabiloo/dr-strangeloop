@@ -63,6 +63,7 @@ watch(sourceKind, (kind) => {
   // near-certain case (HAR captures are frequently manifest-only), but
   // stays visible/editable regardless of source kind, since it's a plain
   // bake.py-level flag, not intrinsically tied to where the content came from.
+  form.source_kind = kind
   form.allow_missing_segments = kind === 'archive'
   if (kind === 'archive' && archives.value.length === 0) loadArchives()
 })
@@ -95,6 +96,7 @@ const form = reactive<ChannelCreatePayload>({
   bucket_name: '',
   content_folder: 'its-a-live/content',
   source_path: '',
+  source_kind: 'playlist',
   allow_missing_segments: false,
   segment_duration: 4.0,
   dvr_window_seconds: 30,

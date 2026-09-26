@@ -288,6 +288,7 @@ export interface ChannelCreatePayload {
   bucket_name: string
   content_folder: string
   source_path: string
+  source_kind?: 'playlist' | 'archive'
   /** grave-robber/SCOPE.md §10: [input].allow_missing_segments -- only
    * meaningful when source_path is a grave-robber segment-list manifest,
    * but stays a plain bake.py-level flag regardless of source kind. */
