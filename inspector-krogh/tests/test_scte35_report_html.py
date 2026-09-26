@@ -68,3 +68,21 @@ def test_render_html_flags_failed_checks():
     )
     html = render_html(report)
     assert "1 check(s) failed" in html
+
+
+def test_markers_starting_at_the_same_time_are_grouped():
+    def mk(eid, code, start):
+        ev = {"pts_ticks": round(start * 90000), "pts_seconds": start, "upid_type": None,
+              "upid_hex": None, "segment_num": None, "segments_expected": None, "flags": {}}
+        return {"event_id": eid, "splice_type": "time_signal", "segmentation_type_id": "0x22",
+                "type_name": code, "type_code": code, "is_instant": True, "duration_seconds": None,
+                "nesting_depth": 0, "contains": [], "start": ev, "stop": None}
+
+    report = _minimal_report(
+        markers=[mk(1, "PAD", 20.0), mk(2, "BRK", 20.0), mk(3, "CAS", 30.0)],
+        summary={"marker_count": 3, "checks_total": 0, "checks_failed": 0},
+    )
+    html = render_html(report)
+    assert html.count('<section class="tp-group">') == 2
+    assert "2 markers" in html and "1 marker<" in html
+    assert html.index('id="marker-2"') < html.index('id="marker-1"')

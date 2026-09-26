@@ -136,6 +136,38 @@ def _marker_card(marker: dict, frames: dict, checks: list[dict], base_dir: Optio
     </div>"""
 
 
+def _marker_time(marker: dict) -> float:
+    ev = marker.get("start") or marker.get("stop")
+    return ev["pts_seconds"]
+
+
+def _grouped_cards(markers: list[dict], frames: dict, checks: list[dict], base_dir: Optional[Path], colors: dict) -> str:
+    """Cards grouped by the timepoint they start (or occur) at, in time order;
+    within a group BRK/PPO/PAD come first, then other types, then event id."""
+    order = {c: i for i, c in enumerate(ordered_type_codes(m["type_code"] for m in markers))}
+    groups: dict[float, list[dict]] = {}
+    for m in sorted(markers, key=lambda m: (round(_marker_time(m), 3), order[m["type_code"]], m["event_id"])):
+        groups.setdefault(round(_marker_time(m), 3), []).append(m)
+
+    out = []
+    for t, group in groups.items():
+        chips = "".join(
+            f'<span class="tp-chip" style="background:{colors[m["type_code"]][1]}">{escape(m["type_code"])}</span>'
+            for m in group
+        )
+        cards = "".join(_marker_card(m, frames, checks, base_dir, colors) for m in group)
+        out.append(f"""
+    <section class="tp-group">
+      <div class="tp-hdr">
+        <span class="tp-time">{_fmt_time(t)}</span>
+        <span class="tp-count">{len(group)} marker{"s" if len(group) != 1 else ""}</span>
+        {chips}
+      </div>
+      <div class="tp-cards">{cards}</div>
+    </section>""")
+    return "".join(out)
+
+
 def _upid_panel(ev: dict) -> str:
     parts = []
     if ev.get("upid_hex"):
@@ -214,7 +246,7 @@ def render_html(report: dict, base_dir: Optional[Path] = None) -> str:
     total = src.get("duration") or 0.0
 
     colors = type_colors(m["type_code"] for m in markers)
-    cards_html = "".join(_marker_card(m, frames, checks, base_dir, colors) for m in markers)
+    cards_html = _grouped_cards(markers, frames, checks, base_dir, colors)
     timeline_html = _timeline_bar(markers, total)
 
     checks_rows = "".join(
@@ -257,7 +289,7 @@ h1{{font-size:19px;color:#e8e8f4;letter-spacing:-.5px}}
 .tick{{position:absolute;top:0;width:10px;margin-left:-5px;height:100%;cursor:pointer;background:linear-gradient(#ffaa44,#ffaa44) center/2px 100% no-repeat}}
 .tick:hover{{background:linear-gradient(#ffd08a,#ffd08a) center/4px 100% no-repeat}}
 html{{scroll-behavior:smooth}}
-.marker-card{{scroll-margin-top:16px}}
+.marker-card{{scroll-margin-top:70px}}
 .marker-card:target{{animation:flash 1.6s ease-out}}
 @keyframes flash{{0%{{box-shadow:0 0 0 3px var(--t-fg),0 4px 18px rgba(0,0,0,.45)}}100%{{box-shadow:0 0 0 3px transparent,0 4px 18px rgba(0,0,0,.45)}}}}
 
@@ -270,7 +302,13 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .checks-table tr.fail td.result{{color:#ff5555}}
 .checks-table tr.fail td{{color:#ff8888}}
 
-.markers-wrap{{display:flex;flex-direction:column;gap:40px}}
+.markers-wrap{{display:flex;flex-direction:column;gap:48px}}
+.tp-group{{position:relative}}
+.tp-hdr{{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:8px 0 10px;margin-bottom:8px;background:#0c0c14;border-bottom:2px solid #33334d}}
+.tp-time{{font-size:16px;font-weight:700;color:#e8e8f4;letter-spacing:.5px}}
+.tp-count{{font-size:11px;color:#b0b0cc;margin-right:6px}}
+.tp-chip{{font-size:10px;font-weight:700;padding:1px 7px;border-radius:3px;color:#fff}}
+.tp-cards{{display:flex;flex-direction:column;gap:18px}}
 .marker-card{{border:1px solid #33334d;border-left:6px solid var(--t-border);border-radius:8px;overflow:hidden;background:#0f0f1a;box-shadow:0 4px 18px rgba(0,0,0,.45)}}
 .marker-hdr{{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 16px;background:linear-gradient(90deg,var(--t-bg),#141424 70%);border-bottom:1px solid var(--t-border)}}
 .mid{{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--t-fg);text-transform:uppercase}}
