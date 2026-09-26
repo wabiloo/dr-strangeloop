@@ -71,7 +71,9 @@ def test_get_coverage_reports_every_variant(archive_store):
     coverage = archives.get_coverage("hls1-chrome")
 
     assert coverage["name"] == "hls1-chrome"
-    assert len(coverage["variants"]) == 3
+    # The fixture's multivariant playlist is reported as info, not as an importable variant.
+    assert len(coverage["variants"]) == 2
+    assert len(coverage["multivariants"]) == 1
     assert all(v["format"] == "HLS" for v in coverage["variants"])
 
 

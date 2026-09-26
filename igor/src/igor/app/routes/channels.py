@@ -52,6 +52,8 @@ class ChannelCreatePayload(BaseModel):
     cue_tags: str = "none"
     increment_event_ids: bool = False
     daterange_id_format: str = DEFAULT_DATERANGE_ID_FORMAT
+    dash_signal_format: str = "binary"
+    dash_descriptor_mode: str = "shared"
 
     @field_validator("name")
     @classmethod
@@ -97,6 +99,20 @@ class ChannelCreatePayload(BaseModel):
     @classmethod
     def _validate_daterange_id_format(cls, v: str) -> str:
         return validate_daterange_id_format(v)
+
+    @field_validator("dash_signal_format")
+    @classmethod
+    def _validate_dash_signal_format(cls, v: str) -> str:
+        if v not in ("binary", "xml"):
+            raise ValueError("dash_signal_format must be 'binary' or 'xml'")
+        return v
+
+    @field_validator("dash_descriptor_mode")
+    @classmethod
+    def _validate_dash_descriptor_mode(cls, v: str) -> str:
+        if v not in ("shared", "narrowed"):
+            raise ValueError("dash_descriptor_mode must be 'shared' or 'narrowed'")
+        return v
 
     @model_validator(mode="after")
     def _validate_port_backend(self) -> "ChannelCreatePayload":

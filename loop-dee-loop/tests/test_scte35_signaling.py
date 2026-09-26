@@ -20,6 +20,7 @@ from scte35_signaling import (  # noqa: E402
     build_daterange_tags,
     build_event_id_map,
     build_grouped_daterange_tags,
+    build_scte35_full_xml,
     compute_event_id_step,
     compute_incremented_event_id,
     group_markers_by_event_id,
@@ -27,6 +28,8 @@ from scte35_signaling import (  # noqa: E402
     is_out_marker,
     reencode_event_ids,
     resolve_marker_duration_ticks,
+    validate_dash_descriptor_mode,
+    validate_dash_signal_format,
     validate_daterange_id_format,
 )
 
@@ -536,3 +539,63 @@ def test_reencode_event_ids_round_trips_segmentation_event_id():
         if eid is not None
     }
     assert new_ids == {int(eid, 16) + 100 for eid in seg_event_ids}
+
+
+def test_validate_dash_signal_format_defaults_and_rejects_unknown():
+    assert validate_dash_signal_format(None) == "binary"
+    assert validate_dash_signal_format("binary") == "binary"
+    assert validate_dash_signal_format("xml") == "xml"
+    with pytest.raises(ValueError):
+        validate_dash_signal_format("bogus")
+
+
+def test_validate_dash_descriptor_mode_defaults_and_rejects_unknown():
+    assert validate_dash_descriptor_mode(None) == "shared"
+    assert validate_dash_descriptor_mode("shared") == "shared"
+    assert validate_dash_descriptor_mode("narrowed") == "narrowed"
+    with pytest.raises(ValueError):
+        validate_dash_descriptor_mode("bogus")
+
+
+def test_build_scte35_full_xml_renders_splice_insert():
+    pytest.importorskip("threefive")
+
+    xml = build_scte35_full_xml(_SPLICE_INSERT_B64)
+    # No xmlns anywhere -- the scte35: prefix is bound once by the caller
+    # (serve.py declares xmlns:scte35 on the MPD root), never per-element.
+    assert "xmlns" not in xml
+    assert xml.startswith("<scte35:SpliceInfoSection")
+    assert "<scte35:SpliceInsert" in xml
+    assert 'spliceEventId="1207959695"' in xml
+    assert "<scte35:AvailDescriptor" in xml
+    assert "TimeSignal" not in xml
+
+
+def test_build_scte35_full_xml_renders_time_signal_multi_descriptor():
+    """The shape this codebase actually produces most (see this module's
+    docstring): a shared time_signal carrying several coincident
+    segmentation descriptors."""
+    pytest.importorskip("threefive")
+
+    xml = build_scte35_full_xml(_TIME_SIGNAL_MULTI_DESCRIPTOR_B64)
+    assert "xmlns" not in xml
+    assert xml.startswith("<scte35:SpliceInfoSection")
+    assert "<scte35:TimeSignal>" in xml
+    assert xml.count("<scte35:SegmentationDescriptor") == 3
+    assert 'segmentationEventId="100"' in xml
+    assert "SpliceInsert" not in xml
+
+
+def test_build_scte35_full_xml_requires_threefive(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_threefive(name, *args, **kwargs):
+        if name == "threefive":
+            raise ImportError("simulated missing dependency")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_threefive)
+    with pytest.raises(RuntimeError, match="threefive"):
+        build_scte35_full_xml(_SPLICE_INSERT_B64)

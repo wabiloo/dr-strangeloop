@@ -150,6 +150,7 @@ def test_ts_media_playlist_uses_ts_without_init_or_separate_audio_when_muxed(mux
     package.cue_tags = "none"
     package.boundaries = {0}
     package.declared_offset_ticks_by_local_index = [0, 0]
+    package.asset_boundaries = []
     channel = Channel(package, 0, window_segments=2)
     channel.now_ticks = lambda: 360_000
 

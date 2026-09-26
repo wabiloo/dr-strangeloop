@@ -48,6 +48,8 @@ def spark(cfg, session, channel_name, extra_args=None):
     daterange_id_format = markers_cfg.get(
         "daterange_id_format", "{segcode}-{eventid}-{loop}"
     )
+    dash_signal_format = markers_cfg.get("dash_signal_format", "binary")
+    dash_descriptor_mode = markers_cfg.get("dash_descriptor_mode", "shared")
 
     if not source_path or not bucket_name:
         sys.exit("input.source_path and s3.bucket_name must be set in the config")
@@ -64,7 +66,9 @@ def spark(cfg, session, channel_name, extra_args=None):
                                "--hls-ts-mux-audio" if packaging.get("hls_ts_mux_audio", True) else "--no-hls-ts-mux-audio",
                               "--daterange-mode", daterange_mode,
                               "--cue-tags", cue_tags,
-                              "--daterange-id-format", daterange_id_format]
+                              "--daterange-id-format", daterange_id_format,
+                              "--dash-signal-format", dash_signal_format,
+                              "--dash-descriptor-mode", dash_descriptor_mode]
     if increment_event_ids:
         bake_args.append("--increment-event-ids")
     # grave-robber/SCOPE.md §10: only meaningful when [input].source_path

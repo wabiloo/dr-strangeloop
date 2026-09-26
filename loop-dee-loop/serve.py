@@ -43,6 +43,7 @@ from loop_math import (
     ticks_to_wall_clock_seconds,
 )
 from scte35_signaling import (
+    SCTE35_XML_NAMESPACE,
     SignalingMarker,
     build_cue_breaks,
     build_cue_in_tag,
@@ -51,6 +52,7 @@ from scte35_signaling import (
     build_daterange_tags,
     build_event_id_map,
     build_grouped_daterange_tags,
+    build_scte35_full_xml,
     is_instant_segmentation,
     is_out_marker,
     markers_to_signaling,
@@ -93,6 +95,20 @@ def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: in
         end = start + duration
         return seg_start_ticks < end and start < seg_end_ticks
     return seg_start_ticks <= start < seg_end_ticks
+
+
+def _asset_ids_starting_in_segment(
+    asset_boundaries: list[dict], seg_start_ticks: int, seg_end_ticks: int
+) -> list[str]:
+    """Asset ids (in timeline order) whose `start_ticks` falls inside
+    [seg_start_ticks, seg_end_ticks) -- i.e. every new asset that begins
+    somewhere within this one segment. Unlike marker placement, this is a
+    plain point-in-interval test: an asset boundary is a single instant
+    (where the new asset's content starts), never a signaled interval."""
+    return [
+        b["asset_id"] for b in asset_boundaries
+        if seg_start_ticks <= b["start_ticks"] < seg_end_ticks
+    ]
 
 
 def _remap_signaling_markers(
@@ -391,6 +407,15 @@ class LoopPackage:
         self.cue_tags: str = self.descriptor.get("cue_tags", "none")
         self.increment_event_ids: bool = self.descriptor.get("increment_event_ids", False)
         self.daterange_id_format: str | None = self.descriptor.get("daterange_id_format")
+        self.dash_signal_format: str = self.descriptor.get("dash_signal_format", "binary")
+        self.dash_descriptor_mode: str = self.descriptor.get("dash_descriptor_mode", "shared")
+        # Loop-relative {asset_id, start_ticks} boundaries from franken-ts's
+        # .timeline.json (see bake.py's load_asset_boundaries) -- [] for
+        # packages baked without one, so HLS/DASH simply author no
+        # asset-boundary comments.
+        self.asset_boundaries: list[dict] = [
+            b for b in self.descriptor.get("asset_boundaries", []) if isinstance(b, dict)
+        ]
 
         # Precomputed once (not per-request): see build_cue_breaks for
         # what this holds and why it's splice_insert-only.
@@ -467,7 +492,12 @@ class LoopPackage:
         # `asset_boundary_gap_ticks` absent -> every declared offset is 0,
         # so PDT/Period-start formulas reduce exactly to today's plain
         # serving-position value.
-        raw_asset_boundaries = self.descriptor.get("asset_boundaries") or []
+        # Segment INDICES of internal asset boundaries (sparse/archive bakes). The older
+        # spelling stored them under "asset_boundaries", which now holds franken-ts's
+        # timeline entries (dicts) -- accept ints there for packages baked before.
+        raw_asset_boundaries = list(self.descriptor.get("asset_boundary_indices") or []) + [
+            b for b in (self.descriptor.get("asset_boundaries") or []) if isinstance(b, int)
+        ]
         self.boundaries: set[int] = compute_asset_boundary_set(raw_asset_boundaries)
         raw_gap_ticks = self.descriptor.get("asset_boundary_gap_ticks") or {}
         self.asset_boundary_gap_ticks: dict[int, int] = {
@@ -918,6 +948,20 @@ class Channel:
             declared_segment_start_ticks = (
                 segment_start_ticks + pkg.declared_offset_ticks_by_local_index[local_index]
             )
+            # Asset-boundary comments (from franken-ts's .timeline.json, see
+            # bake.py's load_asset_boundaries): plain `#` playlist comments
+            # -- ignored by every HLS client -- naming which playlist asset
+            # starts in this segment. Decided from the reference rendition's
+            # timeline, same as markers, so every playlist (and the audio
+            # playlist) places the same asset's comment at the same segment
+            # index. Not deduped across polls (unlike DATERANGE): re-emitting
+            # a comment for a segment still in the window on every poll is
+            # harmless, exactly like PROGRAM-DATE-TIME itself.
+            for asset_id in _asset_ids_starting_in_segment(
+                pkg.asset_boundaries, ref_seg_start_ticks, ref_seg_end_ticks
+            ):
+                lines.append(f"# asset: {asset_id}")
+
             program_date_ticks = program_date_time_ticks(
                 local_loop_number,
                 declared_segment_start_ticks,
@@ -1143,40 +1187,76 @@ class Channel:
                 pkg.segment_boundary_ticks, local_indices, span_start_local
             )
 
-            # `id` is the real, plain event_id (as an actual int, matching
-            # SCTE-35's own segmentation_event_id / the channel config's
-            # `event_id` -- never a compound string): a player decodes the
-            # <Binary> payload itself (via the `scte35` npm package, same
-            # as HLS -- see igor's scte35Lite.ts describeAllMarkers()) to
-            # get the segmentation/splice type, rather than us encoding it
-            # into `id`.
+            # Asset-boundary comments (from franken-ts's .timeline.json, see
+            # bake.py's load_asset_boundaries): decided once from the
+            # reference rendition's timeline, keyed by local_index so every
+            # rendition's own <SegmentTimeline> (and audio's) places the
+            # same asset's comment at the same segment index -- same
+            # pattern as marker placement above.
+            asset_ids_by_local_index: dict[int, list[str]] = {}
+            span_offset_ticks = pkg.segment_boundary_ticks[span_start_local]
+            for seg_start_local, duration_ticks, local_index in reference_entries:
+                # reference_entries are Period-relative; asset boundaries are loop-relative.
+                asset_ids = _asset_ids_starting_in_segment(
+                    pkg.asset_boundaries,
+                    seg_start_local + span_offset_ticks,
+                    seg_start_local + span_offset_ticks + duration_ticks,
+                )
+                if asset_ids:
+                    asset_ids_by_local_index[local_index] = asset_ids
+
+            def _segment_timeline_xml(entries: list[tuple[int, int, int]]) -> str:
+                lines = []
+                for t, d, local_index in entries:
+                    for asset_id in asset_ids_by_local_index.get(local_index, []):
+                        lines.append(f'        <!-- asset: {asset_id} -->')
+                    lines.append(f'        <S t="{t}" d="{d}" />')
+                return "\n".join(lines)
+
+            # `id` is a per-Period-unique synthetic id, never the raw
+            # event_id directly -- see DIRECTION_CODE below. A player
+            # decodes the Signal payload itself (via the `scte35` npm
+            # package, same as HLS -- see igor's scte35Lite.ts
+            # describeAllMarkers()) to get the real segmentation/splice
+            # event id and type, rather than reading `id`.
             #
             # A Start/End pair SHARES one event_id by design (see the
             # module docstring on event_id reuse), and once enough of a
             # loop iteration has played out that BOTH halves sit inside the
             # currently-open Period's never-pruned segment range (see the
-            # comment above `periods_plan`), they're both due in the SAME
-            # <EventStream> -- if `id` alone had to disambiguate them,
+            # comment above `periods_plan`), they're both due in the same
+            # single <EventStream> -- if `id` were the raw event_id,
             # dash.js's EventController (confirmed against its own source)
-            # would see the second one as a duplicate of the first
-            # (same id) and silently drop it, so the End marker would
-            # never fire. Likewise the exact same marker recurring next
-            # loop, with the exact same id, needs to be recognized as a
-            # NEW occurrence, not a dup of the one already scheduled --
-            # EventController's dedupe key isn't `id` alone though, it's
-            # `(EventStream@value, id)` (`(!value || eventStream.value ===
-            # value) && e.id === id`), so both problems are solved the
-            # DASH-native way: by grouping Events into separate
-            # <EventStream> elements whose own `@value` differs per
-            # (loop_number, start/end/instant) -- never by smuggling that
-            # information into `id`.
+            # would see the second one as a duplicate of the first (same
+            # id) and silently drop it, so the End marker would never
+            # fire. `DIRECTION_CODE` gives each direction (out/in/instant)
+            # its own multiple of the base event id, so the two halves of
+            # one break -- and the exact same marker recurring next loop --
+            # always get distinct, but still fully deterministic (no
+            # runtime counter), ids. Base event ids must stay well under
+            # 2**30 for this to fit `id`'s xs:unsignedInt range once
+            # multiplied -- true for every id this codebase's channel
+            # configs actually assign.
             # [markers].increment_event_ids: one id map per Period, keyed
             # by that Period's own loop_number (same helper HLS uses, see
             # _remap_signaling_markers) -- {} when the setting is off, so
             # the lookups below become no-ops via dict.get() fallback.
             event_id_map = build_event_id_map(pkg.markers, loop_number) if pkg.increment_event_ids else {}
+            DIRECTION_CODE = {"out": 0, "in": 1, "instant": 2}
 
-            event_xml_by_stream: dict[str, list[str]] = {}
+            # [markers].dash_signal_format: "binary" (default) carries the
+            # raw base64 splice command in a <scte35:Binary> element; "xml"
+            # carries each marker's full decoded <scte35:SpliceInfoSection>
+            # instead (see build_scte35_full_xml). schemeIdUri distinguishes
+            # the two per the SCTE-35 XML binding, constant for the whole
+            # manifest.
+            scheme_id_uri = (
+                SCTE35_XML_NAMESPACE
+                if pkg.dash_signal_format == "xml"
+                else "urn:scte:scte35:2014:xml+bin"
+            )
+
+            event_xml: list[str] = []
             for marker in pkg.markers:
                 # A single <Event> element describes the whole
                 # [presentationTime, presentationTime+duration) interval on
@@ -1201,10 +1281,21 @@ class Channel:
                 )
                 event_id_hex = event_id_map.get(marker["event_id"], marker["event_id"])
                 event_id_dec = int(event_id_hex, 16)
-                splice_command_b64 = (
-                    reencode_event_ids(marker["splice_command_b64"], event_id_map)
-                    if pkg.increment_event_ids
+                # [markers].dash_descriptor_mode: "shared" (default) embeds
+                # the same full multi-descriptor message every coincident
+                # marker carries; "narrowed" embeds the per-event,
+                # single-descriptor re-encode instead -- independent of
+                # whatever daterange_mode HLS is using (see bake.py's
+                # DecodedMarker.splice_command_b64_narrowed).
+                base_b64 = (
+                    marker["splice_command_b64_narrowed"]
+                    if pkg.dash_descriptor_mode == "narrowed"
                     else marker["splice_command_b64"]
+                )
+                splice_command_b64 = (
+                    reencode_event_ids(base_b64, event_id_map)
+                    if pkg.increment_event_ids
+                    else base_b64
                 )
                 if is_instant_segmentation(marker):
                     direction = "instant"
@@ -1212,18 +1303,23 @@ class Channel:
                     direction = "out"
                 else:
                     direction = "in"
-                # Unchanged shape when there's exactly one span per loop
-                # (the common, no-internal-asset-boundary case) -- only
-                # disambiguated by span_index too when grave-robber/
-                # SCOPE.md §6.1 internal boundaries make more than one
-                # Period share the same loop_number, so dash.js's
-                # (EventStream@value, id) dedupe key doesn't fold events
-                # from two different Periods together.
-                stream_value = (
-                    f"{loop_number}-{direction}"
-                    if spans_per_loop == 1
-                    else f"{loop_number}-{span_index}-{direction}"
-                )
+                synthetic_id = event_id_dec * 4 + DIRECTION_CODE[direction]
+                if pkg.dash_signal_format == "xml":
+                    full_xml = build_scte35_full_xml(splice_command_b64)
+                    indented_xml = "\n".join(
+                        f"        {line}" for line in full_xml.splitlines()
+                    )
+                    signal_xml = (
+                        f"      <scte35:Signal>\n"
+                        f"{indented_xml}\n"
+                        f"      </scte35:Signal>"
+                    )
+                else:
+                    signal_xml = (
+                        f"      <scte35:Signal>\n"
+                        f"        <scte35:Binary>{splice_command_b64}</scte35:Binary>\n"
+                        f"      </scte35:Signal>"
+                    )
                 # Period-relative, like <S t=...> -- subtract this Period's
                 # own start tick (grave-robber/SCOPE.md §6.2's declared
                 # offset lives in the Period's start= instead, see above; a
@@ -1232,12 +1328,10 @@ class Channel:
                 event_presentation_time = (
                     marker["pts_time_ticks"] - pkg.segment_boundary_ticks[span_start_local]
                 )
-                event_xml_by_stream.setdefault(stream_value, []).append(
+                event_xml.append(
                     f'    <Event presentationTime="{event_presentation_time}"'
-                    f'{duration_attr} id="{event_id_dec}">\n'
-                    f'      <Signal xmlns="urn:scte:scte35:2013:xml">\n'
-                    f'        <Binary>{splice_command_b64}</Binary>\n'
-                    f"      </Signal>\n"
+                    f'{duration_attr} id="{synthetic_id}">\n'
+                    f"{signal_xml}\n"
                     f"    </Event>"
                 )
 
@@ -1246,9 +1340,7 @@ class Channel:
                 entries = _period_entries(
                     rendition.segment_boundary_ticks, local_indices, span_start_local
                 )
-                timeline_lines = "\n".join(
-                    f'        <S t="{t}" d="{d}" />' for t, d, _ in entries
-                )
+                timeline_lines = _segment_timeline_xml(entries)
                 v = rendition.video_variant
                 # A sparse (self-initializing) rendition's segments carry
                 # their own moov (SCOPE.md §11) -- there's no shared init
@@ -1279,9 +1371,7 @@ class Channel:
                 audio_entries = _period_entries(
                     pkg.audio_rendition.audio_segment_boundary_ticks, local_indices, span_start_local
                 )
-                audio_timeline_lines = "\n".join(
-                    f'        <S t="{t}" d="{d}" />' for t, d, _ in audio_entries
-                )
+                audio_timeline_lines = _segment_timeline_xml(audio_entries)
                 audio_adaptation_set = f'''
     <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
       <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
@@ -1294,12 +1384,15 @@ class Channel:
       </Representation>
     </AdaptationSet>'''
 
-            event_streams_xml = "\n".join(
-                f'    <EventStream schemeIdUri="urn:scte:scte35:2014:xml+bin" '
-                f'timescale="{pkg.timescale}" value="{stream_value}">\n'
-                + "\n".join(events)
+            # With more than one Period per loop (grave-robber/SCOPE.md §6.1), give each
+            # Period's EventStream its own @value so dash.js's (value, id) dedupe key
+            # can't fold events from two Periods of the same loop together.
+            stream_value_attr = f' value="{loop_number}-{span_index}"' if spans_per_loop > 1 else ""
+            event_streams_xml = (
+                f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}"{stream_value_attr}>\n'
+                + "\n".join(event_xml)
                 + "\n    </EventStream>"
-                for stream_value, events in event_xml_by_stream.items()
+                if event_xml else ""
             )
 
             period_id = (
@@ -1329,6 +1422,7 @@ class Channel:
         # conservative, standard buffer for this.
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     xmlns:scte35="{SCTE35_XML_NAMESPACE}"
      profiles="urn:mpeg:dash:profile:isoff-live:2011"
      type="dynamic"
      availabilityStartTime="{availability_start_time}"

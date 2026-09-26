@@ -107,6 +107,8 @@ const form = reactive<ChannelCreatePayload>({
   cue_tags: 'none',
   increment_event_ids: false,
   daterange_id_format: '{segcode}-{eventid}-{loop}',
+  dash_signal_format: 'binary',
+  dash_descriptor_mode: 'shared',
 })
 // Only meaningful for local-docker (see form.port's "auto" branch below);
 // kept as separate UI state rather than storing 'auto' directly in
@@ -196,6 +198,14 @@ const cueTagsOptions = [
   { label: 'none -- DATERANGE only (default)', value: 'none' },
   { label: 'alongside -- also emit EXT-X-CUE-OUT/-CONT/-IN for splice_insert markers, next to DATERANGE', value: 'alongside' },
   { label: 'only -- EXT-X-CUE-OUT/-CONT/-IN only, no DATERANGE (splice_insert-only channels)', value: 'only' },
+]
+const dashSignalFormatOptions = [
+  { label: 'binary -- raw SCTE-35 payload in a <Binary> element (default)', value: 'binary' },
+  { label: 'xml -- full decoded <SpliceInfoSection> per the SCTE-35 XML binding', value: 'xml' },
+]
+const dashDescriptorModeOptions = [
+  { label: 'shared -- full multi-descriptor message on every coincident event (default)', value: 'shared' },
+  { label: 'narrowed -- each event carries only its own descriptor, re-encoded', value: 'narrowed' },
 ]
 
 async function submit() {
@@ -378,6 +388,14 @@ async function submit() {
       <div class="flex flex-column gap-1">
         <label for="cue-tags">HLS CUE-OUT/CUE-IN tags</label>
         <Select id="cue-tags" v-model="form.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" />
+      </div>
+      <div class="flex flex-column gap-1">
+        <label for="dash-signal-format">DASH SCTE-35 signal format</label>
+        <Select id="dash-signal-format" v-model="form.dash_signal_format" :options="dashSignalFormatOptions" option-label="label" option-value="value" />
+      </div>
+      <div class="flex flex-column gap-1">
+        <label for="dash-descriptor-mode">DASH coincident descriptor mode</label>
+        <Select id="dash-descriptor-mode" v-model="form.dash_descriptor_mode" :options="dashDescriptorModeOptions" option-label="label" option-value="value" />
       </div>
       <div class="flex align-items-center gap-2">
         <Checkbox v-model="form.increment_event_ids" binary input-id="increment-event-ids" />

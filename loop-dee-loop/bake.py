@@ -44,10 +44,14 @@ from gpac_pipeline import (
     run_gpac_dasher,
 )
 from scte35_signaling import (
+    DASH_DESCRIPTOR_MODE_DEFAULT,
+    DASH_SIGNAL_FORMAT_DEFAULT,
     DATERANGE_ID_FORMAT_DEFAULT,
     SCTE35_EVENT_ID_MAX,
     compute_event_id_step,
     validate_daterange_id_format,
+    validate_dash_descriptor_mode,
+    validate_dash_signal_format,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,6 +69,13 @@ class DecodedMarker:
     event_id: str
     pts_time_ticks: int
     splice_command_b64: str
+    # Always the per-event re-encoded, single-descriptor payload -- computed
+    # unconditionally (not just when `--daterange-mode narrowed`), so
+    # [markers].dash_descriptor_mode can pick "narrowed" for DASH
+    # independently of whatever daterange_mode HLS is using. Identical to
+    # `splice_command_b64` whenever there was nothing to narrow (a bare
+    # splice_insert, or a single-descriptor message).
+    splice_command_b64_narrowed: str
     segmentation_type_id: int | None = None
 
 
@@ -201,13 +212,20 @@ def decode_embedded_scte35(ts_file: Path, *, narrow_descriptors: bool = False) -
                 )
             seg_event_ids = [event_id]
             per_event_b64 = {event_id: b64}
-        elif not narrow_descriptors or len(seg_event_ids) == 1:
-            # Default: every event sharing this message gets the same raw,
-            # shared bytes (or there's only one descriptor to begin with,
-            # so the shared message already is that event's own payload).
+            per_event_narrowed_b64 = per_event_b64
+        elif len(seg_event_ids) == 1:
+            # Only one descriptor to begin with -- the shared message
+            # already is that event's own payload, nothing to narrow.
             per_event_b64 = {eid: b64 for eid in seg_event_ids}
+            per_event_narrowed_b64 = per_event_b64
         else:
-            per_event_b64 = {}
+            # Real coincidence (>1 descriptor sharing one message): always
+            # compute the narrowed, single-descriptor-per-event variant --
+            # not just when `--daterange-mode narrowed` -- so
+            # [markers].dash_descriptor_mode can independently choose
+            # "narrowed" for DASH regardless of what daterange_mode HLS is
+            # using (see DecodedMarker.splice_command_b64_narrowed).
+            per_event_narrowed_b64 = {}
             for eid in seg_event_ids:
                 narrowed = threefive.Cue(b64)
                 narrowed.decode()
@@ -216,7 +234,11 @@ def decode_embedded_scte35(ts_file: Path, *, narrow_descriptors: bool = False) -
                     for d in narrowed.descriptors
                     if getattr(d, "segmentation_event_id", None) in (None, eid)
                 ]
-                per_event_b64[eid] = narrowed.encode()
+                per_event_narrowed_b64[eid] = narrowed.encode()
+            per_event_b64 = (
+                per_event_narrowed_b64 if narrow_descriptors
+                else {eid: b64 for eid in seg_event_ids}
+            )
 
         for event_id in seg_event_ids:
             event_id_str = (
@@ -232,6 +254,7 @@ def decode_embedded_scte35(ts_file: Path, *, narrow_descriptors: bool = False) -
                     event_id=event_id_str,
                     pts_time_ticks=ticks,
                     splice_command_b64=per_event_b64[event_id],
+                    splice_command_b64_narrowed=per_event_narrowed_b64[event_id],
                     segmentation_type_id=(
                         int(segmentation_type_by_event[event_id], 16)
                         if isinstance(segmentation_type_by_event.get(event_id), str)
@@ -401,6 +424,7 @@ def validate_markers_against_ts(
                 )
         augmented_marker = dict(marker)
         augmented_marker["splice_command_b64"] = decoded_marker.splice_command_b64
+        augmented_marker["splice_command_b64_narrowed"] = decoded_marker.splice_command_b64_narrowed
         augmented.append(augmented_marker)
 
     logger.info(
@@ -883,6 +907,59 @@ def discover_renditions(
         len(renditions), input_path, [name for name, _ in renditions],
     )
     return renditions, markers_json
+
+
+def discover_asset_timeline(
+    input_path: Path, timeline_override: Path | None = None
+) -> Path | None:
+    """Locate franken-ts's `.timeline.json` sidecar (see franken_ts/markers.py's
+    `write_timeline_sidecar` -- always written alongside `.markers.json`),
+    following the same directory-vs-single-file convention as
+    `discover_renditions`'s own `markers.json` lookup.
+
+    Unlike markers.json, this is OPTIONAL: it only powers the asset-boundary
+    comments in HLS/DASH output (see `load_asset_boundaries` and
+    scte35_signaling.py's `ASSET_BOUNDARY_COMMENT` usage), not core SCTE-35
+    signaling -- content baked before this sidecar existed, or from a
+    non-franken-ts source, simply gets none. Returns None if not found.
+    """
+    if timeline_override is not None:
+        return timeline_override if timeline_override.exists() else None
+    if input_path.is_dir():
+        candidate = input_path / "timeline.json"
+    else:
+        candidate = input_path.with_suffix(".timeline.json")
+    return candidate if candidate.exists() else None
+
+
+def load_asset_boundaries(timeline_path: Path, timescale: int) -> list[dict]:
+    """Convert franken-ts's `.timeline.json` entries into loop-relative
+    `{"asset_id": ..., "start_ticks": ...}` boundaries, one per genuine
+    asset transition (consecutive entries sharing the same `asset_id` --
+    e.g. one asset split around a nested ad break -- are NOT a new asset
+    starting, so collapse to a single boundary at the first one).
+
+    `output_start` is in output-stream SECONDS; `+ muxer_offset` converts
+    to the same stream/PTS-time base krogh's own `timeline_assets` uses
+    (see inspector-krogh/krogh_expected.py), which -- like every other
+    tick this module computes -- already lines up with loop-relative
+    tick 0 by construction (franken-ts's output always starts there).
+    Entries with no `asset_id` (e.g. a fade slate) carry no label and are
+    skipped.
+    """
+    doc = json.loads(timeline_path.read_text())
+    muxer_offset = float(doc.get("muxer_offset") or 0.0)
+    boundaries: list[dict] = []
+    previous_asset_id: object = object()  # sentinel, never equal to a real id
+    for entry in doc.get("entries", []):
+        asset_id = entry.get("asset_id")
+        if asset_id is None or asset_id == previous_asset_id:
+            previous_asset_id = asset_id
+            continue
+        previous_asset_id = asset_id
+        start_ticks = round((float(entry["output_start"]) + muxer_offset) * timescale)
+        boundaries.append({"asset_id": asset_id, "start_ticks": start_ticks})
+    return boundaries
 
 
 SPARSE_RENDITION_NAME = "archive"
@@ -1497,7 +1574,7 @@ def bake_segment_list(
         "increment_event_ids": False,
         "daterange_id_format": DATERANGE_ID_FORMAT_DEFAULT,
         "markers": raw_markers,
-        "asset_boundaries": asset_boundaries,
+        "asset_boundary_indices": asset_boundaries,
         "asset_boundary_gap_ticks": asset_boundary_gap_ticks,
         "video_renditions": [rendition_result],
         "source_input": str(manifest_path),
@@ -1662,12 +1739,15 @@ def bake(
     segment_duration_seconds: float = 4.0,
     dry_run: bool = False,
     markers_override: Path | None = None,
+    timeline_override: Path | None = None,
     daterange_mode: str = "shared",
     cue_tags: str = "none",
     increment_event_ids: bool = False,
     daterange_id_format: str | None = DATERANGE_ID_FORMAT_DEFAULT,
     hls_format: str = "cmaf",
     hls_ts_mux_audio: bool = True,
+    dash_signal_format: str = DASH_SIGNAL_FORMAT_DEFAULT,
+    dash_descriptor_mode: str = DASH_DESCRIPTOR_MODE_DEFAULT,
 ) -> None:
     """Bake phase entrypoint (SCOPE.md §4.1), generalized to a rendition
     ladder auto-discovered from disk (see discover_renditions()).
@@ -1675,13 +1755,16 @@ def bake(
     A single-rendition input degenerates naturally into a ladder of one --
     no special-casing needed anywhere below this point.
 
-    `daterange_mode`/`cue_tags`/`increment_event_ids` (see
-    `its-a-live/AGENTS.md`'s `[markers]` config section) control the
-    *shape* of the HLS/DASH SCTE-35 signaling serve.py later renders from
-    this bake -- they're recorded as-is into loop_descriptor.json and
-    otherwise only consulted here for `daterange_mode`'s effect on the
-    embedded payload (via `decode_embedded_scte35`'s `narrow_descriptors`)
-    and `cue_tags="only"`'s validation below.
+    `daterange_mode`/`cue_tags`/`increment_event_ids`/`dash_signal_format`/
+    `dash_descriptor_mode` (see `its-a-live/AGENTS.md`'s `[markers]` config
+    section) control the *shape* of the HLS/DASH SCTE-35 signaling
+    serve.py later renders from this bake -- they're recorded as-is into
+    loop_descriptor.json and otherwise only consulted here for
+    `daterange_mode`'s effect on the embedded payload (via
+    `decode_embedded_scte35`'s `narrow_descriptors`, which always computes
+    the narrowed variant regardless -- see DecodedMarker's
+    `splice_command_b64_narrowed`) and `cue_tags="only"`'s validation
+    below.
     """
     logger.info("Bake starting: %s -> %s", input_path, output_package_dir)
 
@@ -1690,11 +1773,23 @@ def bake(
 
     try:
         validate_daterange_id_format(daterange_id_format)
+        dash_signal_format = validate_dash_signal_format(dash_signal_format)
+        dash_descriptor_mode = validate_dash_descriptor_mode(dash_descriptor_mode)
     except ValueError as exc:
         raise ValidationError(str(exc)) from exc
 
     renditions, markers_json = discover_renditions(input_path, markers_override)
     raw_markers = load_markers(markers_json)
+
+    timeline_json = discover_asset_timeline(input_path, timeline_override)
+    asset_boundaries = load_asset_boundaries(timeline_json, TIMESCALE) if timeline_json else []
+    if timeline_json:
+        logger.info(
+            "Found asset timeline %s: %d asset boundary comment(s) will be authored",
+            timeline_json, len(asset_boundaries),
+        )
+    else:
+        logger.info("No .timeline.json found -- no asset-boundary comments will be authored")
 
     if cue_tags == "only":
         validate_cue_tags_only(raw_markers)
@@ -1768,12 +1863,16 @@ def bake(
         # None marks packages baked before configurable ID formatting and
         # tells serve.py to preserve their original per-marker ID scheme.
         "daterange_id_format": daterange_id_format,
+        "dash_signal_format": dash_signal_format,
+        "dash_descriptor_mode": dash_descriptor_mode,
+        "asset_boundaries": asset_boundaries,
         "markers": reference["markers"],
         "video_renditions": [
             {k: v for k, v in r.items() if k != "markers"} for r in rendition_results
         ],
         "source_input": str(input_path),
         "source_markers_json": str(markers_json),
+        "source_timeline_json": str(timeline_json) if timeline_json else None,
     }
     descriptor_path = output_package_dir / "loop_descriptor.json"
     with descriptor_path.open("w", encoding="utf-8") as f:
@@ -1815,6 +1914,14 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help="Override the auto-discovered markers.json path",
+    )
+    parser.add_argument(
+        "--timeline",
+        type=Path,
+        default=None,
+        help="Override the auto-discovered .timeline.json path (asset "
+        "boundaries for HLS/DASH comments). Optional -- omit entirely for "
+        "no asset-boundary comments.",
     )
     parser.add_argument("--output", type=Path, required=True, help="Output loop package directory")
     parser.add_argument("--segment-duration", type=float, default=4.0)
@@ -1880,6 +1987,28 @@ def main(argv: list[str] | None = None) -> int:
         "(Unix milliseconds), {pd} (ISO-8601 program date-time). "
         f"Default: {DATERANGE_ID_FORMAT_DEFAULT!r}.",
     )
+    parser.add_argument(
+        "--dash-signal-format",
+        choices=("binary", "xml"),
+        default=DASH_SIGNAL_FORMAT_DEFAULT,
+        help="Shape of the DASH <EventStream>'s <Signal> children. "
+        "'binary' (default): schemeIdUri=\"...2014:xml+bin\", raw base64 "
+        "splice command in a <Binary> element -- today's only behavior. "
+        "'xml': schemeIdUri=\"...2013:xml\", each marker's full decoded "
+        "<SpliceInfoSection> per the SCTE-35 XML binding (requires "
+        "threefive).",
+    )
+    parser.add_argument(
+        "--dash-descriptor-mode",
+        choices=("shared", "narrowed"),
+        default=DASH_DESCRIPTOR_MODE_DEFAULT,
+        help="Shape of each DASH <Event>'s Signal payload for coincident "
+        "descriptors (e.g. a Break start + nested PPO/Ad start, all at the "
+        "same PTS) -- independent of --daterange-mode, so HLS and DASH can "
+        "each pick their own. 'shared' (default): the full multi-descriptor "
+        "message, same bytes regardless of which event it's attached to. "
+        "'narrowed': a re-encoded, single-descriptor-per-event payload.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -1906,12 +2035,15 @@ def main(argv: list[str] | None = None) -> int:
                 segment_duration_seconds=args.segment_duration,
                 dry_run=args.dry_run,
                 markers_override=args.markers,
+                timeline_override=args.timeline,
                 daterange_mode=args.daterange_mode,
                 cue_tags=args.cue_tags,
                 increment_event_ids=args.increment_event_ids,
                 daterange_id_format=args.daterange_id_format,
                 hls_format=args.hls_format,
                 hls_ts_mux_audio=args.hls_ts_mux_audio,
+                dash_signal_format=args.dash_signal_format,
+                dash_descriptor_mode=args.dash_descriptor_mode,
             )
     except ValidationError as exc:
         logger.error("VALIDATION FAILED: %s", exc)

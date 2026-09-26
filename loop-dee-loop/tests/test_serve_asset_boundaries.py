@@ -160,6 +160,9 @@ def _sparse_fake_package(boundaries, gap_ticks_by_index, segment_boundary_ticks,
             segments_per_loop, boundary_set, gap_ticks_by_index
         ),
     )
+    package.asset_boundaries = []  # franken-ts timeline comments: none for archives
+    package.dash_signal_format = "binary"
+    package.dash_descriptor_mode = "shared"
     package.audio_muxed_in_video = False
     package.video_playlist_name = types.MethodType(LoopPackage.video_playlist_name, package)
     return package

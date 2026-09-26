@@ -1174,11 +1174,11 @@ wheels = [
 
 [[package]]
 name = "threefive"
-version = "3.0.95"
+version = "3.0.97"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/fb/eb/446ca025879f23e738bbb4c8740d41d122478034e58a6b2fd954357bd5e7/threefive-3.0.95.tar.gz", hash = "sha256:82a74dec26c5d9973c2e94f647c57b0a7ec4536469bed30071c8f83567b657d1", size = 84341, upload-time = "2026-07-17T00:59:38.465Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/04/6ca28aa657132f6fd240517b891670c17852320e92d023acfc75b38d7fb4/threefive-3.0.97.tar.gz", hash = "sha256:71399987b0be33aad83de40c27c0a5dfdec8777d26b58434f01d6955738122c0", size = 81841, upload-time = "2026-09-22T20:32:30.689Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/22/ed/ac613077219ee1fd27ca9910fd009866576304759930c65d7bc74947e42a/threefive-3.0.95-py3-none-any.whl", hash = "sha256:8feb316ee6d0547055ef30117730b5afad8f8b75e1157b4cbb497dd249236109", size = 88002, upload-time = "2026-07-17T00:59:36.288Z" },
+    { url = "https://files.pythonhosted.org/packages/85/52/0477d88dc60f66603888e271e4f26ca7c2daa1bca94bf6112df11562c6de/threefive-3.0.97-py3-none-any.whl", hash = "sha256:ea4bbe04a90b12bdd807c098031e07e3017398f2cf5047e97c43118f5836075e", size = 85507, upload-time = "2026-09-22T20:32:28.919Z" },
 ]
 
 [[package]]
