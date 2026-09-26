@@ -164,10 +164,10 @@ const survivors = computed<VariantCoverage[]>(() => {
   const [start, end] = targetRange.value
   return (coverage.value?.variants ?? []).filter((v) => coversFully(v.covered_ranges, start, end))
 })
-const dropped = computed<VariantCoverage[]>(() => {
-  const survivorUrls = new Set(survivors.value.map((v) => v.manifest_url))
-  return (coverage.value?.variants ?? []).filter((v) => !survivorUrls.has(v.manifest_url))
-})
+const survivorUrls = computed(() => new Set(survivors.value.map((v) => v.manifest_url)))
+const dropped = computed<VariantCoverage[]>(() =>
+  (coverage.value?.variants ?? []).filter((v) => !survivorUrls.value.has(v.manifest_url)),
+)
 
 // SCOPE.md §8 step 5: residual reference pick -- arbitrary among survivors
 // once they all share the same window, but the human can still pick.
@@ -225,11 +225,16 @@ function onImportFinished(job: Job) {
       <h4 class="mb-0">1. Per-variant coverage</h4>
       <p class="text-color-secondary text-sm m-0">
         Each lane shows the wall-clock stretches this variant was actually captured for -- gaps are
-        stretches a live player wasn't using this variant (SCOPE.md §8). Red segments are listed in
-        the manifest but their media isn't in the archive.
+        stretches a live player wasn't using this variant (SCOPE.md §8). Green segments have their media in the archive; orange ones are listed in the manifest but their
+        media isn't in the archive.
       </p>
       <div class="flex flex-column gap-2">
-        <div v-for="variant in coverage.variants" :key="variant.manifest_url" class="flex flex-column gap-1">
+        <div
+          v-for="variant in coverage.variants"
+          :key="variant.manifest_url"
+          class="variant-lane flex flex-column gap-1"
+          :class="{ dimmed: !survivorUrls.has(variant.manifest_url) }"
+        >
           <div class="text-xs text-color-secondary" style="word-break: break-all">
             <Tag :value="variant.format" severity="secondary" class="mr-2" />{{ variant.manifest_url }}
           </div>
@@ -246,7 +251,7 @@ function onImportFinished(job: Job) {
             <template v-else>
               <div v-for="(range, i) in variant.covered_ranges" :key="i" class="coverage-range" :style="rangeStyle(range)" />
             </template>
-            <div class="coverage-range-picker" :style="{ left: `${rangePercent[0]}%`, width: `${rangePercent[1] - rangePercent[0]}%` }" />
+            <div v-if="survivorUrls.has(variant.manifest_url)" class="coverage-range-picker" :style="{ left: `${rangePercent[0]}%`, width: `${rangePercent[1] - rangePercent[0]}%` }" />
           </div>
         </div>
       </div>
@@ -341,15 +346,15 @@ function onImportFinished(job: Job) {
   border-radius: 4px;
   overflow: hidden;
 }
+/* Segment colours: green = media in the archive, orange = listed but no media. */
 .coverage-range {
   position: absolute;
   top: 0;
   bottom: 0;
-  background: var(--primary-color, #6366f1);
-  opacity: 0.55;
+  background: #4ade80;
 }
 .coverage-range.missing {
-  background: var(--red-500, #ef4444);
+  background: #fb923c;
 }
 .suggestion {
   display: flex;
@@ -370,11 +375,17 @@ function onImportFinished(job: Job) {
   border-color: var(--primary-color, #6366f1);
   box-shadow: 0 0 0 1px var(--primary-color, #6366f1);
 }
+/* Variants that don't fully cover the picked range: dimmed, base colours kept. */
+.variant-lane.dimmed {
+  opacity: 0.35;
+}
+/* Range selection: blue outline, distinct from the green/orange segments. */
 .coverage-range-picker {
   position: absolute;
   top: 0;
   bottom: 0;
-  border: 2px dashed var(--red-500, #ef4444);
+  z-index: 1;
+  border: 3px solid #2563eb;
   box-sizing: border-box;
   pointer-events: none;
 }
