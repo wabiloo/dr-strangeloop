@@ -111,11 +111,17 @@ extension, no separate flag/binary) shaped like:
   "segments": [
     {"index": 0, "duration_ticks": 540000, "asset_boundary": true,  "media_file": "seg_000.m4s"},
     {"index": 1, "duration_ticks": 540000, "asset_boundary": false, "media_file": null},
-    {"index": 2, "duration_ticks": 540000, "asset_boundary": false, "media_file": "seg_002.m4s"}
+    {"index": 2, "duration_ticks": 540000, "asset_boundary": false, "media_file": "seg_002.m4s", "gap_ticks": 45000}
   ],
   "markers": [ /* same .markers.json shape as SCOPE.md §2 */ ]
 }
 ```
+
+`gap_ticks` is optional (absent/0 everywhere is the common case) and only
+meaningful on an `asset_boundary: true` segment — a signed declared
+dead-time (positive) or overlap (negative) at that join, feeding
+`serve.py`'s declared-vs-serving position accumulator (grave-robber's own
+`SCOPE.md` §6.2).
 
 This is the input `grave-robber` produces from a captured HTTP archive
 (HAR/Proxyman log) of a real HLS/DASH session — an inherently sparse

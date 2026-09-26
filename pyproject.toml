@@ -11,4 +11,5 @@ members = [
     "loop-dee-loop",
     "igor",
     "scte35-table23",
+    "grave-robber",
 ]

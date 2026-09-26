@@ -23,6 +23,7 @@ names or CLI flags from this file alone.
 | 3. Deploy + run in AWS | `its-a-live/` | [`its-a-live/AGENTS.md`](./its-a-live/AGENTS.md), [`its-a-live/AGENT_BRIEF.md`](./its-a-live/AGENT_BRIEF.md) |
 | (3a) Self-hosted backend internals | `loop-dee-loop/` | [`loop-dee-loop/AGENTS.md`](./loop-dee-loop/AGENTS.md) |
 | Inspect/verify a built `.ts` | `inspector-krogh/` (`frame-extractor` CLI: every frame + GOP/I-P-B timeline; `krogh` CLI: scans the file's *actual* SCTE-35 markers, independent of franken-ts, optionally compared against `markers.json`) | [`inspector-krogh/README.md`](./inspector-krogh/README.md) |
+| (alt. source) Derive a loop from a captured HAR/Proxyman session instead of authoring one | `grave-robber/` (feeds `loop-dee-loop`'s sparse segment-list `bake.py` mode, not `franken-ts`) | [`grave-robber/AGENTS.md`](./grave-robber/AGENTS.md) |
 | Web UI over all of the above | `igor/` | [`igor/AGENTS.md`](./igor/AGENTS.md) |
 
 ## Architecture
@@ -80,7 +81,7 @@ commands at the end of its run.
 ## Environments
 
 - Repo-root `.venv` (`uv sync --all-packages`): `franken-ts`,
-  `inspector-krogh`, `loop-dee-loop`.
+  `inspector-krogh`, `loop-dee-loop`, `grave-robber`.
 - `its-a-live/` manages its **own separate** venv (`aws-cdk-lib`/`boto3`
   don't need to resolve alongside media tooling): `cd its-a-live && uv
   sync` once, then `uv run --project its-a-live ...` from the repo root.
