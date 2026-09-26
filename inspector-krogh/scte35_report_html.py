@@ -103,7 +103,7 @@ def _boundary_block(marker: dict, boundary: str, frames: dict, m_checks: list[di
         </div>"""
 
 
-def _marker_card(marker: dict, frames: dict, checks: list[dict], base_dir: Optional[Path]) -> str:
+def _marker_card(marker: dict, frames: dict, checks: list[dict], base_dir: Optional[Path], colors: dict) -> str:
     eid = marker["event_id"]
     m_checks = _checks_for(checks, eid)
     dur = marker.get("duration_seconds")
@@ -123,8 +123,9 @@ def _marker_card(marker: dict, frames: dict, checks: list[dict], base_dir: Optio
     splice_badge = f'<span class="splice-badge {marker["splice_type"]}">{marker["splice_type"]}</span>'
     instant_badge = '<span class="instant-badge">instant</span>' if marker["is_instant"] else ""
 
+    bg, border, fg = colors[marker["type_code"]]
     return f"""
-    <div class="marker-card">
+    <div class="marker-card" style="--t-bg:{bg};--t-border:{border};--t-fg:{fg}">
       <div class="marker-hdr">
         <span class="mid">Event #{eid}</span>
         {type_badge}{splice_badge}{instant_badge}
@@ -213,7 +214,8 @@ def render_html(report: dict, base_dir: Optional[Path] = None) -> str:
     summary = report.get("summary", {})
     total = src.get("duration") or 0.0
 
-    cards_html = "".join(_marker_card(m, frames, checks, base_dir) for m in markers)
+    colors = type_colors(m["type_code"] for m in markers)
+    cards_html = "".join(_marker_card(m, frames, checks, base_dir, colors) for m in markers)
     timeline_html = _timeline_bar(markers, total)
 
     checks_rows = "".join(
@@ -263,16 +265,16 @@ table.checks-table{{width:100%;border-collapse:collapse;font-size:12px}}
 .checks-table tr.fail td.result{{color:#ff5555}}
 .checks-table tr.fail td{{color:#ff8888}}
 
-.markers-wrap{{display:flex;flex-direction:column;gap:22px}}
-.marker-card{{border:1px solid #1e1e30;border-radius:8px;overflow:hidden;background:#0f0f1a}}
-.marker-hdr{{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:9px 16px;background:#141424;border-bottom:1px solid #1e1e30}}
-.mid{{font-size:10px;font-weight:700;letter-spacing:1px;color:#5555aa;text-transform:uppercase}}
-.type-badge{{font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;background:#182840;color:#6ab0ff}}
+.markers-wrap{{display:flex;flex-direction:column;gap:40px}}
+.marker-card{{border:1px solid #33334d;border-left:6px solid var(--t-border);border-radius:8px;overflow:hidden;background:#0f0f1a;box-shadow:0 4px 18px rgba(0,0,0,.45)}}
+.marker-hdr{{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 16px;background:linear-gradient(90deg,var(--t-bg),#141424 70%);border-bottom:1px solid var(--t-border)}}
+.mid{{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--t-fg);text-transform:uppercase}}
+.type-badge{{font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;background:var(--t-border);color:#fff}}
 .splice-badge{{font-size:9px;padding:2px 7px;border-radius:3px;text-transform:uppercase;background:#162016;color:#55bb55}}
 .splice-badge.splice_insert{{background:#162016;color:#55bb55}}
 .splice-badge.time_signal{{background:#141428;color:#5577cc}}
 .instant-badge{{font-size:9px;padding:2px 7px;border-radius:3px;background:#332200;color:#ffbb44;text-transform:uppercase}}
-.mname{{color:#999}}
+.mname{{color:var(--t-fg);font-weight:600}}
 .dur{{color:#555;font-size:11px;margin-left:auto}}
 
 .bh{{display:flex;align-items:center;gap:14px;padding:8px 16px;color:#7a7a9a}}
