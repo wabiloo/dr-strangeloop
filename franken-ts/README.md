@@ -80,13 +80,13 @@ osd:                            # optional — on-screen display, see "On-screen
   enabled: true                 # default: false
   countdown:
     enabled: true                # default: true
-    height_pct: 5                 # default: 5 (% of transcoded output height)
-  text_size_pct: 4               # default: 4 (% of transcoded output height)
+    height_pct: 3                 # default: 3 (% of transcoded output height)
+  text_size_pct: 3               # default: 3 (% of transcoded output height)
   text_color: "#FFFFFF"          # default: "#FFFFFF"
   ad_break_label: "ad break"     # default: "ad break"
   corner_box:                    # optional — dark box behind each corner's text
     enabled: true                # default: false
-    color: "#FFFFFF"             # default: "#FFFFFF" — border accent color only, not the fill (see below)
+    color: "#000000"             # default: "#000000" — border accent color only, not the fill (see below)
   corners:
     top_left: asset_id           # default: null
     top_right: scte35_spans      # default: null
@@ -260,13 +260,13 @@ osd:
   enabled: true                 # master on/off switch — default: false
   countdown:
     enabled: true                # default: true
-    height_pct: 5                 # default: 5
-  text_size_pct: 4               # default: 4 — applies to all 4 corners
+    height_pct: 3                 # default: 3
+  text_size_pct: 3               # default: 3 — applies to all 4 corners
   text_color: "#FFFFFF"          # default: "#FFFFFF" — applies to all corner text
   ad_break_label: "ad break"     # default: "ad break" — text for the is_adbreak corner
   corner_box:                    # optional dark box behind each corner's text
     enabled: true                # default: false
-    color: "#FFFFFF"             # default: "#FFFFFF" — border accent color only (see below), same for all 4 corners
+    color: "#000000"             # default: "#000000" — border accent color only (see below), same for all 4 corners
   corners:
     top_left: asset_id
     top_right: scte35_spans

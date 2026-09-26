@@ -632,7 +632,7 @@ class OsdCountdownConfig(BaseModel):
     growing from 0% to 100% width over the current asset's playback."""
 
     enabled: bool = True
-    height_pct: float = Field(default=5.0, ge=0, le=100)
+    height_pct: float = Field(default=3.0, ge=0, le=100)
 
 
 class OsdCornersConfig(BaseModel):
@@ -656,7 +656,7 @@ class OsdCornerBoxConfig(BaseModel):
     computing text metrics itself."""
 
     enabled: bool = False
-    color: str = Field(default="#FFFFFF", pattern=_HEX_COLOR_RE.pattern)
+    color: str = Field(default="#000000", pattern=_HEX_COLOR_RE.pattern)
 
 
 class OsdConfig(BaseModel):
@@ -671,7 +671,7 @@ class OsdConfig(BaseModel):
     corner_box: OsdCornerBoxConfig = Field(default_factory=OsdCornerBoxConfig)
     # Percentage of the transcoded (rendition) output height, applied
     # uniformly to all 4 corners.
-    text_size_pct: float = Field(default=4.0, ge=0, le=100)
+    text_size_pct: float = Field(default=3.0, ge=0, le=100)
     # Applies to all corner text (not the countdown bar, which is always
     # semi-transparent black per spec).
     text_color: str = Field(default="#FFFFFF", pattern=_HEX_COLOR_RE.pattern)

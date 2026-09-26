@@ -223,8 +223,8 @@ function newAsset(): AssetForm {
 function defaultOsd(): OsdForm {
   return {
     enabled: false,
-    countdown: { enabled: true, height_pct: 5 },
-    text_size_pct: 4,
+    countdown: { enabled: true, height_pct: 3 },
+    text_size_pct: 3,
     text_color: '#FFFFFF',
     ad_break_label: 'ad break',
     corner_box: { enabled: false, color: '#000000' },
@@ -1556,9 +1556,9 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
     enabled: Boolean(rawOsd.enabled),
     countdown: {
       enabled: rawOsdCountdown.enabled !== undefined ? Boolean(rawOsdCountdown.enabled) : true,
-      height_pct: (rawOsdCountdown.height_pct as number) ?? 5,
+      height_pct: (rawOsdCountdown.height_pct as number) ?? 3,
     },
-    text_size_pct: (rawOsd.text_size_pct as number) ?? 4,
+    text_size_pct: (rawOsd.text_size_pct as number) ?? 3,
     text_color: (rawOsd.text_color as string) ?? '#FFFFFF',
     ad_break_label: (rawOsd.ad_break_label as string) ?? 'ad break',
     corner_box: {

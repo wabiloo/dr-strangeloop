@@ -37,8 +37,8 @@ def test_osd_config_defaults():
     osd = OsdConfig()
     assert osd.enabled is False
     assert osd.countdown.enabled is True
-    assert osd.countdown.height_pct == 5.0
-    assert osd.text_size_pct == 4.0
+    assert osd.countdown.height_pct == 3.0
+    assert osd.text_size_pct == 3.0
     assert osd.text_color == "#FFFFFF"
     assert osd.ad_break_label == "ad break"
     assert osd.corners.top_left is None
@@ -46,7 +46,7 @@ def test_osd_config_defaults():
     assert osd.corners.bottom_left == "asset_id"
     assert osd.corners.bottom_right == "time"
     assert osd.corner_box.enabled is False
-    assert osd.corner_box.color == "#FFFFFF"
+    assert osd.corner_box.color == "#000000"
 
 
 def test_osd_config_invalid_corner_value_rejected():
@@ -385,10 +385,10 @@ def test_build_corner_text_filter_bottom_gap_matches_top_margin():
     corner's clearance from the frame's top edge -- not double it."""
     output = _output(height=1080)
     entry = _entry(asset_id="a1")
-    osd = OsdConfig()  # countdown.enabled defaults True, height_pct=5.0
+    osd = OsdConfig()  # countdown.enabled defaults True, height_pct=3.0
 
     margin = round(1080 * 0.03)
-    bar_h = round(1080 * 0.05)
+    bar_h = round(1080 * osd.countdown.height_pct / 100)
 
     top = build_corner_text_filter("asset_id", entry, output, osd, "top_left", 10.0)
     bottom = build_corner_text_filter("asset_id", entry, output, osd, "bottom_left", 10.0)
