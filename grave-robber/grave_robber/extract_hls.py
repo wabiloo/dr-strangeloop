@@ -82,6 +82,8 @@ def extract_hls(
                 duration_ticks=duration_ticks,
                 asset_boundary=bool(seg.discontinuity),
                 source_uri=seg.absolute_uri or None,
+                start_time=pdts[index],
+                init_uri=(seg.init_section.absolute_uri if seg.init_section else None) or None,
             )
         )
 

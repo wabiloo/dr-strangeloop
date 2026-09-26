@@ -31,6 +31,23 @@ def _pick_best_entry(entries: list):
     return max(entries, key=_size)
 
 
+def _body(trace: Trace, uri: str | None) -> bytes:
+    """Best-matching non-empty body for `uri`, or b"" (never raises)."""
+    if uri is None:
+        return b""
+    entries = trace.get_entries_for_url(uri)
+    return _pick_best_entry(entries).content_bytes if entries else b""
+
+
+def has_media(trace: Trace, source_uri: str | None, init_uri: str | None = None) -> bool:
+    """Whether `extract_media_for_segments` would recover a usable file for
+    this segment (same lookup, without writing anything). A CMAF segment
+    (`init_uri` set) is only usable if its init segment is in the archive too."""
+    if not _body(trace, source_uri):
+        return False
+    return init_uri is None or bool(_body(trace, init_uri))
+
+
 def extract_media_for_segments(
     trace: Trace,
     segments: list[TimingSegment],
@@ -55,16 +72,21 @@ def extract_media_for_segments(
             media_paths[segment.index] = None
             continue
 
-        entries = trace.get_entries_for_url(segment.source_uri)
-        if not entries:
-            media_paths[segment.index] = None
-            continue
-
-        entry = _pick_best_entry(entries)
-        content = entry.content_bytes
+        content = _body(trace, segment.source_uri)
         if not content:
             media_paths[segment.index] = None
             continue
+
+        if segment.init_uri is not None:
+            # fMP4/CMAF media segments have no moov of their own: prepend the
+            # init segment so each file is a complete, independently
+            # decodable fragmented MP4. No init in the archive -> the
+            # segment is unrecoverable (media_file: null).
+            init = _body(trace, segment.init_uri)
+            if not init:
+                media_paths[segment.index] = None
+                continue
+            content = init + content
 
         dest = output_dir / filename_template.format(index=segment.index)
         dest.write_bytes(content)

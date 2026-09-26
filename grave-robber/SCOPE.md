@@ -306,6 +306,15 @@ last manifest snapshot's latest segment defines the end of the last.
 Accept a real (and possibly visually rough) discontinuity at the wrap —
 fidelity there is explicitly not a goal.
 
+**Amendment (range trimming)**: when `ingest` is given `--start/--end`
+(HLS only, wall-clock from PROGRAM-DATE-TIME), the loop is trimmed to the
+segments lying fully inside that window; markers and boundaries are
+re-based onto the trimmed timeline. Without a range, the full span is used
+as before. The igor wizard offers three smart windows (fully recoverable /
+longest continuous / widest ladder, `grave_robber/suggest.py`), each
+reporting how many segments have media bytes in the archive, and persists
+the chosen selection to `data/archives/<name>.selection.json`.
+
 ## 8. Multi-variant HLS
 
 An HLS ABR ladder captured from a real OTT player reflects that player's

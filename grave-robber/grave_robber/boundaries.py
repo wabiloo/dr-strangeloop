@@ -16,6 +16,7 @@ latest segment ends it, with no separate trimming step needed.
 from __future__ import annotations
 
 import dataclasses
+import datetime as _dt
 
 from .models import AssetBoundary, AssetSpan, RawMarker, TimingSegment
 
@@ -162,3 +163,46 @@ def select_loop_boundary(
     one obvious place to live/be revisited, rather than being implicit in
     merge_timeline_snapshots's own docstring."""
     return segments
+
+
+def trim_timeline(
+    segments: list[TimingSegment],
+    markers: list[RawMarker],
+    boundaries: list[AssetBoundary],
+    start: _dt.datetime,
+    end: _dt.datetime,
+    *,
+    tolerance: _dt.timedelta = _dt.timedelta(milliseconds=50),
+) -> tuple[list[TimingSegment], list[RawMarker], list[AssetBoundary]]:
+    """Restrict a merged timeline to the segments lying fully inside the
+    wall-clock window [start, end] (SCOPE.md §7, amended: the picked range
+    trims the loop). Segments without a wall-clock `start_time` are dropped.
+    Segment indices, marker ticks and boundary indices are re-expressed
+    against the trimmed timeline; markers outside it are dropped."""
+    kept = [
+        s
+        for s in segments
+        if s.start_time is not None
+        and s.start_time >= start - tolerance
+        and s.start_time + _dt.timedelta(seconds=s.duration_ticks / 90_000) <= end + tolerance
+    ]
+    if not kept:
+        return [], [], []
+
+    starts = _cumulative_start_ticks(segments)
+    removed_ticks = starts[kept[0].index]
+    index_map = {s.index: new_index for new_index, s in enumerate(kept)}
+    new_segments = [dataclasses.replace(s, index=index_map[s.index]) for s in kept]
+    total_ticks = sum(s.duration_ticks for s in new_segments)
+
+    new_markers = [
+        dataclasses.replace(m, pts_time_ticks=m.pts_time_ticks - removed_ticks)
+        for m in markers
+        if 0 <= m.pts_time_ticks - removed_ticks < total_ticks
+    ]
+    new_boundaries = [
+        dataclasses.replace(b, segment_index=index_map[b.segment_index], gap_ticks=0 if index_map[b.segment_index] == 0 else b.gap_ticks)
+        for b in boundaries
+        if b.segment_index in index_map
+    ]
+    return new_segments, new_markers, new_boundaries

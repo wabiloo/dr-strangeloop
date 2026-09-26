@@ -18,6 +18,9 @@ from mpd_inspector.inspector import (
     Scte35XmlEventInspector,
 )
 
+from urllib.parse import urljoin
+from xml.etree import ElementTree as ET
+
 from .models import AssetBoundary, RawMarker, TimingSegment
 
 TIMESCALE = 90_000
@@ -37,6 +40,35 @@ def _select_reference_adaptation_set(period: PeriodInspector) -> AdaptationSetIn
     return adaptation_sets[0]
 
 
+def _dash_init_uri(root, period_idx: int, representation, manifest_url: str) -> str | None:
+    """Best-effort absolute URL of the reference Representation's init
+    segment: the `SegmentTemplate@initialization` nearest the Representation
+    (Representation, then its AdaptationSet, then the Period), with
+    $RepresentationID$/$Bandwidth$ substituted. mpd-inspector doesn't expose
+    it. None when the MPD declares no template init (e.g. self-initializing
+    segments, or SegmentBase/SegmentList addressing)."""
+    ns = {"m": "urn:mpeg:dash:schema:mpd:2011"}
+    periods = root.findall("m:Period", ns)
+    if period_idx >= len(periods):
+        return None
+    rep_id = str(getattr(representation, "id", "") or "")
+    for adaptation in periods[period_idx].findall("m:AdaptationSet", ns):
+        for rep in adaptation.findall("m:Representation", ns):
+            if rep_id and rep.get("id") != rep_id:
+                continue
+            for scope in (rep, adaptation, periods[period_idx]):
+                template = scope.find("m:SegmentTemplate", ns)
+                if template is not None and template.get("initialization"):
+                    init = (
+                        template.get("initialization")
+                        .replace("$RepresentationID$", rep.get("id", ""))
+                        .replace("$Bandwidth$", rep.get("bandwidth", ""))
+                    )
+                    return urljoin(manifest_url, init)
+            return None
+    return None
+
+
 def extract_dash(
     manifest_text: str, manifest_url: str = ""
 ) -> tuple[list[TimingSegment], list[RawMarker], list[AssetBoundary]]:
@@ -54,6 +86,7 @@ def extract_dash(
     # with no separator.
     inspector.base_uri = manifest_url.rsplit("/", 1)[0] + "/" if manifest_url else ""
 
+    manifest_root = ET.fromstring(manifest_text.encode("utf-8"))
     segments: list[TimingSegment] = []
     markers: list[RawMarker] = []
     boundaries: list[AssetBoundary] = []
@@ -64,6 +97,7 @@ def extract_dash(
         adaptation_set = _select_reference_adaptation_set(period)
         representation = adaptation_set.representations[0]
         media_segments = representation.segment_information.segments
+        init_uri = _dash_init_uri(manifest_root, period_idx, representation, manifest_url)
 
         period_start_ticks = cumulative_ticks
         if period_idx > 0:
@@ -87,6 +121,7 @@ def extract_dash(
                     # loop-dee-loop/SCOPE.md §6.3).
                     asset_boundary=(seg_idx == 0 and period_idx > 0),
                     source_uri=(media_segment.urls[0] if media_segment.urls else None),
+                    init_uri=init_uri,
                 )
             )
             cumulative_ticks += duration_ticks

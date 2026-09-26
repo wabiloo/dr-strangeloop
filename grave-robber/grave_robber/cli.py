@@ -19,6 +19,7 @@ Two subcommands:
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import logging
 import sys
 from pathlib import Path
@@ -26,6 +27,7 @@ from pathlib import Path
 from trace_shrink import Format, open_trace
 
 from .coverage import build_dash_variant_coverage, build_hls_variant_coverage
+from .multivariant import is_multivariant_playlist, parse_multivariant_playlist
 from .pipeline import ingest
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,10 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         args.output,
         format=fmt,
         media_dir=args.media_dir,
+        start=_dt.datetime.fromisoformat(args.start) if args.start else None,
+        end=_dt.datetime.fromisoformat(args.end) if args.end else None,
+        audio_manifest_url=args.audio_manifest_url,
+        audio=not args.no_audio,
     )
     segments = manifest["segments"]
     present = sum(1 for s in segments if s["media_file"] is not None)
@@ -60,6 +66,11 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
         manifest_url = str(decorated_url.url)
         entries = trace.get_entries_for_url(manifest_url)
         snapshots = [(entry.content_bytes.decode("utf-8", errors="replace"), manifest_url) for entry in entries]
+        if entries and decorated_url.format == "HLS" and is_multivariant_playlist(snapshots[-1][0]):
+            print(f"\nHLS multivariant playlist (no segments): {manifest_url}")
+            for r in parse_multivariant_playlist(snapshots[-1][0], manifest_url):
+                print(f"  {r['resolution'] or 'audio/other'}  {r['bandwidth']} bps  {r['codecs']}  {r['manifest_url']}")
+            continue
         builder = build_hls_variant_coverage if decorated_url.format == "HLS" else build_dash_variant_coverage
         coverage = builder(manifest_url, snapshots)
 
@@ -86,6 +97,10 @@ def main(argv: list[str] | None = None) -> int:
     ingest_parser.add_argument("--output", type=Path, required=True, help="Output directory")
     ingest_parser.add_argument("--format", choices=("hls", "dash"), default=None, help="Override format auto-detection")
     ingest_parser.add_argument("--media-dir", type=Path, default=None, help="Where to write recovered segment media (default: <output>/media)")
+    ingest_parser.add_argument("--start", default=None, help="ISO wall-clock start; with --end, trims the loop to segments fully inside [start, end] (HLS only)")
+    ingest_parser.add_argument("--end", default=None, help="ISO wall-clock end (see --start)")
+    ingest_parser.add_argument("--audio-manifest-url", default=None, help="Separate audio playlist URL (default: auto-detected from the archive's multivariant playlist)")
+    ingest_parser.add_argument("--no-audio", action="store_true", help="Ignore any separate audio playlist")
     ingest_parser.set_defaults(func=_cmd_ingest)
 
     coverage_parser = subparsers.add_parser("coverage", help="Print each variant's captured wall-clock coverage")

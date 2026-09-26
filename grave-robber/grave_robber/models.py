@@ -8,6 +8,7 @@ floats, for the same drift-freedom reasons documented there.
 
 from __future__ import annotations
 
+import datetime as _dt
 from dataclasses import dataclass
 from xml.etree import ElementTree as ET
 
@@ -24,6 +25,11 @@ class TimingSegment:
     source_uri: str | None = None  # the manifest-referenced segment URL, for §5.3's
     # archive body lookup; None only if a format's extractor can't recover
     # an absolute URI.
+    init_uri: str | None = None  # CMAF/fMP4 init segment (HLS #EXT-X-MAP / DASH
+    # SegmentTemplate@initialization); None for self-contained segments (MPEG-TS).
+    start_time: _dt.datetime | None = None  # wall-clock start (HLS: forward-carried
+    # PROGRAM-DATE-TIME); None when the source has no wall-clock reference. Only used
+    # for range selection/trimming (SCOPE.md §8), never for loop timing.
 
 
 @dataclass(frozen=True)

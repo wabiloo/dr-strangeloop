@@ -18,6 +18,9 @@ def build_segment_list_manifest(
     boundaries: list[AssetBoundary],
     decoded_markers: list[dict],
     media_paths: dict[int, Path | None],
+    declared_variant: dict | None = None,
+    audio_segments: list | None = None,
+    audio_media_paths: dict[int, Path | None] | None = None,
 ) -> dict:
     """Assemble the segment-list manifest dict (loop-dee-loop/SCOPE.md
     §11.2's shape, extended with the optional `gap_ticks` field --
@@ -50,7 +53,23 @@ def build_segment_list_manifest(
     # undocumented extra key into bake.py's input.
     markers_out = [{k: v for k, v in m.items() if k != "source"} for m in decoded_markers]
 
-    return {"segments": segment_entries, "markers": markers_out}
+    if audio_segments is not None:
+        # A separate audio playlist, aligned 1:1 to the video segments.
+        for entry, audio in zip(segment_entries, audio_segments):
+            path = (audio_media_paths or {}).get(entry["index"]) if audio is not None else None
+            entry["audio_media_file"] = str(path) if path is not None else None
+            entry["audio_duration_ticks"] = audio.duration_ticks if audio is not None else entry["duration_ticks"]
+
+    manifest = {"segments": segment_entries, "markers": markers_out}
+    if audio_segments is not None:
+        manifest["audio"] = {"separate": True}
+    if declared_variant:
+        # What the archive's multivariant playlist declared for this variant
+        # (exact codecs/bandwidth) -- bake.py prefers it over re-deriving.
+        manifest["variant"] = {
+            k: declared_variant[k] for k in ("codecs", "bandwidth", "resolution", "frame_rate") if declared_variant.get(k)
+        }
+    return manifest
 
 
 def write_segment_list_manifest(manifest: dict, path: Path) -> None:
