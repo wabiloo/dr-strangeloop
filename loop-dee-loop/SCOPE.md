@@ -470,3 +470,137 @@ smallest possible change to `serve.py`'s serving path.
       timeline gap, anywhere.
 - [ ] Requesting a segment with no physical file returns 404; requesting
       any other segment in the same package still succeeds normally.
+
+## 12. Extension: PTS/DTS/PCR continuity across the loop wrap (`--continuous-timeline`)
+
+**DECIDED.** §4.1 step 6 and §4.2 both rely on serving the exact same
+physical segment bytes every loop iteration (immutable, byte-identical,
+trivially CDN-cacheable forever) and signaling the resulting timestamp
+restart with `#EXT-X-DISCONTINUITY` / a new DASH `<Period>` at every wrap
+(see the comments on that in `serve.py`'s `_build_hls_media_playlist` and
+`build_dash_manifest`). This section adds an **opt-in, mutually exclusive**
+alternative, `--continuous-timeline`: instead of signaling the restart,
+rewrite the served bytes' own timestamps per request so the wrap never
+happens from the player's point of view. Both modes read the exact same
+baked loop package -- this is a `serve.py`-only behavior switch, `bake.py`
+is unchanged.
+
+### 12.1 Why this is possible without transcoding
+
+Every timestamp a container carries is a small number of fixed-width
+integer fields (CMAF: one `tfdt` per fragment; MPEG-TS: PTS/DTS in every
+PES header, PCR in scattered adaptation fields) that describe *when* a
+sample plays, never *what* it is. Advancing all of them by the same
+`shift_ticks = loop_number * total_loop_duration_ticks` for a given
+loop iteration is a pure header rewrite -- no decode, no re-encode, no
+re-mux -- implemented in `continuity.py`:
+
+- `shift_cmaf_fragment`: a thin wrapper over `cmaf.rebase_fragments`
+  (already used today for sparse/archive-mode rebasing, §11) -- O(1),
+  since a fragment has exactly one `tfdt` anchor.
+- `shift_ts_segment`: a full packet scan patching every PES PTS/DTS and
+  adaptation-field PCR -- O(packet count), still header-only. PTS/DTS/PCR
+  all wrap at their spec-defined 33-bit modulus (~26.5h at 90kHz) exactly
+  as any sufficiently long-running real MPEG-TS stream already must --
+  expected client-side behavior, not a new failure mode.
+
+Both were validated against real ffmpeg-produced fmp4/TS fixtures in
+`tests/test_continuity.py`: shifted output stays byte-length-identical
+(sample data untouched) and still decodes/ffprobes correctly after a
+multi-hour shift.
+
+### 12.2 URL scheme: the global index, not the physical/local one
+
+The default mode's segment URL intentionally encodes only the
+loop-relative physical/local index (0..`segments_per_loop`-1) -- the whole
+point being that one URL is reused, byte-identical, across every loop
+iteration forever (§4.2). Continuity mode needs the opposite: the server
+must know *which* loop iteration a given request's bytes should be shifted
+into, and that can't be inferred purely from wall-clock time at request
+time (a stale manifest, a slow client, or a CDN prefetch could land a
+request for local index 0 on either side of the exact instant the server's
+own "current loop" flips). So in continuity mode, `serve.py` puts the
+**ever-increasing global segment number** in the segment URI instead
+(`_build_hls_media_playlist`'s `global_index if self.continuous else
+local_index`) -- DASH already did this by construction (`$Number$` /
+`startNumber` was always the global number, see `build_dash_manifest`),
+only HLS's own URI needed to change. The byte-serving routes then decode
+it back (`Channel.loop_number_and_local_index`) to get both the physical
+file to read and the exact shift to apply.
+
+This is the concrete form of the cacheability tradeoff flagged when this
+feature was first discussed: a continuity-mode segment URL is unique per
+loop iteration, not shared across all of them, so a CDN in front of it
+should use a short/no aggressive long-lived cache TTL (still worth
+caching for the concurrent-viewers-of-the-same-instant case per §8, just
+not "cacheable forever" the way the default mode's URLs are).
+
+### 12.3 Manifest shape: no discontinuity left to signal
+
+- **HLS**: `#EXT-X-DISCONTINUITY` is simply never emitted at the loop wrap
+  (`_build_hls_media_playlist`'s `and not self.continuous` guard), and
+  `#EXT-X-DISCONTINUITY-SEQUENCE` is always `0` (there is never a
+  discontinuity to count).
+- **DASH**: one single, never-restarted `<Period id="continuous"
+  start="PT0S">` whose `<SegmentTimeline>` `t` values are each segment's
+  real ABSOLUTE tick position (`loop_number * total_loop_duration_ticks +`
+  its loop-relative tick) -- continuously increasing across every wrap,
+  matching what the byte-serving routes actually rewrite the segments'
+  `tfdt` to (`Channel._build_dash_manifest_continuous`). This is the direct
+  DASH analog of dropping the HLS discontinuity tag: the default mode's
+  one-`<Period>`-per-loop restart (`build_dash_manifest`'s own docstring)
+  has nothing left to restart *for* once the underlying media is genuinely
+  continuous.
+
+### 12.4 Preconditions, checked once at startup (`Channel._validate_continuous`)
+
+Continuity mode hard-fails at `Channel`/`create_app` construction, never
+partway through serving, if either holds:
+
+- **Internal asset-boundary discontinuities** (grave-robber/§6.1 sparse
+  mode) are present (`package.boundaries != {0}`) -- this first cut only
+  makes the loop-wrap boundary continuous; a sparse/archive-derived
+  package's internal joins are a different, harder problem (the gap/overlap
+  math of §6.2's declared-position split would need an equivalent tick
+  shift derived from `gap_ticks`, not attempted here) and any sparse
+  rendition is rejected outright regardless.
+- **A CMAF fragment was baked with a 32-bit (v0) `tfdt`** instead of
+  64-bit (v1). This is a hard requirement, not a preference: continuity
+  mode adds `loop_number * total_loop_duration_ticks` to a `tfdt` on every
+  request for the lifetime of a channel meant to run forever, and a v0
+  `tfdt` (max ~47,721s ≈ 13.25h of ticks) **will** eventually overflow no
+  matter how large `total_loop_duration_ticks` is -- checked once per
+  rendition (+ shared audio) against the real baked segment on disk, not
+  assumed. ffmpeg's own `frag_keyframe` fmp4 muxer already defaults to v1
+  (confirmed while building `tests/test_continuity.py`'s fixtures); GPAC's
+  default was not independently confirmed in this pass and is a follow-up
+  if it ever turns out to default to v0.
+
+### 12.5 Known limitations of this first cut
+
+- **DASH `EventStream` id uniqueness assumes a DVR window never spans more
+  than two loop iterations at once.** A recurring marker needs a distinct
+  `id` per loop iteration it's re-emitted at within the single, ever-open
+  Period (unlike the default mode's one-id-namespace-per-`<Period>`), or
+  dash.js's `EventController` silently drops the second occurrence as a
+  duplicate. `_build_dash_manifest_continuous` folds in only
+  `loop_number & 1` (one bit) for this -- correct for any realistic
+  `--window-segments`/`--dvr-window-seconds` vs. loop-duration
+  combination, but not a general solution for a pathologically short loop
+  relative to the window. A full fix (e.g. folding in more of
+  `loop_number`, bounded by `xs:unsignedInt`'s 32-bit ceiling the same way
+  `increment_event_ids` already has to reason about it, §"increment_event_ids"
+  above) is a follow-up, not attempted here.
+- **its-a-live's `channel.py`/`config.toml` wiring is a follow-up.** This
+  section only adds `serve.py`'s own `--continuous-timeline` CLI flag (and
+  `wsgi.py`'s `CONTINUOUS_TIMELINE` env var) -- surfacing it as an
+  its-a-live `[serving]`-style config key (parallel to `[markers]`'s own
+  flags) is mechanical but not done in this pass.
+- **GPAC's own default `tfdt` version was not verified** (no GPAC install
+  available while implementing this) -- see §12.4's ffmpeg note. If a real
+  GPAC build defaults to v0, `bake.py` would need an explicit dasher flag
+  to force v1 before continuity mode is usable against its output; the
+  startup check (§12.4) means this fails loudly and immediately rather
+  than corrupting playback after ~13 hours, but it does mean continuity
+  mode may need a small `bake.py` change once verified against real GPAC
+  output, contrary to this section's "serve.py-only" framing above.

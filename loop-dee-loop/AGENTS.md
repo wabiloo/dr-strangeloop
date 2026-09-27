@@ -61,6 +61,7 @@ match, fix the upstream franken-ts input instead.
 | `scte35_signaling.py` | Authors `EXT-X-DATERANGE`/DASH `<EventStream>` directly from `.markers.json` — never trust GPAC's own aggregation (unreliable for multi-marker content, see `SCOPE.md` §6). |
 | `loop_math.py` | Integer epoch/loop_number/position_in_loop arithmetic — the drift-freedom guarantee (`SCOPE.md` §4.2/§5). No floats in persisted timing state, ever. |
 | `serve.py` | Stateless HTTP serving of manifests + segments per request. |
+| `continuity.py` | Opt-in `--continuous-timeline` mode (`SCOPE.md` §12): per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite so the channel has no discontinuity/Period-restart at the loop wrap — header patch only, never a re-mux. |
 | `load_test.py` | Concurrent-viewer load generator (see `PERFS.md`). |
 
 ## Requirements

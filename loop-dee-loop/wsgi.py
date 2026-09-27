@@ -26,4 +26,6 @@ window_segments = resolve_window_segments(
     window_segments=int(_window_segments_env) if _window_segments_env else None,
 )
 
-app = create_app(package_dir, epoch_ticks, window_segments=window_segments)
+continuous = os.environ.get("CONTINUOUS_TIMELINE", "").lower() in ("1", "true", "yes")
+
+app = create_app(package_dir, epoch_ticks, window_segments=window_segments, continuous=continuous)

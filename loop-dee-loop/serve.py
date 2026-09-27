@@ -35,6 +35,8 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, send_file
 
+import cmaf
+import continuity
 from loop_math import (
     compute_loop_position,
     global_segment_number,
@@ -552,16 +554,50 @@ class LoopPackage:
         raise KeyError(name)
 
 
+def _cmaf_tfdt_version(path: Path) -> int:
+    """`tfdt` box version (0 = 32-bit, 1 = 64-bit `baseMediaDecodeTime`) of
+    the first movie fragment in a bare CMAF media segment file. Used only by
+    continuity mode's startup check (SCOPE.md §12.4) -- a 32-bit tfdt WILL
+    eventually overflow on a channel that runs forever and keeps adding
+    `loop_number * total_loop_duration_ticks` to it, no matter how large
+    that duration is, so continuity mode refuses to start against one."""
+    data = path.read_bytes()
+    moof = cmaf._find(data, ("moof",))
+    tfdt = cmaf._find(data, ("traf", "tfdt"), moof[0] + 8, moof[1]) if moof else None
+    if moof is None or tfdt is None:
+        raise RuntimeError(f"{path}: no moof/traf/tfdt box found -- not a valid CMAF media fragment")
+    return data[tfdt[0] + 8]
+
+
 class Channel:
     """Fixed channel epoch + loop package. All request handling goes through
     this class's stateless methods -- no attribute here is ever mutated
-    after construction."""
+    after construction.
 
-    def __init__(self, package: LoopPackage, epoch_ticks: int, window_segments: int = 6):
+    `continuous` (SCOPE.md §12): when True, every physical segment's
+    internal timestamps are rewritten per request (continuity.py) to a
+    genuinely ever-increasing absolute position instead of restarting from
+    the same loop-relative values every iteration, so no
+    #EXT-X-DISCONTINUITY / new DASH Period is needed at the loop wrap. Only
+    supported for a package with no internal asset-boundary discontinuities
+    (grave-robber/SCOPE.md §6.1 sparse mode is out of scope for this first
+    cut) and CMAF fragments baked with a 64-bit (v1) tfdt -- both checked
+    once here, at startup, not per request.
+    """
+
+    def __init__(
+        self,
+        package: LoopPackage,
+        epoch_ticks: int,
+        window_segments: int = 6,
+        continuous: bool = False,
+    ):
         if not isinstance(epoch_ticks, int):
             raise ValueError("epoch_ticks must be int")
         if window_segments < 1:
             raise ValueError("window_segments must be >= 1")
+        if continuous:
+            self._validate_continuous(package)
         self.package = package
         self.epoch_ticks = epoch_ticks
         # Controls the DVR window / manifest size: how many segments ahead
@@ -571,6 +607,58 @@ class Channel:
         # responses. See --dvr-window-seconds / --window-segments in
         # serve.py's CLI.
         self.window_segments = window_segments
+        self.continuous = continuous
+
+    @staticmethod
+    def _validate_continuous(package: "LoopPackage") -> None:
+        if package.boundaries != {0}:
+            raise RuntimeError(
+                f"continuity mode (--continuous-timeline) does not support "
+                f"internal asset-boundary discontinuities (grave-robber/"
+                f"SCOPE.md §6.1) -- only the plain loop-wrap boundary. This "
+                f"package declares boundaries={sorted(package.boundaries)}."
+            )
+        for rendition in package.video_renditions:
+            if rendition.sparse:
+                raise RuntimeError(
+                    f"continuity mode does not support sparse/self-"
+                    f"initializing renditions (rendition '{rendition.name}') "
+                    f"-- SCOPE.md §11 archive input is out of scope for "
+                    f"continuity mode in this first cut."
+                )
+            version = _cmaf_tfdt_version(rendition.segment_files[0])
+            if version != 1:
+                raise RuntimeError(
+                    f"continuity mode requires a 64-bit (v1) tfdt, so the "
+                    f"per-loop tick offset (loop_number * "
+                    f"total_loop_duration_ticks) never overflows over a "
+                    f"long-running channel's lifetime -- rendition "
+                    f"'{rendition.name}' was baked with a 32-bit (v0) tfdt. "
+                    f"Rebake with a GPAC dasher invocation that emits v1 "
+                    f"tfdt boxes (SCOPE.md §12.4)."
+                )
+        audio = package.audio_rendition
+        if audio is not None and not audio.audio_sparse and audio.audio_segment_files:
+            version = _cmaf_tfdt_version(audio.audio_segment_files[0])
+            if version != 1:
+                raise RuntimeError(
+                    f"continuity mode requires a 64-bit (v1) tfdt for the "
+                    f"shared audio track too, same reasoning as the video "
+                    f"check above -- rebake with a GPAC dasher invocation "
+                    f"that emits v1 tfdt boxes (SCOPE.md §12.4)."
+                )
+
+    def loop_number_and_local_index(self, global_index: int) -> tuple[int, int]:
+        """(loop_number, local_index) decoded from a continuity-mode
+        segment URL's index, which -- unlike the default mode's plain
+        local/physical index -- is the ever-increasing global segment
+        number (SCOPE.md §12.2), so the same physical bytes can be shifted
+        by the right per-loop offset regardless of which loop iteration a
+        given request actually belongs to."""
+        return divmod(global_index, self.package.segments_per_loop)
+
+    def continuity_shift_ticks(self, loop_number: int) -> int:
+        return loop_number * self.package.total_loop_duration_ticks
 
     def now_ticks(self) -> int:
         """The only place wall-clock time is sampled. Converted to an
@@ -742,7 +830,11 @@ class Channel:
         # `first_global_index // segments_per_loop`) to also count internal
         # asset-boundary discontinuities -- reduces to exactly that formula
         # when pkg.boundaries == {0} (see compute_discontinuity_sequence).
-        first_discontinuity_sequence = compute_discontinuity_sequence(
+        # SCOPE.md §12: in continuity mode there is never a discontinuity to
+        # report -- every loop wrap's timestamps are rewritten to be
+        # genuinely continuous (see the segment byte-serving routes) -- so
+        # the sequence header is always 0 rather than computed.
+        first_discontinuity_sequence = 0 if self.continuous else compute_discontinuity_sequence(
             first_global_index, pkg.segments_per_loop, pkg.boundaries
         )
 
@@ -799,12 +891,17 @@ class Channel:
             local_index = global_index % pkg.segments_per_loop
             local_loop_number = global_index // pkg.segments_per_loop
 
-            if i > 0 and local_index in pkg.boundaries:
+            if i > 0 and local_index in pkg.boundaries and not self.continuous:
                 # This segment starts a new loop iteration OR an internal
                 # asset-boundary join (grave-robber/SCOPE.md §6.1), and
                 # isn't the very first entry in the window (whose implicit
                 # discontinuity sequence is already covered by the header
-                # above) -- signal the timestamp discontinuity here.
+                # above) -- signal the timestamp discontinuity here. Never
+                # reached in continuity mode (SCOPE.md §12): that mode
+                # requires boundaries == {0} (Channel._validate_continuous),
+                # and the loop-wrap boundary itself needs no signal there
+                # since the served bytes are rewritten to be genuinely
+                # continuous across it.
                 lines.append("#EXT-X-DISCONTINUITY")
                 if span_init_uri is not None:
                     lines.append(_span_map_line(local_index))
@@ -985,7 +1082,14 @@ class Channel:
 
             lines.append(f"#EXT-X-PROGRAM-DATE-TIME:{program_date_str}")
             lines.append(f"#EXTINF:{segment_duration_seconds:.3f},")
-            lines.append(seg_uri_template.format(index=local_index))
+            # SCOPE.md §12.2: continuity mode's byte-serving routes need the
+            # ever-increasing global index (not the plain physical/local
+            # one) to know which loop iteration -- and therefore which tick
+            # shift -- a given segment request belongs to, since the same
+            # physical file is reused every loop. This does trade away the
+            # default mode's "one URL forever, cacheable across every loop
+            # iteration" property (SCOPE.md §4.2) for continuity mode.
+            lines.append(seg_uri_template.format(index=global_index if self.continuous else local_index))
 
         return "\n".join(lines) + "\n"
 
@@ -1031,6 +1135,9 @@ class Channel:
         them) and safe to do without violating serve.py's "no persisted
         state" rule (bounded naturally by `segments_per_loop`).
         """
+        if self.continuous:
+            return self._build_dash_manifest_continuous(window_segments)
+
         window_segments = window_segments or self.window_segments
         pos = self.current_position()
         pkg = self.package
@@ -1436,6 +1543,199 @@ class Channel:
 '''
         return mpd
 
+    def _build_dash_manifest_continuous(self, window_segments: int | None = None) -> str:
+        """SCOPE.md §12.3: continuity mode's DASH output is ONE Period that
+        never restarts -- its <SegmentTimeline> `t` values are each
+        segment's real ABSOLUTE tick position (`loop_number *
+        total_loop_duration_ticks` + its loop-relative tick), continuously
+        increasing across every loop wrap, matching what the byte-serving
+        routes actually rewrite the segments' own `tfdt` to. This is the
+        DASH-side equivalent of the default mode's per-loop <Period> restart
+        (see build_dash_manifest's own docstring) -- continuity mode's whole
+        point is that there is no discontinuity left to give a Period
+        boundary to.
+
+        Only reached for a package that already passed
+        `Channel._validate_continuous` (boundaries == {0}, no sparse
+        renditions) -- so, unlike build_dash_manifest, there is exactly one
+        span per loop and no per-span init segments to juggle.
+        """
+        window_segments = window_segments or self.window_segments
+        pkg = self.package
+        pos = self.current_position()
+        seg_index = segment_index_for_position(
+            pos.position_in_loop_ticks, pkg.segment_boundary_ticks
+        )
+        media_sequence = global_segment_number(pos.loop_number, seg_index, pkg.segments_per_loop)
+        first_global_index = max(0, media_sequence - window_segments + 1)
+        global_indices = list(range(first_global_index, media_sequence + 1))
+
+        epoch_seconds = ticks_to_wall_clock_seconds(self.epoch_ticks, pkg.timescale)
+        availability_start_time = (
+            _dt.datetime.utcfromtimestamp(epoch_seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        )
+        now_seconds = ticks_to_wall_clock_seconds(self.now_ticks(), pkg.timescale)
+        publish_time = (
+            _dt.datetime.utcfromtimestamp(now_seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        )
+
+        def _entries(boundary_ticks: list[int]) -> list[tuple[int, int, int]]:
+            """(absolute_start_ticks, duration_ticks, local_index) -- this
+            Period's own start is fixed at tick 0 forever, so "absolute" and
+            "Period-relative" are the same thing here."""
+            entries = []
+            for global_index in global_indices:
+                loop_number, local_index = divmod(global_index, pkg.segments_per_loop)
+                start = boundary_ticks[local_index]
+                end = (
+                    boundary_ticks[local_index + 1]
+                    if local_index + 1 < len(boundary_ticks)
+                    else pkg.total_loop_duration_ticks
+                )
+                entries.append(
+                    (loop_number * pkg.total_loop_duration_ticks + start, end - start, local_index)
+                )
+            return entries
+
+        def _segment_timeline_xml(entries: list[tuple[int, int, int]]) -> str:
+            return "\n".join(f'        <S t="{t}" d="{d}" />' for t, d, _local_index in entries)
+
+        # Markers: one <Event> per (event_id, loop_number) occurrence whose
+        # interval overlaps the window -- mirrors the per-Period builder's
+        # own once-per-marker-per-Period dedup, just across the whole window
+        # rather than per Period, since there's only ever one Period now.
+        DIRECTION_CODE = {"out": 0, "in": 1, "instant": 2}
+        scheme_id_uri = (
+            SCTE35_XML_NAMESPACE if pkg.dash_signal_format == "xml" else "urn:scte:scte35:2014:xml+bin"
+        )
+        event_xml: list[str] = []
+        emitted: set[tuple[str, int]] = set()
+        for global_index in global_indices:
+            loop_number, local_index = divmod(global_index, pkg.segments_per_loop)
+            ref_start = pkg.segment_boundary_ticks[local_index]
+            ref_end = (
+                pkg.segment_boundary_ticks[local_index + 1]
+                if local_index + 1 < len(pkg.segment_boundary_ticks)
+                else pkg.total_loop_duration_ticks
+            )
+            event_id_map = build_event_id_map(pkg.markers, loop_number) if pkg.increment_event_ids else {}
+            for marker in pkg.markers:
+                key = (marker["event_id"], loop_number)
+                if key in emitted or not _marker_covers_segment(marker, ref_start, ref_end):
+                    continue
+                emitted.add(key)
+                duration_attr = (
+                    f' duration="{marker["segmentation_duration_ticks"]}"'
+                    if marker.get("segmentation_duration_ticks") is not None
+                    else ""
+                )
+                event_id_hex = event_id_map.get(marker["event_id"], marker["event_id"])
+                event_id_dec = int(event_id_hex, 16)
+                base_b64 = (
+                    marker["splice_command_b64_narrowed"]
+                    if pkg.dash_descriptor_mode == "narrowed"
+                    else marker["splice_command_b64"]
+                )
+                splice_command_b64 = (
+                    reencode_event_ids(base_b64, event_id_map) if pkg.increment_event_ids else base_b64
+                )
+                if is_instant_segmentation(marker):
+                    direction = "instant"
+                elif is_out_marker(marker):
+                    direction = "out"
+                else:
+                    direction = "in"
+                if pkg.dash_signal_format == "xml":
+                    full_xml = build_scte35_full_xml(splice_command_b64)
+                    indented_xml = "\n".join(f"        {line}" for line in full_xml.splitlines())
+                    signal_xml = f"      <scte35:Signal>\n{indented_xml}\n      </scte35:Signal>"
+                else:
+                    signal_xml = (
+                        f"      <scte35:Signal>\n"
+                        f"        <scte35:Binary>{splice_command_b64}</scte35:Binary>\n"
+                        f"      </scte35:Signal>"
+                    )
+                # A recurring marker gets a distinct id per loop_number it's
+                # re-emitted at (a single ever-open Period, unlike the
+                # default mode's one-namespace-per-Period, needs this to
+                # avoid dash.js's EventController silently dropping a
+                # same-id "duplicate" -- see build_dash_manifest's own
+                # DIRECTION_CODE comment for the base id math). Only the
+                # low bit of loop_number is folded in: a DVR window
+                # (SCOPE.md §12) spanning more than two loop iterations at
+                # once would need more room than this, but that is already
+                # a pathological window/loop-duration combination, not
+                # something continuity mode introduces.
+                synthetic_id = (event_id_dec * 4 + DIRECTION_CODE[direction]) * 2 + (loop_number & 1)
+                event_presentation_time = loop_number * pkg.total_loop_duration_ticks + marker["pts_time_ticks"]
+                event_xml.append(
+                    f'    <Event presentationTime="{event_presentation_time}"'
+                    f'{duration_attr} id="{synthetic_id}">\n'
+                    f"{signal_xml}\n"
+                    f"    </Event>"
+                )
+
+        event_streams_xml = (
+            f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}">\n'
+            + "\n".join(event_xml)
+            + "\n    </EventStream>"
+            if event_xml else ""
+        )
+
+        video_representations = []
+        for idx, rendition in enumerate(pkg.video_renditions):
+            timeline_lines = _segment_timeline_xml(_entries(rendition.segment_boundary_ticks))
+            v = rendition.video_variant
+            video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
+        <SegmentTemplate media="{rendition.name}/seg/$Number$.m4s" initialization="{rendition.name}/init.mp4"
+                         timescale="{pkg.timescale}" startNumber="{first_global_index}">
+          <SegmentTimeline>
+{timeline_lines}
+          </SegmentTimeline>
+        </SegmentTemplate>
+      </Representation>''')
+
+        audio_adaptation_set = ""
+        if pkg.has_audio:
+            a = pkg.audio_rendition.audio_variant
+            audio_timeline_lines = _segment_timeline_xml(
+                _entries(pkg.audio_rendition.audio_segment_boundary_ticks)
+            )
+            audio_adaptation_set = f'''
+    <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
+      <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
+        <SegmentTemplate media="audio/seg/$Number$.m4s" initialization="audio/init.mp4"
+                         timescale="{pkg.timescale}" startNumber="{first_global_index}">
+          <SegmentTimeline>
+{audio_timeline_lines}
+          </SegmentTimeline>
+        </SegmentTemplate>
+      </Representation>
+    </AdaptationSet>'''
+
+        period_xml = f'''  <Period id="continuous" start="PT0S">
+{event_streams_xml}
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
+{chr(10).join(video_representations)}
+    </AdaptationSet>{audio_adaptation_set}
+  </Period>'''
+
+        mpd = f'''<?xml version="1.0" encoding="utf-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     xmlns:scte35="{SCTE35_XML_NAMESPACE}"
+     profiles="urn:mpeg:dash:profile:isoff-live:2011"
+     type="dynamic"
+     availabilityStartTime="{availability_start_time}"
+     publishTime="{publish_time}"
+     minimumUpdatePeriod="PT{pkg.max_segment_duration_seconds_rounded_up}S"
+     timeShiftBufferDepth="PT{pkg.max_segment_duration_seconds_rounded_up * window_segments}S"
+     suggestedPresentationDelay="PT{pkg.max_segment_duration_seconds_rounded_up * 2}S"
+     minBufferTime="PT2S">
+{period_xml}
+</MPD>
+'''
+        return mpd
+
     def segment_bytes_path(self, rendition_name: str, physical_index: int) -> Path:
         return self.package.rendition_by_name(rendition_name).segment_path_for_index(physical_index)
 
@@ -1456,12 +1756,41 @@ class Channel:
         return path
 
 
-def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) -> Flask:
+def create_app(
+    package_dir: Path,
+    epoch_ticks: int,
+    window_segments: int = 6,
+    continuous: bool = False,
+) -> Flask:
     package = LoopPackage(package_dir)
-    channel = Channel(package, epoch_ticks, window_segments=window_segments)
+    channel = Channel(package, epoch_ticks, window_segments=window_segments, continuous=continuous)
     process_start_ticks = channel.now_ticks()
 
     app = Flask(__name__)
+
+    def _serve_segment(
+        path: Path | None,
+        mimetype: str,
+        *,
+        ts: bool,
+        shift_ticks: int | None,
+        sequence_number: int = 0,
+    ):
+        """Shared byte-serving tail for every segment route (SCOPE.md §12):
+        the untouched static-file response in default mode, or a per-
+        request continuity.py patch (never re-muxed, just the fixed-width
+        timestamp fields rewritten) when `shift_ticks` is not None."""
+        if path is None:
+            abort(404)
+        if shift_ticks is None:
+            return send_file(path, mimetype=mimetype)
+        data = path.read_bytes()
+        patched = (
+            continuity.shift_ts_segment(data, shift_ticks)
+            if ts
+            else continuity.shift_cmaf_fragment(data, shift_ticks, sequence_number=sequence_number)
+        )
+        return Response(patched, mimetype=mimetype)
 
     @app.after_request
     def _add_cors(resp):
@@ -1543,28 +1872,43 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
 
     @app.get("/<rendition_name>/seg/<int:physical_index>.m4s")
     def segment(rendition_name: str, physical_index: int):
+        # SCOPE.md §12.2: in continuity mode, `physical_index` (as named in
+        # the URL by every other mode) is actually the ever-increasing
+        # GLOBAL segment index -- decode it back to which loop iteration
+        # this request belongs to (for the tick shift) and which physical
+        # file backs it (for the actual bytes).
+        if channel.continuous:
+            loop_number, local_index = channel.loop_number_and_local_index(physical_index)
+            shift_ticks = channel.continuity_shift_ticks(loop_number)
+        else:
+            local_index = physical_index
+            shift_ticks = None
         try:
-            path = channel.segment_bytes_path(rendition_name, physical_index)
+            path = channel.segment_bytes_path(rendition_name, local_index)
         except (KeyError, IndexError):
             abort(404)
         # SCOPE.md §11.3: a sparse-mode index with no physical media 404s --
         # manifest generation is otherwise completely unaffected (the
         # manifest always advertised this segment as if it existed).
-        if path is None:
-            abort(404)
-        return send_file(path, mimetype="video/iso.segment")
+        return _serve_segment(
+            path, "video/iso.segment", ts=False, shift_ticks=shift_ticks, sequence_number=physical_index
+        )
 
     @app.get("/<rendition_name>/seg/<int:physical_index>.ts")
     def hls_ts_segment(rendition_name: str, physical_index: int):
         if package.hls_format != "ts":
             abort(404)
+        if channel.continuous:
+            loop_number, local_index = channel.loop_number_and_local_index(physical_index)
+            shift_ticks = channel.continuity_shift_ticks(loop_number)
+        else:
+            local_index = physical_index
+            shift_ticks = None
         try:
-            path = channel.hls_ts_segment_path(rendition_name, physical_index)
+            path = channel.hls_ts_segment_path(rendition_name, local_index)
         except (KeyError, IndexError):
             abort(404)
-        if path is None:
-            abort(404)
-        return send_file(path, mimetype="video/mp2t")
+        return _serve_segment(path, "video/mp2t", ts=True, shift_ticks=shift_ticks)
 
     if package.has_audio:
         @app.get(f"/{LoopPackage.AUDIO_PLAYLIST}")
@@ -1589,22 +1933,37 @@ def create_app(package_dir: Path, epoch_ticks: int, window_segments: int = 6) ->
 
         @app.get("/audio/seg/<int:physical_index>.m4s")
         def audio_segment(physical_index: int):
+            if channel.continuous:
+                loop_number, local_index = channel.loop_number_and_local_index(physical_index)
+                shift_ticks = channel.continuity_shift_ticks(loop_number)
+            else:
+                local_index = physical_index
+                shift_ticks = None
             try:
-                path = channel.audio_segment_bytes_path(physical_index)
+                path = channel.audio_segment_bytes_path(local_index)
             except IndexError:
                 abort(404)
-            if path is None:  # sparse audio hole
-                abort(404)
-            return send_file(path, mimetype="audio/iso.segment")
+            # sparse audio hole (path is None) -- _serve_segment 404s it.
+            return _serve_segment(
+                path, "audio/iso.segment", ts=False, shift_ticks=shift_ticks, sequence_number=physical_index
+            )
 
         @app.get("/audio/seg/<int:physical_index>.ts")
         def hls_ts_audio_segment(physical_index: int):
-            if package.hls_format != "ts" or package.hls_ts_mux_audio or physical_index >= package.segments_per_loop:
+            if package.hls_format != "ts" or package.hls_ts_mux_audio:
                 abort(404)
-            path = package.package_dir / "hls-ts" / "audio" / f"{physical_index}.ts"
+            if channel.continuous:
+                loop_number, local_index = channel.loop_number_and_local_index(physical_index)
+                shift_ticks = channel.continuity_shift_ticks(loop_number)
+            else:
+                local_index = physical_index
+                shift_ticks = None
+            if local_index >= package.segments_per_loop:
+                abort(404)
+            path = package.package_dir / "hls-ts" / "audio" / f"{local_index}.ts"
             if not path.is_file():  # sparse audio hole
-                abort(404)
-            return send_file(path, mimetype="video/mp2t")
+                path = None
+            return _serve_segment(path, "video/mp2t", ts=True, shift_ticks=shift_ticks)
 
     return app
 
@@ -1665,6 +2024,16 @@ def main() -> int:
         "(HLS sliding window / DASH SegmentTimeline). Overrides "
         "--dvr-window-seconds if given.",
     )
+    parser.add_argument(
+        "--continuous-timeline",
+        action="store_true",
+        help="SCOPE.md §12: rewrite every segment's internal PTS/DTS/PCR "
+        "(TS) or tfdt (CMAF) per request so the channel is one genuinely "
+        "continuous timeline with no #EXT-X-DISCONTINUITY / DASH Period "
+        "restart at the loop wrap. Requires a package with no internal "
+        "asset-boundary discontinuities and 64-bit (v1) tfdt CMAF "
+        "fragments -- checked once at startup, hard-fails otherwise.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -1691,7 +2060,12 @@ def main() -> int:
         "the ecs-express Docker image's production path fronts this app "
         "with gunicorn instead (see wsgi.py, docker-entrypoint.sh, PERFS.md)."
     )
-    app = create_app(args.package_dir, epoch_ticks, window_segments=window_segments)
+    app = create_app(
+        args.package_dir,
+        epoch_ticks,
+        window_segments=window_segments,
+        continuous=args.continuous_timeline,
+    )
     app.run(host=args.host, port=args.port)
     return 0
 

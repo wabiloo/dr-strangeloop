@@ -229,6 +229,31 @@ computed while producing the real segments at bake time (read back from
 its own generated `manifest.mpd` — see `bake.py`'s `read_variant_metadata`
 — never re-derived/guessed).
 
+### PTS/DTS/PCR continuity across the loop wrap (SCOPE.md §12)
+
+By default, every loop wrap is signaled honestly as a timestamp
+discontinuity (`#EXT-X-DISCONTINUITY` / a new DASH `<Period>`), since the
+exact same physical segment bytes are reused every iteration. Passing
+`--continuous-timeline` to `serve.py` (or `run.sh`) instead rewrites each
+served segment's own timestamps per request -- CMAF `tfdt`, or every
+MPEG-TS PES PTS/DTS and adaptation-field PCR -- to a genuinely
+ever-increasing absolute position, so the whole channel presents as one
+continuous timeline with no discontinuity/Period-restart at all:
+
+```bash
+python3 serve.py /var/loop-packages/2026-01-01 --epoch-utc ... --continuous-timeline
+```
+
+This is a pure header rewrite (`continuity.py`), never a re-mux or
+re-encode. It requires a package with no internal asset-boundary
+discontinuities (§11/grave-robber sparse mode) and CMAF fragments baked
+with a 64-bit (v1) `tfdt` -- both checked once at startup, hard-failing
+otherwise -- and it changes the segment URL scheme to carry an
+ever-increasing global index rather than the plain per-loop physical
+index, trading away that URL's indefinite CDN-cacheability across every
+loop iteration (see SCOPE.md §12 for the full design and known
+limitations).
+
 ### Controlling the DVR window / manifest size
 
 Both `run.sh` and `serve.py` accept `--dvr-window-seconds` (default 30) to
@@ -260,6 +285,7 @@ not something to work around; see `SCOPE.md` §2 and §4.1 step 1.
 | `scte35_signaling.py` | Author `EXT-X-DATERANGE` / DASH `<EventStream>` directly from `.markers.json` (never trust GPAC's own aggregation — see `SCOPE.md` §6). |
 | `loop_math.py` | The epoch/loop_number/position_in_loop **integer** arithmetic that makes drift structurally impossible (`SCOPE.md` §4.2, §5). |
 | `serve.py` | Serve-phase entrypoint: stateless HTTP serving of manifests + segments. |
+| `continuity.py` | `--continuous-timeline` mode's per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite (`SCOPE.md` §12) -- a pure header patch, never a re-mux. |
 | `load_test.py` | Concurrent-viewer load generator used for the measurements in `PERFS.md`. |
 
 See `PERFS.md` for measured CPU/memory usage under realistic concurrent
