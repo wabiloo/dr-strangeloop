@@ -164,7 +164,7 @@ dev = [
 requires-dist = [
     { name = "m3u8", specifier = ">=6.0" },
     { name = "mpd-inspector", git = "https://github.com/wabiloo/mpd-inspector" },
-    { name = "threefive", specifier = ">=2.4" },
+    { name = "threefive", specifier = ">=3.0,<4" },
     { name = "trace-shrink", git = "https://github.com/wabiloo/trace-shrink" },
 ]
 
@@ -338,7 +338,7 @@ dev = [
 requires-dist = [
     { name = "flask", specifier = ">=3.0" },
     { name = "gunicorn", specifier = ">=21.2" },
-    { name = "threefive", specifier = ">=2.4" },
+    { name = "threefive", specifier = ">=3.0,<4" },
 ]
 
 [package.metadata.requires-dev]

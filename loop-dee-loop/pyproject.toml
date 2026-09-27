@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Bake franken-ts outputs into loopable HLS packages and serve them"
 requires-python = ">=3.11"
 dependencies = [
-    "threefive>=2.4",
+    "threefive>=3.0,<4",
     "flask>=3.0",
     "gunicorn>=21.2",
 ]
