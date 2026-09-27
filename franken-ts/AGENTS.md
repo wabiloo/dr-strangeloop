@@ -84,6 +84,14 @@ map, e.g. `headers: {Referer: "https://example.com/"}`) to pass those
 through to yt-dlp. Only meaningful for stream (`.m3u8`/`.mpd`) assets;
 ignored for local files and flat remote mp4s.
 
+Fragments are fetched `--stream-concurrency` at a time (default `4`;
+yt-dlp's `-N`, sequential-only default is `1`) — 4 is deliberately
+conservative for a small container (e.g. an ECS Fargate task running
+franken-ts/loop-dee-loop's bake step): bandwidth-bound rather than CPU/
+memory-bound, and most CDNs start rate-limiting/resetting well above
+single-digit concurrent requests per client. Raise it if the source CDN
+tolerates more and downloads are the bottleneck.
+
 Optional per-asset: `fade_in`/`fade_out` (seconds), `slate_image`
 (per-asset override), `no_osd` (bool, suppresses the OSD entirely for
 this asset regardless of the playlist-level `osd` settings), `osd_label`

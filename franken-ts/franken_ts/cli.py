@@ -114,6 +114,8 @@ def _setup_logging(verbosity: int, debug: bool) -> None:
               help=f"Cache directory for normalized files (default: {_DEFAULT_CACHE_DIR}).")
 @click.option("--no-cache", is_flag=True, default=False,
               help="Disable the normalization cache.")
+@click.option("--stream-concurrency", type=int, default=4,
+              help="Parallel fragment downloads per HLS/DASH stream asset (yt-dlp -N). Default: 4.")
 @click.option("--debug", is_flag=True, default=False,
               help="Keep all temporary files and enable verbose logging.")
 @click.option("--dry-run", is_flag=True, default=False,
@@ -135,6 +137,7 @@ def main(
     normalize: bool,
     cache_dir: Optional[Path],
     no_cache: bool,
+    stream_concurrency: int,
     debug: bool,
     dry_run: bool,
     skip_transcode: bool,
@@ -223,7 +226,9 @@ def main(
         # step (validate/timeline/extract/cache) then sees a plain local
         # file, unchanged from how it already handles local/remote mp4s.
         stream_cache_dir = (effective_cache_dir or temp_dir) / "streams"
-        resolved_streams = resolve_stream_assets(cfg.assets, stream_cache_dir)
+        resolved_streams = resolve_stream_assets(
+            cfg.assets, stream_cache_dir, concurrent_fragments=stream_concurrency
+        )
         for r in resolved_streams:
             status = "cache hit" if r.cached else "downloaded"
             _ok(f"Stream asset ({status}): {r.url} → {r.local_path.name}")

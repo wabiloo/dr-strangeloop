@@ -20,6 +20,14 @@ logger = logging.getLogger(__name__)
 # defeat the check.
 _STREAM_SUFFIXES = {".m3u8", ".mpd"}
 
+# Fragments downloaded in parallel per stream asset (yt-dlp's -N /
+# --concurrent-fragments, default 1 = sequential). 4 is a reasonable default
+# for a small container (e.g. a Fargate task): each fragment is only a few
+# MB buffered in memory, so this is bandwidth- rather than CPU/memory-bound,
+# and most CDNs (Akamai included) start rate-limiting/resetting well above
+# single-digit concurrent requests per client -- see AGENTS.md.
+_DEFAULT_CONCURRENT_FRAGMENTS = 4
+
 # yt-dlp live_status values that mean "not a fixed-duration asset" -- the
 # rest of franken-ts (trimming, timeline math, caching) assumes every asset
 # has a known, unchanging duration, so an open/live manifest can never be
@@ -75,7 +83,12 @@ def _probe(url: str, headers: Optional[dict[str, str]]) -> dict:
     return json.loads(result.stdout)
 
 
-def _download(url: str, target: Path, headers: Optional[dict[str, str]]) -> None:
+def _download(
+    url: str,
+    target: Path,
+    headers: Optional[dict[str, str]],
+    concurrent_fragments: int,
+) -> None:
     """Download the highest-bitrate video+audio rendition of `url` (an HLS
     or DASH manifest) and mux it into a single local mp4 at `target`. yt-dlp
     does the manifest parsing, rendition selection, segment fetching, and
@@ -93,6 +106,7 @@ def _download(url: str, target: Path, headers: Optional[dict[str, str]]) -> None
             "--merge-output-format", "mp4",
             "--no-warnings",
             "--no-playlist",
+            "-N", str(concurrent_fragments),
             *_header_args(headers),
             "-o", str(tmp_target),
             url,
@@ -107,7 +121,10 @@ def _download(url: str, target: Path, headers: Optional[dict[str, str]]) -> None
 
 
 def resolve_stream_asset(
-    url: str, cache_dir: Path, headers: Optional[dict[str, str]] = None
+    url: str,
+    cache_dir: Path,
+    headers: Optional[dict[str, str]] = None,
+    concurrent_fragments: int = _DEFAULT_CONCURRENT_FRAGMENTS,
 ) -> ResolvedStreamAsset:
     """Resolve one HLS/DASH manifest URL to a local mp4 file: the full
     highest-bitrate rendition, downloaded once and cached by URL (+headers)
@@ -119,6 +136,8 @@ def resolve_stream_asset(
 
     `headers` are extra HTTP request headers (e.g. Referer, an auth token)
     some CDN-hosted manifests require -- see AssetConfig.headers.
+    `concurrent_fragments` is yt-dlp's `-N` (fragments fetched in parallel);
+    it doesn't affect the cached bytes, so it isn't part of the cache key.
 
     Raises StreamAssetError if the manifest is live/open rather than a
     closed VOD manifest, or if yt-dlp fails.
@@ -139,12 +158,14 @@ def resolve_stream_asset(
         )
 
     logger.info("Downloading stream asset %s -> %s", url, target)
-    _download(url, target, headers)
+    _download(url, target, headers, concurrent_fragments)
     return ResolvedStreamAsset(url=url, local_path=target, cached=False)
 
 
 def resolve_stream_assets(
-    assets: list[AssetConfig], cache_dir: Path
+    assets: list[AssetConfig],
+    cache_dir: Path,
+    concurrent_fragments: int = _DEFAULT_CONCURRENT_FRAGMENTS,
 ) -> list[ResolvedStreamAsset]:
     """Resolve every HLS/DASH manifest asset in `assets` to a local mp4,
     mutating `AssetConfig.file` in place to point at it. Non-stream assets
@@ -165,7 +186,7 @@ def resolve_stream_assets(
             # local path.
             asset.file = seen[dedup_key]
             continue
-        result = resolve_stream_asset(url, cache_dir, headers)
+        result = resolve_stream_asset(url, cache_dir, headers, concurrent_fragments)
         asset.file = result.local_path
         seen[dedup_key] = result.local_path
         resolved.append(result)

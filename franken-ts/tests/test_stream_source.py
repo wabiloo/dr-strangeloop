@@ -82,12 +82,38 @@ def test_resolve_stream_asset_downloads_vod_and_caches(tmp_path, monkeypatch):
     assert result.local_path.read_bytes() == b"fake mp4 bytes"
     assert len(calls) == 2  # one probe (-J), one download
 
+    download_cmd = calls[1]
+    assert download_cmd[download_cmd.index("-N") + 1] == "4"  # default concurrency
+
     # Second call for the same URL is a cache hit -- no further subprocesses.
     calls.clear()
     result2 = resolve_stream_asset("https://example.com/master.m3u8", tmp_path)
     assert result2.cached is True
     assert result2.local_path == result.local_path
     assert calls == []
+
+
+def test_resolve_stream_asset_custom_concurrency(tmp_path, monkeypatch):
+    monkeypatch.setattr(stream_source, "check_tool", lambda name: Path("/usr/bin/yt-dlp"))
+
+    calls = []
+
+    def fake_run_cmd(cmd, **kw):
+        calls.append(cmd)
+        if cmd[1] == "-J":
+            return _fake_probe_result()()
+        Path(cmd[cmd.index("-o") + 1]).write_bytes(b"fake mp4 bytes")
+
+        class _Result:
+            stdout = ""
+
+        return _Result()
+
+    monkeypatch.setattr(stream_source, "run_cmd", fake_run_cmd)
+
+    resolve_stream_asset("https://example.com/master.m3u8", tmp_path, concurrent_fragments=8)
+    download_cmd = calls[1]
+    assert download_cmd[download_cmd.index("-N") + 1] == "8"
 
 
 # ── resolve_stream_assets (AssetConfig mutation) ─────────────────────────

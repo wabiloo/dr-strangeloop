@@ -169,6 +169,11 @@ stream, which 403s without a `Referer`. Set the optional per-asset
 `headers` map to pass extra HTTP headers through to yt-dlp when that
 happens.
 
+Fragments download `--stream-concurrency` at a time (default `4`, a
+conservative default for a small container that's bandwidth- rather than
+CPU/memory-bound — raise it if your CDN tolerates more and download speed
+is the bottleneck).
+
 ### Nested markers (breaks, placements, ads)
 
 `markers` is a flat list — nesting (e.g. a `break` spanning a jingle plus
@@ -413,6 +418,7 @@ Options:
   -o, --output FILE     Override output file path from config.
   --temp-dir DIRECTORY  Directory for temporary files (default: system temp).
   --normalize           Pre-transcode non-conforming inputs to match output spec.
+  --stream-concurrency N  Parallel fragment downloads per HLS/DASH stream asset (default: 4).
   --debug               Keep all temporary files; enable verbose logging.
   --dry-run             Print commands without executing them.
   --skip-transcode      Skip ffmpeg step (use existing TS at output path).
