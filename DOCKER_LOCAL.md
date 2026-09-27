@@ -89,11 +89,15 @@ plumbing between igor's container and your host was needed for that case.
 
 ## What you get vs. what you don't
 
-Included: franken-ts builds (ffmpeg/tsduck/GPAC all in-image), all three
-its-a-live backends (`aws-media`/`ecs-express` need your own AWS
+Included: franken-ts builds (ffmpeg/tsduck/GPAC all in-image), HTTP(S)
+stream assets (an `.m3u8`/`.mpd` VOD manifest as a playlist `file`,
+resolved via `yt-dlp` -- see `franken-ts/AGENTS.md`'s "assets" section),
+all three its-a-live backends (`aws-media`/`ecs-express` need your own AWS
 credentials -- see `.env.example` -- `local-docker` needs nothing but your
 host Docker install), the asset file-browser/picker scoped to whatever you
-set `MEDIA_ROOT` to.
+set `MEDIA_ROOT` to. The downloaded-stream cache persists in a named
+Docker volume (`franken-ts-cache`) across container restarts, so the same
+manifest URL isn't re-fetched every time you recreate the container.
 
 Not included, same as running igor any other way (`igor/AGENTS.md`'s
 "Known gaps"): no auth (this container binds `0.0.0.0:8090` -- fine on

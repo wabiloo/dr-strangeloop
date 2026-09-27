@@ -70,10 +70,20 @@ FROM debian:bookworm-slim AS runtime
 # with no compose/mount involved.
 ARG REPO_ROOT=/workspace/dr-strangeloop
 
+# UNVERIFIED PLACEHOLDER -- confirm before your first build. This wasn't
+# checked against a live download in the environment that wrote this
+# Dockerfile (no network egress to github.com there). Go to
+# https://github.com/tsduck/tsduck/releases, find the newest release still
+# publishing a "debian12"/"bookworm" amd64 .deb asset, and pass its exact
+# URL via --build-arg (or edit the default below). This base image is
+# debian:bookworm-slim (Debian 12) specifically because GPAC above is built
+# from source against it -- a "debian13" tsduck package is very likely
+# linked against a newer glibc than bookworm ships and will fail at runtime
+# ("version `GLIBC_2.NN' not found") rather than merely warn, so don't
+# substitute one as a quick fix if debian12 assets stop being published;
+# build tsduck from source instead (same pattern as the gpac-build stage
+# above) if that ever happens.
 ARG TSDUCK_DEB_URL=https://github.com/tsduck/tsduck/releases/download/v3.41-3977/tsduck_3.41-3977.debian12_amd64.deb
-# ^ Pin bumped deliberately, like GPAC_COMMIT above -- check
-#   https://github.com/tsduck/tsduck/releases for the current debian12/amd64
-#   asset before bumping, `tsp --version` after rebuilding to confirm.
 
 # docker.io gives us the `docker` CLI to talk to the *host* daemon via the
 # mounted socket (docker-compose.yml) -- dockerd itself is never started,

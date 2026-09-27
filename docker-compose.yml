@@ -69,9 +69,19 @@ services:
       # the env vars above. Read-only -- `aws configure`/`aws sso login` on
       # the HOST, not inside the container.
       - ${HOME}/.aws:/root/.aws:ro
+      # franken-ts's default cache dir (~/.cache/franken_ts), including
+      # yt-dlp's downloaded-stream cache (franken-ts/AGENTS.md's "assets"
+      # section) -- a named volume, not a bind mount, since nothing here is
+      # ever handed to the host Docker daemon (unlike the repo mount above,
+      # no path-matching constraint applies). Without this, every container
+      # recreate re-downloads every stream asset from scratch.
+      - franken-ts-cache:/root/.cache/franken_ts
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 10s
+
+volumes:
+  franken-ts-cache:
