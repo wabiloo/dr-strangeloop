@@ -479,6 +479,11 @@ class AssetConfig(BaseModel):
     fade_in: Optional[TimeValue] = None
     fade_out: Optional[TimeValue] = None
     slate_image: Optional[Path] = None
+    # Extra HTTP request headers (e.g. Referer, a bearer token) needed to
+    # fetch a remote `file` -- most commonly a CDN-hosted HLS/DASH manifest
+    # that Referer/User-Agent-checks unauthenticated requests (see
+    # stream_source.py). Ignored for local files.
+    headers: Optional[dict[str, str]] = None
     # Suppresses the playlist-level OSD entirely for this asset (no bar, no
     # corner text), regardless of the global `Config.osd` settings.
     no_osd: bool = False

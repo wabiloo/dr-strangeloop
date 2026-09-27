@@ -9,6 +9,9 @@ Stitch video assets together, bolt in ad breaks, and inject SCTE-35 markers — 
 - `ffmpeg` + `ffprobe` on your `PATH` — for the OSD overlay's `drawtext` filter,
   this must be a build with `--enable-libfreetype`; see [OSD](#on-screen-display-osd) below
 - `tsp` (tsduck) on your `PATH`
+- `yt-dlp` on your `PATH` — only needed if a playlist uses an HLS/DASH stream
+  as an asset source (see below); installed automatically as a Python
+  dependency, but the CLI itself must resolve on `PATH`
 - Python environment set up from the repo root (`uv sync --all-packages`)
 
 ## Quick start
@@ -130,6 +133,46 @@ markers:
       archive_allowed: false
       device_restrictions: 1
 ```
+
+### Remote and stream (HLS/DASH) asset sources
+
+`file` accepts more than a local path:
+
+```yaml
+assets:
+  - file: https://example.com/movie.mp4          # flat remote mp4 — read directly by ffmpeg
+    duration: "10 min"
+
+  - file: https://example.com/vod/master.m3u8    # HLS manifest
+    id: promo
+    duration: "30s"
+
+  - file: https://example.com/vod/manifest.mpd   # DASH manifest
+    start: "5s"
+    headers:                                     # optional — some CDNs need this
+      Referer: "https://example.com/"
+```
+
+A `.m3u8`/`.mpd` URL must be a **VOD (closed/finite) manifest** — a live or
+open-ended stream has no fixed duration, so it can't be trimmed/stitched
+like every other asset, and franken-ts refuses it with a clear error rather
+than trying. On first use, the highest-bitrate rendition is downloaded and
+muxed into a local mp4 via `yt-dlp` (must be on `PATH`), cached by manifest
+URL so repeat builds/renditions don't re-fetch it; `start`/`duration` then
+trim the downloaded file exactly like any other asset. This download always
+runs for real, even under `--dry-run` (same as the ffprobe validation step
+that already probes remote mp4s).
+
+Some CDNs reject unauthenticated-looking requests (no matching
+`Referer`/`User-Agent`) — verified against a real public Bitmovin DASH test
+stream, which 403s without a `Referer`. Set the optional per-asset
+`headers` map to pass extra HTTP headers through to yt-dlp when that
+happens.
+
+Fragments download `--stream-concurrency` at a time (default `4`, a
+conservative default for a small container that's bandwidth- rather than
+CPU/memory-bound — raise it if your CDN tolerates more and download speed
+is the bottleneck).
 
 ### Nested markers (breaks, placements, ads)
 
@@ -375,6 +418,7 @@ Options:
   -o, --output FILE     Override output file path from config.
   --temp-dir DIRECTORY  Directory for temporary files (default: system temp).
   --normalize           Pre-transcode non-conforming inputs to match output spec.
+  --stream-concurrency N  Parallel fragment downloads per HLS/DASH stream asset (default: 4).
   --debug               Keep all temporary files; enable verbose logging.
   --dry-run             Print commands without executing them.
   --skip-transcode      Skip ffmpeg step (use existing TS at output path).
