@@ -50,21 +50,32 @@ def is_stream_url(file: Path) -> bool:
     return suffix in _STREAM_SUFFIXES
 
 
-def _cache_key(url: str) -> str:
-    return hashlib.sha256(url.encode()).hexdigest()[:24]
+def _cache_key(url: str, headers: Optional[dict[str, str]]) -> str:
+    parts = url + "".join(f"|{k}:{v}" for k, v in sorted((headers or {}).items()))
+    return hashlib.sha256(parts.encode()).hexdigest()[:24]
 
 
-def _probe(url: str) -> dict:
+def _header_args(headers: Optional[dict[str, str]]) -> list[str]:
+    """yt-dlp `--add-header 'Name: value'` flags, one per header -- e.g. a
+    CDN-enforced Referer/User-Agent, or an auth token in a bearer/cookie
+    header. See AssetConfig.headers."""
+    args = []
+    for name, value in (headers or {}).items():
+        args += ["--add-header", f"{name}: {value}"]
+    return args
+
+
+def _probe(url: str, headers: Optional[dict[str, str]]) -> dict:
     """Metadata-only yt-dlp call (no download) -- used to confirm the
     manifest is VOD/closed before committing to a full download."""
     result = run_cmd(
-        ["yt-dlp", "-J", "--no-warnings", "--no-playlist", url],
+        ["yt-dlp", "-J", "--no-warnings", "--no-playlist", *_header_args(headers), url],
         capture=True,
     )
     return json.loads(result.stdout)
 
 
-def _download(url: str, target: Path) -> None:
+def _download(url: str, target: Path, headers: Optional[dict[str, str]]) -> None:
     """Download the highest-bitrate video+audio rendition of `url` (an HLS
     or DASH manifest) and mux it into a single local mp4 at `target`. yt-dlp
     does the manifest parsing, rendition selection, segment fetching, and
@@ -82,6 +93,7 @@ def _download(url: str, target: Path) -> None:
             "--merge-output-format", "mp4",
             "--no-warnings",
             "--no-playlist",
+            *_header_args(headers),
             "-o", str(tmp_target),
             url,
         ],
@@ -94,26 +106,31 @@ def _download(url: str, target: Path) -> None:
     tmp_target.replace(target)
 
 
-def resolve_stream_asset(url: str, cache_dir: Path) -> ResolvedStreamAsset:
+def resolve_stream_asset(
+    url: str, cache_dir: Path, headers: Optional[dict[str, str]] = None
+) -> ResolvedStreamAsset:
     """Resolve one HLS/DASH manifest URL to a local mp4 file: the full
-    highest-bitrate rendition, downloaded once and cached by URL under
-    `cache_dir` (a raw-source cache, separate from the existing per-clip
-    extraction cache in cache.py -- this one caches the whole downloaded
-    asset so repeat builds don't re-fetch it). Trimming (`start`/`duration`)
-    is applied downstream exactly as for any other local asset; the whole
-    VOD is always fetched, never a partial range.
+    highest-bitrate rendition, downloaded once and cached by URL (+headers)
+    under `cache_dir` (a raw-source cache, separate from the existing
+    per-clip extraction cache in cache.py -- this one caches the whole
+    downloaded asset so repeat builds don't re-fetch it). Trimming
+    (`start`/`duration`) is applied downstream exactly as for any other
+    local asset; the whole VOD is always fetched, never a partial range.
+
+    `headers` are extra HTTP request headers (e.g. Referer, an auth token)
+    some CDN-hosted manifests require -- see AssetConfig.headers.
 
     Raises StreamAssetError if the manifest is live/open rather than a
     closed VOD manifest, or if yt-dlp fails.
     """
     check_tool("yt-dlp")
 
-    target = cache_dir / f"{_cache_key(url)}.mp4"
+    target = cache_dir / f"{_cache_key(url, headers)}.mp4"
     if target.exists():
         logger.info("Stream asset cache hit for %s -> %s", url, target)
         return ResolvedStreamAsset(url=url, local_path=target, cached=True)
 
-    info = _probe(url)
+    info = _probe(url, headers)
     if info.get("is_live") or info.get("live_status") in _LIVE_STATUSES:
         raise StreamAssetError(
             f"{url}: this manifest is live (open-ended), not VOD -- only "
@@ -122,7 +139,7 @@ def resolve_stream_asset(url: str, cache_dir: Path) -> ResolvedStreamAsset:
         )
 
     logger.info("Downloading stream asset %s -> %s", url, target)
-    _download(url, target)
+    _download(url, target, headers)
     return ResolvedStreamAsset(url=url, local_path=target, cached=False)
 
 
@@ -135,18 +152,21 @@ def resolve_stream_assets(
     ResolvedStreamAsset per stream asset actually resolved, in playlist
     order, for the caller to log."""
     resolved: list[ResolvedStreamAsset] = []
-    seen: dict[str, Path] = {}
+    seen: dict[tuple, Path] = {}
     for asset in assets:
         if not is_stream_url(asset.file):
             continue
         url = source_str(asset.file)
-        if url in seen:
-            # Same manifest referenced by more than one asset (e.g. trimmed
-            # into several clips) -- resolve once, reuse the local path.
-            asset.file = seen[url]
+        headers = asset.headers
+        dedup_key = (url, tuple(sorted((headers or {}).items())))
+        if dedup_key in seen:
+            # Same manifest (+headers) referenced by more than one asset
+            # (e.g. trimmed into several clips) -- resolve once, reuse the
+            # local path.
+            asset.file = seen[dedup_key]
             continue
-        result = resolve_stream_asset(url, cache_dir)
+        result = resolve_stream_asset(url, cache_dir, headers)
         asset.file = result.local_path
-        seen[url] = result.local_path
+        seen[dedup_key] = result.local_path
         resolved.append(result)
     return resolved

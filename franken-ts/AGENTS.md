@@ -77,6 +77,13 @@ once. This resolution step always runs for real, even under `--dry-run`
 (same as the existing ffprobe validation step) — a live manifest fails
 the build immediately with a clear error rather than hanging.
 
+Some CDN-hosted manifests reject requests that don't carry a matching
+`Referer`/`User-Agent` (confirmed against a real public Bitmovin DASH test
+stream, which 403s without one) — set per-asset `headers` (a string→string
+map, e.g. `headers: {Referer: "https://example.com/"}`) to pass those
+through to yt-dlp. Only meaningful for stream (`.m3u8`/`.mpd`) assets;
+ignored for local files and flat remote mp4s.
+
 Optional per-asset: `fade_in`/`fade_out` (seconds), `slate_image`
 (per-asset override), `no_osd` (bool, suppresses the OSD entirely for
 this asset regardless of the playlist-level `osd` settings), `osd_label`

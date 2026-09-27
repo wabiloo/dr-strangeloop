@@ -149,6 +149,8 @@ assets:
 
   - file: https://example.com/vod/manifest.mpd   # DASH manifest
     start: "5s"
+    headers:                                     # optional — some CDNs need this
+      Referer: "https://example.com/"
 ```
 
 A `.m3u8`/`.mpd` URL must be a **VOD (closed/finite) manifest** — a live or
@@ -160,6 +162,12 @@ URL so repeat builds/renditions don't re-fetch it; `start`/`duration` then
 trim the downloaded file exactly like any other asset. This download always
 runs for real, even under `--dry-run` (same as the ffprobe validation step
 that already probes remote mp4s).
+
+Some CDNs reject unauthenticated-looking requests (no matching
+`Referer`/`User-Agent`) — verified against a real public Bitmovin DASH test
+stream, which 403s without a `Referer`. Set the optional per-asset
+`headers` map to pass extra HTTP headers through to yt-dlp when that
+happens.
 
 ### Nested markers (breaks, placements, ads)
 

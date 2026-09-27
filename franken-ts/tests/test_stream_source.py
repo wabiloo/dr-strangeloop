@@ -92,6 +92,44 @@ def test_resolve_stream_asset_downloads_vod_and_caches(tmp_path, monkeypatch):
 
 # ── resolve_stream_assets (AssetConfig mutation) ─────────────────────────
 
+def test_resolve_stream_asset_passes_custom_headers(tmp_path, monkeypatch):
+    """Some CDNs (e.g. Akamai-fronted manifests) reject requests without a
+    matching Referer/User-Agent -- confirmed against a real public Bitmovin
+    DASH test stream, which 403s without a Referer header. AssetConfig.headers
+    must reach both the probe and download yt-dlp invocations."""
+    monkeypatch.setattr(stream_source, "check_tool", lambda name: Path("/usr/bin/yt-dlp"))
+
+    seen_header_args = []
+
+    def fake_run_cmd(cmd, **kw):
+        if "--add-header" in cmd:
+            idx = cmd.index("--add-header")
+            seen_header_args.append(cmd[idx + 1])
+        if cmd[1] == "-J":
+            return _fake_probe_result()()
+        out_path = Path(cmd[cmd.index("-o") + 1])
+        out_path.write_bytes(b"fake mp4 bytes")
+
+        class _Result:
+            stdout = ""
+
+        return _Result()
+
+    monkeypatch.setattr(stream_source, "run_cmd", fake_run_cmd)
+
+    result = resolve_stream_asset(
+        "https://example.com/master.mpd", tmp_path, headers={"Referer": "https://example.com/"}
+    )
+    assert result.local_path.exists()
+    assert seen_header_args == ["Referer: https://example.com/", "Referer: https://example.com/"]
+
+    # Same URL with DIFFERENT headers must not collide in the cache with the
+    # headerless/first-headers version -- different headers can plausibly
+    # gate access to different content.
+    result2 = resolve_stream_asset("https://example.com/master.mpd", tmp_path, headers=None)
+    assert result2.local_path != result.local_path
+
+
 def test_resolve_stream_assets_mutates_file_and_dedupes(tmp_path, monkeypatch):
     monkeypatch.setattr(stream_source, "check_tool", lambda name: Path("/usr/bin/yt-dlp"))
 
