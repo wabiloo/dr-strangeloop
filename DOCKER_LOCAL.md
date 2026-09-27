@@ -54,31 +54,47 @@ no idea igor is running inside a container, or what that container's
 mount namespace looks like. Paths that its-a-live computes internally
 (`its-a-live/.local-loop-package/<channel>`, `loop-dee-loop/` as a build
 context) are derived from `__file__`, i.e. from wherever the code
-physically lives *inside igor's own container*. For those to also be
-valid, correct **host** paths, the container has to see the code at
-*literally the same absolute path* it lives at on your host -- so
-`docker-compose.yml` bind-mounts your whole checkout at `HOST_REPO_ROOT`
-inside the container too (`${HOST_REPO_ROOT}:${HOST_REPO_ROOT}`, not
-remapped to some fixed `/repo`).
+physically lives *inside igor's own container*.
 
-Two things fall out of that one constraint:
+Two ways to make those also valid, correct **host** paths were considered:
 
-- **The image is built per-checkout-path, not shared.** `uv` bakes the
-  absolute path it was run from into each workspace member's editable-
-  install metadata (see `igor/Dockerfile`'s comments). If the build path
-  and the runtime mount path don't match byte-for-byte, `import franken_ts`
-  etc. breaks at runtime even though the venv itself is intact. So
-  `REPO_ROOT` is threaded through as a build arg equal to `HOST_REPO_ROOT`,
-  and each colleague runs `docker compose build` once, for their own
-  machine -- there's no single image to hand around.
-- **The venvs built at image-build time need putting back at container
-  start.** The bind mount above shadows whatever `uv sync` produced under
-  the checkout at build time (`.venv/`, `its-a-live/.venv/`) with your
-  actual (venv-less, freshly cloned) host checkout. Both venvs are built
-  to `/opt/venv-root` / `/opt/venv-its-a-live` instead (outside the mounted
-  path) and `igor/docker-entrypoint.sh` symlinks them back into place on
-  every container start, so `its-a-live/paths.py`'s existing venv-detection
-  logic needs no code change at all.
+1. Make the container see its code at *literally the same absolute path*
+   it lives at on your host (an earlier version of this doc/image did
+   exactly that -- bind-mount the checkout at `${HOST_REPO_ROOT}:${HOST_REPO_ROOT}`,
+   no remapping). It works, but it also means `uv` (which bakes the
+   absolute path it was run from into each workspace member's editable-
+   install metadata) has to be run at that same path at build time too --
+   so the image is baked per-checkout-path, and isn't shareable between
+   colleagues whose checkouts live at different paths.
+2. **What this repo actually does**: keep the container's own view of the
+   code at a fixed path (`/repo`, see `igor/Dockerfile`) regardless of
+   where a colleague's checkout lives, and translate paths at the exact
+   handful of call sites that hand one to a nested `docker build`/`docker
+   run` -- `its-a-live/_host_paths.py`'s `to_host_path()`, used by
+   `_local_docker_ops.py` (local-docker's own container) and
+   `loop_stack.py`'s `DockerImageAsset` (`cdk deploy`'s image build/push
+   for `ecs-express`). It reads `HOST_REPO_ROOT` (this checkout's real
+   path, from `.env`) and `REPO_ROOT` (always `/repo`) and swaps one
+   prefix for the other. Everywhere else -- franken-ts builds, boto3 calls,
+   igor's own file browser -- never touches Docker, so never needs this;
+   it's a no-op (both env vars simply unset) for a bare-metal/dev
+   invocation of `channel.py`, which already sees real host paths directly.
+
+This means the image itself is identical for every colleague and only
+needs building once (still cheap to rebuild if it ever does change, since
+Docker's layer cache makes a no-source-change rebuild near-instant) --
+`HOST_REPO_ROOT` only matters at runtime, not at build time.
+
+One thing that's still needed regardless of which approach above:
+**the venvs built at image-build time need putting back at container
+start.** The bind mount (source = your checkout, target = the fixed
+`/repo`) shadows whatever `uv sync` produced under `/repo` at build time
+(`.venv/`, `its-a-live/.venv/`) with your actual (venv-less, freshly
+cloned) host checkout. Both venvs are built to `/opt/venv-root` /
+`/opt/venv-its-a-live` instead (outside the mounted path) and
+`igor/docker-entrypoint.sh` symlinks them back into place on every
+container start, so `its-a-live/paths.py`'s existing venv-detection logic
+needs no code change at all.
 
 One thing that works for free, precisely *because* of the socket-sharing
 approach above: `local-docker` channels publish their HLS/DASH ports

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Runs once per container start, before the real CMD (uvicorn).
 #
-# The running container bind-mounts the colleague's own repo checkout over
-# /repo (docker-compose.yml) -- deliberately, so paths its-a-live computes
-# from __file__ (loop-dee-loop's directory, its-a-live/.local-loop-package/
-# <channel>, ...) are also valid paths on the *host*, which is required
-# because local-docker/ecs-express hand those paths to `docker run`/`docker
-# build`/cdk's DockerImageAsset -- all executed against the HOST daemon via
-# the mounted socket, which has no idea this container's mount namespace
-# exists and resolves every path it's given against its own (the host's)
-# filesystem. See DOCKER_LOCAL.md for the full explanation.
+# The running container bind-mounts each colleague's own repo checkout over
+# this same fixed path, /repo (docker-compose.yml) -- deliberately, so the
+# image itself stays identical/shareable across colleagues regardless of
+# where their checkout actually lives on their own host. (A separate
+# concern, handled elsewhere: local-docker/cdk's DockerImageAsset hand
+# paths to `docker run`/`docker build`, executed against the HOST daemon
+# via the mounted socket -- its-a-live/_host_paths.py translates this
+# container's /repo-relative paths to their real host equivalent at those
+# specific call sites. See DOCKER_LOCAL.md for the full explanation.)
 #
-# That bind mount shadows /repo/.venv and /repo/its-a-live/.venv, which the
-# image built at /opt/venv-root and /opt/venv-its-a-live specifically to
+# The bind mount above shadows /repo/.venv and /repo/its-a-live/.venv, which
+# the image built at /opt/venv-root and /opt/venv-its-a-live specifically to
 # survive this. Re-link them on every start so paths.py's existing
 # venv-detection logic (its_a_live_python(), franken_ts_python()) keeps
 # working unmodified.

@@ -12,6 +12,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 from loop_shared_stack import CLUSTER_NAME
+from _host_paths import to_host_path
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 
@@ -86,11 +87,19 @@ class LoopStack(Stack):
         # assume x86_64; without this, building on an ARM host (e.g. Apple
         # Silicon) produces an arm64 image that fails at container start with
         # "exec format error".
+        #
+        # `directory` must be a real path on whatever machine actually runs
+        # `docker build` for this asset -- normally that's just wherever `cdk
+        # deploy` itself runs, but when `cdk deploy` runs inside igor's
+        # Docker-packaged shape (../DOCKER_LOCAL.md), the *host's* daemon
+        # does the building via a mounted socket, so this needs the host's
+        # own path, not this process's in-container one. to_host_path() is a
+        # no-op outside that shape. See _host_paths.py.
         image_asset = ecr_assets.DockerImageAsset(
             self,
             "LoopDeeLoopImage",
             platform=ecr_assets.Platform.LINUX_AMD64,
-            directory=os.path.abspath(LOOP_DEE_LOOP_DIR),
+            directory=to_host_path(os.path.abspath(LOOP_DEE_LOOP_DIR)),
         )
 
         # ── IAM ────────────────────────────────────────────────────────────────

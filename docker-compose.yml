@@ -7,34 +7,35 @@
 #   2. docker compose up --build
 #   3. open http://localhost:8090/admin/
 #
-# HOST_REPO_ROOT MUST be this checkout's own absolute path on YOUR machine
-# (e.g. `pwd` run from this directory) -- it's used as both the build path
-# and the runtime bind-mount path so that any path igor/its-a-live computes
-# internally (bake output dirs, loop-dee-loop's own directory as a `docker
-# build` context, ...) is also a real, correct path from the HOST docker
-# daemon's point of view -- required because local-docker/ecs-express
-# dispatch nested `docker build`/`docker run` through the socket mounted
-# below, and that daemon resolves every path against the host filesystem,
-# with no knowledge this container's mount namespace even exists. Get this
-# wrong and franken-ts builds/imports still work fine (they run in-process,
-# no nested docker involved) but local-docker channels and ecs-express's
-# `cdk deploy` fail or silently bind-mount/build against an empty directory.
-#
-# A consequence of the same constraint: this image is NOT portable between
-# colleagues whose checkouts live at different paths -- each colleague runs
-# `docker compose build` once for their own machine (cached after that).
+# The image is fixed/shared: every colleague's checkout lands at the same
+# in-container path (/repo, see igor/Dockerfile) regardless of where it
+# actually lives on their machine. HOST_REPO_ROOT is only needed at runtime,
+# for two things: (1) as the bind mount's source below, and (2) so
+# its-a-live/_host_paths.py can translate an in-container path back to its
+# real host equivalent at the couple of call sites that hand a path to a
+# nested `docker build`/`docker run` (local-docker's own container, and
+# ecs-express's `cdk deploy`, which builds/pushes a Docker image) --
+# necessary because those commands go through the *host's* Docker daemon
+# via the socket mounted below, which resolves every path it's given
+# against the host filesystem, with no knowledge this container's mount
+# namespace even exists. Get HOST_REPO_ROOT wrong and franken-ts builds
+# still work fine (no nested docker involved), but local-docker channels
+# and `cdk deploy` fail, or silently bind-mount/build an empty directory.
 
 services:
   igor:
     build:
       context: .
       dockerfile: igor/Dockerfile
-      args:
-        REPO_ROOT: ${HOST_REPO_ROOT:?set HOST_REPO_ROOT in .env -- see .env.example}
     image: dr-strangeloop-igor:local
-    working_dir: ${HOST_REPO_ROOT:?set HOST_REPO_ROOT in .env -- see .env.example}
     environment:
-      REPO_ROOT: ${HOST_REPO_ROOT}
+      # REPO_ROOT: this container's own (fixed) view of the repo -- always
+      # /repo, matching the Dockerfile/entrypoint. HOST_REPO_ROOT: the same
+      # repo's real path on your machine. _host_paths.py needs both to
+      # translate between them; neither is meant to be customized per
+      # colleague the way HOST_REPO_ROOT's *value* is.
+      REPO_ROOT: /repo
+      HOST_REPO_ROOT: ${HOST_REPO_ROOT:?set HOST_REPO_ROOT in .env -- see .env.example}
       # Default landing directory for the asset file-browser/picker --
       # scoped to whatever's bind-mounted below, since that's all this
       # container can see anyway. See igor/src/igor/integrations/files.py.
@@ -53,8 +54,10 @@ services:
     ports:
       - "${IGOR_PORT:-8090}:8090"
     volumes:
-      # Source == target on purpose -- see the note above.
-      - ${HOST_REPO_ROOT}:${HOST_REPO_ROOT}
+      # Target is the fixed /repo the image was built with; source is
+      # wherever this colleague actually cloned the repo -- no longer
+      # required to match (see the note above and _host_paths.py).
+      - ${HOST_REPO_ROOT:?set HOST_REPO_ROOT in .env -- see .env.example}:/repo
       # Lets its-a-live's local-docker backend (and ecs-express's `cdk
       # deploy`, which builds/pushes a Docker image for the ECS task) drive
       # the HOST's Docker install as a sibling, not a nested daemon --

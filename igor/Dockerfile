@@ -9,24 +9,18 @@
 #   # or by hand:
 #   docker build -f igor/Dockerfile -t dr-strangeloop-igor .
 #
-# See ../docker-compose.yml and ../DOCKER_LOCAL.md for why the running
-# container bind-mounts the host checkout back over this same code (so
-# paths its-a-live computes internally are also valid *host* paths --
-# required because local-docker/ecs-express dispatch nested `docker
-# build`/`docker run` calls through the host's own Docker socket) and how
-# that interacts with the venvs built below.
-#
-# REPO_ROOT (build arg, must equal the host checkout's own absolute path --
-# docker-compose.yml passes the same value it uses for the bind mount) is
-# not just cosmetic: uv bakes the *absolute* path it was run from into each
-# workspace member's editable-install metadata. Build with one path, mount a
-# different one at runtime, and every `import franken_ts`/`import igor` etc.
-# breaks even though the venv is symlinked back correctly (see
-# docker-entrypoint.sh) -- the venv would be fine, its recorded source
-# location would not. This is also why the image isn't shareable across
-# colleagues whose checkouts live at different paths: each colleague builds
-# their own (docker compose build), which is cheap since it's cached after
-# the first run.
+# The code always lives at a FIXED path inside the container (REPO_ROOT
+# below, default /repo) regardless of where a colleague's checkout lives on
+# their host -- this image is meant to be the same for everyone, buildable
+# once and shareable. See ../docker-compose.yml and ../DOCKER_LOCAL.md for
+# why that's safe: local-docker/ecs-express dispatch nested `docker build`/
+# `docker run` calls through the host's own Docker socket, which resolves
+# every path it's given against the HOST filesystem, not this container's --
+# `its-a-live/_host_paths.py` translates this container's REPO_ROOT-relative
+# paths to their real HOST_REPO_ROOT equivalent (an env var docker-
+# compose.yml sets) at exactly the call sites that need it
+# (_local_docker_ops.py, loop_stack.py's DockerImageAsset), so REPO_ROOT
+# itself never needs to match anything on the host.
 
 # ---------------------------------------------------------------------------
 # Stage: gpac-build -- mirrors loop-dee-loop/Dockerfile's stage exactly
@@ -65,10 +59,10 @@ RUN mkdir -p /out/lib /out/bin \
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim AS runtime
 
-# Must match the bind-mount path docker-compose.yml uses at runtime -- see
-# the note above. Default only matters for a bare `docker build` smoke test
-# with no compose/mount involved.
-ARG REPO_ROOT=/workspace/dr-strangeloop
+# Fixed for every build/colleague -- see the note above. docker-compose.yml
+# bind-mounts each colleague's own checkout onto this same fixed path at
+# runtime (source varies, target never does).
+ARG REPO_ROOT=/repo
 
 # UNVERIFIED PLACEHOLDER -- confirm before your first build. This wasn't
 # checked against a live download in the environment that wrote this
@@ -120,10 +114,10 @@ RUN npm install -g aws-cdk
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:${PATH}"
 
-# The running container bind-mounts the colleague's own checkout over this
-# same path (docker-compose.yml) -- see DOCKER_LOCAL.md. Build-time copies
-# below exist so `docker build` alone (no compose, no mount) also produces a
-# working image for CI/smoke-testing.
+# The running container bind-mounts each colleague's own checkout over this
+# same fixed path (docker-compose.yml) -- see DOCKER_LOCAL.md. Build-time
+# copies below exist so `docker build` alone (no compose, no mount) also
+# produces a working image for CI/smoke-testing.
 WORKDIR ${REPO_ROOT}
 COPY . .
 
@@ -150,4 +144,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 ENV REPO_ROOT=${REPO_ROOT}
 EXPOSE 8090
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["sh", "-c", "uv run --project \"$REPO_ROOT\" uvicorn igor.app.main:app --host 0.0.0.0 --port 8090"]
+# Hardcoded /repo, not $REPO_ROOT -- exec-form CMD isn't shell-expanded, and
+# since REPO_ROOT is a fixed constant now (not per-colleague), that's fine;
+# if you ever do change the ARG default above, update this literal to match.
+CMD ["uv", "run", "--project", "/repo", "uvicorn", "igor.app.main:app", "--host", "0.0.0.0", "--port", "8090"]
