@@ -102,6 +102,7 @@ const form = reactive<ChannelCreatePayload>({
   dvr_window_seconds: 30,
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
+  continuous_timeline: true,
   port: 8080,
   cpu: 256,
   memory: 512,
@@ -351,6 +352,17 @@ async function submit() {
         <div v-if="form.hls_format === 'ts'" class="col-12 flex align-items-center gap-2">
           <Checkbox v-model="form.hls_ts_mux_audio" binary input-id="hls-ts-mux-audio" />
           <label for="hls-ts-mux-audio">Mux audio into each HLS TS video segment</label>
+        </div>
+        <div class="col-12 flex align-items-center gap-2">
+          <Checkbox v-model="form.continuous_timeline" binary input-id="continuous-timeline" />
+          <label for="continuous-timeline">Continuous timeline across the loop wrap</label>
+        </div>
+        <div class="col-12 text-color-secondary text-xs">
+          Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
+          the channel has no discontinuity/Period restart at the loop wrap. On by default; turn off
+          to fall back to the honestly-signaled #EXT-X-DISCONTINUITY / DASH Period restart, e.g. if
+          the source was baked with a 32-bit tfdt (loop-dee-loop/SCOPE.md §12 -- serve.py refuses to
+          start in this mode against one).
         </div>
         <div class="col-12 flex flex-column gap-1">
           <label for="port">Serve port{{ isLocalDocker ? ' (also the host port -- http://localhost:<port>)' : '' }}</label>

@@ -127,6 +127,15 @@ def _dvr_window_seconds(cfg):
     return str(cfg.get("packaging", {}).get("dvr_window_seconds", 30))
 
 
+def _continuous_timeline_args(cfg):
+    """loop-dee-loop/SCOPE.md §12: default on -- `[packaging]
+    continuous_timeline = false` opts back out to the honestly-signaled
+    #EXT-X-DISCONTINUITY/Period-restart default."""
+    if cfg.get("packaging", {}).get("continuous_timeline", True):
+        return ["--continuous-timeline"]
+    return []
+
+
 def spark(cfg, session, channel_name, extra_args=None):
     """Bake the franken-ts input locally (GPAC, no AWS/Docker involved --
     identical bake step to ecs-express's spark), writing straight into the
@@ -322,6 +331,7 @@ def start(cfg, session, outputs, extra_args=None):
         "--epoch-utc", epoch,
         "--port", str(port),
         "--dvr-window-seconds", _dvr_window_seconds(cfg),
+        *_continuous_timeline_args(cfg),
     ]
     print(f"==> Starting container {name} (port {port}, epoch {epoch}) ...")
     result = subprocess.run(run_args)
@@ -376,6 +386,7 @@ def refresh(cfg, session, outputs):
         "--epoch-utc", _DEFAULT_EPOCH,
         "--port", str(port),
         "--dvr-window-seconds", _dvr_window_seconds(cfg),
+        *_continuous_timeline_args(cfg),
     ]
     result = subprocess.run(run_args)
     if result.returncode != 0:

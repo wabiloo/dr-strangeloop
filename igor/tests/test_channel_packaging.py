@@ -21,6 +21,27 @@ def test_channel_hls_packaging_roundtrip(backend, hls_format, mux_audio):
     assert config["packaging"]["hls_ts_mux_audio"] is mux_audio
 
 
+@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("continuous_timeline", [True, False])
+def test_channel_continuous_timeline_roundtrip(backend, continuous_timeline):
+    payload = ChannelCreatePayload(
+        name="test-channel", backend=backend, region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+        continuous_timeline=continuous_timeline,
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["packaging"]["continuous_timeline"] is continuous_timeline
+
+
+def test_channel_continuous_timeline_defaults_true():
+    payload = ChannelCreatePayload(
+        name="test-channel", backend="ecs-express", region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["packaging"]["continuous_timeline"] is True
+
+
 @pytest.mark.parametrize("source_kind", ["playlist", "archive"])
 def test_channel_source_kind_roundtrip(source_kind):
     payload = ChannelCreatePayload(

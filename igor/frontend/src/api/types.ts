@@ -302,6 +302,10 @@ export interface ChannelCreatePayload {
   dvr_window_seconds?: number
   hls_format?: 'cmaf' | 'ts'
   hls_ts_mux_audio?: boolean
+  /** loop-dee-loop/SCOPE.md §12: default true -- no #EXT-X-DISCONTINUITY /
+   * DASH Period restart at the loop wrap (serve.py rewrites each segment's
+   * own timestamps per request instead). ecs-express/local-docker only. */
+  continuous_timeline?: boolean
   // int to pin an explicit host port, "auto" (local-docker only) to let
   // it self-select a free one at start/refresh time.
   port?: number | 'auto'

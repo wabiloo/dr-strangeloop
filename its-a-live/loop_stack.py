@@ -69,6 +69,13 @@ class LoopStack(Stack):
 
         packaging_cfg = config.get("packaging", {})
         dvr_window_seconds = str(packaging_cfg.get("dvr_window_seconds", 30))
+        # loop-dee-loop/SCOPE.md §12: default on -- rewrites each segment's
+        # own timestamps per request (header patch only, never a re-mux) so
+        # the channel has no #EXT-X-DISCONTINUITY / DASH Period restart at
+        # the loop wrap. `false` falls back to the honestly-signaled
+        # default serve.py behavior (e.g. if a package was baked with a
+        # 32-bit tfdt and continuity mode's startup check would refuse it).
+        continuous_timeline = bool(packaging_cfg.get("continuous_timeline", True))
 
         express_cfg = config.get("express", {})
         port = int(express_cfg.get("port", 8080))
@@ -172,6 +179,7 @@ class LoopStack(Stack):
                     "--port", str(port),
                     "--dvr-window-seconds", dvr_window_seconds,
                     "--epoch-utc", "1970-01-01T00:00:00Z",
+                    *(["--continuous-timeline"] if continuous_timeline else []),
                 ],
                 environment=[
                     ecs.CfnExpressGatewayService.KeyValuePairProperty(

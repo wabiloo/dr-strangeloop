@@ -78,6 +78,7 @@ const editForm = reactive<ChannelCreatePayload>({
   dvr_window_seconds: 30,
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
+  continuous_timeline: true,
   port: 8080,
   cpu: 256,
   memory: 512,
@@ -177,6 +178,7 @@ function startEdit() {
     dvr_window_seconds: Number(packaging.dvr_window_seconds ?? 30),
     hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
     hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
+    continuous_timeline: Boolean(packaging.continuous_timeline ?? true),
     port: portSection.port === 'auto' ? 'auto' : Number(portSection.port ?? 8080),
     cpu: Number(express.cpu ?? 256),
     memory: Number(express.memory ?? 512),
@@ -933,6 +935,12 @@ watch(() => props.name, reload)
             <section class="config-group">
               <h4 class="config-group-title">Serving</h4>
               <div class="config-fields">
+                <div class="flex align-items-center gap-2 config-field-wide">
+                  <Checkbox v-model="editForm.continuous_timeline" binary input-id="edit-continuous-timeline" />
+                  <label for="edit-continuous-timeline" class="text-xs text-color-secondary">
+                    Continuous timeline across the loop wrap
+                  </label>
+                </div>
                 <div class="flex flex-column gap-1" :class="{ 'config-field-wide': editIsLocalDocker }">
                   <label class="text-xs text-color-secondary">Serve port</label>
                   <div v-if="editIsLocalDocker" class="flex align-items-center gap-2">

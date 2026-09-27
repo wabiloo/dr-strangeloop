@@ -103,6 +103,7 @@ source_path = "../outputs/mychannel"   # franken-ts output
 [packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30
+continuous_timeline = true  # default -- see loop-dee-loop/SCOPE.md §12; false reverts to signaled discontinuities/Period restarts at the loop wrap
 
 [express]
 port   = 8080
