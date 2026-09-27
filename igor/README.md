@@ -39,6 +39,16 @@ igor/
   their runtime requirements.
 - Node.js/npm for the frontend.
 
+## Running via Docker (no toolchain install)
+
+To hand this to a colleague who has Docker but doesn't want to install
+Python/uv/Node/ffmpeg/tsduck/GPAC/aws-cli/cdk locally, see the repo-root
+[`DOCKER_LOCAL.md`](../DOCKER_LOCAL.md) + [`docker-compose.yml`](../docker-compose.yml).
+Different from [`CLOUD_DEPLOYMENT.md`](./CLOUD_DEPLOYMENT.md) below -- that
+one is about hosting igor somewhere shared/reachable over a network, this
+is about running it locally in a container instead of installing the
+toolchain by hand.
+
 ## Running (dev)
 
 ```bash

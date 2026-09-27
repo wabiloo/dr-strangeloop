@@ -1,0 +1,77 @@
+# Run the whole dr-strangeloop console (igor + franken-ts + its-a-live +
+# loop-dee-loop's local-docker toolchain) with nothing installed locally
+# except Docker itself. See DOCKER_LOCAL.md for the full explanation --
+# in short:
+#
+#   1. copy .env.example to .env and fill in HOST_REPO_ROOT/MEDIA_ROOT
+#   2. docker compose up --build
+#   3. open http://localhost:8090/admin/
+#
+# HOST_REPO_ROOT MUST be this checkout's own absolute path on YOUR machine
+# (e.g. `pwd` run from this directory) -- it's used as both the build path
+# and the runtime bind-mount path so that any path igor/its-a-live computes
+# internally (bake output dirs, loop-dee-loop's own directory as a `docker
+# build` context, ...) is also a real, correct path from the HOST docker
+# daemon's point of view -- required because local-docker/ecs-express
+# dispatch nested `docker build`/`docker run` through the socket mounted
+# below, and that daemon resolves every path against the host filesystem,
+# with no knowledge this container's mount namespace even exists. Get this
+# wrong and franken-ts builds/imports still work fine (they run in-process,
+# no nested docker involved) but local-docker channels and ecs-express's
+# `cdk deploy` fail or silently bind-mount/build against an empty directory.
+#
+# A consequence of the same constraint: this image is NOT portable between
+# colleagues whose checkouts live at different paths -- each colleague runs
+# `docker compose build` once for their own machine (cached after that).
+
+services:
+  igor:
+    build:
+      context: .
+      dockerfile: igor/Dockerfile
+      args:
+        REPO_ROOT: ${HOST_REPO_ROOT:?set HOST_REPO_ROOT in .env -- see .env.example}
+    image: dr-strangeloop-igor:local
+    working_dir: ${HOST_REPO_ROOT:?set HOST_REPO_ROOT in .env -- see .env.example}
+    environment:
+      REPO_ROOT: ${HOST_REPO_ROOT}
+      # Default landing directory for the asset file-browser/picker --
+      # scoped to whatever's bind-mounted below, since that's all this
+      # container can see anyway. See igor/src/igor/integrations/files.py.
+      IGOR_ASSET_ROOT: /media/library
+      # AWS creds: either mount ~/.aws below (uses your existing profiles)
+      # or set these directly here / in .env -- both are read by the same
+      # ambient boto3.session.Session() its-a-live/channel.py already uses
+      # (see CLOUD_DEPLOYMENT.md workstream 3 -- unchanged here, this is
+      # still a trusted-operator tool, not a multi-tenant one).
+      AWS_PROFILE: ${AWS_PROFILE:-}
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    ports:
+      - "${IGOR_PORT:-8090}:8090"
+    volumes:
+      # Source == target on purpose -- see the note above.
+      - ${HOST_REPO_ROOT}:${HOST_REPO_ROOT}
+      # Lets its-a-live's local-docker backend (and ecs-express's `cdk
+      # deploy`, which builds/pushes a Docker image for the ECS task) drive
+      # the HOST's Docker install as a sibling, not a nested daemon --
+      # Docker-in-Docker/privileged mode is deliberately avoided.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Your own source media (videos, slates, images) -- franken-ts
+      # playlists should reference paths under /media/library, e.g.
+      # /media/library/ads/spot-01.mp4. Read-only: nothing here writes back
+      # to your source library.
+      - ${MEDIA_ROOT:?set MEDIA_ROOT in .env to a directory holding your source video/slates}:/media/library:ro
+      # Optional: reuse AWS CLI profiles/SSO cache from your host instead of
+      # the env vars above. Read-only -- `aws configure`/`aws sso login` on
+      # the HOST, not inside the container.
+      - ${HOME}/.aws:/root/.aws:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s

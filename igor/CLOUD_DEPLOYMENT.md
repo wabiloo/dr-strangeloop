@@ -15,6 +15,14 @@ out), Kubernetes-native answers throughout.
 
 ## Local dev and cloud deliberately use different container shapes
 
+See [`../DOCKER_LOCAL.md`](../DOCKER_LOCAL.md) for the local-bundling shape
+described in this section, already built (`docker-compose.yml` at the repo
+root) -- handing a colleague a working console with nothing installed
+locally, against their own files, is a solved problem for the
+single-operator case; everything below in this document is about the
+different, harder problem of making igor reachable by a *team* over a
+network.
+
 For local Docker use (a single operator on one machine), bundle igor +
 franken-ts + the ffmpeg/tsduck toolchain into one image: CPU is shared and
 effectively free on your own box, builds are interactive, and the added

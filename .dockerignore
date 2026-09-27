@@ -1,0 +1,23 @@
+# Build context for igor/Dockerfile. Keep this lean -- everything here is
+# either regenerated at build time (venvs, node_modules, frontend/dist) or
+# is per-colleague runtime state that arrives via bind mount instead (see
+# docker-compose.yml): baking it into the image would go stale immediately.
+
+.git/
+**/__pycache__/
+**/*.pyc
+**/.venv/
+its-a-live/.venv/
+
+**/node_modules/
+igor/frontend/dist/
+
+# Runtime state -- bind-mounted at container start, never baked into the image.
+data/
+outputs/
+its-a-live/.local-loop-package/
+its-a-live/configs/*.toml
+its-a-live/cdk.out/
+**/cdk.out/
+
+.DS_Store
