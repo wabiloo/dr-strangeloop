@@ -237,6 +237,7 @@ def run_gpac_dasher(
             f"dasher:cues={cues_xml}:segdur={segment_duration_seconds}"
             f":cdur={segment_duration_seconds}:profile=live",
             "-o", str(manifest_path),
+            "--mp4mx@tfdt64",
             *(extra_args or []),
         ]
 

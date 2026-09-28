@@ -565,16 +565,17 @@ partway through serving, if either holds:
   shift derived from `gap_ticks`, not attempted here) and any sparse
   rendition is rejected outright regardless.
 - **A CMAF fragment was baked with a 32-bit (v0) `tfdt`** instead of
-  64-bit (v1). This is a hard requirement, not a preference: continuity
-  mode adds `loop_number * total_loop_duration_ticks` to a `tfdt` on every
+  64-bit (v1). The GPAC bake now explicitly requests `tfdt64` on the
+  `mp4mx` muxer, so newly baked CMAF packages satisfy this requirement.
+  This is a hard requirement, not a preference: continuity mode adds
+  `loop_number * total_loop_duration_ticks` to a `tfdt` on every
   request for the lifetime of a channel meant to run forever, and a v0
   `tfdt` (max ~47,721s ≈ 13.25h of ticks) **will** eventually overflow no
   matter how large `total_loop_duration_ticks` is -- checked once per
   rendition (+ shared audio) against the real baked segment on disk, not
   assumed. ffmpeg's own `frag_keyframe` fmp4 muxer already defaults to v1
   (confirmed while building `tests/test_continuity.py`'s fixtures); GPAC's
-  default was not independently confirmed in this pass and is a follow-up
-  if it ever turns out to default to v0.
+  default is not relied upon; bake.py forces 64-bit timestamps explicitly.
 
 ### 12.5 Known limitations of this first cut
 
@@ -596,11 +597,6 @@ partway through serving, if either holds:
   `wsgi.py`'s `CONTINUOUS_TIMELINE` env var) -- surfacing it as an
   its-a-live `[serving]`-style config key (parallel to `[markers]`'s own
   flags) is mechanical but not done in this pass.
-- **GPAC's own default `tfdt` version was not verified** (no GPAC install
-  available while implementing this) -- see §12.4's ffmpeg note. If a real
-  GPAC build defaults to v0, `bake.py` would need an explicit dasher flag
-  to force v1 before continuity mode is usable against its output; the
-  startup check (§12.4) means this fails loudly and immediately rather
-  than corrupting playback after ~13 hours, but it does mean continuity
-  mode may need a small `bake.py` change once verified against real GPAC
-  output, contrary to this section's "serve.py-only" framing above.
+- **Existing packages must be rebaked** after upgrading loop-dee-loop to
+  get 64-bit `tfdt` boxes. The startup check (§12.4) remains as a guard for
+  older packages and any other unsupported input.
