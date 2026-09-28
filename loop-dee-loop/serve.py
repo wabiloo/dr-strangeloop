@@ -1616,7 +1616,14 @@ class Channel:
                 end = (
                     boundary_ticks[local_index + 1]
                     if local_index + 1 < len(boundary_ticks)
-                    else pkg.total_loop_duration_ticks
+                    # The first segment need not start at tick zero (AAC
+                    # typically starts a frame later than video). Its next
+                    # iteration starts at loop_duration + boundary_ticks[0],
+                    # not at loop_duration. Otherwise the MPD describes an
+                    # audio gap at every wrap even though the shifted tfdt
+                    # and media samples continue through it. dash.js can
+                    # stop requesting audio at that gap and stall playback.
+                    else pkg.total_loop_duration_ticks + boundary_ticks[0]
                 )
                 entries.append(
                     (loop_number * pkg.total_loop_duration_ticks + start, end - start, local_index)

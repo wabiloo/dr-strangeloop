@@ -15,6 +15,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -264,6 +265,44 @@ def test_continuous_dash_manifest_has_exactly_one_period_spanning_the_wrap(tmp_p
     t_values = [int(v) for v in __import__("re").findall(r'<S t="(\d+)"', body)]
     assert t_values == sorted(t_values)
     assert t_values[-1] >= total  # window reaches into loop 1
+
+
+def test_continuous_dash_audio_timeline_stays_joined_across_rolling_windows(tmp_path):
+    """Audio can begin after video in each loop. The last audio S must
+    extend to the next loop's audio start, including when that next entry
+    is not yet present in the bounded window."""
+    seg_dur, total = _write_continuous_package(tmp_path)
+    channel = Channel(LoopPackage(tmp_path), epoch_ticks=0, window_segments=4, continuous=True)
+    audio_offset = 1920
+    channel.package.audio_rendition = SimpleNamespace(
+        audio_variant={"bandwidth": 64000, "codecs": "mp4a.40.2"},
+        audio_sparse=False,
+        audio_segment_boundary_ticks=[audio_offset, seg_dur + audio_offset],
+    )
+
+    def timeline(xml: str, mime_type: str):
+        root = ET.fromstring(xml)
+        ns = {"d": "urn:mpeg:dash:schema:mpd:2011"}
+        assert len(root.findall("d:Period", ns)) == 1
+        adaptation = next(a for a in root.findall(".//d:AdaptationSet", ns) if a.get("mimeType") == mime_type)
+        template = adaptation.find(".//d:SegmentTemplate", ns)
+        segments = [(int(s.get("t")), int(s.get("d"))) for s in template.findall(".//d:S", ns)]
+        return int(template.get("startNumber")), segments
+
+    # Capture MPDs immediately before/at/after the boundary, then well into
+    # the next loop when the previous loop has left the DVR window.
+    for ticks in (total - 1, total, total + seg_dur, 2 * total, 2 * total + seg_dur):
+        channel.now_ticks = lambda ticks=ticks: ticks
+        mpd = channel.build_dash_manifest()
+        video_first, video = timeline(mpd, "video/mp4")
+        audio_first, audio = timeline(mpd, "audio/mp4")
+        assert video_first == audio_first
+        assert len(video) == len(audio) <= 4
+        for (v_start, v_duration), (a_start, a_duration) in zip(video, audio):
+            assert a_start == v_start + audio_offset
+            assert a_duration == v_duration
+        for (start, duration), (next_start, _) in zip(audio, audio[1:]):
+            assert start + duration == next_start
 
 
 # ── SCOPE.md §12.6: sparse (grave-robber/archive) input, single span ───────
