@@ -52,6 +52,17 @@ function outputBasename(path: string) {
   return path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || path
 }
 
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return '—'
+  const rounded = Math.round(seconds)
+  const hours = Math.floor(rounded / 3600)
+  const minutes = Math.floor((rounded % 3600) / 60)
+  const remainingSeconds = rounded % 60
+  if (hours > 0) return `${hours}h ${minutes}m ${remainingSeconds}s`
+  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`
+  return `${remainingSeconds}s`
+}
+
 function confirmDelete(event: MouseEvent, name: string) {
   const target = (event.target as HTMLElement).closest('button') ?? (event.target as HTMLElement)
   confirm.require({
@@ -115,7 +126,10 @@ onMounted(load)
 <template>
   <div class="flex flex-column gap-3">
     <div class="flex justify-content-between align-items-center">
-      <h2 class="m-0">Playlists (franken-ts)</h2>
+      <div class="flex flex-column gap-1">
+        <h2 class="m-0">Playlists</h2>
+        <small class="text-color-secondary">Playlist definitions for franken-ts — source assets and ad-break markers used to build transport streams.</small>
+      </div>
       <div class="flex gap-2">
         <Button label="Refresh" icon="pi pi-refresh" severity="secondary" outlined @click="load" :loading="loading" />
         <Button label="New playlist" icon="pi pi-plus" @click="router.push('/playlists/new')" />
@@ -144,6 +158,13 @@ onMounted(load)
           </div>
         </template>
       </Column>
+      <Column header="Duration">
+        <template #body="{ data }">
+          <span :title="data.duration_estimated ? 'Estimate: uses a 15-second placeholder for each asset without a configured duration' : data.duration_seconds == null ? 'Duration unavailable' : `${data.duration_seconds.toFixed(2)} seconds`">
+            {{ formatDuration(data.duration_seconds) }}<span v-if="data.duration_estimated"> (est.)</span>
+          </span>
+        </template>
+      </Column>
       <Column field="rendition_count" header="Renditions" />
       <Column field="asset_count" header="Assets" />
       <Column field="marker_count" header="Markers" />
@@ -157,7 +178,7 @@ onMounted(load)
           </div>
         </template>
       </Column>
-      <template #empty>No franken-ts playlists yet. Click "New playlist" to create one.</template>
+      <template #empty>No playlists yet. Click "New playlist" to create one.</template>
     </DataTable>
     <ConfirmPopup />
 

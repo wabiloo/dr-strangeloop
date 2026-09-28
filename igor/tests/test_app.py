@@ -32,10 +32,14 @@ def test_playlist_schema_is_derived_from_franken_ts():
 def test_list_playlists_returns_real_franken_ts_yaml_files():
     resp = client.get("/api/v1/playlists/")
     assert resp.status_code == 200
-    names = {c["name"] for c in resp.json()}
+    playlists = {c["name"]: c for c in resp.json()}
     # These ship in the repo's data/playlists/ -- if this ever breaks,
     # either the fixtures moved or the list route regressed.
-    assert "short-loop" in names
+    assert "short-loop" in playlists
+    assert playlists["short-loop"]["duration_seconds"] == 25
+    assert playlists["short-loop"]["duration_estimated"] is False
+    assert playlists["test1"]["duration_seconds"] == 180
+    assert playlists["test1"]["duration_estimated"] is True
 
 
 def test_get_missing_playlist_is_404():

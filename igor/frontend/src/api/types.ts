@@ -12,6 +12,8 @@ export interface PlaylistListItem {
   asset_count?: number
   marker_count?: number
   rendition_count?: number
+  duration_seconds?: number | null
+  duration_estimated?: boolean
   error?: string
 }
 

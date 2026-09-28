@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 import yaml
 from franken_ts.config import Config
 from franken_ts.timeline import resolve_markers
+from franken_ts.utils import parse_time
 from franken_ts.validate import validate_inputs
 
 from igor import paths
@@ -32,8 +33,8 @@ def playlist_schema() -> dict:
 
 def list_playlists() -> list[dict]:
     """All *.yaml playlists in franken-ts/playlists/, with just enough
-    parsed metadata for a list view (name, output path, asset/marker
-    counts) -- full content is fetched separately via get_playlist."""
+    parsed metadata for a list view (name, output path, configured duration,
+    asset/marker counts) -- full content is fetched separately via get_playlist."""
     out = []
     for path in sorted(paths.FRANKEN_TS_PLAYLISTS_DIR.glob("*.yaml")):
         try:
@@ -45,6 +46,21 @@ def list_playlists() -> list[dict]:
         assets = raw.get("assets", []) or []
         markers = raw.get("markers", []) or []
         renditions = output.get("renditions") or []
+        # An omitted duration means "use the whole source file", whose length
+        # requires ffprobe. Keep the list lightweight by using the same 15s
+        # placeholder as the timeline UI for those assets, and mark the sum
+        # as an estimate.
+        duration_seconds = None
+        duration_estimated = False
+        if assets:
+            duration_estimated = any(asset.get("duration") is None for asset in assets)
+            try:
+                duration_seconds = sum(
+                    parse_time(asset["duration"]) if asset.get("duration") is not None else 15
+                    for asset in assets
+                )
+            except (TypeError, ValueError):
+                pass
         out.append({
             "name": path.stem,
             "path": str(path),
@@ -52,6 +68,8 @@ def list_playlists() -> list[dict]:
             "output_dir": _resolve_output_path(output.get("dir")),
             "asset_count": len(assets),
             "marker_count": len(markers),
+            "duration_seconds": duration_seconds,
+            "duration_estimated": duration_estimated,
             # Single-rendition playlists (`output.file`) produce exactly one
             # .ts, so they count as 1 rather than 0 -- matches the file/folder
             # icon distinction the playlist list UI already makes.
