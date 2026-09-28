@@ -528,12 +528,27 @@ only HLS's own URI needed to change. The byte-serving routes then decode
 it back (`Channel.loop_number_and_local_index`) to get both the physical
 file to read and the exact shift to apply.
 
-This is the concrete form of the cacheability tradeoff flagged when this
-feature was first discussed: a continuity-mode segment URL is unique per
-loop iteration, not shared across all of them, so a CDN in front of it
-should use a short/no aggressive long-lived cache TTL (still worth
-caching for the concurrent-viewers-of-the-same-instant case per §8, just
-not "cacheable forever" the way the default mode's URLs are).
+This is not the caching hazard it first looks like. A continuity-mode
+segment response is a pure, deterministic, *permanent* function of its
+URL alone (same physical file on disk, same `loop_number` arithmetic
+derived straight from the URL's own global index, every time) -- there is
+no staleness case, ever, so a CDN can cache a given URL indefinitely
+without risk, exactly like the default mode's segments, and for the same
+underlying reason: URL identity is content identity. Nothing here depends
+on the CDN doing anything special -- it only needs the one thing every
+CDN already does by default, include the full path in the cache key
+(CloudFront/Cloudflare/Fastly all do), which `loop_stack.py`'s existing
+segment cache policy already satisfies unmodified.
+
+What *does* differ from default mode is cardinality, not correctness: a
+fixed, perpetually-hot set of `segments_per_loop` keys becomes an
+ever-growing set (one new key roughly every segment duration, forever).
+A CDN's cache therefore holds a rolling window of recent global indices
+and lets old ones fall out via ordinary LRU eviction once nothing is
+requesting them any more (they've aged out of the live/DVR window) --
+this is normal live-CDN behavior, not a new failure mode, and it's why a
+short-ish `max_ttl` is still sensible (avoid holding dead weight
+indefinitely), not because a longer one would ever serve something wrong.
 
 ### 12.3 Manifest shape: no discontinuity left to signal
 
@@ -557,13 +572,14 @@ not "cacheable forever" the way the default mode's URLs are).
 Continuity mode hard-fails at `Channel`/`create_app` construction, never
 partway through serving, if either holds:
 
-- **Internal asset-boundary discontinuities** (grave-robber/§6.1 sparse
-  mode) are present (`package.boundaries != {0}`) -- this first cut only
-  makes the loop-wrap boundary continuous; a sparse/archive-derived
-  package's internal joins are a different, harder problem (the gap/overlap
-  math of §6.2's declared-position split would need an equivalent tick
-  shift derived from `gap_ticks`, not attempted here) and any sparse
-  rendition is rejected outright regardless.
+- **Internal asset-boundary discontinuities** are present
+  (`package.boundaries != {0}`) -- this first cut only makes the loop-wrap
+  boundary continuous; an internal join (grave-robber/§6.1) is a different,
+  harder problem (the gap/overlap math of §6.2's declared-position split
+  would need an equivalent tick shift derived from `gap_ticks`, not
+  attempted here). This is the *only* gate -- see §12.6 for why a sparse
+  package with no internal joins (`boundaries == {0}`) is allowed through,
+  not rejected outright just for being sparse.
 - **A CMAF fragment was baked with a 32-bit (v0) `tfdt`** instead of
   64-bit (v1). The GPAC bake now explicitly requests `tfdt64` on the
   `mp4mx` muxer, so newly baked CMAF packages satisfy this requirement.
@@ -600,3 +616,58 @@ partway through serving, if either holds:
 - **Existing packages must be rebaked** after upgrading loop-dee-loop to
   get 64-bit `tfdt` boxes. The startup check (§12.4) remains as a guard for
   older packages and any other unsupported input.
+
+### 12.6 DECIDED: sparse (grave-robber/archive) input is allowed when the source itself has no discontinuity
+
+§12.4's original cut rejected every sparse rendition outright, on the
+theory that "archive input" and "has internal discontinuities" were the
+same thing. They aren't: `package.boundaries != {0}` -- already computed
+from the segment-list manifest's own declared `asset_boundary` entries
+(§11.2), independent of `.sparse` -- is the actual, precise answer to "does
+the *source* have a discontinuity/multiple-Period join anywhere in it".
+A grave-robber capture that happens to be one continuous span end to end
+(no internal `asset_boundary: true` entries beyond the always-implicit
+index 0) is, as far as continuity is concerned, mechanically identical to
+a franken-ts encode: one span of segments to shift by a constant
+`loop_number * total_loop_duration_ticks` per iteration. So
+`Channel._validate_continuous` now only checks `boundaries != {0}` --
+`.sparse` itself is no longer a blanket rejection.
+
+What this does *not* change: an archive capture with real internal joins
+(the common case -- HAR/Proxyman captures routinely have gaps) is still
+rejected exactly as before, for exactly the reason §12.4 originally gave
+(the `gap_ticks`/declared-position math would need its own per-boundary
+shift, and -- separately, see the conversation that led here -- even with
+that math, independently-captured segments across a real join aren't
+guaranteed to be decode-continuous the way one continuous encode wrapping
+on itself provably is; that's a different, harder problem than a missing
+formula).
+
+Mechanical consequences of allowing a sparse-but-single-span package
+through, all handled in `serve.py`:
+
+- `shift_cmaf_fragment` needed no change: `cmaf.rebase_fragments`/`_find`
+  walk top-level boxes by type, so a self-initializing segment's leading
+  `ftyp`+`moov` (absent from a normal shared-init fragment) is simply
+  carried through untouched while the `moof`/`tfdt` inside is patched --
+  verified in `tests/test_serve_continuity.py` against a real,
+  independently-encoded ffmpeg fixture.
+- `_build_dash_manifest_continuous`'s video/audio `initialization=`
+  handling, previously hardcoded to a shared `init.mp4` (safe only because
+  every package that reached it was non-sparse), now makes the same
+  three-way choice (`self_initializing` -> no `initialization=` attribute
+  at all; `shared_init` -> per-span `init_0.mp4`, span always 0 since
+  `boundaries == {0}` means exactly one span; else -> plain `init.mp4`)
+  `build_dash_manifest`'s own per-Period builder already made.
+- The 64-bit `tfdt` startup check (§12.4) now looks past a possible hole at
+  segment index 0 (a sparse package's first declared segment may have no
+  physical media) to the first *present* segment, rather than assuming
+  index 0 exists.
+- A hole stays a 404 in continuity mode exactly as in the default mode
+  (§11.3) -- `shift_ticks` is only ever applied to bytes that were
+  actually read from disk, never synthesized for a missing index.
+
+Still out of scope, unchanged from §12.4: a package with any internal
+`asset_boundary` beyond index 0. Extending continuity across those is the
+harder problem described above and in §12.4's original bullet, not
+attempted here.

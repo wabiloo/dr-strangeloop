@@ -554,6 +554,20 @@ class LoopPackage:
         raise KeyError(name)
 
 
+def _first_present_segment(files: "list[Path | None]", label: str) -> Path:
+    """First non-None entry of a (possibly sparse, SCOPE.md §11) segment
+    file list -- used by continuity mode's startup tfdt check, which only
+    needs one representative real segment, not index 0 specifically (index
+    0 itself may be a hole in a sparse package)."""
+    for path in files:
+        if path is not None:
+            return path
+    raise RuntimeError(
+        f"{label}: every declared segment is a hole (no physical media at "
+        f"all) -- cannot verify tfdt version for continuity mode."
+    )
+
+
 def _cmaf_tfdt_version(path: Path) -> int:
     """`tfdt` box version (0 = 32-bit, 1 = 64-bit `baseMediaDecodeTime`) of
     the first movie fragment in a bare CMAF media segment file. Used only by
@@ -580,9 +594,12 @@ class Channel:
     the same loop-relative values every iteration, so no
     #EXT-X-DISCONTINUITY / new DASH Period is needed at the loop wrap. Only
     supported for a package with no internal asset-boundary discontinuities
-    (grave-robber/SCOPE.md §6.1 sparse mode is out of scope for this first
-    cut) and CMAF fragments baked with a 64-bit (v1) tfdt -- both checked
-    once here, at startup, not per request.
+    (`boundaries == {0}`) -- i.e. no discontinuity/multiple-Period join
+    anywhere in the source, whether that source is a single franken-ts
+    encode (always true there) or a grave-robber/archive capture that
+    happens to be a single continuous span (SCOPE.md §12.6) -- and CMAF
+    fragments baked with a 64-bit (v1) tfdt. Both checked once here, at
+    startup, not per request.
     """
 
     def __init__(
@@ -616,17 +633,22 @@ class Channel:
                 f"continuity mode (--continuous-timeline) does not support "
                 f"internal asset-boundary discontinuities (grave-robber/"
                 f"SCOPE.md §6.1) -- only the plain loop-wrap boundary. This "
-                f"package declares boundaries={sorted(package.boundaries)}."
+                f"package declares boundaries={sorted(package.boundaries)} "
+                f"(i.e. the source itself has a discontinuity/multiple-"
+                f"Period join, not just the loop wrap -- SCOPE.md §12.6)."
             )
+        # SCOPE.md §12.6: sparse/self-initializing renditions (grave-robber
+        # archive input, §11) are allowed here -- the check above is the
+        # real gate ("is there any discontinuity in the source at all"),
+        # not `.sparse` itself. A single-span archive capture (boundaries
+        # == {0}) is mechanically the same shape as a franken-ts encode as
+        # far as continuity is concerned: one span of segments to shift by
+        # a constant per loop iteration. Segments with no physical media
+        # (a hole, SCOPE.md §11.1) stay a 404 either way -- shift_ticks is
+        # never applied to bytes that don't exist.
         for rendition in package.video_renditions:
-            if rendition.sparse:
-                raise RuntimeError(
-                    f"continuity mode does not support sparse/self-"
-                    f"initializing renditions (rendition '{rendition.name}') "
-                    f"-- SCOPE.md §11 archive input is out of scope for "
-                    f"continuity mode in this first cut."
-                )
-            version = _cmaf_tfdt_version(rendition.segment_files[0])
+            representative = _first_present_segment(rendition.segment_files, rendition.name)
+            version = _cmaf_tfdt_version(representative)
             if version != 1:
                 raise RuntimeError(
                     f"continuity mode requires a 64-bit (v1) tfdt, so the "
@@ -634,17 +656,18 @@ class Channel:
                     f"total_loop_duration_ticks) never overflows over a "
                     f"long-running channel's lifetime -- rendition "
                     f"'{rendition.name}' was baked with a 32-bit (v0) tfdt. "
-                    f"Rebake with a GPAC dasher invocation that emits v1 "
+                    f"Rebake with a GPAC/ffmpeg invocation that emits v1 "
                     f"tfdt boxes (SCOPE.md §12.4)."
                 )
         audio = package.audio_rendition
-        if audio is not None and not audio.audio_sparse and audio.audio_segment_files:
-            version = _cmaf_tfdt_version(audio.audio_segment_files[0])
+        if audio is not None and audio.audio_segment_files:
+            representative = _first_present_segment(audio.audio_segment_files, "audio")
+            version = _cmaf_tfdt_version(representative)
             if version != 1:
                 raise RuntimeError(
                     f"continuity mode requires a 64-bit (v1) tfdt for the "
                     f"shared audio track too, same reasoning as the video "
-                    f"check above -- rebake with a GPAC dasher invocation "
+                    f"check above -- rebake with a GPAC/ffmpeg invocation "
                     f"that emits v1 tfdt boxes (SCOPE.md §12.4)."
                 )
 
@@ -1556,9 +1579,12 @@ class Channel:
         boundary to.
 
         Only reached for a package that already passed
-        `Channel._validate_continuous` (boundaries == {0}, no sparse
-        renditions) -- so, unlike build_dash_manifest, there is exactly one
-        span per loop and no per-span init segments to juggle.
+        `Channel._validate_continuous` (boundaries == {0}) -- so, unlike
+        build_dash_manifest, there is exactly one span per loop. A sparse
+        rendition (SCOPE.md §11) is allowed through as long as it has no
+        internal joins, so `init_attr`/`audio_init` below still need to
+        pick the right init-segment shape (self-initializing / per-span /
+        shared) -- span index is always 0 when there's only one span.
         """
         window_segments = window_segments or self.window_segments
         pkg = self.package
@@ -1686,8 +1712,19 @@ class Channel:
         for idx, rendition in enumerate(pkg.video_renditions):
             timeline_lines = _segment_timeline_xml(_entries(rendition.segment_boundary_ticks))
             v = rendition.video_variant
+            # SCOPE.md §12.6: a sparse rendition may be self-initializing
+            # (own moov, no shared init at all) or carry a per-span init
+            # (span always 0 here, since boundaries == {0} means one span)
+            # -- same three-way choice build_dash_manifest's own
+            # per-Period builder makes, just with span_index fixed at 0.
+            if rendition.self_initializing:
+                init_attr = ""
+            elif rendition.shared_init:
+                init_attr = f' initialization="{rendition.name}/init_0.mp4"'
+            else:
+                init_attr = f' initialization="{rendition.name}/init.mp4"'
             video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
-        <SegmentTemplate media="{rendition.name}/seg/$Number$.m4s" initialization="{rendition.name}/init.mp4"
+        <SegmentTemplate media="{rendition.name}/seg/$Number$.m4s"{init_attr}
                          timescale="{pkg.timescale}" startNumber="{first_global_index}">
           <SegmentTimeline>
 {timeline_lines}
@@ -1701,10 +1738,16 @@ class Channel:
             audio_timeline_lines = _segment_timeline_xml(
                 _entries(pkg.audio_rendition.audio_segment_boundary_ticks)
             )
+            # Same span-0 reasoning as video's init_attr above -- audio has
+            # no self-initializing variant of its own (only sparse/init_N
+            # vs. shared, see LoopPackage/VideoRendition).
+            audio_init = (
+                "audio/init_0.mp4" if pkg.audio_rendition.audio_sparse else "audio/init.mp4"
+            )
             audio_adaptation_set = f'''
     <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
       <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
-        <SegmentTemplate media="audio/seg/$Number$.m4s" initialization="audio/init.mp4"
+        <SegmentTemplate media="audio/seg/$Number$.m4s" initialization="{audio_init}"
                          timescale="{pkg.timescale}" startNumber="{first_global_index}">
           <SegmentTimeline>
 {audio_timeline_lines}
