@@ -47,12 +47,15 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
 
         <nav class="app-nav">
           <RouterLink to="/playlists" class="app-nav-link" :class="{ 'app-nav-link-active': isPlaylistsActive }">
+            <i class="pi pi-objects-column" aria-hidden="true" />
             Playlists
           </RouterLink>
           <RouterLink to="/archives" class="app-nav-link" :class="{ 'app-nav-link-active': isArchivesActive }">
+            <i class="pi pi-box" aria-hidden="true" />
             Archives
           </RouterLink>
           <RouterLink to="/channels" class="app-nav-link" :class="{ 'app-nav-link-active': isChannelsActive }">
+            <i class="pi pi-play-circle" aria-hidden="true" />
             Channels
           </RouterLink>
         </nav>
@@ -208,6 +211,7 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
 .app-nav-link {
   display: flex;
   align-items: center;
+  gap: 0.5rem;
   position: relative;
   color: #94a3b8;
   text-decoration: none;
@@ -217,12 +221,21 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
   transition: color 0.12s ease;
 }
 
+.app-nav-link > i {
+  font-size: 1.1em;
+  -webkit-text-stroke: 0.35px currentColor;
+}
+
 .app-nav-link:hover {
   color: #f8fafc;
 }
 
 .app-nav-link-active {
   color: #f8fafc;
+}
+
+.app-nav-link-active > i {
+  color: var(--p-primary-color, #b91c1c);
 }
 
 .app-nav-link-active::after {
