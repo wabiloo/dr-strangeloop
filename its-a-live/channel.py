@@ -46,6 +46,19 @@ config file selects "aws-media" (MediaLive + MediaPackage v1) or
             the channel stack, then `start`. Equivalent to
             galvanise.py's pipeline minus the interactive confirmations --
             intended for programmatic callers (e.g. a management UI).
+  schedule  Manage scheduled start/stop windows for this channel
+            (aws-media/ecs-express only -- local-docker has no AWS
+            presence to schedule against). Each window is an on-air
+            period with an optional start (omitted = starts immediately;
+            this command then also runs `start`) and an optional end
+            (omitted = runs until a manual `stop`). Windows may not
+            overlap. Backed by one-time EventBridge Scheduler schedules
+            targeting a shared Lambda -- see AGENTS.md and
+            _scheduler_ops.py. Requires `cdk deploy
+            ItsALiveSharedStack-scheduler` once per account/region.
+              schedule add [--start ISO8601] [--end ISO8601]
+              schedule remove <window-id>
+              schedule list
   list      List channels found under a directory of TOML configs
             (default: the directory containing --config), each with its
             CloudFormation stack status if deployed, plus a live
@@ -505,6 +518,63 @@ def cmd_redeploy(cfg, config_path, extra_args):
     sys.exit(result.returncode)
 
 
+def cmd_schedule(cfg, config_path, extra_args, as_json=False):
+    if _backend(cfg) == "local-docker":
+        sys.exit("Scheduling requires an AWS backend (aws-media or ecs-express) -- "
+                  "local-docker channels have no AWS presence to schedule against.")
+    if not extra_args:
+        sys.exit("Usage: channel.py schedule <add|remove|list> [args...]")
+
+    import _scheduler_ops
+
+    sub, rest = extra_args[0], extra_args[1:]
+
+    if sub == "add":
+        start_iso = end_iso = None
+        i = 0
+        while i < len(rest):
+            if rest[i] == "--start" and i + 1 < len(rest):
+                start_iso, i = rest[i + 1], i + 2
+            elif rest[i] == "--end" and i + 1 < len(rest):
+                end_iso, i = rest[i + 1], i + 2
+            else:
+                sys.exit("Usage: channel.py schedule add [--start ISO8601] [--end ISO8601]")
+        window = _scheduler_ops.add_window(cfg, _session(cfg), _channel_name(cfg), config_path, start_iso, end_iso)
+        if start_iso is None:
+            print("No --start given -- starting the channel now ...")
+            cmd_start(cfg, [])
+        if as_json:
+            print(json.dumps(window))
+        else:
+            print(f"Scheduled window {window['id']}: start={window['start'] or 'now'} end={window['end'] or 'manual stop'}")
+        return
+
+    if sub == "remove":
+        if len(rest) != 1:
+            sys.exit("Usage: channel.py schedule remove <window-id>")
+        window = _scheduler_ops.remove_window(_session(cfg), _channel_name(cfg), config_path, rest[0])
+        if as_json:
+            print(json.dumps(window))
+        else:
+            print(f"Removed window {window['id']}.")
+        return
+
+    if sub == "list":
+        if rest:
+            sys.exit("Usage: channel.py schedule list")
+        windows = _scheduler_ops.list_windows(config_path)
+        if as_json:
+            print(json.dumps(windows))
+        elif not windows:
+            print("No scheduled windows.")
+        else:
+            for w in windows:
+                print(f"  {w['id']}  [{w['status']:<8}]  start={w['start'] or 'now'}  end={w['end'] or 'manual stop'}")
+        return
+
+    sys.exit(f"Unknown schedule subcommand: {sub!r} (expected add, remove, or list)")
+
+
 def cmd_terminate(cfg, config_path, extra_args):
     """Tear the channel down for good: `cdk destroy` the stack. The
     inverse of `create`'s `cdk deploy` -- unlike `redeploy`, this doesn't
@@ -522,6 +592,13 @@ def cmd_terminate(cfg, config_path, extra_args):
                   "-- use `stop` instead.")
 
     import subprocess
+
+    # Best-effort: drop any scheduled windows for this channel so nothing
+    # is left pointing at a stack that's about to stop existing. Never
+    # blocks terminate itself (e.g. the scheduler stack was never
+    # deployed, or nothing was ever scheduled).
+    import _scheduler_ops
+    _scheduler_ops.delete_all(_session(cfg), _channel_name(cfg), config_path)
 
     stack_name = _stack_name(cfg)
     cdk_cmd = ["cdk", "destroy", "--force",
@@ -559,8 +636,9 @@ if __name__ == "__main__":
         cmd_list(config_path, extra_args, as_json=as_json)
         sys.exit(0)
 
-    all_commands = list(COMMANDS) + list(JSON_COMMANDS) + list(CONFIG_PATH_COMMANDS) + ["list"]
-    if command not in COMMANDS and command not in JSON_COMMANDS and command not in CONFIG_PATH_COMMANDS:
+    all_commands = list(COMMANDS) + list(JSON_COMMANDS) + list(CONFIG_PATH_COMMANDS) + ["list", "schedule"]
+    if (command not in COMMANDS and command not in JSON_COMMANDS
+            and command not in CONFIG_PATH_COMMANDS and command != "schedule"):
         prog = "python channel.py"
         print(f"Usage: {prog} [--config path/to/config.toml] [--json] [{' | '.join(all_commands)}]")
         sys.exit(1)
@@ -568,7 +646,9 @@ if __name__ == "__main__":
     cfg = _config(config_path)
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-    if command in CONFIG_PATH_COMMANDS:
+    if command == "schedule":
+        cmd_schedule(cfg, config_path, extra_args, as_json=as_json)
+    elif command in CONFIG_PATH_COMMANDS:
         CONFIG_PATH_COMMANDS[command](cfg, config_path, extra_args)
     elif command in JSON_COMMANDS:
         JSON_COMMANDS[command](cfg, extra_args, as_json=as_json)

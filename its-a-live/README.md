@@ -76,7 +76,43 @@ cdk deploy ItsALiveSharedStack-ecs-express   # once per account/region --
                                        # ecs-express backend (creates the
                                        # shared ECS cluster every
                                        # ecs-express channel lives in)
+cdk deploy ItsALiveSharedStack-scheduler     # once per account/region --
+                                       # only needed if you'll use
+                                       # `channel.py schedule` (see
+                                       # "Scheduling" below)
 ```
+
+## Scheduling
+
+`channel.py schedule add/remove/list` manages scheduled on-air windows
+for a channel (aws-media/ecs-express only -- local-docker has no AWS
+presence to schedule against). A window is `[--start ISO8601]
+[--end ISO8601]`, both optional: no `--start` means the window begins
+right now (and `schedule add` also runs `start` for you); no `--end`
+means it runs until a manual `stop`. Windows on the same channel may not
+overlap.
+
+Each edge that has an actual future timestamp becomes a one-time
+[EventBridge Scheduler](https://docs.aws.amazon.com/scheduler/) schedule
+targeting one shared Lambda (`ItsALiveSharedStack-scheduler`, deployed
+once per account/region -- see Setup above). That Lambda looks up the
+channel's current CloudFormation outputs at fire time and calls the same
+`start()`/`stop()` functions `channel.py` itself calls (see
+`_aws_media_ops.py`/`_ecs_express_ops.py`), so there's exactly one
+implementation of what "start"/"stop" means per backend. Firing is
+AWS-native: it does not depend on `channel.py`, igor, or any of your own
+infrastructure being up at the scheduled time.
+
+```bash
+uv run python channel.py -c <config.toml> schedule add --start 2026-10-01T08:00:00Z --end 2026-10-01T20:00:00Z
+uv run python channel.py -c <config.toml> schedule list
+uv run python channel.py -c <config.toml> schedule remove <window-id>
+```
+
+Windows are tracked in a small local JSON sidecar file next to the
+channel's TOML config (`<name>.schedule.json`), not in the TOML config
+itself. `terminate` best-effort deletes any windows still scheduled for
+that channel.
 
 ## Configure
 

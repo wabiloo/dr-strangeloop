@@ -126,6 +126,8 @@ Infrastructure:
 uv sync                                        # once, its-a-live has its own venv
 cdk bootstrap                                  # once per account/region -- N/A for local-docker
 cdk deploy ItsALiveSharedStack-ecs-express      # once per account/region, ecs-express only
+cdk deploy ItsALiveSharedStack-scheduler        # once per account/region -- only needed if you'll
+                                                 # use `channel.py schedule` (aws-media/ecs-express only)
 
 uv run python channel.py -c <config.toml> create      # first-time bootstrap: spark + deploy + start (spark + start only for local-docker)
 # ...or the manual equivalent, for finer-grained control:
@@ -142,6 +144,27 @@ uv run python channel.py -c <config.toml> terminate   # tear the stack down for 
 # ...or the manual equivalent:
 cdk destroy ItsALiveStack-<name>-<backend> -c config=<config.toml>   # N/A for local-docker
 ```
+
+Scheduling (aws-media/ecs-express only -- local-docker has no AWS
+presence to schedule against):
+
+```bash
+uv run python channel.py -c <config.toml> schedule add [--start ISO8601] [--end ISO8601]
+                                                    # on-air window; omit --start to start now
+                                                    # (this also runs `start`), omit --end to run
+                                                    # until a manual `stop`. Windows may not overlap.
+uv run python channel.py -c <config.toml> schedule remove <window-id>
+uv run python channel.py -c <config.toml> schedule list
+```
+
+Backed by one-time EventBridge Scheduler schedules targeting a single
+shared Lambda (see `scheduler_stack.py`/`_scheduler_lambda.py`) that
+calls the exact same `start`/`stop` functions this CLI itself uses --
+firing is AWS-native and does not depend on `channel.py`/igor being run
+again at the scheduled time. Requires `ItsALiveSharedStack-scheduler` to
+be deployed once per account/region (see Infrastructure commands above).
+`terminate` best-effort cleans up any windows still scheduled for that
+channel.
 
 Stream:
 

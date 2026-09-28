@@ -2,6 +2,7 @@
 import Button from 'primevue/button'
 import Checkbox from 'primevue/checkbox'
 import ConfirmPopup from 'primevue/confirmpopup'
+import DatePicker from 'primevue/datepicker'
 import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
@@ -16,6 +17,7 @@ import PlaybackPanel from '../components/PlaybackPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import { alignConfirmPopup } from '../utils/confirmPopup'
 import {
+  addScheduleWindow,
   createChannel,
   getChannel,
   getChannelHealth,
@@ -23,7 +25,9 @@ import {
   getChannelStatus,
   listChannels,
   listJobs,
+  listScheduleWindows,
   redeployChannel,
+  removeScheduleWindow,
   sparkChannel,
   startChannel,
   stopChannel,
@@ -31,7 +35,15 @@ import {
   updateChannel,
   updateChannelContent,
 } from '../api/client'
-import type { ChannelCreatePayload, ChannelHealth, ChannelListItem, ChannelOutputs, ChannelStatus, Job } from '../api/types'
+import type {
+  ChannelCreatePayload,
+  ChannelHealth,
+  ChannelListItem,
+  ChannelOutputs,
+  ChannelStatus,
+  Job,
+  ScheduleWindow,
+} from '../api/types'
 import { type Phase, PHASE_LABEL, isUpButMaybeUnreachable, listItemPhase, liveStatusPhase, phaseSeverity } from '../utils/channelPhase'
 
 const props = defineProps<{ name: string }>()
@@ -42,6 +54,13 @@ const health = ref<ChannelHealth | null>(null)
 const config = ref<Record<string, unknown> | null>(null)
 const statusError = ref('')
 const healthError = ref('')
+const scheduleWindows = ref<ScheduleWindow[]>([])
+const scheduleError = ref('')
+const scheduleLoading = ref(false)
+const newWindowStart = ref<Date | null>(null)
+const newWindowEnd = ref<Date | null>(null)
+const addWindowSaving = ref(false)
+const addWindowError = ref('')
 // Row for this channel from the list endpoint (`channel.py list`) -- kept
 // around purely so the top-of-page "State" tag can use the exact same
 // listItemPhase() computation as the list page's State column, rather
@@ -340,6 +359,18 @@ function effectiveOutlined(a: ActionDef) {
 // every backend its-a-live supports.
 const backend = computed(() => status.value?.backend)
 
+// Fires once backend first becomes known (right after loadStatus
+// resolves) and again if it ever changes -- not on every status poll,
+// since `backend` itself doesn't change between polls.
+watch(
+  backend,
+  (b) => {
+    if (b && b !== 'local-docker') loadSchedule()
+    else scheduleWindows.value = []
+  },
+  { immediate: true },
+)
+
 function byBackend(localDocker: string, ecsExpress: string, awsMedia: string): string {
   if (backend.value === 'local-docker') return localDocker
   if (backend.value === 'ecs-express') return ecsExpress
@@ -587,6 +618,72 @@ async function loadHealth() {
   }
 }
 
+// aws-media/ecs-express only -- local-docker has no AWS presence to
+// schedule against (channel.py itself refuses `schedule *`, see
+// its_a_live.AGENTS.md), so this is never called for it (see the
+// `backend` watcher below).
+async function loadSchedule() {
+  scheduleLoading.value = true
+  scheduleError.value = ''
+  try {
+    scheduleWindows.value = await listScheduleWindows(props.name)
+  } catch (e) {
+    scheduleError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    scheduleLoading.value = false
+  }
+}
+
+// DatePicker gives back a plain local Date; the API takes ISO8601 UTC
+// (channel.py's _scheduler_ops.py `%Y-%m-%dT%H:%M:%SZ`) -- truncate to
+// whole seconds, no milliseconds.
+function toIsoUtc(d: Date | null): string | null {
+  return d ? d.toISOString().replace(/\.\d{3}Z$/, 'Z') : null
+}
+
+function windowEdgeLabel(w: ScheduleWindow): string {
+  const start = w.start ? new Date(w.start).toLocaleString() : `now (${new Date(w.created_at).toLocaleString()})`
+  const end = w.end ? new Date(w.end).toLocaleString() : 'manual stop'
+  return `${start} → ${end}`
+}
+
+// Dispatched as a background Job, not a plain await -- an immediate
+// window (no start given) also runs a full `channel.py start` server-side
+// (see schedule_add_job's docstring), which can take as long as the
+// existing Start button already does.
+async function submitAddWindow() {
+  addWindowSaving.value = true
+  addWindowError.value = ''
+  try {
+    const job = await addScheduleWindow(props.name, toIsoUtc(newWindowStart.value), toIsoUtc(newWindowEnd.value))
+    newWindowStart.value = null
+    newWindowEnd.value = null
+    activeAction.value = 'schedule-add'
+    activeActionEta.value = 'A few seconds -- longer if no start time was given (also starts the channel now).'
+    phaseBeforeAction.value = phase.value
+    activeJobId.value = job.id
+    await loadSchedule()
+  } catch (e) {
+    addWindowError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    addWindowSaving.value = false
+  }
+}
+
+async function removeWindow(windowId: string) {
+  try {
+    await removeScheduleWindow(props.name, windowId)
+    await loadSchedule()
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Could not remove window',
+      detail: e instanceof Error ? e.message : String(e),
+      life: 6000,
+    })
+  }
+}
+
 // Actions with a `confirmMessage` (currently just Terminate) show a
 // confirm popup before running -- everything else runs immediately on
 // click, same as before this existed.
@@ -658,12 +755,15 @@ function reload() {
   health.value = null
   config.value = null
   listItem.value = null
+  scheduleWindows.value = []
   activeJobId.value = null
   reattachRunningJob()
   loadStatus()
   loadListPhase()
   loadHealth()
   loadConfig()
+  // loadSchedule() itself is driven by the `backend` watcher above, once
+  // loadStatus() resolves and backend becomes known again.
 }
 
 // Auto-poll cadence for the live status + list-derived State tag --
@@ -829,6 +929,51 @@ watch(() => props.name, reload)
             <summary class="cursor-pointer text-color-secondary">Stack outputs (raw)</summary>
             <pre class="job-log mt-2">{{ JSON.stringify(outputs, null, 2) }}</pre>
           </details>
+        </div>
+
+        <div v-if="backend && backend !== 'local-docker'" class="flex flex-column gap-2">
+          <h3 class="m-0 text-sm text-color-secondary uppercase">Schedule</h3>
+          <div class="flex flex-column gap-2 p-3 border-round surface-card" style="border: 1px solid var(--surface-border)">
+            <Message v-if="scheduleError" severity="warn" :closable="false">{{ scheduleError }}</Message>
+
+            <div v-if="scheduleWindows.length" class="flex flex-column gap-2">
+              <div
+                v-for="w in scheduleWindows"
+                :key="w.id"
+                class="flex align-items-center justify-content-between gap-2 p-2 surface-100 border-round text-sm"
+              >
+                <div class="flex align-items-center gap-2">
+                  <Tag
+                    :value="w.status"
+                    :severity="w.status === 'active' ? 'success' : w.status === 'upcoming' ? 'info' : 'secondary'"
+                  />
+                  <span>{{ windowEdgeLabel(w) }}</span>
+                </div>
+                <Button icon="pi pi-times" severity="danger" text size="small" @click="removeWindow(w.id)" />
+              </div>
+            </div>
+            <div v-else-if="!scheduleLoading" class="text-color-secondary text-sm">No scheduled windows.</div>
+
+            <div class="flex flex-column gap-2 mt-1 pt-2" style="border-top: 1px solid var(--surface-border)">
+              <Message v-if="addWindowError" severity="error" :closable="false">{{ addWindowError }}</Message>
+              <div class="flex flex-wrap align-items-end gap-2">
+                <div class="flex flex-column gap-1">
+                  <label class="text-xs text-color-secondary">Start (empty = now)</label>
+                  <DatePicker v-model="newWindowStart" show-time hour-format="24" show-icon show-button-bar />
+                </div>
+                <div class="flex flex-column gap-1">
+                  <label class="text-xs text-color-secondary">End (empty = manual stop)</label>
+                  <DatePicker v-model="newWindowEnd" show-time hour-format="24" show-icon show-button-bar />
+                </div>
+                <Button label="Add window" icon="pi pi-plus" size="small" :loading="addWindowSaving" @click="submitAddWindow" />
+              </div>
+              <div class="text-color-secondary text-xs">
+                Windows may not overlap. Firing is AWS-native (EventBridge Scheduler), independent of igor being up --
+                see its-a-live/AGENTS.md. Removing a window only cancels its remaining future triggers; it does not stop
+                the channel if the window is currently active.
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 

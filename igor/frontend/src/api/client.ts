@@ -15,6 +15,7 @@ import type {
   MarkersPreview,
   PlaylistListItem,
   ProbeResult,
+  ScheduleWindow,
 } from './types'
 
 async function handle(res: Response): Promise<Response> {
@@ -297,6 +298,22 @@ export function redeployChannel(name: string): Promise<Job> {
 
 export function terminateChannel(name: string): Promise<Job> {
   return postJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/terminate`)
+}
+
+export function listScheduleWindows(name: string): Promise<ScheduleWindow[]> {
+  return getJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/schedule`)
+}
+
+export function addScheduleWindow(name: string, start: string | null, end: string | null): Promise<Job> {
+  return postJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/schedule`, { start, end })
+}
+
+export async function removeScheduleWindow(name: string, windowId: string): Promise<void> {
+  await handle(
+    await fetch(`${CHANNELS_BASE}/${encodeURIComponent(name)}/schedule/${encodeURIComponent(windowId)}`, {
+      method: 'DELETE',
+    }),
+  )
 }
 
 // ---------------------------------------------------------------------------

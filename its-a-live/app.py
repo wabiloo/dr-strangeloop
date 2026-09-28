@@ -5,6 +5,7 @@ import aws_cdk as cdk
 from media_stack import MediaStack
 from loop_stack import LoopStack
 from loop_shared_stack import LoopSharedStack
+from scheduler_stack import SchedulerStack
 
 app = cdk.App()
 
@@ -46,6 +47,15 @@ env = cdk.Environment(
 # e.g. a "demo" channel on aws-media and a "demo" channel on ecs-express
 # from colliding if you ever want both side by side.
 stack_name = f"ItsALiveStack-{name}-{backend}"
+
+
+# Shared prerequisite for `channel.py schedule add/remove/list` -- not
+# backend-specific (covers both aws-media and ecs-express), so always
+# present in the synthesized app regardless of which backend the given
+# config file selects; deploy it explicitly with
+# `cdk deploy ItsALiveSharedStack-scheduler` before scheduling any
+# channel's start/stop.
+SchedulerStack(app, "ItsALiveSharedStack-scheduler", env=env)
 
 if backend == "ecs-express":
     # Shared prerequisite -- one ECS cluster reused by every ecs-express
