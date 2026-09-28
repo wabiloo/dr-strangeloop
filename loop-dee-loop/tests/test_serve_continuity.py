@@ -31,7 +31,7 @@ pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg n
 # ── Channel._validate_continuous ────────────────────────────────────────────
 
 
-def _minimal_video_rendition(tmp_path: Path, *, tfdt_version: int = 1) -> SimpleNamespace:
+def _minimal_video_rendition(tmp_path: Path, *, tfdt_version: int = 1, sparse: bool = False) -> SimpleNamespace:
     subprocess.run(
         [
             "ffmpeg", "-v", "error", "-y",
@@ -76,7 +76,7 @@ def _minimal_video_rendition(tmp_path: Path, *, tfdt_version: int = 1) -> Simple
 
     return SimpleNamespace(
         name="1080p",
-        sparse=False,
+        sparse=sparse,
         video_track_id=1,
         segment_files=[segments_dir / "seg_track1_0.m4s", segments_dir / "seg_track1_1.m4s"],
     )
@@ -88,10 +88,33 @@ def test_validate_continuous_rejects_internal_asset_boundaries():
         Channel._validate_continuous(package)
 
 
-def test_validate_continuous_rejects_sparse_rendition():
-    rendition = SimpleNamespace(sparse=True, name="archive")
+def test_validate_continuous_accepts_sparse_rendition_with_no_internal_boundaries(tmp_path):
+    """A grave-robber/archive-derived (sparse) package is fine for
+    continuity mode as long as the SOURCE itself has no discontinuity --
+    i.e. boundaries == {0}, same gate a franken-ts package must pass too.
+    `.sparse` alone is no longer a blanket rejection (SCOPE.md §12.6)."""
+    rendition = _minimal_video_rendition(tmp_path, tfdt_version=1, sparse=True)
     package = SimpleNamespace(boundaries={0}, video_renditions=[rendition], audio_rendition=None)
-    with pytest.raises(RuntimeError, match="sparse"):
+    Channel._validate_continuous(package)  # must not raise
+
+
+def test_validate_continuous_rejects_sparse_rendition_with_internal_boundaries(tmp_path):
+    """The real gate is boundaries == {0}, not `.sparse` -- a sparse
+    package that DOES have an internal join is still rejected."""
+    rendition = _minimal_video_rendition(tmp_path, tfdt_version=1, sparse=True)
+    package = SimpleNamespace(boundaries={0, 2}, video_renditions=[rendition], audio_rendition=None)
+    with pytest.raises(RuntimeError, match="internal asset-boundary"):
+        Channel._validate_continuous(package)
+
+
+def test_validate_continuous_finds_tfdt_version_past_a_sparse_hole(tmp_path):
+    """A sparse package's index 0 may itself be a hole (SCOPE.md §11) --
+    the tfdt check must look past it to the first PRESENT segment, not
+    assume index 0 exists."""
+    rendition = _minimal_video_rendition(tmp_path, tfdt_version=0, sparse=True)
+    rendition.segment_files[0] = None  # index 0 is a hole
+    package = SimpleNamespace(boundaries={0}, video_renditions=[rendition], audio_rendition=None)
+    with pytest.raises(RuntimeError, match="64-bit"):  # still finds+rejects the v0 tfdt at index 1
         Channel._validate_continuous(package)
 
 
@@ -241,3 +264,153 @@ def test_continuous_dash_manifest_has_exactly_one_period_spanning_the_wrap(tmp_p
     t_values = [int(v) for v in __import__("re").findall(r'<S t="(\d+)"', body)]
     assert t_values == sorted(t_values)
     assert t_values[-1] >= total  # window reaches into loop 1
+
+
+# ── SCOPE.md §12.6: sparse (grave-robber/archive) input, single span ───────
+
+
+def _self_initializing_segment(path: Path) -> None:
+    """One independently-encoded, self-initializing fragment (own ftyp+moov,
+    exactly one moof+mdat) -- the shape grave-robber's
+    remux_segment_to_self_initializing_fragment produces for each archive
+    segment (SCOPE.md §11), as opposed to _write_continuous_package's bare
+    fragments sharing one init."""
+    subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=64x64:rate=24:duration=0.5",
+            "-c:v", "libx264", "-g", "999", "-video_track_timescale", "90000",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4",
+            str(path),
+        ],
+        check=True,
+    )
+
+
+def _write_continuous_sparse_package(package_dir: Path) -> int:
+    """A grave-robber-style sparse package (self-initializing segments, no
+    shared init) with NO internal asset boundaries -- a single-span archive
+    capture, the case SCOPE.md §12.6 now allows into continuity mode.
+    Returns total_loop_duration_ticks."""
+    segments_dir = package_dir / "segments" / "archive"
+    segments_dir.mkdir(parents=True)
+    _self_initializing_segment(segments_dir / "seg_000000.m4s")
+    _self_initializing_segment(segments_dir / "seg_000001.m4s")
+
+    def _tfdt(path: Path) -> int:
+        data = path.read_bytes()
+        moof = cmaf._find(data, ("moof",))
+        tfdt = cmaf._find(data, ("traf", "tfdt"), moof[0] + 8, moof[1])
+        return struct.unpack(">Q", data[tfdt[0] + 12 : tfdt[0] + 20])[0]
+
+    dur0 = _tfdt(segments_dir / "seg_000000.m4s")  # 0, by construction (independent encodes)
+    dur1 = _tfdt(segments_dir / "seg_000001.m4s")
+    assert dur0 == 0 and dur1 == 0  # each is independently encoded, starts at its own tick 0
+
+    # A sparse package's declared boundary ticks come from the ledger
+    # (bake.py's compute_segment_list_boundary_ticks), not from re-probing
+    # each independently-encoded segment's own (meaningless, always-0) tfdt
+    # -- pick a nominal duration matching the real encoded content.
+    segment_duration_ticks = 45_000  # 0.5s at 90kHz
+    total_loop_duration_ticks = 2 * segment_duration_ticks
+
+    descriptor = {
+        "version": 2,
+        "timescale": 90_000,
+        "total_loop_duration_ticks": total_loop_duration_ticks,
+        "segment_duration_seconds": segment_duration_ticks / 90_000,
+        "hls_format": "cmaf",
+        "hls_ts_mux_audio": True,
+        "daterange_mode": "shared",
+        "cue_tags": "none",
+        "increment_event_ids": False,
+        "daterange_id_format": None,
+        "markers": [],
+        "asset_boundaries": [],
+        "video_renditions": [
+            {
+                "name": "archive",
+                "sparse": True,
+                "video_track_id": None,
+                "audio_track_id": None,
+                "segment_boundary_ticks": [0, segment_duration_ticks],
+                "segment_present": [True, True],
+                "video_variant": {
+                    "codecs": "avc1.640028", "width": 64, "height": 64,
+                    "frame_rate": 24.0, "bandwidth": 500_000,
+                },
+                "audio_variant": None,
+            }
+        ],
+        "source_input": "manifest.json",
+        "source_markers_json": "manifest.json",
+    }
+    (package_dir / "loop_descriptor.json").write_text(json.dumps(descriptor))
+    return total_loop_duration_ticks
+
+
+def test_continuous_accepts_a_single_span_sparse_package(tmp_path):
+    """Channel construction (LoopPackage load + _validate_continuous)
+    succeeds for a sparse package with boundaries == {0} -- SCOPE.md §12.6's
+    whole point: the source has no discontinuity of its own, so it's
+    treated the same as a franken-ts encode as far as continuity goes."""
+    _write_continuous_sparse_package(tmp_path)
+    app = create_app(tmp_path, epoch_ticks=0, window_segments=4, continuous=True)
+    assert app is not None
+
+
+def test_continuous_sparse_hls_has_no_map_and_no_discontinuity(tmp_path):
+    _write_continuous_sparse_package(tmp_path)
+    app = create_app(tmp_path, epoch_ticks=0, window_segments=4, continuous=True)
+    client = app.test_client()
+
+    resp = client.get("/video.m3u8")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "#EXT-X-DISCONTINUITY\n" not in body
+    # Self-initializing rendition -- no shared init to point #EXT-X-MAP at.
+    assert "#EXT-X-MAP" not in body
+
+
+def test_continuous_sparse_dash_has_no_initialization_attribute(tmp_path):
+    """A self-initializing rendition's <SegmentTemplate> must omit
+    `initialization=` entirely (SCOPE.md §12.6) -- there is no shared init
+    segment to point it at."""
+    _write_continuous_sparse_package(tmp_path)
+    app = create_app(tmp_path, epoch_ticks=0, window_segments=4, continuous=True)
+    client = app.test_client()
+
+    resp = client.get("/stream.mpd")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert body.count("<Period ") == 1
+    assert "initialization=" not in body
+
+
+def test_continuous_sparse_segment_route_shifts_tfdt_by_loop_number(tmp_path):
+    total = _write_continuous_sparse_package(tmp_path)
+    app = create_app(tmp_path, epoch_ticks=0, window_segments=4, continuous=True)
+    client = app.test_client()
+
+    # global index 0 -> loop 0, local 0: unshifted (each segment's own
+    # independent encode starts at its own tfdt 0).
+    resp0 = client.get("/archive/seg/0.m4s")
+    assert resp0.status_code == 200
+    moof0 = cmaf._find(resp0.data, ("moof",))
+    tfdt0 = cmaf._find(resp0.data, ("traf", "tfdt"), moof0[0] + 8, moof0[1])
+    value0 = struct.unpack(">Q", resp0.data[tfdt0[0] + 12 : tfdt0[0] + 20])[0]
+    assert value0 == 0
+
+    # global index 2 -> loop 1, local 0: same physical bytes, shifted by
+    # exactly one total_loop_duration_ticks.
+    resp2 = client.get("/archive/seg/2.m4s")
+    assert resp2.status_code == 200
+    moof2 = cmaf._find(resp2.data, ("moof",))
+    tfdt2 = cmaf._find(resp2.data, ("traf", "tfdt"), moof2[0] + 8, moof2[1])
+    value2 = struct.unpack(">Q", resp2.data[tfdt2[0] + 12 : tfdt2[0] + 20])[0]
+    assert value2 == total
+
+    # the leading ftyp+moov (this rendition's own, self-initializing) must
+    # survive the patch byte-for-byte -- only the tfdt inside moof changes.
+    assert resp2.data[:8] == resp0.data[:8]  # same ftyp box size+type
+    assert resp2.data[4:8] == b"ftyp"

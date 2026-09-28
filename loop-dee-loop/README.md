@@ -246,13 +246,19 @@ python3 serve.py /var/loop-packages/2026-01-01 --epoch-utc ... --continuous-time
 
 This is a pure header rewrite (`continuity.py`), never a re-mux or
 re-encode. It requires a package with no internal asset-boundary
-discontinuities (§11/grave-robber sparse mode) and CMAF fragments baked
-with a 64-bit (v1) `tfdt` -- both checked once at startup, hard-failing
-otherwise -- and it changes the segment URL scheme to carry an
-ever-increasing global index rather than the plain per-loop physical
-index, trading away that URL's indefinite CDN-cacheability across every
-loop iteration (see SCOPE.md §12 for the full design and known
-limitations).
+discontinuities (`boundaries == {0}` -- true for every franken-ts-authored
+package, and for a §11/grave-robber archive capture that happens to be a
+single continuous span with no internal joins, SCOPE.md §12.6) and CMAF
+fragments baked with a 64-bit (v1) `tfdt` -- both checked once at startup,
+hard-failing otherwise -- and it changes the segment URL scheme to carry
+an ever-increasing global index rather than the plain per-loop physical
+index. That's not a caching hazard (each URL's bytes are a permanent,
+deterministic function of the URL itself, so a CDN can cache any one of
+them indefinitely without ever risking stale content) -- it just means a
+CDN sees an ever-growing set of cache keys instead of default mode's
+small fixed one, aging old entries out via ordinary LRU as they leave the
+live/DVR window rather than reusing the same handful of keys forever (see
+SCOPE.md §12 for the full design and known limitations).
 
 ### Controlling the DVR window / manifest size
 
