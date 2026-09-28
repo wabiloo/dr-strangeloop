@@ -22,6 +22,7 @@ import socket
 import subprocess
 import sys
 
+from _host_paths import to_host_path
 from _reachability import check_manifest_reachable
 
 _LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
@@ -210,8 +211,9 @@ def _build_image():
     stop/start cycles because the image was only built on its very first
     run). Returns the freshly built image's id, so callers can tell
     whether a currently-running container is already using it."""
-    print(f"==> Building {_IMAGE_TAG} from {_LOOP_DEE_LOOP_DIR} ...")
-    result = subprocess.run(["docker", "build", "-t", _IMAGE_TAG, _LOOP_DEE_LOOP_DIR])
+    build_context = to_host_path(_LOOP_DEE_LOOP_DIR)
+    print(f"==> Building {_IMAGE_TAG} from {build_context} ...")
+    result = subprocess.run(["docker", "build", "-t", _IMAGE_TAG, build_context])
     if result.returncode != 0:
         sys.exit(f"docker build failed (exit {result.returncode}) -- see output above.")
     return _image_id(_IMAGE_TAG)
@@ -325,7 +327,7 @@ def start(cfg, session, outputs, extra_args=None):
     run_args = [
         "docker", "run", "-d", "--name", name,
         "-p", f"{port}:{port}",
-        "-v", f"{local_output_dir}:/var/loop-package:ro",
+        "-v", f"{to_host_path(local_output_dir)}:/var/loop-package:ro",
         _IMAGE_TAG,
         "serve.py", "/var/loop-package",
         "--epoch-utc", epoch,
@@ -380,7 +382,7 @@ def refresh(cfg, session, outputs):
     run_args = [
         "docker", "run", "-d", "--name", name,
         "-p", f"{port}:{port}",
-        "-v", f"{local_output_dir}:/var/loop-package:ro",
+        "-v", f"{to_host_path(local_output_dir)}:/var/loop-package:ro",
         _IMAGE_TAG,
         "serve.py", "/var/loop-package",
         "--epoch-utc", _DEFAULT_EPOCH,

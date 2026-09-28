@@ -9,6 +9,7 @@ franken-ts/ffmpeg process that consumes playlist assets.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import uuid
@@ -49,13 +50,16 @@ async def save_uploaded_file(filename: str, chunks: AsyncIterable[bytes]) -> dic
 
 
 def browse_directory(path: str | None) -> dict:
-    """Lists a directory's immediate contents. Defaults to the user's
-    home directory if no path (or an invalid one) is given. Video-ish
-    files are flagged so the frontend can highlight them, but nothing is
-    filtered out -- browsing needs to reach any file (slates, images)."""
+    """Lists a directory's immediate contents. Defaults to IGOR_ASSET_ROOT
+    (the containerized-deployment shape's bind-mounted media directory --
+    see docker-compose.yml) if set, else the user's home directory, if no
+    path (or an invalid one) is given. Video-ish files are flagged so the
+    frontend can highlight them, but nothing is filtered out -- browsing
+    needs to reach any file (slates, images)."""
     VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".ts", ".m4v", ".avi", ".webm"}
 
-    base = Path(path).expanduser() if path else Path.home()
+    default_root = os.environ.get("IGOR_ASSET_ROOT")
+    base = Path(path).expanduser() if path else Path(default_root) if default_root else Path.home()
     if not base.is_dir():
         base = base.parent if base.parent.is_dir() else Path.home()
     base = base.resolve()
