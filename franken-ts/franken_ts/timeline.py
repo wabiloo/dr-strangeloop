@@ -27,7 +27,9 @@ class TimelineEntry:
     output_end: float      # seconds from start of the output stream
     inpoint_raw: float     # as computed before frame-snapping
     outpoint_raw: float    # as computed before frame-snapping
+    loop_duration: float = 0.0  # total output-playlist duration, assigned after all entries are built
     asset_id: Optional[str] = field(default=None)  # AssetConfig.id, for `markers` resolution
+    role: Optional[str] = None  # copied from AssetConfig.role for the transition OSD
     # OSD fields — resolved in build_timeline().
     next_asset_id: Optional[str] = field(default=None)  # id of the next real (non-image) asset;
                                                           # the playlist loops, so this wraps
@@ -161,6 +163,7 @@ def build_timeline(
     n_assets = len(assets)
     for i, (asset, entry) in enumerate(zip(assets, entries)):
         clip_dur = entry.clip_duration
+        entry.loop_duration = cursor
 
         # ── Next asset id ──────────────────────────────────────────────────────
         # The playlist loops, so there is always a "next" asset: scan forward,
@@ -176,6 +179,7 @@ def build_timeline(
                 next_id = a.id if a.id is not None else a.file.stem
                 break
         entry.next_asset_id = next_id
+        entry.role = asset.role
         entry.no_osd = asset.no_osd
         entry.osd_label = asset.osd_label
 

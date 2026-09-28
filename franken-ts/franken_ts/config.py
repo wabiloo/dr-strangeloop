@@ -523,10 +523,10 @@ class AssetConfig(BaseModel):
         return parse_time(self.fade_out)
 
 
-# The six things a corner text slot can show. See osd.py's
+# The corner text slot content types. See osd.py's
 # build_corner_text_filter for exactly how each resolves to display text.
 CornerContent = Literal[
-    "asset_id", "time", "next_asset_id", "scte35_spans", "is_adbreak", "osd_label"
+    "asset_id", "time", "loop_time", "transition", "next_asset_id", "scte35_spans", "is_adbreak", "osd_label"
 ]
 
 _HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")

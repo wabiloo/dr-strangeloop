@@ -71,6 +71,9 @@ _ACCENT_STRIPE_WIDTH_FRACTION = 0.22
 # hidden under the (now fully opaque) stripe instead of opening a gap.
 _ACCENT_STRIPE_OVERLAP_PX = 2
 
+# How long the Transition corner countdown is shown before an asset boundary.
+_TRANSITION_COUNTDOWN_SECONDS = 5.0
+
 
 def escape_ffmpeg_text(text: str) -> str:
     """Escape a literal string for use inside a `drawtext=text='...'` value.
@@ -177,6 +180,34 @@ def _corner_content_text(
         centis = "%{eif\\:trunc(mod(t\\,1)*100)\\:d\\:2}"
         return f"{whole}.{centis}/{total}"
 
+    if content == "loop_time":
+        # Each asset is extracted as an independent clip, so ffmpeg's `t`
+        # restarts at zero for every asset. Add the clip's playlist offset
+        # to show one continuous elapsed/total clock for the whole loop.
+        # Keep the current value live-ticking and centisecond-formatted just
+        # like the asset-level `time` option above.
+        start = f"{entry.output_start:.6f}"
+        total = f"{entry.loop_duration:.2f}"
+        elapsed = f"(t+{start})"
+        whole = f"%{{eif\\:trunc({elapsed})\\:d}}"
+        centis = f"%{{eif\\:trunc(mod({elapsed}\\,1)*100)\\:d\\:2}}"
+        return f"{whole}.{centis}/{total}"
+
+    if content == "transition":
+        # Show a 5-second countdown immediately before every asset cut. The
+        # final asset's outgoing cut is the playlist loop boundary, not a
+        # regular asset transition. Clips shorter than 3 seconds count down
+        # from their own duration instead of displaying negative values.
+        if abs(entry.output_end - entry.loop_duration) < 1e-6:
+            label = "Loop End"
+        else:
+            label = entry.role or "Asset"
+        countdown_start = max(0.0, clip_dur - _TRANSITION_COUNTDOWN_SECONDS)
+        countdown_expression = f"max(0\\,{clip_dur:.6f}-t)"
+        whole = f"%{{eif\\:trunc({countdown_expression})\\:d}}"
+        centis = f"%{{eif\\:trunc(mod({countdown_expression}\\,1)*100)\\:d\\:2}}"
+        return f"{escape_ffmpeg_text(label)} in {whole}.{centis}"
+
     if content == "next_asset_id":
         # Always set -- playlists loop, see timeline.py's wraparound scan --
         # except in the harmless edge case where every other asset is a
@@ -244,9 +275,14 @@ def build_corner_text_filter(
         padding = round(fontsize * _CORNER_BOX_PADDING_FRACTION)
         box_part = f":box=1:boxcolor={_CORNER_BOX_FILL_COLOR}@{_CORNER_BOX_ALPHA}:boxborderw={padding}"
 
+    enable_part = ""
+    if content == "transition":
+        countdown_start = max(0.0, clip_dur - _TRANSITION_COUNTDOWN_SECONDS)
+        enable_part = f":enable='gte(t\\,{countdown_start:.6f})'"
+
     return (
         f"drawtext=text='{text}':fontsize={fontsize}:fontcolor={osd.ffmpeg_color()}:"
-        f"x={x}:y={y}{box_part}"
+        f"x={x}:y={y}{box_part}{enable_part}"
     )
 
 
@@ -343,6 +379,11 @@ def build_corner_accent_stripe_graph(
         shifted_x = f"w-tw-{margin - stripe_w}"
         crop_x = output.width - margin + padding - _ACCENT_STRIPE_OVERLAP_PX
 
+    enable_part = ""
+    if content == "transition":
+        countdown_start = max(0.0, clip_dur - _TRANSITION_COUNTDOWN_SECONDS)
+        enable_part = f":enable='gte(t\\,{countdown_start:.6f})'"
+
     main = f"{label_prefix}main"
     full = f"{label_prefix}full"
     boxed = f"{label_prefix}boxed"
@@ -351,7 +392,7 @@ def build_corner_accent_stripe_graph(
     return [
         f"{input_label} split=2 [{main}][{full}]",
         f"[{full}] drawtext=text='{text}':fontsize={fontsize}:fontcolor=black@0.0:"
-        f"x={shifted_x}:y={y}:box=1:boxcolor={color}@{_ACCENT_STRIPE_ALPHA}:boxborderw={padding} [{boxed}]",
+        f"x={shifted_x}:y={y}:box=1:boxcolor={color}@{_ACCENT_STRIPE_ALPHA}:boxborderw={padding}{enable_part} [{boxed}]",
         f"[{boxed}] crop=w={crop_w}:h=ih:x={crop_x}:y=0:exact=1 [{col}]",
         f"[{main}][{col}] overlay=x={crop_x}:y=0 [{output_label}]",
     ]

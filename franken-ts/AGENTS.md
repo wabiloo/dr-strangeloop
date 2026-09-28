@@ -106,7 +106,10 @@ height, grows 0→100% width over each asset's playback) plus up to 4
 `corners` (`top_left`/`top_right`/`bottom_left`/`bottom_right`, default
 `bottom_left: asset_id`/`bottom_right: time`, others unset), each one of
 `asset_id`/`time` (elapsed/total seconds in the current asset, sub-second
-with 2 decimal places, e.g. `12.32/34.60`)/
+with 2 decimal places, e.g. `12.32/34.60`)/`loop_time` (elapsed/total
+seconds in the whole playlist loop, e.g. `83.45/754.00`)/`transition`
+(5-second countdown before the next asset or loop boundary; uses the
+asset's role or `Asset`, and `Loop End` for the last asset)/
 `next_asset_id` (`next: {id}`, always resolves — playlist loops)/
 `scte35_spans` (non-instant covering spans, shown as stable three-letter
 codes and `/`-joined outermost-first, e.g. `BRK / PPO / PAD`; bare

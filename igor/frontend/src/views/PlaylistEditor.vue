@@ -92,6 +92,8 @@ type CornerContent =
   | ''
   | 'asset_id'
   | 'time'
+  | 'loop_time'
+  | 'transition'
   | 'next_asset_id'
   | 'scte35_spans'
   | 'is_adbreak'
@@ -100,7 +102,9 @@ type CornerContent =
 const CORNER_CONTENT_OPTIONS: { label: string; value: CornerContent }[] = [
   { label: 'None', value: '' },
   { label: 'Asset ID', value: 'asset_id' },
-  { label: 'Time', value: 'time' },
+  { label: 'Asset Progress', value: 'time' },
+  { label: 'Loop Time', value: 'loop_time' },
+  { label: 'Transition', value: 'transition' },
   { label: 'Next asset', value: 'next_asset_id' },
   { label: 'SCTE-35 spans', value: 'scte35_spans' },
   { label: 'Ad break indicator', value: 'is_adbreak' },
@@ -130,6 +134,8 @@ interface OsdForm {
 const CORNER_PREVIEW_TEXT: Partial<Record<CornerContent, string>> = {
   asset_id: 'asset-1',
   time: '12.32/34.60',
+  loop_time: '83.45/754.00',
+  transition: 'Asset in 2.37',
   next_asset_id: 'next: asset-2',
   scte35_spans: 'BRK / PPO / PAD',
   osd_label: 'Weather',

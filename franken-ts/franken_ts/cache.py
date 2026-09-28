@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # Bump this whenever the extraction recipe changes in a way that makes old
 # cache artifacts incompatible (filters, codec params, stream layout, …) so
 # stale entries are not silently reused.
-_RECIPE_VERSION = "extract_v16_vonly+aonly+osd+fade+slate+image"
+_RECIPE_VERSION = "extract_v18_vonly+aonly+osd+loop-time+transition+fade+slate+image"
 
 
 @dataclass(frozen=True)
@@ -65,9 +65,19 @@ def entry_cache_key(entry: TimelineEntry, output: OutputConfig, osd: Optional[Os
     fade_part = f"{entry.fade_in}:{entry.fade_out}"
 
     span_abbrevs = ",".join(abbreviation_for_marker(m) for m in entry.covering_spans)
+    loop_time_part = ""
+    configured_corners = set(osd.corners.model_dump().values()) if osd is not None else set()
+    if "loop_time" in configured_corners:
+        # The new whole-playlist clock is rendered into each clip's video,
+        # so identical source ranges at different playlist positions are no
+        # longer interchangeable cache hits.
+        loop_time_part = f":{entry.output_start:.6f}:{entry.loop_duration:.6f}"
+    transition_part = ""
+    if "transition" in configured_corners:
+        transition_part = f":{entry.role or ''}:{entry.output_end == entry.loop_duration}"
     osd_entry_part = (
         f"{entry.no_osd}:{entry.is_adbreak}:{entry.next_asset_id}:"
-        f"{entry.osd_label}:{span_abbrevs}"
+        f"{entry.osd_label}:{span_abbrevs}{loop_time_part}{transition_part}"
     )
     osd_cfg_part = osd.model_dump_json() if osd is not None else "none"
     osd_part = f"{osd_entry_part}:{osd_cfg_part}"

@@ -330,6 +330,51 @@ def test_build_corner_text_filter_time_uses_2_decimal_places():
     assert "%{eif\\:trunc(t)\\:d}.%{eif\\:trunc(mod(t\\,1)*100)\\:d\\:2}/34.60" in f
 
 
+def test_build_corner_text_filter_loop_time_includes_asset_offset_and_loop_duration():
+    osd = OsdConfig()
+    output = _output()
+    entry = _entry()
+    entry.output_start = 21.5
+    entry.loop_duration = 754.0
+
+    f = build_corner_text_filter("loop_time", entry, output, osd, "bottom_right", 10.0)
+
+    assert f is not None
+    assert "%{eif\\:trunc((t+21.500000))\\:d}.%{eif\\:trunc(mod((t+21.500000)\\,1)*100)\\:d\\:2}/754.00" in f
+
+
+def test_transition_osd_uses_role_and_only_enables_during_final_five_seconds():
+    entry = _entry()
+    entry.role = "jingle"
+    entry.output_end = 40.0
+    entry.loop_duration = 100.0
+    f = build_corner_text_filter("transition", entry, _output(), OsdConfig(), "bottom_right", 10.0)
+
+    assert f is not None
+    assert "text='jingle in %{eif\\:trunc(max(0\\,10.000000-t))\\:d}." in f
+    assert ":enable='gte(t\\,5.000000)'" in f
+
+
+def test_transition_osd_labels_loop_boundary_and_short_clip_countdown():
+    entry = _entry()
+    entry.role = "advert"
+    entry.output_end = entry.loop_duration = 2.0
+    f = build_corner_text_filter("transition", entry, _output(), OsdConfig(), "bottom_right", 2.0)
+
+    assert f is not None
+    assert "text='Loop End in %{eif\\:trunc(max(0\\,2.000000-t))\\:d}." in f
+    assert ":enable='gte(t\\,0.000000)'" in f
+
+
+def test_transition_osd_defaults_to_asset_when_role_is_unset():
+    entry = _entry()
+    entry.output_end = 10.0
+    entry.loop_duration = 20.0
+    f = build_corner_text_filter("transition", entry, _output(), OsdConfig(), "bottom_right", 10.0)
+
+    assert f is not None and "text='Asset in " in f
+
+
 def test_build_corner_text_filter_is_adbreak_uses_configured_label():
     osd = OsdConfig(ad_break_label="AD BREAK IN PROGRESS")
     output = _output()

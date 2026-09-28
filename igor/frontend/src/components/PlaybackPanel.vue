@@ -96,6 +96,7 @@ let hlsGeneration = 0
 let hlsFragProgramDateTime: number | null = null
 let hlsFragStart = 0
 let hlsNativePlayback = false
+let hlsLastContinuityCounter: number | null = null
 
 function onHlsTimeUpdate() {
   const video = hlsVideo.value
@@ -610,6 +611,7 @@ interface MarkerToast {
   key: string
   label: string
   kind: Scte35MarkerKind
+  boundary?: boolean
 }
 
 const hlsMarkerToasts = ref<MarkerToast[]>([])
@@ -639,6 +641,14 @@ const MARKER_KIND_ICON: Record<Scte35MarkerKind, string> = {
 function pushMarkerToast(list: typeof hlsMarkerToasts, label: string, kind: Scte35MarkerKind) {
   const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
   list.value.push({ key, label, kind })
+  setTimeout(() => {
+    list.value = list.value.filter((t) => t.key !== key)
+  }, MARKER_TOAST_LIFE_MS)
+}
+
+function pushBoundaryToast(list: typeof hlsMarkerToasts, label: string) {
+  const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  list.value.push({ key, label, kind: 'other', boundary: true })
   setTimeout(() => {
     list.value = list.value.filter((t) => t.key !== key)
   }, MARKER_TOAST_LIFE_MS)
@@ -835,7 +845,14 @@ async function playHls() {
       // wall-clock instant currently being displayed -- video.currentTime
       // itself is on hls.js's own internal (non-epoch) timeline, not wall
       // clock, so it can't be shown directly (unlike DASH -- see playDash()).
-      hlsInstance.on(Hls.Events.FRAG_CHANGED, (_evt: unknown, data: { frag?: { programDateTime?: number | null; start?: number } }) => {
+      hlsInstance.on(Hls.Events.FRAG_CHANGED, (_evt: unknown, data: { frag?: { programDateTime?: number | null; start?: number; cc?: number } }) => {
+        const continuityCounter = data.frag?.cc
+        if (continuityCounter != null) {
+          if (hlsLastContinuityCounter != null && continuityCounter !== hlsLastContinuityCounter) {
+            pushBoundaryToast(hlsMarkerToasts, 'HLS discontinuity')
+          }
+          hlsLastContinuityCounter = continuityCounter
+        }
         if (data.frag?.programDateTime != null) {
           hlsFragProgramDateTime = data.frag.programDateTime
           hlsFragStart = data.frag.start ?? video.currentTime
@@ -932,6 +949,16 @@ async function playDash() {
     dashInstance.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
       dashLoading.value = false
     })
+    dashInstance.on(
+      dashjs.MediaPlayer.events.PERIOD_SWITCH_STARTED,
+      (e: { fromStreamInfo?: { id?: string } | null; toStreamInfo?: { id?: string } | null }) => {
+        // The initial selection has no previous Period; only announce a
+        // transition the viewer actually reaches during playback.
+        if (!e.fromStreamInfo || !e.toStreamInfo) return
+        const periodId = e.toStreamInfo.id
+        pushBoundaryToast(dashMarkerToasts, periodId ? `DASH Period ${periodId}` : 'DASH Period')
+      },
+    )
     // `e.event.id` is serve.py's own DASH `<Event id>` -- the real, plain
     // segmentation/splice event_id (a decimal int; never parsed here, only
     // ever compared for equality). Start and End of the same break SHARE
@@ -1053,6 +1080,7 @@ function destroyHls() {
   hlsNativePlayback = false
   hlsFragProgramDateTime = null
   hlsFragStart = 0
+  hlsLastContinuityCounter = null
   hlsPlaying.value = false
   hlsIsPlaying.value = false
   hlsFullscreen.value = false
@@ -1235,8 +1263,8 @@ async function copyUrl(url?: string | null) {
                 class="marker-toast-stack"
                 :style="{ '--marker-toast-life': `${MARKER_TOAST_LIFE_MS}ms` }"
               >
-                <div v-for="t in hlsMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`]">
-                  <i :class="MARKER_KIND_ICON[t.kind]" />
+                <div v-for="t in hlsMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`, { 'marker-toast-boundary': t.boundary }]">
+                  <i :class="t.boundary ? 'pi pi-sync' : MARKER_KIND_ICON[t.kind]" />
                   <span>{{ t.label }}</span>
                 </div>
               </TransitionGroup>
@@ -1357,8 +1385,8 @@ async function copyUrl(url?: string | null) {
                 class="marker-toast-stack"
                 :style="{ '--marker-toast-life': `${MARKER_TOAST_LIFE_MS}ms` }"
               >
-                <div v-for="t in dashMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`]">
-                  <i :class="MARKER_KIND_ICON[t.kind]" />
+                <div v-for="t in dashMarkerToasts" :key="t.key" :class="['marker-toast', `marker-toast-${t.kind}`, { 'marker-toast-boundary': t.boundary }]">
+                  <i :class="t.boundary ? 'pi pi-sync' : MARKER_KIND_ICON[t.kind]" />
                   <span>{{ t.label }}</span>
                 </div>
               </TransitionGroup>
@@ -1641,7 +1669,7 @@ async function copyUrl(url?: string | null) {
 
 .marker-toast-stack {
   position: absolute;
-  top: 0.5rem;
+  top: 50%;
   left: 0.5rem;
   right: 0.5rem;
   display: flex;
@@ -1649,6 +1677,7 @@ async function copyUrl(url?: string | null) {
   gap: 0.35rem;
   pointer-events: none;
   z-index: 2;
+  transform: translateY(-50%);
 }
 
 .marker-toast {
@@ -1716,6 +1745,15 @@ async function copyUrl(url?: string | null) {
 
 .marker-toast-end i {
   color: #fbbf24;
+}
+
+.marker-toast-boundary {
+  border-color: rgba(45, 212, 191, 0.65);
+  color: #ccfbf1;
+}
+
+.marker-toast-boundary i {
+  color: #2dd4bf;
 }
 
 .marker-toast-enter-active {
