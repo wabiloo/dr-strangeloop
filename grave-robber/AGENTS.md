@@ -25,6 +25,10 @@ uv run --project grave-robber grave-robber ingest <archive.har> <manifest-url> \
 uv run --project grave-robber grave-robber coverage <archive.har>   # multi-variant HLS report
 ```
 
+- `ingest-url <manifest-url> --output <dir> [--renditions ...]` is the
+  same for a **VOD** HLS/DASH URL (no capture): downloads the manifest and all
+  segments, and turns a multivariant playlist/MPD into a multi-rendition
+  segment-list manifest (`vod.py`; see README "VOD manifest URL").
 - `ingest` is the common case: one already-known manifest URL (a single
   rendition, or a human-picked reference variant after reviewing
   `coverage`'s report — the real multi-variant range-picker wizard lives
@@ -54,7 +58,8 @@ guarantee that every segment is actually playable.
 | `boundaries.py` | Multi-snapshot timeline merge, AssetSpan computation, loop-boundary selection (§6/§7). |
 | `coverage.py` | Multi-variant HLS/DASH coverage map + full-coverage filtering (§8). |
 | `manifest_writer.py` | Segment-list manifest + markers.json-shaped output (§11 decision). |
-| `pipeline.py` | Orchestrates the above for one manifest URL. |
+| `pipeline.py` | Orchestrates the above for one manifest URL of an archive. |
+| `vod.py` | `ingest-url`: fetches a VOD manifest + segments over HTTP, builds the rendition ladder (alignment check, variant selection, download). |
 | `cli.py` | `grave-robber ingest`/`coverage` entrypoints. |
 
 ## Testing

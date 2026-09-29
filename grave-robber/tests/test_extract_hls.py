@@ -170,3 +170,22 @@ seg0.ts
     _, markers, _ = extract_hls(text, "https://cdn.example.com/live/index.m3u8")
 
     assert markers == []
+
+
+def test_byte_ranges_resolve_omitted_offsets_and_init_range():
+    text = """#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:4
+#EXT-X-MAP:URI="v.mp4",BYTERANGE="700@0"
+#EXTINF:4.0,
+#EXT-X-BYTERANGE:1000@700
+v.mp4
+#EXTINF:4.0,
+#EXT-X-BYTERANGE:2000
+v.mp4
+#EXT-X-ENDLIST
+"""
+    segments, _, _ = extract_hls(text, "http://x/a/p.m3u8")
+
+    assert [s.byte_range for s in segments] == [(700, 1000), (1700, 2000)]
+    assert all(s.init_byte_range == (0, 700) for s in segments)

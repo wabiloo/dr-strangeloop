@@ -29,6 +29,7 @@ from trace_shrink import Format, open_trace
 from .coverage import build_dash_variant_coverage, build_hls_variant_coverage
 from .multivariant import is_multivariant_playlist, parse_multivariant_playlist
 from .pipeline import ingest
+from .vod import ingest_url
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,25 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     logger.info(
         "Wrote %s: %d segment(s) (%d with recovered media), %d marker(s)",
         Path(args.output) / "manifest.json", len(segments), present, len(manifest["markers"]),
+    )
+    return 0
+
+
+def _cmd_ingest_url(args: argparse.Namespace) -> int:
+    manifest = ingest_url(
+        args.manifest_url,
+        args.output,
+        renditions=args.renditions,
+        audio=not args.no_audio,
+        audio_manifest_url=args.audio_manifest_url,
+        allow_missing_segments=args.allow_missing_segments,
+        workers=args.workers,
+    )
+    renditions = manifest.get("renditions") or [{"name": "(single)"}]
+    logger.info(
+        "Wrote %s: %d segment(s), %d rendition(s) [%s], %d marker(s)",
+        Path(args.output) / "manifest.json", len(manifest["segments"]), len(renditions),
+        ", ".join(r["name"] for r in renditions), len(manifest["markers"]),
     )
     return 0
 
@@ -102,6 +122,23 @@ def main(argv: list[str] | None = None) -> int:
     ingest_parser.add_argument("--audio-manifest-url", default=None, help="Separate audio playlist URL (default: auto-detected from the archive's multivariant playlist)")
     ingest_parser.add_argument("--no-audio", action="store_true", help="Ignore any separate audio playlist")
     ingest_parser.set_defaults(func=_cmd_ingest)
+
+    url_parser = subparsers.add_parser(
+        "ingest-url",
+        help="Build a (multi-rendition) segment list from a VOD HLS/DASH manifest URL, downloading its segments",
+    )
+    url_parser.add_argument("manifest_url", type=str, help="VOD HLS multivariant/media playlist or DASH MPD URL")
+    url_parser.add_argument("--output", type=Path, required=True, help="Output directory")
+    url_parser.add_argument(
+        "--renditions", default=None,
+        help="Which ladder renditions to keep: 'all' (default), 'best', or a comma-separated list of "
+        "heights (720,360) / 1-based bandwidth-ranked positions (#1,#3)",
+    )
+    url_parser.add_argument("--audio-manifest-url", default=None, help="Separate HLS audio playlist URL (default: from the multivariant playlist)")
+    url_parser.add_argument("--no-audio", action="store_true", help="Ignore any separate audio playlist")
+    url_parser.add_argument("--allow-missing-segments", action="store_true", help="Record segments that fail to download as missing instead of failing")
+    url_parser.add_argument("--workers", type=int, default=8, help="Concurrent segment downloads (default 8)")
+    url_parser.set_defaults(func=_cmd_ingest_url)
 
     coverage_parser = subparsers.add_parser("coverage", help="Print each variant's captured wall-clock coverage")
     coverage_parser.add_argument("archive", type=str)

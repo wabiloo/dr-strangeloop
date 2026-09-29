@@ -1000,7 +1000,10 @@ def load_segment_list_manifest(path: Path) -> dict:
         )
 
     segments = data["segments"]
-    required_fields = ("index", "duration_ticks", "asset_boundary", "media_file")
+    has_renditions = data.get("renditions") is not None
+    # With a top-level `renditions` ladder each rendition carries its own
+    # media_files, so the shared timing entries need no media_file of their own.
+    required_fields = ("index", "duration_ticks", "asset_boundary") + (() if has_renditions else ("media_file",))
     for i, seg in enumerate(segments):
         missing_fields = [f for f in required_fields if f not in seg]
         if missing_fields:
@@ -1026,7 +1029,7 @@ def load_segment_list_manifest(path: Path) -> dict:
                 f"{path}: segments[{i}]['asset_boundary'] must be a bool, "
                 f"got {seg['asset_boundary']!r}"
             )
-        media_file = seg["media_file"]
+        media_file = seg.get("media_file")
         if media_file is not None and not isinstance(media_file, str):
             raise ValidationError(
                 f"{path}: segments[{i}]['media_file'] must be a string path "
@@ -1049,6 +1052,38 @@ def load_segment_list_manifest(path: Path) -> dict:
                 f"asset_boundary=False -- a gap/overlap only means anything "
                 f"at an asset boundary."
             )
+
+    if has_renditions:
+        renditions = data["renditions"]
+        if not isinstance(renditions, list) or not renditions:
+            raise ValidationError(f"{path}: 'renditions' must be a non-empty list when present")
+        names: set[str] = set()
+        for r, rendition in enumerate(renditions):
+            name = rendition.get("name")
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+                raise ValidationError(
+                    f"{path}: renditions[{r}]['name'] must be a non-empty string of "
+                    f"[A-Za-z0-9_.-] (it becomes a directory/URL component), got {name!r}"
+                )
+            if name in names:
+                raise ValidationError(f"{path}: duplicate rendition name {name!r}")
+            names.add(name)
+            media_files = rendition.get("media_files")
+            if not isinstance(media_files, list) or len(media_files) != len(segments):
+                raise ValidationError(
+                    f"{path}: renditions[{r}] ({name!r}) needs a 'media_files' list with exactly "
+                    f"one entry per segment ({len(segments)}) -- every rendition of a ladder "
+                    f"shares one segment timeline"
+                )
+            for i, media_file in enumerate(media_files):
+                if media_file is not None and not isinstance(media_file, str):
+                    raise ValidationError(
+                        f"{path}: renditions[{r}]['media_files'][{i}] must be a string path "
+                        f"or null, got {media_file!r}"
+                    )
+            variant = rendition.get("variant")
+            if variant is not None and not isinstance(variant, dict):
+                raise ValidationError(f"{path}: renditions[{r}]['variant'] must be an object")
 
     return data
 
@@ -1370,9 +1405,29 @@ def bake_segment_list(
     segments = manifest["segments"]
     raw_markers = manifest["markers"]
 
-    missing_indices = validate_segment_list_missing_media(
-        segments, allow_missing_segments=allow_missing_segments
-    )
+    # A ladder ("renditions" key) gives every rendition its own media_files over
+    # the one shared segment timeline; the classic single-rendition manifest is a
+    # ladder of one, named SPARSE_RENDITION_NAME, sourced from segments[].media_file.
+    if manifest.get("renditions"):
+        rendition_specs = [
+            {"name": r["name"], "variant": r.get("variant"), "media_files": r["media_files"]}
+            for r in manifest["renditions"]
+        ]
+    else:
+        rendition_specs = [{
+            "name": SPARSE_RENDITION_NAME,
+            "variant": manifest.get("variant"),
+            "media_files": [s["media_file"] for s in segments],
+        }]
+    missing_by_rendition: dict[str, list[int]] = {}
+    for spec in rendition_specs:
+        try:
+            missing_by_rendition[spec["name"]] = validate_segment_list_missing_media(
+                [{"index": i, "media_file": f} for i, f in enumerate(spec["media_files"])],
+                allow_missing_segments=allow_missing_segments,
+            )
+        except ValidationError as exc:
+            raise ValidationError(f"Rendition '{spec['name']}': {exc}") from exc
 
     segment_boundary_ticks = compute_segment_list_boundary_ticks(segments)
     total_loop_duration_ticks = sum(s["duration_ticks"] for s in segments)
@@ -1381,21 +1436,21 @@ def bake_segment_list(
     nominal_segment_duration_seconds = (total_loop_duration_ticks / TIMESCALE) / len(segments)
 
     logger.info(
-        "Sparse bake: %d segment(s) declared, %d missing media, "
-        "%d asset boundary/boundaries, total_loop_duration_ticks=%d",
-        len(segments), len(missing_indices), len(asset_boundaries),
-        total_loop_duration_ticks,
+        "Sparse bake: %d segment(s) declared, %d rendition(s), %d missing media "
+        "(summed over renditions), %d asset boundary/boundaries, total_loop_duration_ticks=%d",
+        len(segments), len(rendition_specs), sum(len(m) for m in missing_by_rendition.values()),
+        len(asset_boundaries), total_loop_duration_ticks,
     )
 
     output_package_dir.mkdir(parents=True, exist_ok=True)
-    segments_dir = output_package_dir / "segments" / SPARSE_RENDITION_NAME
-    segments_dir.mkdir(parents=True, exist_ok=True)
-    if hls_format == "ts":
-        ts_dir = output_package_dir / "hls-ts" / SPARSE_RENDITION_NAME
-        ts_dir.mkdir(parents=True, exist_ok=True)
+    for spec in rendition_specs:
+        (output_package_dir / "segments" / spec["name"]).mkdir(parents=True, exist_ok=True)
+        if hls_format == "ts":
+            (output_package_dir / "hls-ts" / spec["name"]).mkdir(parents=True, exist_ok=True)
+    # The first rendition is the reference: it carries the (single, shared) audio
+    # track, which serve.py requires to live on exactly one rendition.
+    segments_dir = output_package_dir / "segments" / rendition_specs[0]["name"]
 
-    segment_present: list[bool] = []
-    reference_segment_path: Path | None = None
     # Proper CMAF: ONE init per output period / discontinuity (= per asset
     # span: a span starts at index 0 and at every asset boundary) + bare
     # moof+mdat segments whose tfdt is relative to their span's start (what
@@ -1405,9 +1460,6 @@ def bake_segment_list(
     # config change needs a real discontinuity (asset boundary) to carry it.
     span_starts = sorted({0} | set(asset_boundaries))
     span_of = {i: max(k for k, s in enumerate(span_starts) if s <= i) for i in range(len(segments))}
-    span_init_avcc: dict[int, bytes | None] = {}
-    init_files: list[str | None] = [None] * len(span_starts)
-    next_sequence_number = 1
     segment_starts = compute_segment_list_boundary_ticks(segments)
 
     # Audio: a separate playlist's segments (per-entry `audio_media_file`), or
@@ -1464,102 +1516,133 @@ def bake_segment_list(
         audio_present[index] = True
         if audio_reference is None:
             audio_reference = audio_src
-    for seg in segments:
-        index = seg["index"]
-        media_file = seg["media_file"]
-        present = media_file is not None
-        segment_present.append(present)
-        if audio_separate and not dry_run and seg.get("audio_media_file"):
-            _bake_audio(index, Path(seg["audio_media_file"]))  # independent of the video's presence
-        if not present:
-            continue
+    def _bake_video_rendition(r_idx: int, spec: dict) -> dict:
+        """Bake one rendition's video (and, for the reference rendition only, the
+        shared audio) from its media_files. Returns the rendition's build state."""
+        name = spec["name"]
+        is_reference = r_idx == 0
+        r_segments_dir = output_package_dir / "segments" / name
+        segment_present: list[bool] = []
+        reference_segment_path: Path | None = None
+        span_init_avcc: dict[int, bytes | None] = {}
+        init_files: list[str | None] = [None] * len(span_starts)
+        next_sequence_number = 1
+        nonlocal audio_muxed
+        for seg in segments:
+            index = seg["index"]
+            media_file = spec["media_files"][index]
+            present = media_file is not None
+            segment_present.append(present)
+            if is_reference and audio_separate and not dry_run and seg.get("audio_media_file"):
+                _bake_audio(index, Path(seg["audio_media_file"]))  # independent of the video's presence
+            if not present:
+                continue
 
-        src = Path(media_file)
-        cmaf_dest = segments_dir / f"seg_{index:06d}.m4s"
-        if not dry_run:
-            tmp_dest = cmaf_dest.with_suffix(".tmp.mp4")
-            remux_segment_to_fragmented_mp4(src, tmp_dest)
-            init, fragments = cmaf.split_init_and_fragments(tmp_dest.read_bytes())
-            tmp_dest.unlink()
-            avcc = cmaf.avcc_config(init)
-            span = span_of[index]
-            if span not in span_init_avcc:
-                span_init_avcc[span] = avcc
-                init_files[span] = f"init_{span}.mp4"
-                (segments_dir / init_files[span]).write_bytes(init)
-            elif avcc != span_init_avcc[span]:
-                raise ValidationError(
-                    f"Segment {index} ({src}) has a different decoder config (SPS/PPS) from the "
-                    f"other segments of its span (segments {span_starts[span]}..), but there is no "
-                    f"discontinuity between them, so one CMAF init can't describe both. Narrow the "
-                    f"imported range to a stretch with a single encoder config."
-                )
-            body, next_sequence_number = cmaf.rebase_fragments(
-                fragments, segment_starts[index] - segment_starts[span_starts[span]], next_sequence_number
-            )
-            cmaf_dest.write_bytes(body)
-            if reference_segment_path is None:
-                reference_segment_path = src
-            # Audio muxed into this video segment.
-            if not audio_separate:
-                if audio_muxed is None:
-                    audio_muxed = probe_has_audio(src)
-                if audio_muxed:
-                    _bake_audio(index, src)
-        if hls_format == "ts":
-            ts_dest = output_package_dir / "hls-ts" / SPARSE_RENDITION_NAME / f"{index}.ts"
+            src = Path(media_file)
+            cmaf_dest = r_segments_dir / f"seg_{index:06d}.m4s"
             if not dry_run:
-                remux_segment_to_ts(
-                    src, ts_dest, stream="v" if ts_unmuxed else None,
-                    start_seconds=TS_BASE_SECONDS + segment_starts[index] / TIMESCALE,
+                tmp_dest = cmaf_dest.with_suffix(".tmp.mp4")
+                remux_segment_to_fragmented_mp4(src, tmp_dest)
+                init, fragments = cmaf.split_init_and_fragments(tmp_dest.read_bytes())
+                tmp_dest.unlink()
+                avcc = cmaf.avcc_config(init)
+                span = span_of[index]
+                if span not in span_init_avcc:
+                    span_init_avcc[span] = avcc
+                    init_files[span] = f"init_{span}.mp4"
+                    (r_segments_dir / init_files[span]).write_bytes(init)
+                elif avcc != span_init_avcc[span]:
+                    raise ValidationError(
+                        f"Rendition '{name}': segment {index} ({src}) has a different decoder config "
+                        f"(SPS/PPS) from the other segments of its span (segments {span_starts[span]}..), "
+                        f"but there is no discontinuity between them, so one CMAF init can't describe "
+                        f"both. Narrow the imported range to a stretch with a single encoder config."
+                    )
+                body, next_sequence_number = cmaf.rebase_fragments(
+                    fragments, segment_starts[index] - segment_starts[span_starts[span]], next_sequence_number
                 )
+                cmaf_dest.write_bytes(body)
+                if reference_segment_path is None:
+                    reference_segment_path = src
+                # Audio muxed into this video segment (baked once, from the reference rendition).
+                if is_reference and not audio_separate:
+                    if audio_muxed is None:
+                        audio_muxed = probe_has_audio(src)
+                    if audio_muxed:
+                        _bake_audio(index, src)
+            if hls_format == "ts":
+                ts_dest = output_package_dir / "hls-ts" / name / f"{index}.ts"
+                if not dry_run:
+                    remux_segment_to_ts(
+                        src, ts_dest, stream="v" if ts_unmuxed else None,
+                        start_seconds=TS_BASE_SECONDS + segment_starts[index] / TIMESCALE,
+                    )
+        return {
+            "segment_present": segment_present,
+            "reference_segment_path": reference_segment_path,
+            "init_files": init_files,
+        }
+
+    built = [_bake_video_rendition(i, spec) for i, spec in enumerate(rendition_specs)]
 
     if dry_run:
         logger.warning("dry-run: skipping loop_descriptor.json (no real segments produced)")
         return
 
-    if reference_segment_path is None:
-        raise ValidationError(
-            "Every segment is missing media_file -- cannot probe codec/"
-            "resolution/bandwidth metadata with nothing to probe. At least "
-            "one real segment is required even with --allow-missing-segments."
-        )
-    first_init = next(f for f in init_files if f)
-    variant_metadata = probe_segment_variant_metadata(reference_segment_path, segments_dir / first_init)
-    apply_declared_variant(variant_metadata["video"], manifest.get("variant"))
-
-    audio_variant = None
+    shared_audio_variant = None
     if audio_reference is not None:
-        audio_variant = probe_audio_variant(audio_reference)
-        declared_codecs = [c.strip() for c in ((manifest.get("variant") or {}).get("codecs") or "").split(",")]
-        declared_audio = next((c for c in declared_codecs if c.startswith(("mp4a", "ac-3", "ec-3"))), None)
-        if declared_audio:
-            audio_variant["codecs"] = declared_audio
-        # A declared BANDWIDTH covers video + audio; serve.py adds audio's back on.
-        variant_metadata["video"]["bandwidth"] = max(
-            1, variant_metadata["video"]["bandwidth"] - audio_variant["bandwidth"]
-        )
+        shared_audio_variant = probe_audio_variant(audio_reference)
 
-    rendition_result = {
-        "name": SPARSE_RENDITION_NAME,
-        "sparse": True,
-        "init_span_starts": span_starts,
-        "init_files": init_files,
-        "video_track_id": None,
-        "audio_track_id": None,
-        "total_loop_duration_ticks": total_loop_duration_ticks,
-        "segment_boundary_ticks": segment_boundary_ticks,
-        "segment_present": segment_present,
-        "audio_segment_boundary_ticks": audio_starts if audio_variant else None,
-        "video_variant": variant_metadata["video"],
-        "audio_variant": audio_variant,
-    }
-    if audio_variant:
-        rendition_result.update(
-            audio_sparse=True,
-            audio_init_files=audio_init_files,
-            audio_segment_present=audio_present,
+    rendition_results = []
+    for r_idx, (spec, state) in enumerate(zip(rendition_specs, built)):
+        name = spec["name"]
+        if state["reference_segment_path"] is None:
+            raise ValidationError(
+                f"Rendition '{name}': every segment is missing media_file -- cannot probe codec/"
+                f"resolution/bandwidth metadata with nothing to probe. At least "
+                f"one real segment per rendition is required even with --allow-missing-segments."
+            )
+        first_init = next(f for f in state["init_files"] if f)
+        variant_metadata = probe_segment_variant_metadata(
+            state["reference_segment_path"], output_package_dir / "segments" / name / first_init
         )
+        apply_declared_variant(variant_metadata["video"], spec["variant"])
+
+        audio_variant = None
+        if r_idx == 0 and shared_audio_variant is not None:
+            audio_variant = shared_audio_variant
+            declared_codecs = [c.strip() for c in ((spec["variant"] or {}).get("codecs") or "").split(",")]
+            declared_audio = next((c for c in declared_codecs if c.startswith(("mp4a", "ac-3", "ec-3"))), None)
+            if declared_audio:
+                audio_variant["codecs"] = declared_audio
+        if shared_audio_variant is not None:
+            # A declared BANDWIDTH covers video + audio; serve.py adds audio's back on. Every
+            # rendition of the ladder shares the one audio track, so each one is adjusted.
+            variant_metadata["video"]["bandwidth"] = max(
+                1, variant_metadata["video"]["bandwidth"] - shared_audio_variant["bandwidth"]
+            )
+
+        rendition_result = {
+            "name": name,
+            "sparse": True,
+            "init_span_starts": span_starts,
+            "init_files": state["init_files"],
+            "video_track_id": None,
+            "audio_track_id": None,
+            "total_loop_duration_ticks": total_loop_duration_ticks,
+            "segment_boundary_ticks": segment_boundary_ticks,
+            "segment_present": state["segment_present"],
+            "audio_segment_boundary_ticks": audio_starts if audio_variant else None,
+            "video_variant": variant_metadata["video"],
+            "audio_variant": audio_variant,
+        }
+        if audio_variant:
+            rendition_result.update(
+                audio_sparse=True,
+                audio_init_files=audio_init_files,
+                audio_segment_present=audio_present,
+            )
+        rendition_results.append(rendition_result)
 
     loop_descriptor = {
         "version": 2,
@@ -1576,7 +1659,7 @@ def bake_segment_list(
         "markers": raw_markers,
         "asset_boundary_indices": asset_boundaries,
         "asset_boundary_gap_ticks": asset_boundary_gap_ticks,
-        "video_renditions": [rendition_result],
+        "video_renditions": rendition_results,
         "source_input": str(manifest_path),
         "source_markers_json": str(manifest_path),
     }
@@ -1586,8 +1669,8 @@ def bake_segment_list(
         f.write("\n")
 
     logger.info(
-        "Sparse bake complete. %d/%d segment(s) have real media, written to %s",
-        len(segments) - len(missing_indices), len(segments), output_package_dir,
+        "Sparse bake complete. %d rendition(s), %d segment(s) each, written to %s",
+        len(rendition_results), len(segments), output_package_dir,
     )
 
 

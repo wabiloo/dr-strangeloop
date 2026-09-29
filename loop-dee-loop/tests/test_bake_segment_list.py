@@ -414,3 +414,197 @@ def test_main_cli_dispatches_json_input_to_segment_list_mode(tmp_path, _stub_med
     assert called_with["manifest_path"] == manifest_path
     assert called_with["output_dir"] == output_dir
     assert called_with["allow_missing_segments"] is True
+
+
+# ── multi-rendition (ladder) segment-list manifests ──────────────────────
+
+
+def _write_ladder_manifest(path: Path, segments: list[dict], renditions: list[dict], markers=None) -> Path:
+    manifest_path = path / "manifest.json"
+    timing = [{k: v for k, v in s.items() if k != "media_file"} for s in segments]
+    manifest_path.write_text(json.dumps({"segments": timing, "renditions": renditions, "markers": markers or []}))
+    return manifest_path
+
+
+def _ladder(tmp_path: Path, count: int = 3, missing: dict[str, set[int]] | None = None) -> list[dict]:
+    missing = missing or {}
+    return [
+        {
+            "name": name,
+            "variant": {"bandwidth": bandwidth, "resolution": resolution},
+            "media_files": [
+                None if i in missing.get(name, set()) else _write_source_segment(tmp_path, f"{name}_{i}.bin")
+                for i in range(count)
+            ],
+        }
+        for name, bandwidth, resolution in (("720p", 3_000_000, "1280x720"), ("360p", 800_000, "640x360"))
+    ]
+
+
+def test_load_segment_list_manifest_accepts_renditions_without_segment_media_file(tmp_path):
+    segments = [_segment(0), _segment(1)]
+    manifest_path = _write_ladder_manifest(tmp_path, segments, _ladder(tmp_path, 2))
+
+    data = load_segment_list_manifest(manifest_path)
+
+    assert [r["name"] for r in data["renditions"]] == ["720p", "360p"]
+
+
+@pytest.mark.parametrize(
+    "mutate, match",
+    [
+        (lambda rs: rs[1].update(name="720p"), "duplicate rendition name"),
+        (lambda rs: rs[0].update(name="a/b"), "must be a non-empty string"),
+        (lambda rs: rs[1]["media_files"].pop(), "exactly one entry per segment"),
+        (lambda rs: rs[0]["media_files"].__setitem__(0, 5), "string path or null"),
+        (lambda rs: rs.clear(), "non-empty list"),
+    ],
+)
+def test_load_segment_list_manifest_rejects_bad_renditions(tmp_path, mutate, match):
+    segments = [_segment(0), _segment(1)]
+    renditions = _ladder(tmp_path, 2)
+    mutate(renditions)
+    manifest_path = _write_ladder_manifest(tmp_path, segments, renditions)
+
+    with pytest.raises(ValidationError, match=match):
+        load_segment_list_manifest(manifest_path)
+
+
+def test_bake_segment_list_ladder_writes_one_rendition_dir_each(tmp_path, _stub_media_io, monkeypatch):
+    remux_calls, _ = _stub_media_io
+    bandwidth_by_dir = {"720p": 3_000_000, "360p": 800_000}
+
+    def _fake_probe(path, init_path=None):
+        return {"video": {"codecs": "avc1.640028", "width": 1, "height": 1, "frame_rate": 25.0,
+                          "bandwidth": bandwidth_by_dir[init_path.parent.name]}, "audio": None}
+
+    monkeypatch.setattr(bake, "probe_segment_variant_metadata", _fake_probe)
+    segments = [_segment(0, duration_ticks=100), _segment(1, duration_ticks=200), _segment(2, duration_ticks=50)]
+    manifest_path = _write_ladder_manifest(tmp_path, segments, _ladder(tmp_path))
+    output_dir = tmp_path / "out"
+
+    bake_segment_list(manifest_path, output_dir)
+
+    assert len(remux_calls) == 6  # every rendition's every segment
+    descriptor = json.loads((output_dir / "loop_descriptor.json").read_text())
+    renditions = descriptor["video_renditions"]
+    assert [r["name"] for r in renditions] == ["720p", "360p"]
+    for rendition in renditions:
+        assert rendition["sparse"] is True
+        assert rendition["segment_boundary_ticks"] == [0, 100, 300]  # one shared timeline
+        assert rendition["total_loop_duration_ticks"] == 350
+        assert rendition["segment_present"] == [True, True, True]
+        segments_dir = output_dir / "segments" / rendition["name"]
+        assert (segments_dir / "init_0.mp4").exists()
+        assert all((segments_dir / f"seg_{i:06d}.m4s").exists() for i in range(3))
+    assert renditions[0]["video_variant"]["bandwidth"] == 3_000_000
+    assert renditions[1]["video_variant"]["bandwidth"] == 800_000
+
+
+def test_bake_segment_list_ladder_applies_each_renditions_declared_variant(tmp_path, _stub_media_io):
+    segments = [_segment(0), _segment(1)]
+    manifest_path = _write_ladder_manifest(tmp_path, segments, _ladder(tmp_path, 2))
+    output_dir = tmp_path / "out"
+
+    bake_segment_list(manifest_path, output_dir)
+
+    renditions = json.loads((output_dir / "loop_descriptor.json").read_text())["video_renditions"]
+    assert [r["video_variant"]["bandwidth"] for r in renditions] == [3_000_000, 800_000]
+
+
+def test_bake_segment_list_ladder_holes_are_per_rendition(tmp_path, _stub_media_io):
+    segments = [_segment(0), _segment(1), _segment(2)]
+    ladder = _ladder(tmp_path, missing={"360p": {1}})
+    manifest_path = _write_ladder_manifest(tmp_path, segments, ladder)
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValidationError, match="Rendition '360p'.*allow-missing-segments"):
+        bake_segment_list(manifest_path, output_dir)
+
+    bake_segment_list(manifest_path, output_dir, allow_missing_segments=True)
+
+    by_name = {r["name"]: r for r in json.loads((output_dir / "loop_descriptor.json").read_text())["video_renditions"]}
+    assert by_name["720p"]["segment_present"] == [True, True, True]
+    assert by_name["360p"]["segment_present"] == [True, False, True]
+
+
+def test_bake_segment_list_ladder_rendition_with_no_media_fails(tmp_path, _stub_media_io):
+    segments = [_segment(0), _segment(1)]
+    ladder = _ladder(tmp_path, 2, missing={"360p": {0, 1}})
+    manifest_path = _write_ladder_manifest(tmp_path, segments, ladder)
+
+    with pytest.raises(ValidationError, match="Rendition '360p'.*cannot probe"):
+        bake_segment_list(manifest_path, tmp_path / "out", allow_missing_segments=True)
+
+
+def test_bake_segment_list_ladder_hls_ts_writes_a_ts_store_per_rendition(tmp_path, _stub_media_io):
+    _, ts_calls = _stub_media_io
+    segments = [_segment(0), _segment(1)]
+    manifest_path = _write_ladder_manifest(tmp_path, segments, _ladder(tmp_path, 2))
+    output_dir = tmp_path / "out"
+
+    bake_segment_list(manifest_path, output_dir, hls_format="ts")
+
+    assert len(ts_calls) == 4
+    for name in ("720p", "360p"):
+        assert (output_dir / "hls-ts" / name / "0.ts").exists()
+
+
+def test_bake_segment_list_ladder_bakes_muxed_audio_once_from_the_first_rendition(
+    tmp_path, _stub_media_io, monkeypatch
+):
+    audio_calls = []
+
+    def _fake_remux(src, dest, *, stream="v"):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(_fake_fmp4())
+        if stream == "a":
+            audio_calls.append(Path(src).name)
+
+    monkeypatch.setattr(bake, "remux_segment_to_fragmented_mp4", _fake_remux)
+    monkeypatch.setattr(bake, "probe_has_audio", lambda path: True)
+    monkeypatch.setattr(bake.cmaf, "stsd_config", lambda init: b"aac")
+    monkeypatch.setattr(bake.cmaf, "track_timescale", lambda init: 48_000)
+    monkeypatch.setattr(bake, "probe_audio_variant", lambda path: {"codecs": "mp4a.40.2", "bandwidth": 128_000})
+    segments = [_segment(0), _segment(1)]
+    manifest_path = _write_ladder_manifest(tmp_path, segments, _ladder(tmp_path, 2))
+    output_dir = tmp_path / "out"
+
+    bake_segment_list(manifest_path, output_dir)
+
+    assert audio_calls == ["720p_0.bin", "720p_1.bin"]  # the 360p sources' audio is never used
+    renditions = json.loads((output_dir / "loop_descriptor.json").read_text())["video_renditions"]
+    assert renditions[0]["audio_sparse"] is True
+    assert renditions[0]["audio_variant"]["codecs"] == "mp4a.40.2"
+    assert "audio_variant" in renditions[1] and renditions[1]["audio_variant"] is None
+    assert (output_dir / "segments" / "720p" / "seg_a_000000.m4s").exists()
+    assert not (output_dir / "segments" / "360p" / "seg_a_000000.m4s").exists()
+    # Declared bandwidth covers video + audio: the shared audio is subtracted from every rendition.
+    assert [r["video_variant"]["bandwidth"] for r in renditions] == [3_000_000 - 128_000, 800_000 - 128_000]
+
+
+def test_baked_ladder_is_served_as_a_multivariant_playlist_and_multi_representation_mpd(tmp_path, _stub_media_io):
+    """Round trip: a baked ladder loads in serve.py, which advertises every
+    rendition in the HLS multivariant playlist / DASH MPD and serves each
+    one's segments from its own directory."""
+    from serve import Channel, LoopPackage, create_app
+
+    segments = [_segment(0, duration_ticks=90_000), _segment(1, duration_ticks=90_000)]
+    manifest_path = _write_ladder_manifest(tmp_path, segments, _ladder(tmp_path, 2))
+    output_dir = tmp_path / "out"
+    bake_segment_list(manifest_path, output_dir)
+
+    channel = Channel(LoopPackage(output_dir), epoch_ticks=0, window_segments=2)
+    channel.now_ticks = lambda: 0
+
+    master = channel.build_hls_master_playlist()
+    assert master.count("#EXT-X-STREAM-INF") == 2
+    assert "video_1.m3u8" in master and "video_2.m3u8" in master  # highest bandwidth first
+    for name in ("720p", "360p"):
+        assert f"{name}/seg/0.m4s" in channel.build_hls_manifest(name)
+    mpd = channel.build_dash_manifest()
+    assert mpd.count("<Representation") == 2
+
+    client = create_app(output_dir, epoch_ticks=0, window_segments=2).test_client()
+    for name in ("720p", "360p"):
+        assert client.get(f"/{name}/seg/0.m4s").status_code == 200

@@ -141,10 +141,17 @@ python3 bake.py archive-manifest.json --output /var/loop-packages/archive-channe
     --allow-missing-segments
 ```
 
-Known limitations of this mode (v1): single rendition only (no ABR
-ladder — an archive-derived source has already been reduced to one
-canonical reference rendition upstream, see `grave-robber/SCOPE.md` §8),
-video-only (no separate shared audio track/Representation), and segments
+An ABR ladder is a top-level `"renditions": [{"name", "variant",
+"media_files": [...one per segment...]}]` list over the same shared
+`segments` timing (SCOPE.md §11.2's ladder extension); `grave-robber
+ingest-url` writes this from a VOD multivariant playlist / MPD. Each
+rendition is baked into its own `segments/<name>/`, and `serve.py`
+advertises them all. The first rendition is the reference that carries
+the one shared audio track.
+
+Known limitations of this mode: an archive capture (`grave-robber ingest`)
+is still reduced to one reference rendition, only one audio track is kept,
+and segments
 are remuxed into self-initializing fragments (each carries its own `moov`)
 rather than sharing one init segment, since sparse-mode segments come from
 independently captured archive entries with no guaranteed common encoder

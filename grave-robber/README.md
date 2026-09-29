@@ -78,6 +78,33 @@ engine, for instance) can consume regardless of whether every segment is
 actually playable end-to-end. See `loop-dee-loop/SCOPE.md` §11 for the
 corresponding "manifest-complete, media-optional" serving mode.
 
+## VOD manifest URL (rendition ladder)
+
+No capture needed for a **VOD** (`#EXT-X-ENDLIST` HLS, `type="static"`
+DASH): `ingest-url` fetches the manifest and every segment itself.
+
+```bash
+uv run --project grave-robber grave-robber ingest-url https://cdn.example/vod/master.m3u8 \
+    --output outputs/<name>/ [--renditions all|best|720,360|#1,#3] [--no-audio] [--allow-missing-segments]
+python3 loop-dee-loop/bake.py outputs/<name>/manifest.json --output <package-dir>
+```
+
+- A multivariant playlist / MPD becomes a **rendition ladder**
+  (`--renditions`, default all): one shared timeline + markers (read from
+  the highest-bandwidth rendition), and a `media_files` list per rendition
+  — see `loop-dee-loop/SCOPE.md` §11.2. A media playlist gives a single
+  rendition. Renditions must be segment-aligned (same count,
+  discontinuities, durations within 10 ms) or ingest fails.
+- HLS audio from a separate `#EXT-X-MEDIA` playlist is kept (one track,
+  from the highest-bandwidth variant's audio group); DASH audio
+  AdaptationSets are not imported. Byte-range HLS (single-file VOD) is
+  supported.
+- All segments are downloaded (`--workers`, default 8). A failed download
+  fails the ingest unless `--allow-missing-segments`. Live playlists are
+  refused — capture them and use `ingest`.
+- Not supported: lazy/proxy serving of the origin's segments, live
+  sources, and an ABR ladder from a HAR (`ingest` keeps one variant).
+
 ## Known limitations (v1)
 
 - **Loop boundary**: uses the archive's full captured span, no
