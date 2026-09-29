@@ -140,13 +140,13 @@ def generate_toml(
         raise ValueError(
             f"backend must be 'aws-media', 'ecs-express', or 'local-docker', got {backend!r}"
         )
-    if source_kind not in ("playlist", "archive"):
-        raise ValueError("source_kind must be 'playlist' or 'archive'")
+    if source_kind not in ("playlist", "archive", "manifest"):
+        raise ValueError("source_kind must be 'playlist', 'archive' or 'manifest'")
     validate_daterange_id_format(daterange_id_format)
     if hls_format not in ("cmaf", "ts"):
         raise ValueError("hls_format must be 'cmaf' or 'ts'")
-    if source_kind not in ("playlist", "archive"):
-        raise ValueError("source_kind must be 'playlist' or 'archive'")
+    if source_kind not in ("playlist", "archive", "manifest"):
+        raise ValueError("source_kind must be 'playlist', 'archive' or 'manifest'")
     if dash_signal_format not in ("binary", "xml"):
         raise ValueError("dash_signal_format must be 'binary' or 'xml'")
     if dash_descriptor_mode not in ("shared", "narrowed"):

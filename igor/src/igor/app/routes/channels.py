@@ -8,7 +8,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator, model_validator
 
-from igor.integrations import archives, franken_ts, its_a_live
+from igor.integrations import archives, franken_ts, its_a_live, manifests
 from igor.integrations.its_a_live import DEFAULT_DATERANGE_ID_FORMAT, validate_daterange_id_format
 from igor.store import channels as channel_store
 
@@ -107,8 +107,8 @@ class ChannelCreatePayload(BaseModel):
     @field_validator("source_kind")
     @classmethod
     def _validate_source_kind(cls, v: str) -> str:
-        if v not in ("playlist", "archive"):
-            raise ValueError("source_kind must be 'playlist' or 'archive'")
+        if v not in ("playlist", "archive", "manifest"):
+            raise ValueError("source_kind must be 'playlist', 'archive' or 'manifest'")
         return v
 
     @field_validator("daterange_id_format")
@@ -160,7 +160,13 @@ def list_channels() -> list[dict]:
         channel["source_path"] = source_path
         channel["playlist_name"] = franken_ts.find_playlist_for_source(source_path)
         channel["archive_name"] = archives.find_archive_for_source(source_path)
-        channel["source_kind"] = "archive" if channel["archive_name"] else source_kind
+        channel["manifest_name"] = manifests.find_manifest_for_source(source_path)
+        channel["manifest_display_name"] = (
+            manifests.get_manifest(channel["manifest_name"])["display_name"] if channel["manifest_name"] else None
+        )
+        channel["source_kind"] = (
+            "archive" if channel["archive_name"] else "manifest" if channel["manifest_name"] else source_kind
+        )
         channel["archive_display_name"] = (
             archives.get_display_name(channel["archive_name"]) if channel["archive_name"] else None
         )

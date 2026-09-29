@@ -6,6 +6,8 @@ import PlaylistList from '../views/PlaylistList.vue'
 import PlaylistEditor from '../views/PlaylistEditor.vue'
 import ArchiveImportList from '../views/ArchiveImportList.vue'
 import ArchiveImportEditor from '../views/ArchiveImportEditor.vue'
+import ManifestImportList from '../views/ManifestImportList.vue'
+import ManifestImportEditor from '../views/ManifestImportEditor.vue'
 
 export default createRouter({
   history: createWebHashHistory(),
@@ -19,5 +21,7 @@ export default createRouter({
     { path: '/playlists/:name', name: 'playlist-edit', component: PlaylistEditor, props: true },
     { path: '/archives', name: 'archives', component: ArchiveImportList },
     { path: '/archives/:name', name: 'archive-import', component: ArchiveImportEditor, props: true },
+    { path: '/manifests', name: 'manifests', component: ManifestImportList },
+    { path: '/manifests/:name', name: 'manifest-import', component: ManifestImportEditor, props: true },
   ],
 })

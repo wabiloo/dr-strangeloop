@@ -258,7 +258,7 @@ onBeforeUnmount(() => {
           <div v-if="data.source_path" class="flex align-items-center gap-2" :title="data.source_path">
             <i
               class="source-kind-icon"
-              :class="data.source_kind === 'archive' ? 'pi pi-box' : 'pi pi-objects-column'"
+              :class="data.source_kind === 'archive' ? 'pi pi-box' : data.source_kind === 'manifest' ? 'pi pi-link' : 'pi pi-objects-column'"
               aria-hidden="true"
             />
             <RouterLink
@@ -268,6 +268,14 @@ onBeforeUnmount(() => {
               @click.stop
             >
               {{ data.archive_display_name || data.archive_name }}
+            </RouterLink>
+            <RouterLink
+              v-else-if="data.manifest_name"
+              :to="`/manifests/${data.manifest_name}`"
+              class="source-link"
+              @click.stop
+            >
+              {{ data.manifest_display_name || data.manifest_name }}
             </RouterLink>
             <RouterLink
               v-else-if="data.playlist_name"

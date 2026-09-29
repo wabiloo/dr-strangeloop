@@ -319,3 +319,53 @@ def ingest_url(
     )
     write_segment_list_manifest(manifest, output_dir / "manifest.json")
     return manifest
+
+
+def describe_manifest(manifest_url: str, *, fetch: Fetch = http_fetch) -> dict:
+    """What `ingest_url` would see, without downloading any segment: the manifest's
+    format, whether it is a VOD, and its rendition ladder (best bandwidth first,
+    `position` = the 1-based rank `--renditions #N` refers to, `name` = the
+    rendition directory `ingest_url` would use)."""
+    text = _text(fetch, manifest_url)
+    if "<MPD" in text[:2048]:
+        variants = sorted(list_dash_representations(text, manifest_url), key=lambda v: v.get("bandwidth") or 0, reverse=True)
+        result = {"format": "dash", "is_vod": dash_is_static(text), "audio": has_dash_audio(text)}
+    else:
+        if is_multivariant_playlist(text):
+            from .multivariant import parse_multivariant_playlist
+
+            variants = [
+                v for v in parse_multivariant_playlist(text, manifest_url)
+                if v["resolution"] or (v["codecs"] and re.search(r"avc|hvc|hev|av01|vp0?9", v["codecs"]))
+            ]
+            variants.sort(key=lambda v: v.get("bandwidth") or 0, reverse=True)
+            # Only a *separate* audio playlist is an option; audio muxed into the video
+            # segments is always kept and needs no choice.
+            has_audio = any(
+                _hls_audio_playlist(m3u8.loads(text), manifest_url, v["audio_group"]) for v in variants
+            )
+        else:
+            variants, has_audio = [{"resolution": None, "bandwidth": None, "codecs": None}], False
+        result = {"format": "hls", "is_vod": _is_hls_vod(manifest_url, text, variants, fetch), "audio": has_audio}
+    taken: set[str] = set()
+    result["renditions"] = [
+        {
+            "position": i + 1,
+            "name": _rendition_name(v, i, taken),
+            "resolution": v.get("resolution"),
+            "bandwidth": v.get("bandwidth"),
+            "codecs": v.get("codecs"),
+            "frame_rate": v.get("frame_rate"),
+        }
+        for i, v in enumerate(variants)
+    ]
+    return result
+
+
+def _is_hls_vod(manifest_url: str, text: str, variants: list[dict], fetch: Fetch) -> bool:
+    """A media playlist is a VOD iff it has ENDLIST; a multivariant one is judged by
+    its best variant's playlist (the one `ingest_url` reads the timeline from)."""
+    if not is_multivariant_playlist(text):
+        return bool(m3u8.loads(text).is_endlist)
+    first = variants[0].get("manifest_url") if variants else None
+    return bool(first) and bool(m3u8.loads(_text(fetch, first)).is_endlist)

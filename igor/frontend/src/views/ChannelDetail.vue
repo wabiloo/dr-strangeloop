@@ -92,7 +92,7 @@ const editForm = reactive<ChannelCreatePayload>({
 const editIsEcsExpress = computed(() => editForm.backend === 'ecs-express')
 const editIsLocalDocker = computed(() => editForm.backend === 'local-docker')
 const editUsesChannelSection = computed(() => editIsEcsExpress.value || editIsLocalDocker.value)
-const editIsArchiveSource = computed(() => editForm.source_kind === 'archive')
+const editIsArchiveSource = computed(() => editForm.source_kind === 'archive' || editForm.source_kind === 'manifest')
 const hlsFormatOptions = [
   { label: 'CMAF (fragmented MP4)', value: 'cmaf' },
   { label: 'MPEG-TS', value: 'ts' },
@@ -171,9 +171,11 @@ function startEdit() {
     bucket_name: String(s3.bucket_name ?? ''),
     content_folder: String(s3.content_folder ?? ''),
     source_path: String(input.source_path ?? ''),
-    source_kind: input.source_kind === 'archive' || /(?:^|[\\/])manifest\.json$/i.test(String(input.source_path ?? ''))
-      ? 'archive'
-      : 'playlist',
+    source_kind: input.source_kind === 'manifest'
+      ? 'manifest'
+      : input.source_kind === 'archive' || /(?:^|[\\/])manifest\.json$/i.test(String(input.source_path ?? ''))
+        ? 'archive'
+        : 'playlist',
     segment_duration: Number(packaging.segment_duration ?? 4.0),
     dvr_window_seconds: Number(packaging.dvr_window_seconds ?? 30),
     hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
@@ -228,7 +230,7 @@ const configRows = computed(() => {
   // baking preserves each segment's declared source duration; the channel's
   // packaging.segment_duration value is not used for this input mode. The
   // path match supports configs created before input.source_kind was added.
-  const isArchiveSegmentList = input?.source_kind === 'archive' || /(?:^|[\\/])manifest\.json$/i.test(sourcePath)
+  const isArchiveSegmentList = input?.source_kind === 'archive' || input?.source_kind === 'manifest' || /(?:^|[\\/])manifest\.json$/i.test(sourcePath)
   for (const [section, fields] of Object.entries(config.value)) {
     if (isLocalDocker && (section === 'aws' || section === 's3')) continue
     if (!fields || typeof fields !== 'object') continue

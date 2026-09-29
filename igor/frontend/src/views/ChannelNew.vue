@@ -8,10 +8,10 @@ import Select from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { buildPlaylist, defineChannel, listArchives, listPlaylists } from '../api/client'
+import { buildPlaylist, defineChannel, listArchives, listManifests, listPlaylists } from '../api/client'
 import JobPanel from '../components/JobPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
-import type { ArchiveListItem, ChannelCreatePayload, Job, PlaylistListItem } from '../api/types'
+import type { ArchiveListItem, ChannelCreatePayload, Job, ManifestListItem, PlaylistListItem } from '../api/types'
 
 const router = useRouter()
 const saving = ref(false)
@@ -29,8 +29,9 @@ const building = ref(false)
 const sourceKindOptions = [
   { label: 'franken-ts playlist', value: 'playlist' },
   { label: 'Archive import', value: 'archive' },
+  { label: 'Manifest import', value: 'manifest' },
 ]
-const sourceKind = ref<'playlist' | 'archive'>('playlist')
+const sourceKind = ref<'playlist' | 'archive' | 'manifest'>('playlist')
 const archives = ref<ArchiveListItem[]>([])
 const selectedArchiveName = ref<string | null>(null)
 const selectedArchive = computed(() => archives.value.find((a) => a.name === selectedArchiveName.value) ?? null)
@@ -58,6 +59,38 @@ async function loadArchives() {
   }
 }
 
+// ── Manifest imports (grave-robber ingest-url): a downloaded VOD ladder ──
+const manifests = ref<ManifestListItem[]>([])
+const selectedManifestName = ref<string | null>(null)
+const selectedManifest = computed(() => manifests.value.find((m) => m.name === selectedManifestName.value) ?? null)
+const manifestOptions = computed(() =>
+  manifests.value.map((m) => {
+    const summary = m.import?.summary
+    const ladder = summary ? `${summary.renditions.length} rendition${summary.renditions.length === 1 ? '' : 's'}` : ''
+    return {
+      label: m.import ? `${m.display_name || m.name} -- imported (${ladder})` : `${m.display_name || m.name} -- not yet imported`,
+      value: m.name,
+      disabled: !m.import,
+    }
+  }),
+)
+
+function selectManifest(name: string | null) {
+  selectedManifestName.value = name
+  const m = manifests.value.find((x) => x.name === name)
+  if (m?.import?.manifest_path) form.source_path = m.import.manifest_path
+  // A full download has no missing segments unless the import was told to skip failures.
+  form.allow_missing_segments = m?.import_options?.allow_missing_segments ?? false
+}
+
+async function loadManifests() {
+  try {
+    manifests.value = await listManifests()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
 watch(sourceKind, (kind) => {
   // Defaults on for archive-import source kind (SCOPE.md §10) -- the
   // near-certain case (HAR captures are frequently manifest-only), but
@@ -66,6 +99,7 @@ watch(sourceKind, (kind) => {
   form.source_kind = kind
   form.allow_missing_segments = kind === 'archive'
   if (kind === 'archive' && archives.value.length === 0) loadArchives()
+  if (kind === 'manifest' && manifests.value.length === 0) loadManifests()
 })
 
 const selectedPlaylist = computed(() => playlists.value.find((c) => c.name === selectedPlaylistName.value) ?? null)
@@ -290,6 +324,29 @@ async function submit() {
         <Button label="Build now" icon="pi pi-cog" size="small" text :loading="building" @click="build" />
       </div>
       <JobPanel v-if="buildJobId" :job-id="buildJobId" @finished="onBuildFinished" />
+    </div>
+
+    <div v-else-if="sourceKind === 'manifest'" class="flex flex-column gap-1">
+      <label for="source-manifest">Manifest import</label>
+      <Select
+        id="source-manifest"
+        :model-value="selectedManifestName"
+        :options="manifestOptions"
+        option-label="label"
+        option-value="value"
+        placeholder="Pick an imported manifest, or enter a manifest.json path manually below"
+        show-clear
+        @update:model-value="selectManifest"
+      />
+      <div v-if="selectedManifest" class="flex align-items-center gap-2 mt-1">
+        <RouterLink :to="`/manifests/${selectedManifest.name}`" class="text-sm">
+          {{ selectedManifest.import ? 'Re-run import' : 'Import this manifest' }}
+        </RouterLink>
+      </div>
+      <div v-if="manifests.length === 0" class="text-color-secondary text-sm">
+        No manifests yet. Add a VOD manifest URL on the <RouterLink to="/manifests">Manifests</RouterLink> page
+        and import it first.
+      </div>
     </div>
 
     <div v-else class="flex flex-column gap-1">

@@ -39,6 +39,53 @@ export interface ArchiveListItem {
   import: ArchiveImportStatus | null
 }
 
+/** One rendition of a VOD manifest's ladder (GET/POST /api/v1/manifests/inspect). `position`
+ * is the 1-based bandwidth rank an import's `renditions: '#1,#3'` refers to. */
+export interface ManifestRendition {
+  position: number
+  name: string
+  resolution: string | null
+  bandwidth: number | null
+  codecs: string | null
+  frame_rate: number | null
+}
+
+/** POST /api/v1/manifests/inspect -- what an import would see, without downloading segments. */
+export interface ManifestInspection {
+  format: 'hls' | 'dash'
+  is_vod: boolean
+  audio: boolean
+  renditions: ManifestRendition[]
+}
+
+/** GET /api/v1/manifests/{name}/import/status */
+export interface ManifestImportStatus {
+  exists: boolean
+  manifest_path: string | null
+  summary: {
+    segments: number
+    duration_seconds: number
+    markers: number
+    audio: boolean
+    renditions: { name: string; bandwidth: number | null; resolution: string | null }[]
+  } | null
+}
+
+export interface ManifestImportOptions {
+  renditions: string
+  audio: boolean
+  allow_missing_segments: boolean
+}
+
+/** One saved VOD manifest URL (GET /api/v1/manifests/). */
+export interface ManifestListItem {
+  name: string
+  display_name: string
+  manifest_url: string
+  import_options: ManifestImportOptions | null
+  import: ManifestImportStatus | null
+}
+
 /** One [start, end) wall-clock interval a variant was actually captured for. */
 export interface CoverageRange {
   start: string
@@ -221,10 +268,12 @@ export interface ChannelListItem {
   container_name?: string | null
   stack_status: string | null
   source_path?: string
-  source_kind?: 'playlist' | 'archive'
+  source_kind?: 'playlist' | 'archive' | 'manifest'
   playlist_name?: string | null
   archive_name?: string | null
   archive_display_name?: string | null
+  manifest_name?: string | null
+  manifest_display_name?: string | null
   // Live running/stopped signal, fetched by `channel.py list` once the
   // CloudFormation stack has settled -- stack_status alone can't tell
   // "deployed" apart from "deployed but scaled to 0 / IDLE". Absent
@@ -295,7 +344,7 @@ export interface ChannelCreatePayload {
   bucket_name: string
   content_folder: string
   source_path: string
-  source_kind?: 'playlist' | 'archive'
+  source_kind?: 'playlist' | 'archive' | 'manifest'
   /** grave-robber/SCOPE.md §10: [input].allow_missing_segments -- only
    * meaningful when source_path is a grave-robber segment-list manifest,
    * but stays a plain bake.py-level flag regardless of source kind. */

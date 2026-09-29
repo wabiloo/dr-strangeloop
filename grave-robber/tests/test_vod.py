@@ -321,3 +321,40 @@ def test_cli_ingest_url(tmp_path, monkeypatch):
     assert code == 0
     manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
     assert manifest["variant"]["resolution"] == "1280x720"
+
+
+# ── describe_manifest ────────────────────────────────────────────────────
+
+
+def test_describe_hls_multivariant_lists_the_ladder_without_fetching_segments():
+    from grave_robber.vod import describe_manifest
+
+    site = FakeSite(_hls_site())
+
+    info = describe_manifest(BASE + "master.m3u8", fetch=site)
+
+    assert info["format"] == "hls" and info["is_vod"] is True and info["audio"] is True
+    assert [(r["position"], r["name"], r["resolution"], r["bandwidth"]) for r in info["renditions"]] == [
+        (1, "720p", "1280x720", 3_000_000), (2, "360p", "640x360", 800_000)]
+    assert not any(url.endswith(".ts") for url, _ in site.requests)
+
+
+def test_describe_flags_live_playlists_and_reads_dash():
+    from grave_robber.vod import describe_manifest
+
+    live = _hls_site(**{BASE + "720/index.m3u8": _media_playlist("v720_", endlist=False)})
+    assert describe_manifest(BASE + "master.m3u8", fetch=FakeSite(live))["is_vod"] is False
+
+    dash = describe_manifest(BASE + "stream.mpd", fetch=FakeSite(_dash_audio_site(192_000, 2)))
+    assert dash["format"] == "dash" and dash["is_vod"] is True and dash["audio"] is True
+    assert [r["name"] for r in dash["renditions"]] == ["720p", "360p"]
+    assert describe_manifest(BASE + "stream.mpd", fetch=FakeSite(_dash_site("dynamic")))["is_vod"] is False
+
+
+def test_describe_reports_no_separate_audio_for_muxed_variants():
+    from grave_robber.vod import describe_manifest
+
+    muxed = MASTER.replace(',AUDIO="aud"', "").replace(
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="en",DEFAULT=YES,URI="audio/index.m3u8"\n', "")
+
+    assert describe_manifest(BASE + "master.m3u8", fetch=FakeSite(_hls_site(**{BASE + "master.m3u8": muxed})))["audio"] is False
