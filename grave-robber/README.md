@@ -95,10 +95,12 @@ python3 loop-dee-loop/bake.py outputs/<name>/manifest.json --output <package-dir
   — see `loop-dee-loop/SCOPE.md` §11.2. A media playlist gives a single
   rendition. Renditions must be segment-aligned (same count,
   discontinuities, durations within 10 ms) or ingest fails.
-- HLS audio from a separate `#EXT-X-MEDIA` playlist is kept (one track,
-  from the highest-bandwidth variant's audio group); DASH audio
-  AdaptationSets are not imported. Byte-range HLS (single-file VOD) is
-  supported.
+- Separate audio is kept as one track: HLS `#EXT-X-MEDIA` playlist (from
+  the highest-bandwidth variant's audio group) or DASH audio AdaptationSet
+  (the first one, first Representation). DASH audio is aligned to the video
+  by segment start ticks, so audio and video segments needn't have equal
+  durations; a video segment with no audio starting within half its length
+  gets no audio. Byte-range HLS (single-file VOD) is supported.
 - All segments are downloaded (`--workers`, default 8). A failed download
   fails the ingest unless `--allow-missing-segments`. Live playlists are
   refused — capture them and use `ingest`.

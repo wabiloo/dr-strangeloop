@@ -251,6 +251,49 @@ def test_dash_representation_selection_and_live_rejection(tmp_path):
         _ingest(tmp_path, _dash_site("dynamic"), url="stream.mpd")
 
 
+MPD_AUDIO = MPD.replace(
+    "</Period>",
+    """<AdaptationSet mimeType="audio/mp4" lang="en">
+      <SegmentTemplate timescale="48000" duration="{audio_duration}" initialization="aud/init.mp4"
+                       media="aud/seg_$Number$.m4s" startNumber="1"/>
+      <Representation id="aud" bandwidth="128000" codecs="mp4a.40.2" audioSamplingRate="48000"/>
+    </AdaptationSet>
+  </Period>""",
+)
+
+
+def _dash_audio_site(audio_duration: int, count: int) -> dict[str, bytes]:
+    files = _dash_site()
+    files[BASE + "stream.mpd"] = MPD_AUDIO.format(type="static", audio_duration=audio_duration).encode()
+    files[BASE + "aud/init.mp4"] = b"init_aud|"
+    for n in range(1, count + 1):
+        files[f"{BASE}aud/seg_{n}.m4s"] = f"aud{n}".encode()
+    return files
+
+
+def test_dash_separate_audio_adaptation_set_is_imported_and_aligned(tmp_path):
+    # 4.01 s audio segments (192480 / 48000) against 4 s video: slightly off, still aligned.
+    manifest = _ingest(tmp_path, _dash_audio_site(192_480, 2), url="stream.mpd")
+
+    assert manifest["audio"] == {"separate": True}
+    assert [_read(e["audio_media_file"]) for e in manifest["segments"]] == [b"init_aud|aud1", b"init_aud|aud2"]
+    assert [e["audio_duration_ticks"] for e in manifest["segments"]] == [360_900, 360_900]
+
+
+def test_dash_audio_with_no_counterpart_for_a_video_segment_is_a_hole(tmp_path):
+    # One 8 s audio segment against two 4 s video segments: nothing starts near the second.
+    manifest = _ingest(tmp_path, _dash_audio_site(384_000, 1), url="stream.mpd")
+
+    assert [_read(e["audio_media_file"]) if e["audio_media_file"] else None for e in manifest["segments"]] == [
+        b"init_aud|aud1", None]
+
+
+def test_dash_no_audio_flag_and_muxed_audio(tmp_path):
+    manifest = _ingest(tmp_path, _dash_audio_site(192_000, 2), url="stream.mpd", audio=False)
+    assert "audio" not in manifest
+    assert "audio" not in _ingest(tmp_path, _dash_site(), url="stream.mpd")
+
+
 # ── manifest writer ──────────────────────────────────────────────────────
 
 

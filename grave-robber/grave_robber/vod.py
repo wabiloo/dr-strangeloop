@@ -25,8 +25,8 @@ from urllib.parse import urljoin
 
 import m3u8
 
-from .audio import align_audio_segments
-from .extract_dash import dash_is_static, extract_dash, list_dash_representations
+from .audio import align_audio_segments, align_audio_segments_by_ticks
+from .extract_dash import dash_is_static, extract_dash, has_dash_audio, list_dash_representations
 from .extract_hls import extract_hls
 from .manifest_writer import build_ladder_segment_list_manifest, write_segment_list_manifest
 from .models import TimingSegment
@@ -251,6 +251,7 @@ def ingest_url(
     is_dash = "<MPD" in text[:2048]
 
     audio_url: str | None = audio_manifest_url
+    audio_extract: Callable[[], list[TimingSegment]] | None = None
     if is_dash:
         if not dash_is_static(text):
             raise VodIngestError(f"{manifest_url} is a dynamic (live) MPD, not a VOD")
@@ -263,14 +264,19 @@ def ingest_url(
             for i, r in enumerate(reps)
         ]
         extract = lambda entry: extract_dash(text, manifest_url, entry["representation_id"])  # noqa: E731
-        if audio:
-            logger.warning("DASH audio AdaptationSets are not imported; only audio muxed into the video segments is kept")
+        if audio and has_dash_audio(text):
+            audio_extract = lambda: extract_dash(text, manifest_url, audio=True)[0]  # noqa: E731
     else:
         ladder, discovered_audio = _hls_ladder(manifest_url, text, fetch, renditions)
         for entry in ladder:
             _require_vod(entry["manifest_url"], entry["manifest_text"])
         extract = lambda entry: extract_hls(entry["manifest_text"], entry["manifest_url"])  # noqa: E731
         audio_url = audio_manifest_url or discovered_audio
+        if audio and audio_url:
+            def audio_extract() -> list[TimingSegment]:
+                audio_text = _text(fetch, audio_url)
+                _require_vod(audio_url, audio_text)
+                return extract_hls(audio_text, audio_url)[0]
 
     extracted = [extract(entry) for entry in ladder]
     reference_segments, raw_markers, boundaries = extracted[0]
@@ -298,11 +304,10 @@ def ingest_url(
                     sum(1 for p in media_paths.values() if p is not None))
 
     aligned_audio = audio_media_paths = None
-    if audio and audio_url and not is_dash:
-        audio_text = _text(fetch, audio_url)
-        _require_vod(audio_url, audio_text)
-        audio_segments, _, _ = extract_hls(audio_text, audio_url)
-        aligned_audio = align_audio_segments(reference_segments, audio_segments)
+    if audio and audio_extract is not None:
+        audio_segments = audio_extract()
+        align = align_audio_segments_by_ticks if is_dash else align_audio_segments
+        aligned_audio = align(reference_segments, audio_segments)
         audio_media_paths = download_segments(
             [a for a in aligned_audio if a is not None], output_dir / "media" / "audio", fetch,
             filename_template="audio_{index:06d}.bin", allow_missing=allow_missing_segments,

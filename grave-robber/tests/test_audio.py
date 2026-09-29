@@ -74,3 +74,15 @@ def test_manifest_carries_audio_entries():
     assert manifest["segments"][0]["audio_media_file"] == "/a0.bin"
     assert manifest["segments"][1]["audio_media_file"] is None
     assert manifest["segments"][1]["audio_duration_ticks"] == manifest["segments"][1]["duration_ticks"]
+
+
+def test_align_by_ticks_uses_nearest_start_within_half_a_segment():
+    from grave_robber.audio import align_audio_segments_by_ticks
+
+    video = [TimingSegment(index=i, duration_ticks=360_000) for i in range(3)]
+    audio = [TimingSegment(index=i, duration_ticks=360_900) for i in range(2)]  # third one missing
+
+    aligned = align_audio_segments_by_ticks(video, audio)
+
+    assert [a.index if a else None for a in aligned] == [0, 1, None]
+    assert align_audio_segments_by_ticks(video, []) == [None, None, None]
