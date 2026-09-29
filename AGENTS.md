@@ -24,7 +24,7 @@ names or CLI flags from this file alone.
 | (3a) Self-hosted backend internals | `loop-dee-loop/` | [`loop-dee-loop/AGENTS.md`](./loop-dee-loop/AGENTS.md) |
 | Inspect/verify a built `.ts` | `inspector-krogh/` (`frame-extractor` CLI: every frame + GOP/I-P-B timeline; `krogh` CLI: scans the file's *actual* SCTE-35 markers, independent of franken-ts, optionally compared against `markers.json`) | [`inspector-krogh/README.md`](./inspector-krogh/README.md) |
 | (alt. source) Derive a loop from a captured HAR/Proxyman session, or from a VOD HLS/DASH manifest URL (`ingest-url`, multi-rendition ladder), instead of authoring one | `grave-robber/` (feeds `loop-dee-loop`'s sparse segment-list `bake.py` mode, not `franken-ts`) | [`grave-robber/AGENTS.md`](./grave-robber/AGENTS.md) |
-| Web UI over all of the above | `igor/` | [`igor/AGENTS.md`](./igor/AGENTS.md) |
+| Web UI over all of the above (playlists, archive imports, VOD manifest imports, channels) | `igor/` | [`igor/AGENTS.md`](./igor/AGENTS.md) |
 
 ## Architecture
 

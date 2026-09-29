@@ -115,9 +115,9 @@ python3 loop-dee-loop/bake.py outputs/<name>/manifest.json --output <package-dir
 - **Multi-variant selection** (SCOPE.md §8): `coverage`'s CLI report is
   the fallback; the real human-in-the-loop range-picker + full-coverage
   filter is designed as an `igor` UI wizard, not a CLI flag.
-- **No ABR ladder or separate audio track** in the segment-list manifest
-  output — matches loop-dee-loop's own sparse-mode limitation (single
-  reference rendition, video-only).
+- **Archive imports (`ingest`) keep one variant** — the reference variant
+  you pick, with at most one separate audio track. A rendition ladder
+  (and DASH audio) comes only from `ingest-url` on a VOD manifest.
 - **RFC 6381 codec strings / bandwidth** aren't derived by this tool at
   all — loop-dee-loop's sparse `bake.py` mode probes them via `ffprobe`
   from whatever media it recovers (best-effort, see its own README).

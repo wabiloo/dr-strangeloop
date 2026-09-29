@@ -22,6 +22,16 @@ tools an agent would use directly: `franken-ts <config.yaml>`,
   and a `/health` proxy to loop-dee-loop's `serve.py` for live loop
   position on `ecs-express` channels.
 
+## Pages
+
+Playlists (franken-ts YAML editor), Archives (HAR/Proxyman import wizard,
+`/archives`), **Manifests** (`/manifests`: save a VOD HLS/DASH manifest URL,
+inspect its rendition ladder, pick renditions/audio, download it as a
+segment list via `grave-robber ingest-url`), and Channels. A channel's
+`[input] source_kind` is `playlist`, `archive` or `manifest`; the latter two
+both point `source_path` at a grave-robber `manifest.json` (a segment-list
+manifest, baked with the source's own segment durations).
+
 If you're an agent asked to do a one-off content/deploy task via the CLI
 directly, prefer the per-tool `AGENTS.md` files (`franken-ts/AGENTS.md`,
 `its-a-live/AGENTS.md`, `loop-dee-loop/AGENTS.md`) -- this project exists
