@@ -56,7 +56,7 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
             Archives
           </RouterLink>
           <RouterLink to="/manifests" class="app-nav-link" :class="{ 'app-nav-link-active': isManifestsActive }">
-            <i class="pi pi-link" aria-hidden="true" />
+            <i class="pi pi-cloud-download" aria-hidden="true" />
             Manifests
           </RouterLink>
           <RouterLink to="/channels" class="app-nav-link" :class="{ 'app-nav-link-active': isChannelsActive }">

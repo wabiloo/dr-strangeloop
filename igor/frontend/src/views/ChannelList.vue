@@ -258,7 +258,7 @@ onBeforeUnmount(() => {
           <div v-if="data.source_path" class="flex align-items-center gap-2" :title="data.source_path">
             <i
               class="source-kind-icon"
-              :class="data.source_kind === 'archive' ? 'pi pi-box' : data.source_kind === 'manifest' ? 'pi pi-link' : 'pi pi-objects-column'"
+              :class="data.source_kind === 'archive' ? 'pi pi-box' : data.source_kind === 'manifest' ? 'pi pi-cloud-download' : 'pi pi-objects-column'"
               aria-hidden="true"
             />
             <RouterLink

@@ -147,9 +147,6 @@ async function onImportFinished(job: Job) {
 
 <template>
   <div class="flex flex-column gap-3">
-    <div class="flex align-items-center gap-2">
-      <RouterLink to="/manifests" class="text-sm">&larr; Manifests</RouterLink>
-    </div>
     <Message v-if="error" severity="error">{{ error }}</Message>
 
     <template v-if="source">
