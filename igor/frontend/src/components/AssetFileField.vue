@@ -4,7 +4,7 @@ import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import ProgressSpinner from 'primevue/progressspinner'
-import { computed, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { browseFiles, localFilePreviewUrl, probeMedia } from '../api/client'
 import type { FileEntry, ProbeResult } from '../api/types'
 import { filesFromDrop, isDragInside, isFileDrag, sourceFromDroppedFile } from '../utils/fileDrop'
@@ -108,14 +108,85 @@ const canPreview = computed(() => {
 const previewOpen = ref(false)
 const previewSource = ref('')
 const previewError = ref(false)
+const previewKind = ref<'hls' | 'dash' | 'native'>('native')
+const videoEl = ref<HTMLVideoElement | null>(null)
+
+// Minimal shape of the hls.js / dash.js player instances we hold on to.
+let streamPlayer: { destroy?: () => void; reset?: () => void } | null = null
+
+function sourceExtension(source: string): string {
+  let pathname = source
+  try {
+    pathname = new URL(source).pathname
+  } catch {
+    // A local filesystem path, rather than an absolute URL.
+  }
+  return pathname.slice(pathname.lastIndexOf('.')).toLowerCase()
+}
 
 function openPreview() {
   const source = model.value.trim()
   if (!source || !canPreview.value) return
   previewError.value = false
+  const extension = sourceExtension(source)
+  previewKind.value = extension === '.m3u8' ? 'hls' : extension === '.mpd' ? 'dash' : 'native'
   previewSource.value = /^https?:\/\//i.test(source) ? source : localFilePreviewUrl(source)
   previewOpen.value = true
 }
+
+function destroyStreamPlayer() {
+  if (!streamPlayer) return
+  if (streamPlayer.destroy) streamPlayer.destroy()
+  else streamPlayer.reset?.()
+  streamPlayer = null
+}
+
+// HLS/DASH manifests aren't playable by a bare <video src> in most browsers,
+// so attach hls.js / dash.js (loaded lazily: they're large and only needed here).
+async function attachStreamPlayer() {
+  await nextTick()
+  const video = videoEl.value
+  if (!video || previewKind.value === 'native') return
+  const url = previewSource.value
+  try {
+    if (previewKind.value === 'hls') {
+      const { default: Hls } = await import('hls.js')
+      if (!previewOpen.value) return
+      if (Hls.isSupported()) {
+        const hls = new Hls()
+        streamPlayer = hls
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) previewError.value = true
+        })
+        hls.loadSource(url)
+        hls.attachMedia(video)
+        void video.play().catch(() => {})
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = url // Safari plays HLS natively
+        void video.play().catch(() => {})
+      } else {
+        previewError.value = true
+      }
+    } else {
+      const dashjs = await import('dashjs')
+      if (!previewOpen.value) return
+      const player = dashjs.MediaPlayer().create()
+      streamPlayer = player
+      player.on('error', () => {
+        previewError.value = true
+      })
+      player.initialize(video, url, true)
+    }
+  } catch {
+    previewError.value = true
+  }
+}
+
+watch(previewOpen, (open) => {
+  if (open) void attachStreamPlayer()
+  else destroyStreamPlayer()
+})
+onBeforeUnmount(destroyStreamPlayer)
 
 async function probe() {
   if (!model.value.trim()) return
@@ -210,7 +281,8 @@ function formatDuration(seconds: number): string {
     <Dialog v-model:visible="previewOpen" modal header="Video preview" :style="{ width: '64rem', maxWidth: '95vw' }">
       <video
         v-if="previewOpen"
-        :src="previewSource"
+        ref="videoEl"
+        :src="previewKind === 'native' ? previewSource : undefined"
         controls
         autoplay
         playsinline
@@ -218,7 +290,7 @@ function formatDuration(seconds: number): string {
         @error="previewError = true"
       />
       <Message v-if="previewError" severity="error" :closable="false" class="mt-2">
-        This video could not be played. Check that the file exists and uses a browser-supported format.
+        This video could not be played. Check that the file or manifest exists, is reachable from your browser (CORS, required headers) and uses a supported format.
       </Message>
     </Dialog>
   </div>
