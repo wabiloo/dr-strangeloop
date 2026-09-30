@@ -23,6 +23,7 @@ import subprocess
 import sys
 
 from _host_paths import to_host_path
+from _packaging_cfg import period_on_segmentation_serve_args
 from _reachability import check_manifest_reachable
 from _timeshift_cfg import timeshift_serve_args
 
@@ -335,6 +336,7 @@ def start(cfg, session, outputs, extra_args=None):
         "--port", str(port),
         "--dvr-window-seconds", _dvr_window_seconds(cfg),
         *_continuous_timeline_args(cfg),
+        *period_on_segmentation_serve_args(cfg),
         *timeshift_serve_args(cfg),
     ]
     print(f"==> Starting container {name} (port {port}, epoch {epoch}) ...")
@@ -391,6 +393,7 @@ def refresh(cfg, session, outputs):
         "--port", str(port),
         "--dvr-window-seconds", _dvr_window_seconds(cfg),
         *_continuous_timeline_args(cfg),
+        *period_on_segmentation_serve_args(cfg),
         *timeshift_serve_args(cfg),
     ]
     result = subprocess.run(run_args)

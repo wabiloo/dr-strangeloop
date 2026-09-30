@@ -65,6 +65,14 @@ match, fix the upstream franken-ts input instead.
 | `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig`, and integer-tick `resolve_window` (segment snapping, `full-loops` widening, max-span cap). Pure ints, no Flask. |
 | `load_test.py` | Concurrent-viewer load generator (see `PERFS.md`). |
 
+## Forced Periods on SCTE-35 types
+
+`serve.py --period-on-segmentation 0x22,0x30,...` (its-a-live `[packaging]
+period_on_segmentation`) opens a new Period / `#EXT-X-DISCONTINUITY` at
+markers with those `segmentation_type_id`s, signal-only (timestamps stay
+continuous under `--continuous-timeline`). Design: `SCOPE.md` §14; tests:
+`tests/test_serve_signal_periods.py`.
+
 ## Startover & catchup
 
 `serve.py --timeshift` (its-a-live: `[timeshift]`, on by default) makes the

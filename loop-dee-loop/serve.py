@@ -191,7 +191,49 @@ def compute_discontinuity_sequence(
     # having just crossed it, same convention the original loop-only
     # formula used for local_index 0).
     local_rank = sum(1 for b in sorted_boundaries if b <= local_index)
-    return loop_number * k + local_rank - 1
+    # Index 0 (the loop wrap) is an implicit discontinuity at the very start
+    # of the timeline, already covered by the sequence header's own base of
+    # 0, hence the `- 1`. A set without 0 (continuous timeline + signal-only
+    # breaks, see compute_signal_breaks) has no such implicit one.
+    return loop_number * k + local_rank - (1 if 0 in boundaries else 0)
+
+
+def parse_segmentation_type_ids(spec: str | None) -> frozenset[int]:
+    """`--period-on-segmentation` value: comma-separated segmentation_type_id
+    values, hex (`0x22`) or decimal, e.g. `0x22,0x23,0x30,0x31`."""
+    ids = set()
+    for token in (spec or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            value = int(token, 0)
+        except ValueError:
+            raise ValueError(f"invalid segmentation_type_id {token!r} (expected e.g. 0x22)") from None
+        if not 0 <= value <= 0xFF:
+            raise ValueError(f"segmentation_type_id {token!r} out of range 0..255")
+        ids.add(value)
+    return frozenset(ids)
+
+
+def compute_signal_breaks(
+    markers: list[dict], segment_boundary_ticks: list[int], type_ids: frozenset[int]
+) -> frozenset[int]:
+    """Local segment indices where a *signal-only* Period / discontinuity is
+    forced: the segment containing each marker whose `segmentation_type_id`
+    is in `type_ids`. Unlike an asset boundary (grave-robber/SCOPE.md §6.1)
+    the media timestamps stay continuous across it -- only the manifest
+    signals a restart. Markers with no segmentation_type_id (plain
+    splice_insert) never match."""
+    breaks = set()
+    for m in markers:
+        raw = m.get("segmentation_type_id")
+        if raw is None:
+            continue
+        type_id = int(raw, 16) if isinstance(raw, str) else int(raw)
+        if type_id in type_ids:
+            breaks.add(segment_index_for_position(m["pts_time_ticks"], segment_boundary_ticks))
+    return frozenset(breaks)
 
 
 def compute_declared_offset_ticks_by_local_index(
@@ -643,6 +685,7 @@ class Channel:
         epoch_ticks: int,
         window_segments: int = 6,
         continuous: bool = False,
+        period_on_segmentation: frozenset[int] = frozenset(),
     ):
         if not isinstance(epoch_ticks, int):
             raise ValueError("epoch_ticks must be int")
@@ -660,6 +703,13 @@ class Channel:
                 self.continuous_error = str(exc)
         self.package = package
         self.epoch_ticks = epoch_ticks
+        # Channel-level: segmentation_type_ids whose markers force a new
+        # Period / #EXT-X-DISCONTINUITY (signal only -- timestamps stay
+        # continuous across it). Resolved once to local segment indices.
+        self.period_on_segmentation = frozenset(period_on_segmentation)
+        self.signal_breaks: frozenset[int] = compute_signal_breaks(
+            package.markers, package.segment_boundary_ticks, self.period_on_segmentation
+        )
         # Controls the DVR window / manifest size: how many segments ahead
         # of the live edge are advertised in each manifest response (HLS
         # sliding window, DASH SegmentTimeline + timeShiftBufferDepth).
@@ -670,6 +720,17 @@ class Channel:
         self.continuous = continuous
         # Set only on a per-request with_offset() variant (SCOPE.md §13.7).
         self.offset_ticks = 0
+
+    @property
+    def period_starts(self) -> frozenset[int]:
+        """Local segment indices that open a new Period / discontinuity in
+        the current mode. Default mode: every real boundary (always incl. 0,
+        the loop wrap) plus the forced signal breaks. Continuous mode: the
+        loop wrap is seamless, so only the forced signal breaks (which may
+        include 0, a marker right at the loop start)."""
+        if self.continuous:
+            return self.signal_breaks
+        return frozenset(self.package.boundaries) | self.signal_breaks
 
     @staticmethod
     def _validate_continuous(package: "LoopPackage") -> None:
@@ -982,9 +1043,10 @@ class Channel:
         # report -- every loop wrap's timestamps are rewritten to be
         # genuinely continuous (see the segment byte-serving routes) -- so
         # the sequence header is always 0 rather than computed.
-        first_discontinuity_sequence = 0 if self.continuous else compute_discontinuity_sequence(
-            first_global_index, pkg.segments_per_loop, pkg.boundaries
-        )
+        period_starts = self.period_starts
+        first_discontinuity_sequence = compute_discontinuity_sequence(
+            first_global_index, pkg.segments_per_loop, period_starts
+        ) if period_starts else 0
 
         lines = [
             "#EXTM3U",
@@ -1045,7 +1107,7 @@ class Channel:
             local_index = global_index % pkg.segments_per_loop
             local_loop_number = global_index // pkg.segments_per_loop
 
-            if i > 0 and local_index in pkg.boundaries and not self.continuous:
+            if i > 0 and local_index in period_starts:
                 # This segment starts a new loop iteration OR an internal
                 # asset-boundary join (grave-robber/SCOPE.md §6.1), and
                 # isn't the very first entry in the window (whose implicit
@@ -1411,8 +1473,16 @@ class Channel:
         # boundaries (pkg.boundaries == {0}), there is exactly one span per
         # loop and every span_bounds/span_index_for_local call below reduces
         # to the original whole-loop behavior.
-        boundaries_sorted = sorted(pkg.boundaries)
+        # Period starts = real asset boundaries + forced signal-only breaks
+        # (period_on_segmentation). A signal-only Period reuses its real
+        # span's init segment and keeps that span's media timeline, so
+        # `real_sorted` maps any Period back to the real span it lives in.
+        boundaries_sorted = sorted(self.period_starts)
+        real_sorted = sorted(pkg.boundaries)
         spans_per_loop = len(boundaries_sorted)
+
+        def _real_span_index(local_index: int) -> int:
+            return bisect.bisect_right(real_sorted, local_index) - 1
 
         def _span_bounds(span_index: int) -> tuple[int, int]:
             """[start_local, end_local) for asset span `span_index`."""
@@ -1472,13 +1542,13 @@ class Channel:
 
 
         def _period_entries(
-            boundary_ticks: list[int], local_indices: list[int], span_start_local: int
+            boundary_ticks: list[int], local_indices: list[int], origin_local: int
         ) -> list[tuple[int, int, int]]:
             """(segment_start_ticks, duration_ticks, local_index), relative
-            to this Period's own start (span_start_local's own tick), not
-            the whole loop's -- identical to loop-relative when
-            span_start_local == 0 (the common, no-internal-boundary case)."""
-            span_start_ticks = boundary_ticks[span_start_local]
+            to the tick of segment `origin_local` -- the Period's own
+            real-span start (or 0 for loop-relative), so identical to
+            loop-relative in the common, no-internal-boundary case."""
+            span_start_ticks = boundary_ticks[origin_local]
             entries = []
             for local_index in local_indices:
                 segment_start_ticks = boundary_ticks[local_index]
@@ -1518,6 +1588,17 @@ class Channel:
             if not local_indices:
                 continue
             span_start_local, _ = _span_bounds(span_index)
+            # Media-timeline origin: the real span this Period lives in. For
+            # a signal-only Period (forced break inside a span) it is earlier
+            # than span_start_local, `t` keeps counting from it, and the
+            # difference goes into presentationTimeOffset below.
+            origin_local = real_sorted[_real_span_index(span_start_local)]
+            real_span_index = _real_span_index(span_start_local)
+
+            def _extra_pto_attr(boundary_ticks: list[int], base_pto: int) -> str:
+                total = base_pto + boundary_ticks[span_start_local] - boundary_ticks[origin_local]
+                return f' presentationTimeOffset="{total}"' if total else ""
+
             # grave-robber/SCOPE.md §6.2: declared position (real serving
             # position + every gap_ticks crossed so far) drives the
             # Period's own start=, exactly mirroring the HLS side's PDT
@@ -1540,7 +1621,6 @@ class Channel:
                     period_start_ticks_relative = 0
                 else:
                     period_start_ticks_relative -= window_origin_abs
-            pto_attr = f' presentationTimeOffset="{pto_ticks}"' if pto_ticks else ""
             period_start_seconds = ticks_to_wall_clock_seconds(
                 period_start_ticks_relative, pkg.timescale
             )
@@ -1550,9 +1630,11 @@ class Channel:
             # used for marker placement -- loop-relative ticks, since each
             # Period's own <EventStream> is independently time-based from
             # its own start.
-            reference_entries = _period_entries(
-                pkg.segment_boundary_ticks, local_indices, span_start_local
-            )
+            # Loop-relative (markers' and asset boundaries' own frame).
+            reference_entries = [
+                (t + pkg.segment_boundary_ticks[0], d, li)
+                for t, d, li in _period_entries(pkg.segment_boundary_ticks, local_indices, 0)
+            ]
 
             # Asset-boundary comments (from franken-ts's .timeline.json, see
             # bake.py's load_asset_boundaries): decided once from the
@@ -1561,13 +1643,9 @@ class Channel:
             # same asset's comment at the same segment index -- same
             # pattern as marker placement above.
             asset_ids_by_local_index: dict[int, list[str]] = {}
-            span_offset_ticks = pkg.segment_boundary_ticks[span_start_local]
             for seg_start_local, duration_ticks, local_index in reference_entries:
-                # reference_entries are Period-relative; asset boundaries are loop-relative.
                 asset_ids = _asset_ids_starting_in_segment(
-                    pkg.asset_boundaries,
-                    seg_start_local + span_offset_ticks,
-                    seg_start_local + span_offset_ticks + duration_ticks,
+                    pkg.asset_boundaries, seg_start_local, seg_start_local + duration_ticks
                 )
                 if asset_ids:
                     asset_ids_by_local_index[local_index] = asset_ids
@@ -1705,9 +1783,10 @@ class Channel:
             video_representations = []
             for idx, rendition in enumerate(pkg.video_renditions):
                 entries = _period_entries(
-                    rendition.segment_boundary_ticks, local_indices, span_start_local
+                    rendition.segment_boundary_ticks, local_indices, origin_local
                 )
                 timeline_lines = _segment_timeline_xml(entries)
+                pto_attr = _extra_pto_attr(rendition.segment_boundary_ticks, pto_ticks)
                 v = rendition.video_variant
                 # A sparse (self-initializing) rendition's segments carry
                 # their own moov (SCOPE.md §11) -- there's no shared init
@@ -1716,7 +1795,7 @@ class Channel:
                 if rendition.self_initializing:
                     init_attr = ""
                 elif rendition.shared_init:
-                    init_attr = f' initialization="{rendition.name}/init_{span_index}.mp4"'
+                    init_attr = f' initialization="{rendition.name}/init_{real_span_index}.mp4"'
                 else:
                     init_attr = f' initialization="{rendition.name}/init.mp4"'
 
@@ -1733,17 +1812,20 @@ class Channel:
             if pkg.has_audio:
                 a = pkg.audio_rendition.audio_variant
                 audio_init = (
-                    f"audio/init_{span_index}.mp4" if pkg.audio_rendition.audio_sparse else "audio/init.mp4"
+                    f"audio/init_{real_span_index}.mp4" if pkg.audio_rendition.audio_sparse else "audio/init.mp4"
                 )
                 audio_entries = _period_entries(
-                    pkg.audio_rendition.audio_segment_boundary_ticks, local_indices, span_start_local
+                    pkg.audio_rendition.audio_segment_boundary_ticks, local_indices, origin_local
+                )
+                audio_pto_attr = _extra_pto_attr(
+                    pkg.audio_rendition.audio_segment_boundary_ticks, pto_ticks
                 )
                 audio_timeline_lines = _segment_timeline_xml(audio_entries)
                 audio_adaptation_set = f'''
     <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
       <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
         <SegmentTemplate media="audio/seg/$Number$.m4s" initialization="{audio_init}"
-                         timescale="{pkg.timescale}" startNumber="{first_number}"{pto_attr}>
+                         timescale="{pkg.timescale}" startNumber="{first_number}"{audio_pto_attr}>
           <SegmentTimeline>
 {audio_timeline_lines}
           </SegmentTimeline>
@@ -1849,16 +1931,57 @@ class Channel:
             if last_local + 1 < len(pkg.segment_boundary_ticks)
             else pkg.total_loop_duration_ticks
         )
-        pto_attr = f' presentationTimeOffset="{origin_abs}"' if origin_abs else ""
+        spl = pkg.segments_per_loop
+        signal_breaks = sorted(self.signal_breaks)
 
+        def _governing_break(global_index: int) -> int | None:
+            """Global index of the forced break that opened the Period this
+            segment belongs to (None: before the first one ever)."""
+            loop_number, local_index = divmod(global_index, spl)
+            earlier = [b for b in signal_breaks if b <= local_index]
+            if earlier:
+                return loop_number * spl + earlier[-1]
+            if signal_breaks and loop_number > 0:
+                return (loop_number - 1) * spl + signal_breaks[-1]
+            return None
 
-        def _entries(boundary_ticks: list[int]) -> list[tuple[int, int, int]]:
-            """(absolute_start_ticks, duration_ticks, local_index) -- this
-            Period's own start is fixed at tick 0 forever, so "absolute" and
-            "Period-relative" are the same thing here."""
+        # (governing break or None, [global indices]) -- one Period each.
+        groups: list[tuple[int | None, list[int]]] = []
+        for g in global_indices:
+            brk = _governing_break(g)
+            if groups and groups[-1][0] == brk:
+                groups[-1][1].append(g)
+            else:
+                groups.append((brk, [g]))
+
+        def _abs_ticks(global_index: int) -> int:
+            loop_number, local_index = divmod(global_index, spl)
+            return loop_number * pkg.total_loop_duration_ticks + pkg.segment_boundary_ticks[local_index]
+
+        def _group_start_abs(brk: int | None) -> int:
+            return 0 if brk is None else _abs_ticks(brk)
+
+        def _group_start_rel(group_number: int, brk: int | None) -> int:
+            """Period@start in ticks. A range rebases its first Period to 0
+            (presentationTimeOffset below carries the lead-in)."""
+            if window is not None:
+                return 0 if group_number == 0 else _group_start_abs(brk) - origin_abs
+            return _group_start_abs(brk)
+
+        def _group_pto(group_number: int, brk: int | None) -> int:
+            """Media time (absolute `t`/tfdt axis) that sits at Period@start,
+            so presentation time stays the segments' own absolute position
+            in every Period (timestamps never restart, only the signal)."""
+            if window is not None and group_number == 0:
+                return origin_abs
+            return _group_start_abs(brk)
+
+        def _entries(boundary_ticks: list[int], indices: list[int]) -> list[tuple[int, int, int]]:
+            """(absolute_start_ticks, duration_ticks, local_index) -- `t`
+            stays the absolute media position in every Period."""
             entries = []
-            for global_index in global_indices:
-                loop_number, local_index = divmod(global_index, pkg.segments_per_loop)
+            for global_index in indices:
+                loop_number, local_index = divmod(global_index, spl)
                 start = boundary_ticks[local_index]
                 end = (
                     boundary_ticks[local_index + 1]
@@ -1880,18 +2003,23 @@ class Channel:
         def _segment_timeline_xml(entries: list[tuple[int, int, int]]) -> str:
             return "\n".join(f'        <S t="{t}" d="{d}" />' for t, d, _local_index in entries)
 
+        group_of_global = {
+            g: group_number for group_number, (_brk, indices) in enumerate(groups) for g in indices
+        }
+
         # Markers: one <Event> per (event_id, loop_number) occurrence whose
-        # interval overlaps the window -- mirrors the per-Period builder's
-        # own once-per-marker-per-Period dedup, just across the whole window
-        # rather than per Period, since there's only ever one Period now.
+        # interval overlaps the window, placed in the Period of the first
+        # segment that covers it -- mirrors the per-Period builder's own
+        # once-per-marker dedup, just across the whole window.
         DIRECTION_CODE = {"out": 0, "in": 1, "instant": 2}
         scheme_id_uri = (
             SCTE35_XML_NAMESPACE if pkg.dash_signal_format == "xml" else "urn:scte:scte35:2014:xml+bin"
         )
-        event_xml: list[str] = []
+        event_xml_by_group: list[list[str]] = [[] for _ in groups]
         emitted: set[tuple[str, int]] = set()
         for global_index in global_indices:
-            loop_number, local_index = divmod(global_index, pkg.segments_per_loop)
+            loop_number, local_index = divmod(global_index, spl)
+            group_number = group_of_global[global_index]
             ref_start = pkg.segment_boundary_ticks[local_index]
             ref_end = (
                 pkg.segment_boundary_ticks[local_index + 1]
@@ -1954,64 +2082,73 @@ class Channel:
                     # as a growing manifest is refreshed: fold in the low 16
                     # bits of the absolute loop number (SCOPE.md §13.6).
                     synthetic_id = (base_id << 16) | (loop_number & 0xFFFF)
+                # Relative to the Period's own start (presentation axis).
                 event_presentation_time = (
-                    loop_number * pkg.total_loop_duration_ticks + marker["pts_time_ticks"] - origin_abs
+                    loop_number * pkg.total_loop_duration_ticks + marker["pts_time_ticks"]
+                    - origin_abs - _group_start_rel(group_number, groups[group_number][0])
                 )
-                event_xml.append(
+                event_xml_by_group[group_number].append(
                     f'    <Event presentationTime="{event_presentation_time}"'
                     f'{duration_attr} id="{synthetic_id}">\n'
                     f"{signal_xml}\n"
                     f"    </Event>"
                 )
 
-        event_streams_xml = (
-            f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}">\n'
-            + "\n".join(event_xml)
-            + "\n    </EventStream>"
-            if event_xml else ""
-        )
+        period_xml_parts = []
+        for group_number, (brk, indices) in enumerate(groups):
+            event_xml = event_xml_by_group[group_number]
+            event_streams_xml = (
+                f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}">\n'
+                + "\n".join(event_xml)
+                + "\n    </EventStream>"
+                if event_xml else ""
+            )
+            start_rel = _group_start_rel(group_number, brk)
+            pto = _group_pto(group_number, brk)
+            pto_attr = f' presentationTimeOffset="{pto}"' if pto else ""
+            first_global = indices[0]
 
-        video_representations = []
-        for idx, rendition in enumerate(pkg.video_renditions):
-            timeline_lines = _segment_timeline_xml(_entries(rendition.segment_boundary_ticks))
-            v = rendition.video_variant
-            # SCOPE.md §12.6: a sparse rendition may be self-initializing
-            # (own moov, no shared init at all) or carry a per-span init
-            # (span always 0 here, since boundaries == {0} means one span)
-            # -- same three-way choice build_dash_manifest's own
-            # per-Period builder makes, just with span_index fixed at 0.
-            if rendition.self_initializing:
-                init_attr = ""
-            elif rendition.shared_init:
-                init_attr = f' initialization="{rendition.name}/init_0.mp4"'
-            else:
-                init_attr = f' initialization="{rendition.name}/init.mp4"'
-            video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
+            video_representations = []
+            for idx, rendition in enumerate(pkg.video_renditions):
+                timeline_lines = _segment_timeline_xml(_entries(rendition.segment_boundary_ticks, indices))
+                v = rendition.video_variant
+                # SCOPE.md §12.6: a sparse rendition may be self-initializing
+                # (own moov, no shared init at all) or carry a per-span init
+                # (span always 0 here, since boundaries == {0} means one span)
+                # -- same three-way choice build_dash_manifest's own
+                # per-Period builder makes, just with span_index fixed at 0.
+                if rendition.self_initializing:
+                    init_attr = ""
+                elif rendition.shared_init:
+                    init_attr = f' initialization="{rendition.name}/init_0.mp4"'
+                else:
+                    init_attr = f' initialization="{rendition.name}/init.mp4"'
+                video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
         <SegmentTemplate media="{rendition.name}/cseg/$Number$.m4s"{init_attr}
-                         timescale="{pkg.timescale}" startNumber="{first_global_index}"{pto_attr}>
+                         timescale="{pkg.timescale}" startNumber="{first_global}"{pto_attr}>
           <SegmentTimeline>
 {timeline_lines}
           </SegmentTimeline>
         </SegmentTemplate>
       </Representation>''')
 
-        audio_adaptation_set = ""
-        if pkg.has_audio:
-            a = pkg.audio_rendition.audio_variant
-            audio_timeline_lines = _segment_timeline_xml(
-                _entries(pkg.audio_rendition.audio_segment_boundary_ticks)
-            )
-            # Same span-0 reasoning as video's init_attr above -- audio has
-            # no self-initializing variant of its own (only sparse/init_N
-            # vs. shared, see LoopPackage/VideoRendition).
-            audio_init = (
-                "audio/init_0.mp4" if pkg.audio_rendition.audio_sparse else "audio/init.mp4"
-            )
-            audio_adaptation_set = f'''
+            audio_adaptation_set = ""
+            if pkg.has_audio:
+                a = pkg.audio_rendition.audio_variant
+                audio_timeline_lines = _segment_timeline_xml(
+                    _entries(pkg.audio_rendition.audio_segment_boundary_ticks, indices)
+                )
+                # Same span-0 reasoning as video's init_attr above -- audio has
+                # no self-initializing variant of its own (only sparse/init_N
+                # vs. shared, see LoopPackage/VideoRendition).
+                audio_init = (
+                    "audio/init_0.mp4" if pkg.audio_rendition.audio_sparse else "audio/init.mp4"
+                )
+                audio_adaptation_set = f'''
     <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
       <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
         <SegmentTemplate media="audio/cseg/$Number$.m4s" initialization="{audio_init}"
-                         timescale="{pkg.timescale}" startNumber="{first_global_index}"{pto_attr}>
+                         timescale="{pkg.timescale}" startNumber="{first_global}"{pto_attr}>
           <SegmentTimeline>
 {audio_timeline_lines}
           </SegmentTimeline>
@@ -2019,12 +2156,18 @@ class Channel:
       </Representation>
     </AdaptationSet>'''
 
-        period_xml = f'''  <Period id="continuous" start="PT0S">
+            # Stable across polls: named after the break that opened it,
+            # never after where the sliding window happens to clip it. With
+            # no forced breaks this is the single never-restarted Period.
+            period_id = "continuous" if brk is None else f"break{brk}"
+            start_seconds = ticks_to_wall_clock_seconds(start_rel, pkg.timescale)
+            period_start = "PT0S" if start_rel == 0 else f"PT{start_seconds}S"
+            period_xml_parts.append(f'''  <Period id="{period_id}" start="{period_start}">
 {event_streams_xml}
     <AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
 {chr(10).join(video_representations)}
     </AdaptationSet>{audio_adaptation_set}
-  </Period>'''
+  </Period>''')
 
         mpd_open = self._mpd_open_tag(
             window=window,
@@ -2034,7 +2177,7 @@ class Channel:
         )
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
 {mpd_open}
-{period_xml}
+{chr(10).join(period_xml_parts)}
 {self._utc_timing_xml(window)}</MPD>
 '''
         return mpd
@@ -2065,10 +2208,17 @@ def create_app(
     window_segments: int = 6,
     continuous: bool = False,
     timeshift: TimeshiftConfig | None = None,
+    period_on_segmentation: frozenset[int] = frozenset(),
 ) -> Flask:
     ts_cfg = timeshift or TimeshiftConfig()
     package = LoopPackage(package_dir)
-    channel = Channel(package, epoch_ticks, window_segments=window_segments, continuous=continuous)
+    channel = Channel(
+        package,
+        epoch_ticks,
+        window_segments=window_segments,
+        continuous=continuous,
+        period_on_segmentation=period_on_segmentation,
+    )
     process_start_ticks = channel.now_ticks()
 
     app = Flask(__name__)
@@ -2414,6 +2564,17 @@ def main() -> int:
         "fragments -- checked once at startup, hard-fails otherwise.",
     )
     parser.add_argument(
+        "--period-on-segmentation",
+        default="",
+        metavar="IDS",
+        help="Comma-separated segmentation_type_id values (e.g. "
+        "0x22,0x23,0x30,0x31) whose markers force a new DASH Period / "
+        "#EXT-X-DISCONTINUITY at the segment they fall in, in either "
+        "timeline mode. Signal only: with --continuous-timeline the "
+        "timestamps stay continuous across the new Period. Channel-level; "
+        "SCOPE.md §14.",
+    )
+    parser.add_argument(
         "--timeshift",
         action="store_true",
         help="SCOPE.md §13: enable startover/catchup via query parameters on "
@@ -2453,6 +2614,7 @@ def main() -> int:
         epoch_ticks,
         window_segments=window_segments,
         continuous=args.continuous_timeline,
+        period_on_segmentation=parse_segmentation_type_ids(args.period_on_segmentation),
         timeshift=TimeshiftConfig(
             enabled=args.timeshift,
             start_param=args.timeshift_start_param,

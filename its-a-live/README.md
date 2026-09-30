@@ -140,6 +140,7 @@ source_path = "../outputs/mychannel"   # franken-ts output
 segment_duration   = 4.0
 dvr_window_seconds = 30
 continuous_timeline = true  # default -- see loop-dee-loop/SCOPE.md §12; false reverts to signaled discontinuities/Period restarts at the loop wrap
+# period_on_segmentation = [0x22, 0x30]  # optional: force a Period/discontinuity at these SCTE-35 segmentation_type_ids, even with continuous_timeline (loop-dee-loop/SCOPE.md §14)
 
 [timeshift]                  # optional; startover/catchup (loop-dee-loop/SCOPE.md §13), on by default
 enabled = true

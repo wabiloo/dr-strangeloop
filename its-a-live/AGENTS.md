@@ -65,6 +65,7 @@ dvr_window_seconds = 30
 hls_format = "cmaf"          # "cmaf" (default) | "ts"; HLS only, DASH remains CMAF
 hls_ts_mux_audio = true      # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
 continuous_timeline = true   # default true -- serve.py rewrites each segment's own timestamps per request (header patch, never a re-mux -- loop-dee-loop/SCOPE.md §12) so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the loop wrap. false falls back to the honestly-signaled discontinuity/Period-restart default (e.g. if a package's CMAF fragments have a 32-bit tfdt, which continuity mode's startup check refuses). ecs-express/local-docker only -- aws-media (MediaLive/MediaPackage) doesn't run loop-dee-loop at all.
+period_on_segmentation = []   # optional list of SCTE-35 segmentation_type_ids (e.g. [0x22, 0x23, 0x30, 0x31]) that force a new DASH Period / #EXT-X-DISCONTINUITY at matching markers; signal only, so timestamps stay continuous when continuous_timeline = true (loop-dee-loop/SCOPE.md §14)
 
 # Startover/catchup (loop-dee-loop/SCOPE.md §13) -- ecs-express/local-docker only. The
 # channel's normal HLS/DASH URLs accept start/end/full-loops/timeline query

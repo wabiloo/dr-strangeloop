@@ -13,6 +13,7 @@ from aws_cdk import (
 from constructs import Construct
 from loop_shared_stack import CLUSTER_NAME
 from _host_paths import to_host_path
+from _packaging_cfg import period_on_segmentation_serve_args
 from _timeshift_cfg import timeshift_param_names, timeshift_serve_args
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
@@ -190,6 +191,7 @@ class LoopStack(Stack):
                     "--dvr-window-seconds", dvr_window_seconds,
                     "--epoch-utc", "1970-01-01T00:00:00Z",
                     *(["--continuous-timeline"] if continuous_timeline else []),
+                    *period_on_segmentation_serve_args(config),
                     *timeshift_serve_args(config),
                 ],
                 environment=[
