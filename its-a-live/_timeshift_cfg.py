@@ -13,18 +13,22 @@ DEFAULTS = {
     "enabled": True,
     "start_param": "start",
     "end_param": "end",
-    "continuous_param": "continuous_timeline",
     "full_loop_param": "full_loop",
     "max_span_seconds": 21600,
 }
 
-_PARAM_KEYS = ("start_param", "end_param", "continuous_param", "full_loop_param")
+_PARAM_KEYS = ("start_param", "end_param", "full_loop_param")
+
+# Fixed name of the per-request timeline-mode override (timeline=default|
+# continuous|discontinuous) -- not configurable, mirrors loop-dee-loop's
+# timeshift.TIMELINE_PARAM.
+TIMELINE_PARAM = "timeline"
 
 
 def timeshift_settings(cfg: dict) -> dict:
     """Merged + validated `[timeshift]` table."""
     merged = {**DEFAULTS, **cfg.get("timeshift", {})}
-    names = [str(merged[k]) for k in _PARAM_KEYS]
+    names = [str(merged[k]) for k in _PARAM_KEYS] + [TIMELINE_PARAM]
     if any(not n for n in names) or len(set(names)) != len(names):
         raise ValueError(f"[timeshift] parameter names must be non-empty and distinct, got {names}")
     if int(merged["max_span_seconds"]) < 1:
@@ -37,7 +41,7 @@ def timeshift_settings(cfg: dict) -> dict:
 def timeshift_param_names(cfg: dict) -> list[str]:
     """Query parameter names a CDN must key manifest caching on ([] if off)."""
     s = timeshift_settings(cfg)
-    return [s[k] for k in _PARAM_KEYS] if s["enabled"] else []
+    return [*(s[k] for k in _PARAM_KEYS), TIMELINE_PARAM] if s["enabled"] else []
 
 
 def timeshift_serve_args(cfg: dict) -> list[str]:
@@ -49,7 +53,6 @@ def timeshift_serve_args(cfg: dict) -> list[str]:
         "--timeshift",
         "--timeshift-start-param", s["start_param"],
         "--timeshift-end-param", s["end_param"],
-        "--timeshift-continuous-param", s["continuous_param"],
         "--timeshift-full-loop-param", s["full_loop_param"],
         "--timeshift-max-span-seconds", str(s["max_span_seconds"]),
     ]

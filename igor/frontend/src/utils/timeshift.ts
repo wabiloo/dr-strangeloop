@@ -3,7 +3,7 @@
 // A channel serves time-shifted playback from its NORMAL manifest URLs via
 // query parameters whose names are configurable per channel ([timeshift] in
 // the channel TOML). This module is the single place that turns a
-// user-facing request (start, optional end, full-loop, continuous override)
+// user-facing request (start, optional end, full-loop, timeline override)
 // into those URLs, and pre-validates it the same way serve.py will, so the
 // UI can explain a problem instead of showing a bare HTTP 400.
 //
@@ -13,7 +13,6 @@ export interface TimeshiftParams {
   enabled: boolean
   start_param: string
   end_param: string
-  continuous_param: string
   full_loop_param: string
   max_span_seconds: number
 }
@@ -22,19 +21,23 @@ export const DEFAULT_TIMESHIFT_PARAMS: TimeshiftParams = {
   enabled: true,
   start_param: 'start',
   end_param: 'end',
-  continuous_param: 'continuous_timeline',
   full_loop_param: 'full_loop',
   max_span_seconds: 21600,
 }
 
 export type TimeFormat = 'iso' | 'epoch' | 'epoch_ms'
-export type ContinuousChoice = 'default' | 'on' | 'off'
+/** Fixed (not configurable) name of the per-request timeline-mode override,
+ * `timeline=default|continuous|discontinuous`; absent == `default`, i.e. the
+ * channel's own continuous-timeline setting. Mirrors loop-dee-loop's
+ * timeshift.TIMELINE_PARAM. */
+export const TIMELINE_PARAM = 'timeline'
+export type TimelineChoice = 'default' | 'continuous' | 'discontinuous'
 
 export interface TimeshiftRequest {
   start: Date | null
   end: Date | null
   fullLoop: boolean
-  continuous: ContinuousChoice
+  timeline: TimelineChoice
   format: TimeFormat
 }
 
@@ -57,7 +60,6 @@ export function timeshiftParamsFromConfig(table: Record<string, unknown> | undef
     enabled: typeof t.enabled === 'boolean' ? t.enabled : DEFAULT_TIMESHIFT_PARAMS.enabled,
     start_param: str('start_param'),
     end_param: str('end_param'),
-    continuous_param: str('continuous_param'),
     full_loop_param: str('full_loop_param'),
     max_span_seconds:
       typeof t.max_span_seconds === 'number' && t.max_span_seconds >= 1
@@ -95,9 +97,7 @@ export function buildTimeshiftQuery(params: TimeshiftParams, req: TimeshiftReque
     }
     if (req.fullLoop) parts.push(`${encodeURIComponent(params.full_loop_param)}=true`)
   }
-  if (req.continuous !== 'default') {
-    parts.push(`${encodeURIComponent(params.continuous_param)}=${req.continuous === 'on' ? 'true' : 'false'}`)
-  }
+  if (req.timeline !== 'default') parts.push(`${TIMELINE_PARAM}=${req.timeline}`)
   return parts.join('&')
 }
 

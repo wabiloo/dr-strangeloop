@@ -40,7 +40,17 @@ from flask import Flask, Response, abort, request, send_file
 
 import cmaf
 import continuity
-from timeshift import TimeWindow, TimeshiftConfig, TimeshiftError, global_index_at, parse_bool, parse_instant_ticks, resolve_window
+from timeshift import (
+    TIMELINE_PARAM,
+    TimeWindow,
+    TimeshiftConfig,
+    TimeshiftError,
+    global_index_at,
+    parse_bool,
+    parse_instant_ticks,
+    parse_timeline,
+    resolve_window,
+)
 from loop_math import (
     compute_loop_position,
     global_segment_number,
@@ -2064,9 +2074,11 @@ def create_app(
         if ts_cfg.enabled:
             args = request.args
             try:
-                raw_cont = args.get(ts_cfg.continuous_param)
-                if raw_cont is not None:
-                    ch = channel.for_mode(parse_bool(raw_cont, ts_cfg.continuous_param))
+                raw_timeline = args.get(TIMELINE_PARAM)
+                if raw_timeline is not None:
+                    want_continuous = parse_timeline(raw_timeline)
+                    if want_continuous is not None:
+                        ch = channel.for_mode(want_continuous)
                 raw_start, raw_end = args.get(ts_cfg.start_param), args.get(ts_cfg.end_param)
                 if raw_start is None and raw_end is not None:
                     raise TimeshiftError(f"'{ts_cfg.end_param}' requires '{ts_cfg.start_param}'")
@@ -2146,7 +2158,7 @@ def create_app(
                     "enabled": True,
                     "start_param": ts_cfg.start_param,
                     "end_param": ts_cfg.end_param,
-                    "continuous_param": ts_cfg.continuous_param,
+                    "timeline_param": TIMELINE_PARAM,
                     "full_loop_param": ts_cfg.full_loop_param,
                     "max_span_seconds": ts_cfg.max_span_seconds,
                     "continuous_supported": channel.continuous or channel.continuous_error is None,
@@ -2368,7 +2380,6 @@ def main() -> int:
     )
     parser.add_argument("--timeshift-start-param", default="start")
     parser.add_argument("--timeshift-end-param", default="end")
-    parser.add_argument("--timeshift-continuous-param", default="continuous_timeline")
     parser.add_argument("--timeshift-full-loop-param", default="full_loop")
     parser.add_argument("--timeshift-max-span-seconds", type=int, default=21600)
     args = parser.parse_args()
@@ -2406,7 +2417,6 @@ def main() -> int:
             enabled=args.timeshift,
             start_param=args.timeshift_start_param,
             end_param=args.timeshift_end_param,
-            continuous_param=args.timeshift_continuous_param,
             full_loop_param=args.timeshift_full_loop_param,
             max_span_seconds=args.timeshift_max_span_seconds,
         ),

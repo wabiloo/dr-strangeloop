@@ -745,7 +745,6 @@ milliseconds when > 1e11) or ISO8601 (`Z` or numeric offset).
 enabled            = true
 start_param        = "start"
 end_param          = "end"
-continuous_param   = "continuous_timeline"   # per-request override, bool
 full_loop_param    = "full_loop"             # bool: widen range to whole loops (13.5b)
 max_span_seconds   = 21600
 ```
@@ -767,13 +766,23 @@ Plumbing: `its-a-live` TOML -> `serve.py` CLI flags and `wsgi.py` env vars
 "Live edge" for a still-growing range is the same `now`-derived edge live
 uses; nothing else about segment availability changes.
 
-### 13.5 DECIDED: per-request `continuous_timeline` override
+### 13.5 DECIDED: per-request `timeline` override
 
 `--continuous-timeline` (§12) is a startup flag today. It becomes the
-*default* for the new per-request `continuous_param`; the param overrides
-it for that request. Startup preconditions (§12.4: `boundaries == {0}`,
-64-bit `tfdt`) are computed once and cached; `continuous=true` on a
-package that fails them -> 400, never a silent fallback.
+*default* for a new per-request query parameter with a **fixed name,
+`timeline`** (deliberately not configurable, unlike `start`/`end`/
+`full_loop`; a configured name equal to `timeline` is rejected), with values:
+
+- `default` (or the param absent) -- follow the server's `--continuous-timeline`;
+- `continuous` -- §12 continuity for this request;
+- `discontinuous` -- the honestly-signaled mode (`#EXT-X-DISCONTINUITY` /
+  a Period per loop) for this request.
+
+It applies to **live URLs as well** as to ranges (no `start` needed), and an
+HLS master propagates it to its child playlists. Anything else -> 400.
+Startup preconditions (§12.4: `boundaries == {0}`, 64-bit `tfdt`) are computed
+once and cached; `continuous` on a package that fails them -> 400, never a
+silent fallback.
 
 This forces a URL-scheme decision, because the segment URL means
 different things in the two modes (§12.2: local index vs. global index)
@@ -797,7 +806,7 @@ and one server must serve both:
 Non-continuous ranges spanning several loop wraps emit one
 `#EXT-X-DISCONTINUITY` (HLS) / one `<Period>` (DASH) per wrap. A 6h span
 over a 10-minute loop is ~36. This is accepted (see interview); players
-that dislike it can request `continuous_timeline=true`.
+that dislike it can request `timeline=continuous`.
 
 Existing limit that catchup makes reachable: MPEG-TS PTS/DTS/PCR wrap at
 33 bits (~26.5h), and continuous mode's shift of `loop_number *
@@ -829,7 +838,7 @@ Ended ranges are `type="static"` with `mediaPresentationDuration` and no
 
 ### 13.5b DECIDED: `full_loop` (whole-loop snapping)
 
-A fourth, boolean, configurable parameter (`full_loop_param`, default
+A boolean, configurable parameter (`full_loop_param`, default
 `full_loop`). When true, the range is widened to whole loop iterations
 *before* segment snapping:
 

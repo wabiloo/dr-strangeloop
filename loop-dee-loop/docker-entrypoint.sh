@@ -70,7 +70,6 @@ case "$SUBCOMMAND" in
             TIMESHIFT="false"
             TIMESHIFT_START_PARAM=""
             TIMESHIFT_END_PARAM=""
-            TIMESHIFT_CONTINUOUS_PARAM=""
             TIMESHIFT_FULL_LOOP_PARAM=""
             TIMESHIFT_MAX_SPAN_SECONDS=""
             while [[ $# -gt 0 ]]; do
@@ -84,7 +83,6 @@ case "$SUBCOMMAND" in
                     --timeshift) TIMESHIFT="true"; shift ;;
                     --timeshift-start-param) TIMESHIFT_START_PARAM="$2"; shift 2 ;;
                     --timeshift-end-param) TIMESHIFT_END_PARAM="$2"; shift 2 ;;
-                    --timeshift-continuous-param) TIMESHIFT_CONTINUOUS_PARAM="$2"; shift 2 ;;
                     --timeshift-full-loop-param) TIMESHIFT_FULL_LOOP_PARAM="$2"; shift 2 ;;
                     --timeshift-max-span-seconds) TIMESHIFT_MAX_SPAN_SECONDS="$2"; shift 2 ;;
                     *)
@@ -100,7 +98,7 @@ case "$SUBCOMMAND" in
 
             export LOOP_PACKAGE_DIR="$LOOP_PACKAGE_LOCAL_DIR"
             export EPOCH_UTC DVR_WINDOW_SECONDS WINDOW_SEGMENTS CONTINUOUS_TIMELINE
-            export TIMESHIFT TIMESHIFT_START_PARAM TIMESHIFT_END_PARAM TIMESHIFT_CONTINUOUS_PARAM
+            export TIMESHIFT TIMESHIFT_START_PARAM TIMESHIFT_END_PARAM
             export TIMESHIFT_FULL_LOOP_PARAM TIMESHIFT_MAX_SPAN_SECONDS
             WORKERS="${GUNICORN_WORKERS:-4}"
             log "starting gunicorn (${WORKERS} workers) on ${HOST}:${PORT}"

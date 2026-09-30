@@ -18,6 +18,10 @@ from loop_math import compute_loop_position, global_segment_number, segment_inde
 # (1e11 s is year 5138; 1e11 ms is 1973).
 _MS_THRESHOLD = 10**11
 _NUMERIC = re.compile(r"^\d+(\.\d+)?$")
+# Fixed (not configurable) name and values of the per-request timeline-mode
+# override: `default` = the server's --continuous-timeline setting.
+TIMELINE_PARAM = "timeline"
+TIMELINE_VALUES = ("default", "continuous", "discontinuous")
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off", ""}
 
@@ -31,12 +35,11 @@ class TimeshiftConfig:
     enabled: bool = False
     start_param: str = "start"
     end_param: str = "end"
-    continuous_param: str = "continuous_timeline"
     full_loop_param: str = "full_loop"
     max_span_seconds: int = 21600
 
     def __post_init__(self):
-        names = [self.start_param, self.end_param, self.continuous_param, self.full_loop_param]
+        names = [self.start_param, self.end_param, self.full_loop_param, TIMELINE_PARAM]
         if any(not n for n in names) or len(set(names)) != len(names):
             raise ValueError(f"timeshift parameter names must be non-empty and distinct: {names}")
         if self.max_span_seconds < 1:
@@ -44,7 +47,7 @@ class TimeshiftConfig:
 
     @property
     def param_names(self) -> tuple[str, ...]:
-        return (self.start_param, self.end_param, self.continuous_param, self.full_loop_param)
+        return (self.start_param, self.end_param, self.full_loop_param, TIMELINE_PARAM)
 
 
 def parse_bool(value: str, name: str) -> bool:
@@ -54,6 +57,19 @@ def parse_bool(value: str, name: str) -> bool:
     if v in _FALSE:
         return False
     raise TimeshiftError(f"'{name}' must be a boolean (true/false/1/0), got {value!r}")
+
+
+def parse_timeline(value: str) -> bool | None:
+    """`timeline=` -> True (continuous), False (discontinuous) or None (use the
+    server default). Case-insensitive; anything else is a 400."""
+    v = value.strip().lower()
+    if v == "default":
+        return None
+    if v == "continuous":
+        return True
+    if v == "discontinuous":
+        return False
+    raise TimeshiftError(f"'{TIMELINE_PARAM}' must be one of {', '.join(TIMELINE_VALUES)}, got {value!r}")
 
 
 def parse_instant_ticks(value: str, timescale: int, name: str = "time") -> int:

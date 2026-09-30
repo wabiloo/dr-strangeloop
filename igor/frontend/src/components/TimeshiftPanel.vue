@@ -18,10 +18,11 @@ import {
   inputValueToDate,
   validateRequest,
   type ChannelTiming,
-  type ContinuousChoice,
+  type TimelineChoice,
   type TimeFormat,
   type TimeshiftParams,
   type TimeshiftRequest,
+  TIMELINE_PARAM,
 } from '../utils/timeshift'
 import FieldHelp from './FieldHelp.vue'
 
@@ -53,7 +54,7 @@ const useUtc = ref(true)
 const startText = ref('')
 const endText = ref('')
 const fullLoop = ref(false)
-const continuous = ref<ContinuousChoice>('default')
+const timeline = ref<TimelineChoice>('default')
 const format = ref<TimeFormat>('iso')
 
 const nowMs = ref(Date.now())
@@ -81,7 +82,7 @@ const request = computed<TimeshiftRequest>(() => ({
   start: inputValueToDate(startText.value, useUtc.value),
   end: inputValueToDate(endText.value, useUtc.value),
   fullLoop: fullLoop.value,
-  continuous: continuous.value,
+  timeline: timeline.value,
   format: format.value,
 }))
 
@@ -111,7 +112,7 @@ const summary = computed(() => {
   return `Serves ${fmt(r.startMs)} → ${fmt(r.endMs)}, ${formatDuration((r.endMs - r.startMs) / 1000)}${loops}. Start and end snap to segment boundaries.${snapped}`
 })
 
-// A continuous-only override (no start) is also a valid, shareable URL.
+// A timeline-only override (no start) is also a valid, shareable URL.
 const hlsUrlOut = computed(() =>
   props.hlsUrl ? buildTimeshiftUrl(props.hlsUrl, props.params, request.value) : '',
 )
@@ -202,10 +203,10 @@ const zoneOptions = [
   { label: 'UTC', value: true },
   { label: 'Local', value: false },
 ]
-const continuousOptions = [
-  { label: 'Channel default', value: 'default' },
-  { label: 'Continuous (no discontinuities)', value: 'on' },
-  { label: 'Signaled discontinuities', value: 'off' },
+const timelineOptions = [
+  { label: 'default (channel setting)', value: 'default' },
+  { label: 'continuous (no discontinuities)', value: 'continuous' },
+  { label: 'discontinuous (signaled at each wrap)', value: 'discontinuous' },
 ]
 const formatOptions = [
   { label: 'ISO 8601', value: 'iso' },
@@ -289,15 +290,16 @@ const formatOptions = [
       </div>
       <div class="col-12 md:col-4 flex flex-column gap-1">
         <label class="text-xs text-color-secondary">
-          Timeline ({{ params.continuous_param }})
+          Timeline ({{ TIMELINE_PARAM }})
           <FieldHelp label="Timeline override">
-            Overrides the channel's continuous-timeline setting for just this URL. Continuous rewrites
-            timestamps so there is no discontinuity at each loop wrap; signaled mode emits one
-            #EXT-X-DISCONTINUITY (HLS) / Period (DASH) per wrap, which for a long range is many. Continuous is
-            refused (HTTP 400) if the baked package does not support it.
+            <code>timeline=default|continuous|discontinuous</code> — works on live URLs too, not just ranges.
+            <em>default</em> (or leaving it out) follows the channel's continuous-timeline setting.
+            <em>continuous</em> rewrites timestamps so there is no discontinuity at each loop wrap;
+            <em>discontinuous</em> signals one #EXT-X-DISCONTINUITY (HLS) / Period (DASH) per wrap, which for a
+            long range is many. <em>continuous</em> is refused (HTTP 400) if the baked package cannot support it.
           </FieldHelp>
         </label>
-        <Select v-model="continuous" :options="continuousOptions" option-label="label" option-value="value" fluid />
+        <Select v-model="timeline" :options="timelineOptions" option-label="label" option-value="value" fluid />
       </div>
       <div class="col-12 flex align-items-center gap-2">
         <Checkbox v-model="fullLoop" binary input-id="ts-full-loop" />
@@ -345,7 +347,9 @@ const formatOptions = [
           These are ordinary channel manifest URLs with extra query parameters, so any player (or the CDN) can use
           them; nothing is stored per viewer. Parameter names are set per channel in
           <code>[timeshift]</code>: <code>{{ params.start_param }}</code>, <code>{{ params.end_param }}</code>,
-          <code>{{ params.continuous_param }}</code>, <code>{{ params.full_loop_param }}</code>.
+          <code>{{ params.full_loop_param }}</code>; the timeline override is always
+          <code>{{ TIMELINE_PARAM }}</code> (<code>default</code>, <code>continuous</code> or
+          <code>discontinuous</code>).
         </p>
         <ul class="m-0 pl-4">
           <li>
@@ -370,7 +374,7 @@ const formatOptions = [
             inside the range are carried through.
           </li>
           <li>
-            <strong>Discontinuities</strong>: unless continuous is on, each loop wrap inside the range is an
+            <strong>Discontinuities</strong>: unless the timeline is continuous, each loop wrap inside the range is an
             #EXT-X-DISCONTINUITY / DASH Period, so a long range over a short loop has many.
           </li>
           <li>

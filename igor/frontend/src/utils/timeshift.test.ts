@@ -19,7 +19,7 @@ const req = (over: Partial<TimeshiftRequest> = {}): TimeshiftRequest => ({
   start: at('2026-09-30T08:00:00Z'),
   end: at('2026-09-30T08:10:00Z'),
   fullLoop: false,
-  continuous: 'default',
+  timeline: 'default',
   format: 'iso',
   ...over,
 })
@@ -37,18 +37,18 @@ test('buildTimeshiftUrl: catchup with default names', () => {
   assert.equal(url, 'https://cdn.example/index.m3u8?start=2026-09-30T08:00:00Z&end=2026-09-30T08:10:00Z')
 })
 
-test('buildTimeshiftUrl: custom names, full loop, continuous override, epoch values', () => {
-  const params = { ...P, start_param: 'from', end_param: 'to', full_loop_param: 'whole', continuous_param: 'cont' }
-  const url = buildTimeshiftUrl('http://localhost:8080/stream.mpd', params, req({ fullLoop: true, continuous: 'off', format: 'epoch' }))
-  assert.equal(url, 'http://localhost:8080/stream.mpd?from=1790755200&to=1790755800&whole=true&cont=false')
+test('buildTimeshiftUrl: custom names, full loop, timeline override, epoch values', () => {
+  const params = { ...P, start_param: 'from', end_param: 'to', full_loop_param: 'whole' }
+  const url = buildTimeshiftUrl('http://localhost:8080/stream.mpd', params, req({ fullLoop: true, timeline: 'discontinuous', format: 'epoch' }))
+  assert.equal(url, 'http://localhost:8080/stream.mpd?from=1790755200&to=1790755800&whole=true&timeline=discontinuous')
 })
 
-test('buildTimeshiftUrl: no start means live; continuous alone is still a valid override', () => {
+test('buildTimeshiftUrl: no start means live; timeline alone is still a valid override', () => {
   const live = req({ start: null, end: null })
   assert.equal(buildTimeshiftUrl('http://x/index.m3u8', P, live), 'http://x/index.m3u8')
   assert.equal(
-    buildTimeshiftUrl('http://x/index.m3u8', P, { ...live, continuous: 'on' }),
-    'http://x/index.m3u8?continuous_timeline=true',
+    buildTimeshiftUrl('http://x/index.m3u8', P, { ...live, timeline: 'continuous' }),
+    'http://x/index.m3u8?timeline=continuous',
   )
 })
 
