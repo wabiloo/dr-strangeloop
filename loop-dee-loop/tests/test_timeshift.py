@@ -430,3 +430,22 @@ def test_rseg_shifts_ts_timestamps_relative_to_range_origin(tmp_path):
     # a later loop in the range is shifted by whole loops relative to the origin only
     later = next(u for u in uris if int(re.search(r"(\d+)\.ts", u).group(1)) >= 2 * (origin + 2))
     assert first_pts(client.get("/" + later).data) == unshifted + 2 * total
+
+
+@ffmpeg
+@pytest.mark.parametrize("server_continuous", [False, True])
+def test_continuous_override_works_on_plain_live(tmp_path, server_continuous):
+    """The per-request override needs no start/end: it flips the live
+    stream's mode either way, in HLS, DASH and the master's child URIs."""
+    client, _ = _app(tmp_path, continuous=server_continuous)
+    on = client.get("/video.m3u8?continuous_timeline=true").get_data(as_text=True)
+    off = client.get("/video.m3u8?continuous_timeline=false").get_data(as_text=True)
+    assert "cseg/" in on and "#EXT-X-DISCONTINUITY\n" not in on and "PLAYLIST-TYPE" not in on
+    assert "cseg/" not in off and "#EXT-X-DISCONTINUITY\n" in off
+    assert 'id="continuous"' in client.get("/stream.mpd?continuous_timeline=true").get_data(as_text=True)
+    assert 'id="continuous"' not in client.get("/stream.mpd?continuous_timeline=false").get_data(as_text=True)
+    master = client.get("/index.m3u8?continuous_timeline=true").get_data(as_text=True)
+    assert "video.m3u8?continuous_timeline=true" in master
+    # no param: the server default still applies
+    default = client.get("/video.m3u8").get_data(as_text=True)
+    assert ("cseg/" in default) is server_continuous
