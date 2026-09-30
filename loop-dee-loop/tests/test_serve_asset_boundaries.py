@@ -324,6 +324,23 @@ def test_dash_manifest_pads_from_previous_span_when_window_exceeds_current_span(
     assert 'id="loop0-2"' in mpd  # span1, carries the declared gap offset
 
 
+def test_dash_loop_comment_only_on_first_period_of_a_loop():
+    boundary_ticks = [0, 90_000, 180_000, 270_000]
+    package = _sparse_fake_package(
+        boundaries=[2], gap_ticks_by_index={2: 45_000}, segment_boundary_ticks=boundary_ticks,
+        total_loop_duration_ticks=360_000,
+    )
+    channel = Channel(package, epoch_ticks=0, window_segments=4)
+    channel.now_ticks = lambda: 359_000
+
+    mpd = channel.build_dash_manifest()
+
+    assert mpd.count("<Period ") == 2
+    assert mpd.count("<!-- loop 0 -->") == 1
+    assert mpd.index("<!-- loop 0 -->") < mpd.index('id="loop0-0"')
+    assert mpd.index('id="loop0-0"') < mpd.index('id="loop0-2"')
+
+
 # ── §11.3: segment byte-serving 404 guard, real on-disk sparse package ──
 
 

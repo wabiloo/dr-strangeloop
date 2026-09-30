@@ -1796,8 +1796,10 @@ class Channel:
                 if spans_per_loop == 1
                 else f"loop{loop_number}-{span_start_local}"
             )
-            period_xml_parts.append(f'''  <!-- loop {loop_number} -->
-  <Period id="{period_id}" start="PT{period_start_seconds}S">
+            # Loop-number comment only on the Period that starts the loop,
+            # not on the later asset-span Periods within the same loop.
+            loop_comment = f"  <!-- loop {loop_number} -->\n" if span_start_local == 0 else ""
+            period_xml_parts.append(f'''{loop_comment}  <Period id="{period_id}" start="PT{period_start_seconds}S">
 {event_streams_xml}
     <AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
 {chr(10).join(video_representations)}
