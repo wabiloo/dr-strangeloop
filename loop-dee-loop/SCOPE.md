@@ -698,3 +698,152 @@ Still out of scope, unchanged from §12.4: a package with any internal
 `asset_boundary` beyond index 0. Extending continuity across those is the
 harder problem described above and in §12.4's original bullet, not
 attempted here.
+
+## 13. Extension: startover + catchup (time-shifted playback via query params)
+
+**PROPOSED** (design agreed in interview; not yet implemented). Adds two
+playback modes next to the live DVR window, served from the *same*
+manifest URLs, selected purely by query parameters. No bake changes, no
+segment-byte changes, no new stored state.
+
+### 13.1 Why this is cheap
+
+§4.2's serve path is a pure function of `(now, epoch, package)`. Live
+builds a window ending at `now`; time-shifted playback builds a window
+over an explicit `[start, end]` instead. `loop_math.compute_loop_position`
+already resolves any instant >= epoch, and segment bytes for a past
+instant are identical to what was served then (default mode: unmodified
+file; continuous mode: a pure function of the global index, §12.2).
+
+### 13.2 DECIDED: scope and assumptions
+
+- **The epoch never changes.** History is *derived*, not recorded. A
+  re-`start --epoch-utc` or a re-bake silently changes what the past
+  contained; this is a documented caveat, not something serve.py detects.
+  (Mitigation only: expose `epoch` in `/health` and as a manifest comment.)
+- **Any time back** to the epoch; `start < epoch` -> 400.
+- **Max span** `max_span_seconds` (default 21600 = 6h, channel TOML);
+  `end - start` above it -> 400. `start > now` or `end <= start` -> 400.
+- **Open, same as live.** No auth, no signing. Params are plain query strings.
+- **Snap to segment boundaries.** `start` snaps down, `end` snaps up to the
+  enclosing segment edge. No partial segments, no re-mux. An exact in-point
+  may be hinted (`EXT-X-START:TIME-OFFSET` / DASH `presentationTimeOffset`)
+  but that is optional polish, not required for v1.
+- **SCTE-35 markers carry through** for every range, same DATERANGE /
+  EventStream authoring as live (`scte35_signaling.py`), extended to a
+  multi-loop span (see 13.6).
+- **Same URL as live.** `master.m3u8` / `manifest.mpd` (and each child
+  playlist) behave as live when no params are present.
+
+### 13.3 Parameters
+
+Names are configurable per channel; values accept epoch (seconds, or
+milliseconds when > 1e11) or ISO8601 (`Z` or numeric offset).
+
+```toml
+[timeshift]
+enabled            = true
+start_param        = "start"
+end_param          = "end"
+continuous_param   = "continuous_timeline"   # per-request override, bool
+max_span_seconds   = 21600
+```
+
+Plumbing: `its-a-live` TOML -> `serve.py` CLI flags and `wsgi.py` env vars
+(same route as `CONTINUOUS_TIMELINE` today, `loop_stack.py` /
+`_local_docker_ops.py`). Unknown/garbled values -> 400 with a message.
+
+### 13.4 Behavior matrix
+
+| `start` | `end` | HLS | DASH |
+|---|---|---|---|
+| - | - | live DVR window (unchanged) | unchanged |
+| set | set, `<= now` | VOD: full range, `#EXT-X-ENDLIST`, `PLAYLIST-TYPE:VOD` | `type="static"`, `mediaPresentationDuration` |
+| set | set, `> now` | EVENT-style: from `start`, grows with live edge, no trimming; `ENDLIST` appended once `end` passes | `dynamic`, fixed `availabilityStartTime`=start, no `timeShiftBufferDepth` trim; `static` once `end` passes |
+| set | - | as above, never ends | as above, never ends |
+| - | set | 400 (`end` requires `start`) | 400 |
+
+"Live edge" for a still-growing range is the same `now`-derived edge live
+uses; nothing else about segment availability changes.
+
+### 13.5 DECIDED: per-request `continuous_timeline` override
+
+`--continuous-timeline` (§12) is a startup flag today. It becomes the
+*default* for the new per-request `continuous_param`; the param overrides
+it for that request. Startup preconditions (§12.4: `boundaries == {0}`,
+64-bit `tfdt`) are computed once and cached; `continuous=true` on a
+package that fails them -> 400, never a silent fallback.
+
+This forces a URL-scheme decision, because the segment URL means
+different things in the two modes (§12.2: local index vs. global index)
+and one server must serve both:
+
+- `/<rendition>/seg/<local>.m4s` -> always the *local* physical index
+  (default-mode semantics, byte-identical, discontinuity-signaled).
+- `/<rendition>/cseg/<global>.m4s` -> always the *global* index
+  (continuous semantics, timestamps rewritten per §12.2).
+- A manifest emits whichever form matches the mode it was built in. The
+  choice is therefore encoded in the path, so CDN cache keys stay correct
+  with no query-string dependence for segments.
+- **Breaking change to note:** continuous-mode live today serves global
+  indices under `/seg/`. Moving them to `/cseg/` invalidates warm CDN
+  caches once and breaks any player holding an old manifest across the
+  deploy. Acceptable at a deploy boundary; call it out in the changelog.
+  (Alternative: keep `/seg/` = channel-default mode and add the *other*
+  form under a new prefix, avoiding the break but making URL meaning depend
+  on deployment config. Rejected as harder to reason about.)
+
+Non-continuous ranges spanning several loop wraps emit one
+`#EXT-X-DISCONTINUITY` (HLS) / one `<Period>` (DASH) per wrap. A 6h span
+over a 10-minute loop is ~36. This is accepted (see interview); players
+that dislike it can request `continuous_timeline=true`.
+
+Existing limit that catchup makes reachable: MPEG-TS PTS/DTS/PCR wrap at
+33 bits (~26.5h). Continuous-TS with `shift_ticks = loop_number *
+total_loop_duration_ticks` for a start days after the epoch will wrap.
+v1: continuous + TS + (`start - epoch` > 26h) -> 400 with an explanatory
+message. (Follow-up: shift relative to the range start instead of the
+epoch, at the cost of range-specific segment URLs.) CMAF (64-bit `tfdt`)
+is unaffected.
+
+### 13.6 Implementation notes (serve.py / scte35_signaling.py)
+
+1. Introduce a `Window(start_ticks, end_ticks|None, growing: bool)` value
+   and make `_build_hls_media_playlist`, `build_dash_manifest` and
+   `_build_dash_manifest_continuous` take it; live becomes
+   `Window(now - dvr, now, growing=True)`. `window_segments` becomes a
+   derived quantity, not an input, for time-shifted requests.
+2. The master playlist / HLS child-playlist links must **propagate** the
+   request's timeshift query params (start/end/continuous) onto every
+   variant, audio and iframe URI, otherwise players fetch live child
+   playlists. DASH is one MPD, so segment templates need nothing.
+3. Replace the DASH-continuous `loop_number & 1` EventStream id trick
+   (§12.5 first bullet) with an id that folds in the full loop number,
+   bounded to `xs:unsignedInt`, since a range spans arbitrarily many loops.
+4. `scte35_signaling` already remaps markers per window; extend it to
+   iterate every loop iteration intersecting `[start, end]`.
+5. Cache headers: VOD/ended ranges `Cache-Control: public, max-age=31536000,
+   immutable`; growing ranges and live `max-age` ~ one segment duration.
+   `loop_stack.py` must add the configured start/end/continuous param names
+   to the CloudFront manifest cache key (and only manifests; segments are
+   path-keyed). **Missing this serves the wrong range to other viewers.**
+6. `/health`: add `epoch_utc`, `timeshift` config, `max_span_seconds`.
+7. Sparse packages: holes 404 exactly as today (§11.3).
+
+### 13.7 Acceptance checklist
+
+- [ ] No params -> byte-identical manifests to today (regression).
+- [ ] VOD range, single loop and multi-loop, HLS + DASH, both modes: manifest
+      valid, `ENDLIST`/`static`, segment count == snapped-range / segment dur.
+- [ ] Growing range with future `end` flips to ended form after `end` (inject
+      clock).
+- [ ] start/end snap to boundaries; ISO8601 and epoch (s and ms) parse to the
+      same instant; bad values / `start < epoch` / span > max -> 400.
+- [ ] `continuous_timeline` override: both forms resolve through
+      `/seg/` vs `/cseg/`; unsupported package -> 400; PTS-wrap guard.
+- [ ] Discontinuity count == number of loop wraps in range (non-continuous).
+- [ ] SCTE-35 markers present and id-unique across a multi-loop range
+      (ffprobe / dash.js EventController duplicate check).
+- [ ] Child playlist URIs carry the timeshift params; CloudFront cache key
+      includes them (verify in `loop_stack.py` synth output).
+- [ ] `tests/test_loop_math.py` still passes; no float tick state introduced.
