@@ -476,10 +476,10 @@ def test_manifests_are_stamped_with_generator_version(tmp_path, continuous):
     assert m["master"].splitlines()[1] == f"# {stamp}"
     assert m["hls"].splitlines()[1] == f"# {stamp}"
     assert m["dash"].splitlines()[1] == f"<!-- {stamp} -->"
-    # Second comment: the current (live-edge) loop, on HLS media and DASH.
-    hls_loop = int(m["hls"].splitlines()[2].removeprefix("# current loop: "))
-    assert m["dash"].splitlines()[2] == f"<!-- current loop: {hls_loop} -->"
-    assert hls_loop >= 1
+    # HLS media: second comment is the loop of the window's first segment.
+    first_loop = int(m["hls"].splitlines()[2].removeprefix("# current loop: "))
+    media_seq = int(next(l for l in m["hls"].splitlines() if l.startswith("#EXT-X-MEDIA-SEQUENCE:")).split(":")[1])
+    assert first_loop == media_seq // 2  # 2 segments per loop in this package
 
 
 @pytest.mark.parametrize("continuous", [True, False])
@@ -493,7 +493,7 @@ def test_hls_loop_number_comment_precedes_first_segment_of_each_loop(tmp_path, c
             assert nxt.startswith("#EXT-X-PROGRAM-DATE-TIME")
 
 
-def test_dash_continuous_has_loop_comment_before_first_segment_of_each_loop(tmp_path):
+def test_dash_continuous_has_loop_comment_before_first_segment_of_window_and_each_loop(tmp_path):
     import re
 
     body = _manifests(tmp_path, continuous=True)["dash"]
@@ -504,10 +504,13 @@ def test_dash_continuous_has_loop_comment_before_first_segment_of_each_loop(tmp_
     assert re.search(r"<!-- loop \d+ -->\n\s+<S t=", body)
 
 
-def test_dash_default_mode_has_loop_comment_before_each_period(tmp_path):
+def test_dash_default_mode_has_loop_comment_inside_each_period_before_first_segment(tmp_path):
     import re
 
     body = _manifests(tmp_path, continuous=False)["dash"]
-    periods = re.findall(r"<!-- loop (\d+) -->\n  <Period id=\"loop(\d+)\"", body)
-    assert len(periods) == body.count("<Period ") >= 1
+    assert "<!-- loop" not in body.split("<Period ")[0]  # nothing before the first Period
+    periods = re.findall(
+        r'<Period id="loop(\d+)".*?<SegmentTimeline>\n\s+<!-- loop (\d+) -->\n\s+<S t=', body, re.S
+    )
+    assert len(periods) >= 1
     assert all(a == b for a, b in periods)

@@ -1011,7 +1011,7 @@ class Channel:
         lines = [
             "#EXTM3U",
             f"# {GENERATOR_COMMENT}",
-            f"# current loop: {media_sequence // pkg.segments_per_loop}",
+            f"# current loop: {first_global_index // pkg.segments_per_loop}",
             "#EXT-X-VERSION:6" if init_uri is None and span_init_uri is None else "#EXT-X-VERSION:7",
             f"#EXT-X-TARGETDURATION:{pkg.max_segment_duration_seconds_rounded_up}",
             f"#EXT-X-MEDIA-SEQUENCE:{first_global_index}",
@@ -1602,8 +1602,16 @@ class Channel:
                 if asset_ids:
                     asset_ids_by_local_index[local_index] = asset_ids
 
+            # Loop-number comment, inside the Period before its first
+            # segment: on the Period that starts a loop, and on the very
+            # first Period of the manifest (whichever loop its first segment
+            # belongs to). Not on later asset-span Periods of the same loop.
+            emit_loop_comment = span_start_local == 0 or period_number == 0
+
             def _segment_timeline_xml(entries: list[tuple[int, int, int]]) -> str:
                 lines = []
+                if emit_loop_comment:
+                    lines.append(f"        <!-- loop {loop_number} -->")
                 for t, d, local_index in entries:
                     for asset_id in asset_ids_by_local_index.get(local_index, []):
                         lines.append(f'        <!-- asset: {asset_id} -->')
@@ -1797,10 +1805,7 @@ class Channel:
                 if spans_per_loop == 1
                 else f"loop{loop_number}-{span_start_local}"
             )
-            # Loop-number comment only on the Period that starts the loop,
-            # not on the later asset-span Periods within the same loop.
-            loop_comment = f"  <!-- loop {loop_number} -->\n" if span_start_local == 0 else ""
-            period_xml_parts.append(f'''{loop_comment}  <Period id="{period_id}" start="PT{period_start_seconds}S">
+            period_xml_parts.append(f'''  <Period id="{period_id}" start="PT{period_start_seconds}S">
 {event_streams_xml}
     <AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
 {chr(10).join(video_representations)}
@@ -1828,7 +1833,6 @@ class Channel:
         )
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
 <!-- {GENERATOR_COMMENT} -->
-<!-- current loop: {current_loop_number} -->
 {mpd_open}
 {chr(10).join(period_xml_parts)}
 {self._utc_timing_xml(window)}</MPD>
@@ -1914,10 +1918,11 @@ class Channel:
 
         def _segment_timeline_xml(entries: list[tuple[int, int, int]]) -> str:
             # An XML comment naming the loop iteration before the first
-            # segment of each loop (this single Period never restarts).
+            # segment of the window and of each subsequent loop (this single
+            # Period never restarts).
             out = []
-            for t, d, local_index in entries:
-                if local_index == 0:
+            for n, (t, d, local_index) in enumerate(entries):
+                if local_index == 0 or n == 0:
                     out.append(f"        <!-- loop {t // pkg.total_loop_duration_ticks} -->")
                 out.append(f'        <S t="{t}" d="{d}" />')
             return "\n".join(out)
@@ -2076,7 +2081,6 @@ class Channel:
         )
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
 <!-- {GENERATOR_COMMENT} -->
-<!-- current loop: {last_loop} -->
 {mpd_open}
 {period_xml}
 {self._utc_timing_xml(window)}</MPD>
