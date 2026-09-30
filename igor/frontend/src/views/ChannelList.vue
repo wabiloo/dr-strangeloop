@@ -22,6 +22,12 @@ const BACKEND_ICON: Record<ChannelListItem['backend'], string> = {
   'aws-media': awsIcon,
 }
 
+const BACKEND_COLOR: Record<ChannelListItem['backend'], string> = {
+  'local-docker': '#2496ed',
+  'ecs-express': '#ed7100',
+  'aws-media': '#8c4fff',
+}
+
 // Quoted: bundled SVGs may be inlined as data URIs containing ' and ( ),
 // which are invalid inside an unquoted CSS url().
 function backendIconUrl(channel: ChannelListItem) {
@@ -271,7 +277,7 @@ onBeforeUnmount(() => {
           <div class="flex align-items-center gap-2 backend-cell">
             <span
               class="backend-icon"
-              :style="{ '--icon-url': backendIconUrl(data) }"
+              :style="{ '--icon-url': backendIconUrl(data), color: BACKEND_COLOR[data.backend as ChannelListItem['backend']] }"
               aria-hidden="true"
             />
             <span>{{ data.backend }}</span>
