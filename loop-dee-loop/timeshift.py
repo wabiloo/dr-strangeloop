@@ -21,6 +21,8 @@ _NUMERIC = re.compile(r"^\d+(\.\d+)?$")
 # Fixed (not configurable) name and values of the per-request timeline-mode
 # override: `default` = the server's --continuous-timeline setting.
 TIMELINE_PARAM = "timeline"
+# Also fixed: `full-loops=true` widens the range to whole loops.
+FULL_LOOPS_PARAM = "full-loops"
 TIMELINE_VALUES = ("default", "continuous", "periodic")
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off", ""}
@@ -35,11 +37,10 @@ class TimeshiftConfig:
     enabled: bool = False
     start_param: str = "start"
     end_param: str = "end"
-    full_loop_param: str = "full-loops"
     max_span_seconds: int = 21600
 
     def __post_init__(self):
-        names = [self.start_param, self.end_param, self.full_loop_param, TIMELINE_PARAM]
+        names = [self.start_param, self.end_param, FULL_LOOPS_PARAM, TIMELINE_PARAM]
         if any(not n for n in names) or len(set(names)) != len(names):
             raise ValueError(f"timeshift parameter names must be non-empty and distinct: {names}")
         if self.max_span_seconds < 1:
@@ -47,7 +48,7 @@ class TimeshiftConfig:
 
     @property
     def param_names(self) -> tuple[str, ...]:
-        return (self.start_param, self.end_param, self.full_loop_param, TIMELINE_PARAM)
+        return (self.start_param, self.end_param, FULL_LOOPS_PARAM, TIMELINE_PARAM)
 
 
 def parse_bool(value: str, name: str) -> bool:

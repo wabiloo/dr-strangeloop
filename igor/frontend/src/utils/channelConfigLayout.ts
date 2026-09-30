@@ -34,7 +34,6 @@ export const CONFIG_FIELD_LABEL = {
   timeshift_enabled: 'Enable startover & catchup',
   timeshift_start_param: 'Start parameter',
   timeshift_end_param: 'End parameter',
-  timeshift_full_loop_param: 'Whole-loops parameter',
   timeshift_max_span_seconds: 'Maximum range (s)',
   segment_duration: 'Segment duration (s)',
   dvr_window_seconds: 'DVR window (s)',
@@ -143,7 +142,6 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
       ['timeshift_enabled', ts.enabled],
       ['timeshift_start_param', ts.enabled ? ts.start_param : undefined],
       ['timeshift_end_param', ts.enabled ? ts.end_param : undefined],
-      ['timeshift_full_loop_param', ts.enabled ? ts.full_loop_param : undefined],
       ['timeshift_max_span_seconds', ts.enabled ? ts.max_span_seconds : undefined],
     ])
     add('hls', [

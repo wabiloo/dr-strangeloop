@@ -77,9 +77,12 @@ def test_parse_timeline():
             parse_timeline(bad)
 
 
-def test_config_rejects_a_param_named_like_the_fixed_timeline_param():
+@pytest.mark.parametrize("reserved", ["timeline", "full-loops"])
+def test_config_rejects_a_param_named_like_a_fixed_param(reserved):
     with pytest.raises(ValueError):
-        TimeshiftConfig(enabled=True, start_param="timeline")
+        TimeshiftConfig(enabled=True, start_param=reserved)
+    with pytest.raises(ValueError):
+        TimeshiftConfig(enabled=True, end_param=reserved)
 
 
 def test_config_rejects_duplicate_param_names():
@@ -279,7 +282,7 @@ def test_master_playlist_propagates_timeshift_params(tmp_path):
 
 @ffmpeg
 def test_custom_param_names(tmp_path):
-    client, epoch = _app(tmp_path, start_param="from", end_param="to", full_loop_param="whole")
+    client, epoch = _app(tmp_path, start_param="from", end_param="to")
     body = client.get(f"/video.m3u8?from={epoch + 5}&to={epoch + 7}").get_data(as_text=True)
     assert "ENDLIST" in body
     # the default names mean nothing here
@@ -385,7 +388,7 @@ def test_health_reports_timeshift_config(tmp_path):
     client, _ = _app(tmp_path, max_span_seconds=123)
     ts = client.get("/health").get_json()["timeshift"]
     assert ts["enabled"] and ts["max_span_seconds"] == 123 and ts["continuous_supported"]
-    assert ts["start_param"] == "start" and ts["full_loop_param"] == "full-loops"
+    assert ts["start_param"] == "start" and ts["full_loops_param"] == "full-loops"
     assert ts["timeline_param"] == "timeline"
     off, _ = _app(tmp_path / "off" if (tmp_path / "off").mkdir() is None else tmp_path, enabled=False)
     assert off.get("/health").get_json()["timeshift"] == {"enabled": False}

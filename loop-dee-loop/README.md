@@ -292,14 +292,15 @@ curl 'http://localhost:8080/index.m3u8?timeline=continuous'
 |---|---|
 | `start` (name configurable) | Range start: epoch seconds, epoch ms (≥ 1e11) or ISO 8601 (no zone = UTC). Snapped down to a segment boundary. Must be ≥ the channel epoch and not in the future. Without it the URL is plain live. |
 | `end` (name configurable) | Optional range end (needs `start`). Past → catchup (VOD); future → startover that ends there; absent → startover capped at `start + max_span`. Snapped up to a segment boundary. |
-| `full-loops` (name configurable) | Boolean. Widen the range to whole loops: `start` → nearest loop start at or before it, `end` → nearest loop end at or after it. |
+| `full-loops` (fixed name) | Boolean. Widen the range to whole loops: `start` → nearest loop start at or before it, `end` → nearest loop end at or after it. |
 | `timeline` (fixed name) | `default`, `continuous` or `periodic`; absent = `default` = the server's `--continuous-timeline` setting. Overrides it for this request, on live URLs too. `continuous` → `400` if the package can't be served continuously. |
 
-The `start` / `end` / `full-loops` names are configurable
-(`--timeshift-start-param`, `--timeshift-end-param`,
-`--timeshift-full-loop-param`; `--timeshift-max-span-seconds`, default
-21600); `timeline` is not, and no configurable name may equal it. Bad input is a plain-text `400`. Child playlists of an HLS master
-inherit the params automatically.
+Only the `start` and `end` names are configurable
+(`--timeshift-start-param`, `--timeshift-end-param`;
+`--timeshift-max-span-seconds`, default 21600); `full-loops` and `timeline`
+are fixed, and neither configured name may equal them. Bad input is a
+plain-text `400`. Child playlists of an HLS master inherit the params
+automatically.
 
 Segment URLs: `/<r>/seg/<local>` is always the loop-local index;
 `/<r>/cseg/<global>` the continuous-timeline (global index) form;

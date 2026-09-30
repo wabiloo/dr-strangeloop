@@ -38,9 +38,9 @@ test('buildTimeshiftUrl: catchup with default names', () => {
 })
 
 test('buildTimeshiftUrl: custom names, full loop, timeline override, epoch values', () => {
-  const params = { ...P, start_param: 'from', end_param: 'to', full_loop_param: 'whole' }
+  const params = { ...P, start_param: 'from', end_param: 'to' }
   const url = buildTimeshiftUrl('http://localhost:8080/stream.mpd', params, req({ fullLoop: true, timeline: 'periodic', format: 'epoch' }))
-  assert.equal(url, 'http://localhost:8080/stream.mpd?from=1790755200&to=1790755800&whole=true&timeline=periodic')
+  assert.equal(url, 'http://localhost:8080/stream.mpd?from=1790755200&to=1790755800&full-loops=true&timeline=periodic')
 })
 
 test('buildTimeshiftUrl: no start means live; timeline alone is still a valid override', () => {
@@ -108,10 +108,9 @@ test('validateRequest: max span is checked after full-loop widening', () => {
 test('timeshiftParamsFromConfig: missing table = defaults (enabled); overrides and junk', () => {
   assert.deepEqual(timeshiftParamsFromConfig(undefined), P)
   assert.equal(timeshiftParamsFromConfig({ enabled: false }).enabled, false)
-  const p = timeshiftParamsFromConfig({ start_param: 'from', max_span_seconds: 60, end_param: '', full_loop_param: 7 })
+  const p = timeshiftParamsFromConfig({ start_param: 'from', max_span_seconds: 60, end_param: '' })
   assert.equal(p.start_param, 'from')
   assert.equal(p.end_param, 'end')
-  assert.equal(p.full_loop_param, 'full-loops')
   assert.equal(p.max_span_seconds, 60)
 })
 

@@ -36,10 +36,6 @@ defineProps<{ form: ChannelCreatePayload; idPrefix: string }>()
         <InputText :id="`${idPrefix}-ts-end`" v-model="form.timeshift_end_param" fluid />
       </div>
       <div class="col-12 md:col-6 flex flex-column gap-1">
-        <label :for="`${idPrefix}-ts-loop`">{{ L.timeshift_full_loop_param }}</label>
-        <InputText :id="`${idPrefix}-ts-loop`" v-model="form.timeshift_full_loop_param" fluid />
-      </div>
-      <div class="col-12 md:col-6 flex flex-column gap-1">
         <label :for="`${idPrefix}-ts-span`">{{ L.timeshift_max_span_seconds }}</label>
         <InputNumber :input-id="`${idPrefix}-ts-span`" v-model="form.timeshift_max_span_seconds" :min="1" :use-grouping="false" fluid />
       </div>

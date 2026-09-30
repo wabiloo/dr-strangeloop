@@ -58,7 +58,6 @@ class ChannelCreatePayload(BaseModel):
     timeshift_enabled: bool = True
     timeshift_start_param: str = "start"
     timeshift_end_param: str = "end"
-    timeshift_full_loop_param: str = "full-loops"
     timeshift_max_span_seconds: int = 21600
     # int to pin an explicit host port, "auto" (local-docker only) to let
     # it self-select a free one at start/refresh time -- see
@@ -142,7 +141,7 @@ class ChannelCreatePayload(BaseModel):
         return v
 
     @field_validator(
-        "timeshift_start_param", "timeshift_end_param", "timeshift_full_loop_param",
+        "timeshift_start_param", "timeshift_end_param",
     )
     @classmethod
     def _validate_timeshift_param_name(cls, v: str) -> str:
@@ -162,10 +161,10 @@ class ChannelCreatePayload(BaseModel):
 
     @model_validator(mode="after")
     def _validate_timeshift_names_distinct(self) -> "ChannelCreatePayload":
-        # "timeline" is the fixed, non-configurable timeline-mode override.
+        # "full-loops" and "timeline" are fixed, non-configurable query params.
         names = [
             self.timeshift_start_param, self.timeshift_end_param,
-            self.timeshift_full_loop_param, "timeline",
+            "full-loops", "timeline",
         ]
         if len(set(names)) != len(names):
             raise ValueError(f"timeshift parameter names must be distinct, got {names}")

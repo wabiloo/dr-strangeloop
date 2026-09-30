@@ -22,6 +22,7 @@ import {
   type TimeFormat,
   type TimeshiftParams,
   type TimeshiftRequest,
+  FULL_LOOPS_PARAM,
   TIMELINE_PARAM,
 } from '../utils/timeshift'
 import FieldHelp from './FieldHelp.vue'
@@ -303,7 +304,7 @@ const formatOptions = [
       </div>
       <div class="col-12 flex align-items-center gap-2">
         <Checkbox v-model="fullLoop" binary input-id="ts-full-loop" />
-        <label for="ts-full-loop">Whole loops only ({{ params.full_loop_param }})</label>
+        <label for="ts-full-loop">Whole loops only ({{ FULL_LOOPS_PARAM }})</label>
         <FieldHelp label="Whole loops only">
           Widens the range to complete loop iterations: the start moves back to the nearest loop start at or before
           it, and the end (if given) moves forward to the nearest loop end at or after it. With no end, the
@@ -345,11 +346,11 @@ const formatOptions = [
       <div class="flex flex-column gap-2 mt-2 text-color-secondary">
         <p class="m-0">
           These are ordinary channel manifest URLs with extra query parameters, so any player (or the CDN) can use
-          them; nothing is stored per viewer. Parameter names are set per channel in
-          <code>[timeshift]</code>: <code>{{ params.start_param }}</code>, <code>{{ params.end_param }}</code>,
-          <code>{{ params.full_loop_param }}</code>; the timeline override is always
+          them; nothing is stored per viewer. The start and end parameter names are set per channel in
+          <code>[timeshift]</code> (currently <code>{{ params.start_param }}</code> and
+          <code>{{ params.end_param }}</code>); <code>{{ FULL_LOOPS_PARAM }}</code> (boolean) and
           <code>{{ TIMELINE_PARAM }}</code> (<code>default</code>, <code>continuous</code> or
-          <code>periodic</code>).
+          <code>periodic</code>) always have these fixed names.
         </p>
         <ul class="m-0 pl-4">
           <li>

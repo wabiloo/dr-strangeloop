@@ -82,7 +82,6 @@ _TIMESHIFT_EXTRA = """
 enabled          = {enabled}
 start_param      = "{start_param}"
 end_param        = "{end_param}"
-full_loop_param  = "{full_loop_param}"
 max_span_seconds = {max_span_seconds}
 """
 
@@ -138,7 +137,6 @@ def generate_toml(
     timeshift_enabled: bool = True,
     timeshift_start_param: str = "start",
     timeshift_end_param: str = "end",
-    timeshift_full_loop_param: str = "full-loops",
     timeshift_max_span_seconds: int = 21600,
     port: int | str = 8080,
     cpu: int = 256,
@@ -169,7 +167,6 @@ def generate_toml(
         return _TIMESHIFT_EXTRA.format(
             enabled=str(timeshift_enabled).lower(),
             start_param=timeshift_start_param, end_param=timeshift_end_param,
-            full_loop_param=timeshift_full_loop_param,
             max_span_seconds=int(timeshift_max_span_seconds),
         )
 

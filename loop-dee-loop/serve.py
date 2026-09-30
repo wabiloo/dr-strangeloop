@@ -41,6 +41,7 @@ from flask import Flask, Response, abort, request, send_file
 import cmaf
 import continuity
 from timeshift import (
+    FULL_LOOPS_PARAM,
     TIMELINE_PARAM,
     TimeWindow,
     TimeshiftConfig,
@@ -2088,7 +2089,7 @@ def create_app(
                         parse_instant_ticks(raw_start, ts, ts_cfg.start_param),
                         parse_instant_ticks(raw_end, ts, ts_cfg.end_param) if raw_end is not None else None,
                         ts_cfg.max_span_seconds,
-                        parse_bool(args.get(ts_cfg.full_loop_param, "false"), ts_cfg.full_loop_param),
+                        parse_bool(args.get(FULL_LOOPS_PARAM, "false"), FULL_LOOPS_PARAM),
                     )
             except TimeshiftError as exc:
                 abort(Response(f"{exc}\n", status=400, mimetype="text/plain"))
@@ -2159,7 +2160,7 @@ def create_app(
                     "start_param": ts_cfg.start_param,
                     "end_param": ts_cfg.end_param,
                     "timeline_param": TIMELINE_PARAM,
-                    "full_loop_param": ts_cfg.full_loop_param,
+                    "full_loops_param": FULL_LOOPS_PARAM,
                     "max_span_seconds": ts_cfg.max_span_seconds,
                     "continuous_supported": channel.continuous or channel.continuous_error is None,
                 }
@@ -2380,7 +2381,6 @@ def main() -> int:
     )
     parser.add_argument("--timeshift-start-param", default="start")
     parser.add_argument("--timeshift-end-param", default="end")
-    parser.add_argument("--timeshift-full-loop-param", default="full-loops")
     parser.add_argument("--timeshift-max-span-seconds", type=int, default=21600)
     args = parser.parse_args()
 
@@ -2417,7 +2417,6 @@ def main() -> int:
             enabled=args.timeshift,
             start_param=args.timeshift_start_param,
             end_param=args.timeshift_end_param,
-            full_loop_param=args.timeshift_full_loop_param,
             max_span_seconds=args.timeshift_max_span_seconds,
         ),
     )

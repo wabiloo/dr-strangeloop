@@ -13,7 +13,6 @@ export interface TimeshiftParams {
   enabled: boolean
   start_param: string
   end_param: string
-  full_loop_param: string
   max_span_seconds: number
 }
 
@@ -21,7 +20,6 @@ export const DEFAULT_TIMESHIFT_PARAMS: TimeshiftParams = {
   enabled: true,
   start_param: 'start',
   end_param: 'end',
-  full_loop_param: 'full-loops',
   max_span_seconds: 21600,
 }
 
@@ -31,6 +29,8 @@ export type TimeFormat = 'iso' | 'epoch' | 'epoch_ms'
  * channel's own continuous-timeline setting. Mirrors loop-dee-loop's
  * timeshift.TIMELINE_PARAM. */
 export const TIMELINE_PARAM = 'timeline'
+/** Also fixed: `full-loops=true` widens the range to whole loops. */
+export const FULL_LOOPS_PARAM = 'full-loops'
 export type TimelineChoice = 'default' | 'continuous' | 'periodic'
 
 export interface TimeshiftRequest {
@@ -60,7 +60,6 @@ export function timeshiftParamsFromConfig(table: Record<string, unknown> | undef
     enabled: typeof t.enabled === 'boolean' ? t.enabled : DEFAULT_TIMESHIFT_PARAMS.enabled,
     start_param: str('start_param'),
     end_param: str('end_param'),
-    full_loop_param: str('full_loop_param'),
     max_span_seconds:
       typeof t.max_span_seconds === 'number' && t.max_span_seconds >= 1
         ? t.max_span_seconds
@@ -95,7 +94,7 @@ export function buildTimeshiftQuery(params: TimeshiftParams, req: TimeshiftReque
     if (req.end) {
       parts.push(`${encodeURIComponent(params.end_param)}=${encodeValue(formatInstant(req.end, req.format))}`)
     }
-    if (req.fullLoop) parts.push(`${encodeURIComponent(params.full_loop_param)}=true`)
+    if (req.fullLoop) parts.push(`${FULL_LOOPS_PARAM}=true`)
   }
   if (req.timeline !== 'default') parts.push(`${TIMELINE_PARAM}=${req.timeline}`)
   return parts.join('&')

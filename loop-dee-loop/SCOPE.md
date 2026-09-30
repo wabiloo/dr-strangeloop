@@ -745,7 +745,6 @@ milliseconds when > 1e11) or ISO8601 (`Z` or numeric offset).
 enabled            = true
 start_param        = "start"
 end_param          = "end"
-full_loop_param    = "full-loops"             # bool: widen range to whole loops (13.5b)
 max_span_seconds   = 21600
 ```
 
@@ -770,8 +769,8 @@ uses; nothing else about segment availability changes.
 
 `--continuous-timeline` (§12) is a startup flag today. It becomes the
 *default* for a new per-request query parameter with a **fixed name,
-`timeline`** (deliberately not configurable, unlike `start`/`end`/
-`full-loops`; a configured name equal to `timeline` is rejected), with values:
+`timeline`** (deliberately not configurable, unlike `start`/`end`;
+a configured name equal to it or to `full-loops` is rejected), with values:
 
 - `default` (or the param absent) -- follow the server's `--continuous-timeline`;
 - `continuous` -- §12 continuity for this request;
@@ -838,8 +837,9 @@ Ended ranges are `type="static"` with `mediaPresentationDuration` and no
 
 ### 13.5b DECIDED: `full-loops` (whole-loop snapping)
 
-A boolean, configurable parameter (`full_loop_param`, default
-`full-loops`). When true, the range is widened to whole loop iterations
+A boolean parameter with a **fixed name, `full-loops`** (like `timeline`, not
+configurable; `start`/`end` remain configurable and may not collide with it).
+When true, the range is widened to whole loop iterations
 *before* segment snapping:
 
 - `start` -> the start of the loop iteration containing it (nearest loop

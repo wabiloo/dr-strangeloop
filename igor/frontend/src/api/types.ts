@@ -343,7 +343,7 @@ export interface ChannelHealth {
     start_param?: string
     end_param?: string
     timeline_param?: string
-    full_loop_param?: string
+    full_loops_param?: string
     max_span_seconds?: number
     continuous_supported?: boolean
   }
@@ -375,7 +375,6 @@ export interface ChannelCreatePayload {
   timeshift_enabled?: boolean
   timeshift_start_param?: string
   timeshift_end_param?: string
-  timeshift_full_loop_param?: string
   timeshift_max_span_seconds?: number
   // int to pin an explicit host port, "auto" (local-docker only) to let
   // it self-select a free one at start/refresh time.
