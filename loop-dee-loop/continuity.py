@@ -50,8 +50,8 @@ PCR_EXT_PER_TICK = 300
 
 
 def shift_cmaf_fragment(data: bytes, shift_ticks: int, *, sequence_number: int) -> bytes:
-    """Return a copy of one CMAF media segment (`moof`+`mdat`, no init) with
-    its `tfdt` advanced by `shift_ticks` and its `mfhd` sequence number set
+    """Return a copy of one CMAF media segment (one or more `moof`+`mdat`
+    fragments, no init) with its `tfdt`s advanced by `shift_ticks` and its `mfhd` sequence number set
     to `sequence_number` (the caller's global, ever-increasing segment
     index -- keeps `mfhd` meaningful across loop iterations instead of
     restarting at the same value every time, same as the timestamps).
@@ -73,9 +73,9 @@ def shift_cmaf_fragment(data: bytes, shift_ticks: int, *, sequence_number: int) 
     old_tfdt = struct.unpack(fmt, data[at : at + width])[0]
     target_start = old_tfdt + shift_ticks
     body, _next_seq = cmaf.rebase_fragments(
-        [data], target_start=target_start, first_sequence_number=sequence_number
+        cmaf.split_fragments(data[moof[0] :]), target_start=target_start, first_sequence_number=sequence_number
     )
-    return body
+    return data[: moof[0]] + body
 
 
 def _pack_ts_timestamp(guard: int, value: int) -> bytes:

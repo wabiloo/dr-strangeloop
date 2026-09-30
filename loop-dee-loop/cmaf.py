@@ -63,6 +63,19 @@ def split_init_and_fragments(data: bytes) -> tuple[bytes, list[bytes]]:
     return b"".join(init_parts), fragments
 
 
+def split_fragments(data: bytes) -> list[bytes]:
+    """[moof+mdat, ...] of a bare CMAF media segment (no init required)."""
+    fragments: list[bytes] = []
+    pending_moof: bytes | None = None
+    for box_type, b_start, b_end in iter_boxes(data):
+        if box_type == "moof":
+            pending_moof = data[b_start:b_end]
+        elif box_type == "mdat" and pending_moof is not None:
+            fragments.append(pending_moof + data[b_start:b_end])
+            pending_moof = None
+    return fragments
+
+
 def avcc_config(init: bytes) -> bytes | None:
     """Raw avcC payload (profile/level + SPS/PPS) from an init segment, for
     checking that separately-remuxed segments really share one decoder config."""

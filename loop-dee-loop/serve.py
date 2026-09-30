@@ -277,6 +277,7 @@ class VideoRendition:
         self.audio_variant: dict | None = rendition.get("audio_variant")
         self.audio_segment_files: list[Path] = []
         self.audio_segment_boundary_ticks: list[int] = []
+        self._audio_timescale: int | None = None
         # Sparse (archive) audio: one audio init per span, per-index files that
         # may be missing (404) independently of the video's.
         self.audio_sparse: bool = self.sparse and bool(rendition.get("audio_sparse"))
@@ -323,6 +324,23 @@ class VideoRendition:
     @property
     def has_audio(self) -> bool:
         return self.audio_track_id is not None or self.audio_sparse
+
+    def audio_timescale(self, default: int) -> int:
+        """The audio track's own media timescale (its init's mdhd), which its
+        `tfdt`s are written in; `default` (the package timescale) if unreadable."""
+        if self._audio_timescale is None:
+            found = None
+            try:
+                if self.audio_sparse:
+                    name = next((f for f in self.audio_init_files if f), None)
+                    init = self.segments_dir / name if name else None
+                else:
+                    init = self.audio_init_path()
+                found = cmaf.track_timescale(init.read_bytes()) if init else None
+            except (OSError, RuntimeError):
+                found = None
+            self._audio_timescale = found or default
+        return self._audio_timescale
 
     def audio_init_path_for_span(self, span: int) -> Path | None:
         name = self.audio_init_files[span] if 0 <= span < len(self.audio_init_files) else None
@@ -1985,7 +2003,11 @@ def create_app(
         def audio_segment(physical_index: int):
             if channel.continuous:
                 loop_number, local_index = channel.loop_number_and_local_index(physical_index)
-                shift_ticks = channel.continuity_shift_ticks(loop_number)
+                audio_ts = package.audio_rendition.audio_timescale(package.timescale)
+                # tfdt is in the audio track's own timescale, the shift in the package's.
+                shift_ticks = round(
+                    channel.continuity_shift_ticks(loop_number) * audio_ts / package.timescale
+                )
             else:
                 local_index = physical_index
                 shift_ticks = None

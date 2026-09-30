@@ -118,6 +118,21 @@ def test_shift_cmaf_fragment_advances_tfdt_and_stays_playable(tmp_path):
     assert int(probe.stdout.strip().rstrip(",")) == 12  # one GOP
 
 
+def test_shift_cmaf_fragment_shifts_every_moof_of_a_multi_fragment_segment(tmp_path):
+    data = _fmp4_with_audio(tmp_path / "a.mp4")
+    _init, fragments = cmaf.split_init_and_fragments(data)
+    assert len(fragments) >= 2
+    segment = b"".join(fragments)
+    shift = 90_000 * 3600
+
+    shifted = continuity.shift_cmaf_fragment(segment, shift, sequence_number=1)
+
+    def tfdts(buf):
+        return [_first_moof_tfdt(f)[1] for f in cmaf.split_fragments(buf)]
+
+    assert tfdts(shifted) == [t + shift for t in tfdts(segment)]
+
+
 def test_shift_cmaf_fragment_is_idempotent_shape_for_zero_shift(tmp_path):
     data = _fmp4_with_audio(tmp_path / "a.mp4")
     _init, fragments = cmaf.split_init_and_fragments(data)
