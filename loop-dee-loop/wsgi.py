@@ -15,6 +15,7 @@ from pathlib import Path
 from serve import (
     TimeshiftConfig,
     create_app,
+    parse_period_apply,
     parse_segmentation_type_ids,
     read_package_descriptor,
     resolve_epoch_ticks,
@@ -51,4 +52,5 @@ app = create_app(
     continuous=continuous,
     timeshift=timeshift,
     period_on_segmentation=period_on_segmentation,
+    period_apply=parse_period_apply(os.environ.get("PERIOD_ON_SEGMENTATION_APPLY")),
 )

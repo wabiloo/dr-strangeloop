@@ -959,6 +959,11 @@ the media changes: timestamps stay continuous across a forced break.
 - Startover/catchup ranges honour it in both modes (first Period rebased to 0
   as before).
 
-Channel config: `[packaging] period_on_segmentation = [0x22, 0x30]` in
-its-a-live; env `PERIOD_ON_SEGMENTATION` for gunicorn.
+**Per-format control.** `--period-on-segmentation-apply dash|hls|both`
+(default `both`) picks which manifest format gets the forced break: `dash`
+= Periods only, `hls` = discontinuities only. The type-id selection is shared;
+real loop-wrap / asset-boundary signalling is unaffected by it.
+
+Channel config: `[packaging] period_on_segmentation = [0x22, 0x30]` (+
+`period_on_segmentation_apply = "dash"|"hls"|"both"`) in its-a-live; env `PERIOD_ON_SEGMENTATION` for gunicorn.
 Tests: `tests/test_serve_signal_periods.py`.

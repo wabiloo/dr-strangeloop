@@ -198,6 +198,18 @@ def compute_discontinuity_sequence(
     return loop_number * k + local_rank - (1 if 0 in boundaries else 0)
 
 
+PERIOD_APPLY_CHOICES = ("both", "dash", "hls")
+
+
+def parse_period_apply(value: str | None) -> str:
+    """`--period-on-segmentation-apply`: which manifest formats get the forced
+    break -- `dash` (Periods), `hls` (discontinuities) or `both` (default)."""
+    value = (value or "both").strip().lower()
+    if value not in PERIOD_APPLY_CHOICES:
+        raise ValueError(f"period-on-segmentation apply must be one of {PERIOD_APPLY_CHOICES}, got {value!r}")
+    return value
+
+
 def parse_segmentation_type_ids(spec: str | None) -> frozenset[int]:
     """`--period-on-segmentation` value: comma-separated segmentation_type_id
     values, hex (`0x22`) or decimal, e.g. `0x22,0x23,0x30,0x31`."""
@@ -686,6 +698,7 @@ class Channel:
         window_segments: int = 6,
         continuous: bool = False,
         period_on_segmentation: frozenset[int] = frozenset(),
+        period_apply: str = "both",
     ):
         if not isinstance(epoch_ticks, int):
             raise ValueError("epoch_ticks must be int")
@@ -710,6 +723,15 @@ class Channel:
         self.signal_breaks: frozenset[int] = compute_signal_breaks(
             package.markers, package.segment_boundary_ticks, self.period_on_segmentation
         )
+        # Which formats the forced breaks are applied to (the real loop-wrap /
+        # asset-boundary signalling is never affected by this).
+        self.period_apply = parse_period_apply(period_apply)
+        self.hls_signal_breaks: frozenset[int] = (
+            self.signal_breaks if self.period_apply in ("both", "hls") else frozenset()
+        )
+        self.dash_signal_breaks: frozenset[int] = (
+            self.signal_breaks if self.period_apply in ("both", "dash") else frozenset()
+        )
         # Controls the DVR window / manifest size: how many segments ahead
         # of the live edge are advertised in each manifest response (HLS
         # sliding window, DASH SegmentTimeline + timeShiftBufferDepth).
@@ -721,16 +743,23 @@ class Channel:
         # Set only on a per-request with_offset() variant (SCOPE.md §13.7).
         self.offset_ticks = 0
 
-    @property
-    def period_starts(self) -> frozenset[int]:
+    def _period_starts(self, signal_breaks: frozenset[int]) -> frozenset[int]:
         """Local segment indices that open a new Period / discontinuity in
         the current mode. Default mode: every real boundary (always incl. 0,
         the loop wrap) plus the forced signal breaks. Continuous mode: the
         loop wrap is seamless, so only the forced signal breaks (which may
         include 0, a marker right at the loop start)."""
         if self.continuous:
-            return self.signal_breaks
-        return frozenset(self.package.boundaries) | self.signal_breaks
+            return signal_breaks
+        return frozenset(self.package.boundaries) | signal_breaks
+
+    @property
+    def hls_period_starts(self) -> frozenset[int]:
+        return self._period_starts(self.hls_signal_breaks)
+
+    @property
+    def dash_period_starts(self) -> frozenset[int]:
+        return self._period_starts(self.dash_signal_breaks)
 
     @staticmethod
     def _validate_continuous(package: "LoopPackage") -> None:
@@ -1043,7 +1072,7 @@ class Channel:
         # report -- every loop wrap's timestamps are rewritten to be
         # genuinely continuous (see the segment byte-serving routes) -- so
         # the sequence header is always 0 rather than computed.
-        period_starts = self.period_starts
+        period_starts = self.hls_period_starts
         first_discontinuity_sequence = compute_discontinuity_sequence(
             first_global_index, pkg.segments_per_loop, period_starts
         ) if period_starts else 0
@@ -1477,7 +1506,7 @@ class Channel:
         # (period_on_segmentation). A signal-only Period reuses its real
         # span's init segment and keeps that span's media timeline, so
         # `real_sorted` maps any Period back to the real span it lives in.
-        boundaries_sorted = sorted(self.period_starts)
+        boundaries_sorted = sorted(self.dash_period_starts)
         real_sorted = sorted(pkg.boundaries)
         spans_per_loop = len(boundaries_sorted)
 
@@ -1932,7 +1961,7 @@ class Channel:
             else pkg.total_loop_duration_ticks
         )
         spl = pkg.segments_per_loop
-        signal_breaks = sorted(self.signal_breaks)
+        signal_breaks = sorted(self.dash_signal_breaks)
 
         def _governing_break(global_index: int) -> int | None:
             """Global index of the forced break that opened the Period this
@@ -2209,6 +2238,7 @@ def create_app(
     continuous: bool = False,
     timeshift: TimeshiftConfig | None = None,
     period_on_segmentation: frozenset[int] = frozenset(),
+    period_apply: str = "both",
 ) -> Flask:
     ts_cfg = timeshift or TimeshiftConfig()
     package = LoopPackage(package_dir)
@@ -2218,6 +2248,7 @@ def create_app(
         window_segments=window_segments,
         continuous=continuous,
         period_on_segmentation=period_on_segmentation,
+        period_apply=period_apply,
     )
     process_start_ticks = channel.now_ticks()
 
@@ -2575,6 +2606,13 @@ def main() -> int:
         "SCOPE.md §14.",
     )
     parser.add_argument(
+        "--period-on-segmentation-apply",
+        choices=PERIOD_APPLY_CHOICES,
+        default="both",
+        help="Which formats --period-on-segmentation applies to: dash "
+        "(Periods only), hls (discontinuities only) or both (default).",
+    )
+    parser.add_argument(
         "--timeshift",
         action="store_true",
         help="SCOPE.md §13: enable startover/catchup via query parameters on "
@@ -2615,6 +2653,7 @@ def main() -> int:
         window_segments=window_segments,
         continuous=args.continuous_timeline,
         period_on_segmentation=parse_segmentation_type_ids(args.period_on_segmentation),
+        period_apply=args.period_on_segmentation_apply,
         timeshift=TimeshiftConfig(
             enabled=args.timeshift,
             start_param=args.timeshift_start_param,

@@ -162,3 +162,44 @@ def test_dash_default_mode_signal_break_reuses_media_timeline_via_pto():
     # and presentationTimeOffset maps t=180000 to the Period start
     assert _pto_and_number(mpd)[1] == ("2", "180000")
     assert [int(t) for t in re.findall(r'<S t="(\d+)"', mpd)] == [0, 90_000, 180_000, 270_000]
+
+
+# ── per-format control ──────────────────────────────────────────────────────
+
+
+def _channel_apply(apply: str, *, continuous: bool) -> Channel:
+    package = _sparse_fake_package(
+        boundaries=[], gap_ticks_by_index={}, segment_boundary_ticks=TICKS, total_loop_duration_ticks=LOOP
+    )
+    package.markers = MARKERS
+    channel = Channel(
+        package, epoch_ticks=0, window_segments=6,
+        period_on_segmentation=frozenset({0x22}), period_apply=apply,
+    )
+    channel.continuous = continuous
+    channel.now_ticks = lambda: LOOP + 270_000
+    return channel
+
+
+def test_apply_dash_only_leaves_hls_untouched():
+    ch = _channel_apply("dash", continuous=True)
+    assert "#EXT-X-DISCONTINUITY" not in _hls(ch)
+    assert len(_periods(ch.build_dash_manifest(window_segments=6))) == 2
+
+
+def test_apply_hls_only_leaves_dash_single_period():
+    ch = _channel_apply("hls", continuous=True)
+    assert _hls(ch).count("#EXT-X-DISCONTINUITY") == 1
+    assert _periods(ch.build_dash_manifest(window_segments=6)) == [("continuous", "PT0S")]
+
+
+def test_apply_hls_only_default_mode_keeps_real_loop_wrap_in_dash():
+    ch = _channel_apply("hls", continuous=False)
+    assert _hls(ch).count("#EXT-X-DISCONTINUITY") == 2  # wrap + forced break
+    ch.now_ticks = lambda: 270_000
+    assert [p for p, _ in _periods(ch.build_dash_manifest(window_segments=6))] == ["loop0"]
+
+
+def test_apply_rejects_unknown_value():
+    with pytest.raises(ValueError):
+        _channel_apply("xml", continuous=True)

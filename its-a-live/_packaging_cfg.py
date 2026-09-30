@@ -18,4 +18,14 @@ def period_on_segmentation_serve_args(cfg: dict) -> list[str]:
         if not 0 <= value <= 0xFF:
             raise ValueError(f"[packaging] period_on_segmentation: {item!r} is not a segmentation_type_id (0..255)")
         ids.append(f"0x{value:02X}")
-    return ["--period-on-segmentation", ",".join(ids)] if ids else []
+    if not ids:
+        return []
+    apply_to = str(cfg.get("packaging", {}).get("period_on_segmentation_apply", "both")).lower()
+    if apply_to not in ("both", "dash", "hls"):
+        raise ValueError(
+            f"[packaging] period_on_segmentation_apply must be 'both', 'dash' or 'hls', got {apply_to!r}"
+        )
+    return [
+        "--period-on-segmentation", ",".join(ids),
+        "--period-on-segmentation-apply", apply_to,
+    ]

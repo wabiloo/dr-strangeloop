@@ -274,6 +274,9 @@ period_on_segmentation = [0x22, 0x30]`) forces a new DASH Period /
 `#EXT-X-DISCONTINUITY` at every marker with one of those
 `segmentation_type_id`s, in either timeline mode. It is signal only: with
 `--continuous-timeline` the timestamps stay continuous across the new Period.
+`--period-on-segmentation-apply dash|hls|both` (its-a-live:
+`period_on_segmentation_apply`) restricts it to DASH Periods, HLS
+discontinuities, or both (default).
 
 ### Startover & catchup (SCOPE.md §13)
 

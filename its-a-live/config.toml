@@ -60,6 +60,7 @@ daterange_id_format = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template; 
 [packaging]
 segment_duration   = 4.0   # nominal bake segment duration, seconds
 dvr_window_seconds = 30    # serve.py sliding-window size, seconds
+# period_on_segmentation_apply = "both"  # "both" (default) | "dash" (Periods only) | "hls" (discontinuities only)
 # period_on_segmentation = [0x22, 0x23, 0x30, 0x31]  # optional: force a new DASH Period / #EXT-X-DISCONTINUITY at markers with these SCTE-35 segmentation_type_ids (signal only -- timestamps stay continuous when continuous_timeline = true; loop-dee-loop/SCOPE.md §14)
 continuous_timeline = true # default -- no discontinuity/Period restart at the loop wrap (loop-dee-loop/SCOPE.md §12); false reverts to the signaled-discontinuity default
 
