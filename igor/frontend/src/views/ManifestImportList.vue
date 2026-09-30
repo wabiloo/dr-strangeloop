@@ -82,7 +82,10 @@ onMounted(load)
 <template>
   <div class="flex flex-column gap-3">
     <div class="flex justify-content-between align-items-center">
-      <h2 class="m-0">Manifests (VOD import)</h2>
+      <div class="flex flex-column gap-1">
+        <h2 class="m-0">Manifests</h2>
+        <small class="text-color-secondary">Import VOD HLS/DASH manifest URLs as looping channel sources.</small>
+      </div>
       <Button label="Refresh" icon="pi pi-refresh" severity="secondary" outlined @click="load" :loading="loading" />
     </div>
 

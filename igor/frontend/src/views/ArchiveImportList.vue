@@ -128,7 +128,10 @@ onMounted(load)
 <template>
   <div class="flex flex-column gap-3">
     <div class="flex justify-content-between align-items-center">
-      <h2 class="m-0">Archives (grave-robber import)</h2>
+      <div class="flex flex-column gap-1">
+        <h2 class="m-0">Archives</h2>
+        <small class="text-color-secondary">Captured HAR/Proxyman sessions imported as loop timelines with grave-robber.</small>
+      </div>
       <div class="flex gap-2">
         <Button label="Refresh" icon="pi pi-refresh" severity="secondary" outlined @click="load" :loading="loading" />
       </div>
