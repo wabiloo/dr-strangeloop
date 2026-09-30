@@ -40,6 +40,18 @@ def _select_reference_adaptation_set(period: PeriodInspector) -> AdaptationSetIn
     return adaptation_sets[0]
 
 
+def _select_audio_adaptation_set(period: PeriodInspector) -> AdaptationSetInspector | None:
+    """The period's audio AdaptationSet: the one declaring itself default/main
+    is not exposed by mpd-inspector, so take the first audio one (document order)."""
+    for adaptation_set in period.adaptation_sets:
+        mime_type = adaptation_set.mime_type or ""
+        if mime_type.startswith("audio/") or any(
+            (r.mime_type or "").startswith("audio/") for r in adaptation_set.representations
+        ):
+            return adaptation_set
+    return None
+
+
 def _dash_init_uri(root, period_idx: int, representation, manifest_url: str) -> str | None:
     """Best-effort absolute URL of the reference Representation's init
     segment: the `SegmentTemplate@initialization` nearest the Representation
@@ -69,14 +81,72 @@ def _dash_init_uri(root, period_idx: int, representation, manifest_url: str) -> 
     return None
 
 
+def _reference_representations(period: PeriodInspector) -> list:
+    return list(_select_reference_adaptation_set(period).representations)
+
+
+def list_dash_representations(manifest_text: str, manifest_url: str = "") -> list[dict]:
+    """The video ladder of an MPD: one dict per Representation of the first
+    Period's reference (video) AdaptationSet -- `id`, `bandwidth`, `resolution`,
+    `codecs`, `frame_rate` (see `dash_is_static` for the VOD check)."""
+    inspector = MPDInspector(MPDParser.from_string(manifest_text))
+    root = ET.fromstring(manifest_text.encode("utf-8"))
+    ns = {"m": "urn:mpeg:dash:schema:mpd:2011"}
+    if not inspector.periods:
+        return []
+    out = []
+    adaptation_set = _select_reference_adaptation_set(inspector.periods[0])
+    rep_elements = {
+        rep.get("id"): (adaptation, rep)
+        for adaptation in root.findall("m:Period", ns)[0].findall("m:AdaptationSet", ns)
+        for rep in adaptation.findall("m:Representation", ns)
+    }
+    for representation in adaptation_set.representations:
+        adaptation_element, rep_element = rep_elements.get(str(representation.id), (None, None))
+        def _attr(name):
+            for element in (rep_element, adaptation_element):
+                if element is not None and element.get(name):
+                    return element.get(name)
+            return None
+        frame_rate = _attr("frameRate")
+        out.append({
+            "id": str(representation.id),
+            "bandwidth": int(_attr("bandwidth")) if _attr("bandwidth") else None,
+            "resolution": f"{representation.width}x{representation.height}" if representation.width and representation.height else None,
+            "codecs": _attr("codecs"),
+            "frame_rate": _parse_frame_rate(frame_rate),
+        })
+    return out
+
+
+def _parse_frame_rate(value: str | None) -> float | None:
+    if not value:
+        return None
+    numerator, _, denominator = value.partition("/")
+    return float(numerator) / float(denominator or 1)
+
+
+def dash_is_static(manifest_text: str) -> bool:
+    return ET.fromstring(manifest_text.encode("utf-8")).get("type", "static") == "static"
+
+
+def has_dash_audio(manifest_text: str) -> bool:
+    """Whether the first Period has a separate audio AdaptationSet."""
+    inspector = MPDInspector(MPDParser.from_string(manifest_text))
+    return bool(inspector.periods) and _select_audio_adaptation_set(inspector.periods[0]) is not None
+
+
 def extract_dash(
-    manifest_text: str, manifest_url: str = ""
+    manifest_text: str, manifest_url: str = "", representation_id: str | None = None, *, audio: bool = False
 ) -> tuple[list[TimingSegment], list[RawMarker], list[AssetBoundary]]:
     """Parse one DASH MPD snapshot into normalized TimingSegment/RawMarker/
     AssetBoundary lists, positioned on THIS snapshot's own timeline
     (starting at tick 0, concatenating every Period in document order) --
     the caller combines multiple snapshots over time into one overall
-    timeline (SCOPE.md §7, see boundaries.py)."""
+    timeline (SCOPE.md §7, see boundaries.py). `representation_id` picks a
+    specific Representation of the video ladder (default: the first).
+    `audio=True` reads the audio AdaptationSet instead (same shape; its markers
+    and boundaries are the caller's to ignore) and errors if a Period has none."""
     mpd = MPDParser.from_string(manifest_text)
     inspector = MPDInspector(mpd)
     # mpd-inspector's full_urls properties use `self.base_uri` verbatim (no
@@ -94,8 +164,23 @@ def extract_dash(
     global_index = 0
 
     for period_idx, period in enumerate(inspector.periods):
-        adaptation_set = _select_reference_adaptation_set(period)
-        representation = adaptation_set.representations[0]
+        if audio:
+            adaptation_set = _select_audio_adaptation_set(period)
+            if adaptation_set is None:
+                raise ValueError(f"Period {period_idx} has no audio AdaptationSet")
+        else:
+            adaptation_set = _select_reference_adaptation_set(period)
+        if representation_id is None:
+            representation = adaptation_set.representations[0]
+        else:
+            representation = next(
+                (r for r in adaptation_set.representations if str(r.id) == representation_id), None
+            )
+            if representation is None:
+                raise ValueError(
+                    f"Period {period_idx} has no Representation with id {representation_id!r} in its "
+                    f"video AdaptationSet -- a ladder must expose the same Representations in every Period."
+                )
         media_segments = representation.segment_information.segments
         init_uri = _dash_init_uri(manifest_root, period_idx, representation, manifest_url)
 

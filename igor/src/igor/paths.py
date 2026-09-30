@@ -27,6 +27,12 @@ ARCHIVES_DIR = REPO_ROOT / "data" / "archives"
 # collides with a franken-ts playlist's own <name>.ts/<name>/ output.
 ARCHIVE_IMPORTS_DIR = OUTPUTS_DIR / "archives"
 
+# VOD manifest-URL sources (`grave-robber ingest-url`): the saved URL +
+# display name live under data/manifests/, the downloaded import
+# (manifest.json + media/) under outputs/manifests/<name>/.
+MANIFESTS_DIR = REPO_ROOT / "data" / "manifests"
+MANIFEST_IMPORTS_DIR = OUTPUTS_DIR / "manifests"
+
 
 def its_a_live_python() -> list[str]:
     """Resolution order mirrors loop-dee-loop's ops modules: its-a-live

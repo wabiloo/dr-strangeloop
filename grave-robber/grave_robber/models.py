@@ -27,6 +27,9 @@ class TimingSegment:
     # an absolute URI.
     init_uri: str | None = None  # CMAF/fMP4 init segment (HLS #EXT-X-MAP / DASH
     # SegmentTemplate@initialization); None for self-contained segments (MPEG-TS).
+    byte_range: tuple[int, int] | None = None  # (offset, length) of the segment inside
+    # `source_uri` (HLS #EXT-X-BYTERANGE); None when the segment is the whole resource.
+    init_byte_range: tuple[int, int] | None = None  # same, for the init segment (#EXT-X-MAP BYTERANGE)
     start_time: _dt.datetime | None = None  # wall-clock start (HLS: forward-carried
     # PROGRAM-DATE-TIME); None when the source has no wall-clock reference. Only used
     # for range selection/trimming (SCOPE.md §8), never for loop timing.

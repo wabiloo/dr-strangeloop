@@ -22,6 +22,16 @@ tools an agent would use directly: `franken-ts <config.yaml>`,
   and a `/health` proxy to loop-dee-loop's `serve.py` for live loop
   position on `ecs-express` channels.
 
+## Pages
+
+Playlists (franken-ts YAML editor), Archives (HAR/Proxyman import wizard,
+`/archives`), **Manifests** (`/manifests`: save a VOD HLS/DASH manifest URL,
+inspect its rendition ladder, pick renditions/audio, download it as a
+segment list via `grave-robber ingest-url`), and Channels. A channel's
+`[input] source_kind` is `playlist`, `archive` or `manifest`; the latter two
+both point `source_path` at a grave-robber `manifest.json` (a segment-list
+manifest, baked with the source's own segment durations).
+
 If you're an agent asked to do a one-off content/deploy task via the CLI
 directly, prefer the per-tool `AGENTS.md` files (`franken-ts/AGENTS.md`,
 `its-a-live/AGENTS.md`, `loop-dee-loop/AGENTS.md`) -- this project exists
@@ -33,6 +43,7 @@ another agent unless you're specifically building on its HTTP API.
 | Prefix | Purpose |
 |---|---|
 | `GET/PUT/DELETE /api/v1/playlists/*` | franken-ts YAML playlist CRUD + `/schema` (JSON Schema) + `/duplicate` (copy under a new name) + `/build` (spawns a job) |
+| `GET/POST/DELETE /api/v1/manifests/*` | VOD manifest-URL sources (separate from `/archives`: no capture/coverage/range picker). `POST /` saves a URL (`data/manifests/<name>.json`), `POST /inspect` fetches just the manifest and returns its rendition ladder, `POST /{name}/import` spawns `grave-robber ingest-url` (`renditions`: `all`/`best`/`#1,#3`, `audio`, `allow_missing_segments`) into `outputs/manifests/<name>/`, `GET /{name}/import/status` summarises the result. Channels reference it with `source_kind = "manifest"` |
 | `GET/POST/DELETE /api/v1/channels/*` | its-a-live TOML CRUD (igor-only, no `channel.py` equivalent) |
 | ↳ Infrastructure: `/create`, `/redeploy`, `/terminate` (job-spawning), `/outputs` | does the stack/container exist -- `/redeploy`, `/terminate` and `/outputs` are no-ops/unavailable for local-docker channels (no stack); igor's UI hides all three for local-docker. No `/list` -- igor lists channels from its local TOML store directly, not by shelling out to `channel.py list` |
 | ↳ Stream: `/spark`, `/start`, `/stop`, `/refresh`, `/update` (job-spawning), `/status` | is content actually playing -- available for every backend. `/update` is `/spark`+`/refresh` combined (channel.py's `update`); igor's UI shows it instead of a separate Spark/Refresh pair once the channel is running, and plain `/spark` otherwise (staging never depends on deploy state) |

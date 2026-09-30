@@ -42,7 +42,9 @@ bucket_name = "..."    # required (ignored by local-docker) — must already exi
 content_folder = "..." # required (ignored by local-docker) — content lives under <content_folder>/<name>/
 
 [input]
-source_path = "..."    # required — franken-ts output (.ts file, or ladder dir for ecs-express/local-docker)
+source_path = "..."    # required — franken-ts output (.ts file, or ladder dir for ecs-express/local-docker), or a grave-robber segment-list manifest.json (from `grave-robber ingest`/`ingest-url`; ecs-express/local-docker only)
+source_kind = "playlist" # optional metadata written by igor: "playlist" | "archive" | "manifest" -- not read by channel.py
+allow_missing_segments = false # optional -- pass --allow-missing-segments to bake.py (segment-list manifests with holes)
 
 # ecs-express/local-docker only (ignored by aws-media):
 [bake]

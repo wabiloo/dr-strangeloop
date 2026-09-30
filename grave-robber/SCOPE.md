@@ -8,6 +8,13 @@
 > captured archive). Igor-facing UI terminology ("Archives", "archive
 > import") is unaffected — that's user-facing wording, not the package
 > name.
+>
+> **VOD manifest URLs** (`ingest-url`, `vod.py`; usage in `README.md`) are a
+> second input to the same segment-list output: no capture, so no snapshot
+> merge, no coverage map and no range picker, but a full segment download
+> and a multi-rendition ladder (`loop-dee-loop/SCOPE.md` §11.2). In Igor it
+> is its own "Manifests" section (`/api/v1/manifests/*`), deliberately kept
+> apart from the archive wizard described in §10.
 
 ## 1. Motivation
 

@@ -78,6 +78,35 @@ engine, for instance) can consume regardless of whether every segment is
 actually playable end-to-end. See `loop-dee-loop/SCOPE.md` §11 for the
 corresponding "manifest-complete, media-optional" serving mode.
 
+## VOD manifest URL (rendition ladder)
+
+No capture needed for a **VOD** (`#EXT-X-ENDLIST` HLS, `type="static"`
+DASH): `ingest-url` fetches the manifest and every segment itself.
+
+```bash
+uv run --project grave-robber grave-robber ingest-url https://cdn.example/vod/master.m3u8 \
+    --output outputs/<name>/ [--renditions all|best|720,360|#1,#3] [--no-audio] [--allow-missing-segments]
+python3 loop-dee-loop/bake.py outputs/<name>/manifest.json --output <package-dir>
+```
+
+- A multivariant playlist / MPD becomes a **rendition ladder**
+  (`--renditions`, default all): one shared timeline + markers (read from
+  the highest-bandwidth rendition), and a `media_files` list per rendition
+  — see `loop-dee-loop/SCOPE.md` §11.2. A media playlist gives a single
+  rendition. Renditions must be segment-aligned (same count,
+  discontinuities, durations within 10 ms) or ingest fails.
+- Separate audio is kept as one track: HLS `#EXT-X-MEDIA` playlist (from
+  the highest-bandwidth variant's audio group) or DASH audio AdaptationSet
+  (the first one, first Representation). DASH audio is aligned to the video
+  by segment start ticks, so audio and video segments needn't have equal
+  durations; a video segment with no audio starting within half its length
+  gets no audio. Byte-range HLS (single-file VOD) is supported.
+- All segments are downloaded (`--workers`, default 8). A failed download
+  fails the ingest unless `--allow-missing-segments`. Live playlists are
+  refused — capture them and use `ingest`.
+- Not supported: lazy/proxy serving of the origin's segments, live
+  sources, and an ABR ladder from a HAR (`ingest` keeps one variant).
+
 ## Known limitations (v1)
 
 - **Loop boundary**: uses the archive's full captured span, no
@@ -86,9 +115,9 @@ corresponding "manifest-complete, media-optional" serving mode.
 - **Multi-variant selection** (SCOPE.md §8): `coverage`'s CLI report is
   the fallback; the real human-in-the-loop range-picker + full-coverage
   filter is designed as an `igor` UI wizard, not a CLI flag.
-- **No ABR ladder or separate audio track** in the segment-list manifest
-  output — matches loop-dee-loop's own sparse-mode limitation (single
-  reference rendition, video-only).
+- **Archive imports (`ingest`) keep one variant** — the reference variant
+  you pick, with at most one separate audio track. A rendition ladder
+  (and DASH audio) comes only from `ingest-url` on a VOD manifest.
 - **RFC 6381 codec strings / bandwidth** aren't derived by this tool at
   all — loop-dee-loop's sparse `bake.py` mode probes them via `ffprobe`
   from whatever media it recovers (best-effort, see its own README).

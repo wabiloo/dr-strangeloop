@@ -54,6 +54,17 @@ def assign_program_date_times(segments: list) -> list[_dt.datetime | None]:
     return pdts
 
 
+def _parse_byte_range(value: str | None, previous_end: int | None) -> tuple[int, int] | None:
+    """`#EXT-X-BYTERANGE` / `#EXT-X-MAP` BYTERANGE `length[@offset]` -> (offset, length).
+    An omitted offset means "right after the previous range of the same resource"."""
+    if not value:
+        return None
+    length_text, _, offset_text = str(value).partition("@")
+    length = int(length_text)
+    offset = int(offset_text) if offset_text else (previous_end or 0)
+    return offset, length
+
+
 def extract_hls(
     manifest_text: str, manifest_url: str
 ) -> tuple[list[TimingSegment], list[RawMarker], list[AssetBoundary]]:
@@ -72,10 +83,14 @@ def extract_hls(
     boundaries: list[AssetBoundary] = []
     cumulative_ticks = 0
     starts_ticks: list[int] = []
+    range_end_by_uri: dict[str, int] = {}
 
     for index, seg in enumerate(playlist.segments):
         duration_ticks = round((seg.duration or 0.0) * TIMESCALE)
         starts_ticks.append(cumulative_ticks)
+        byte_range = _parse_byte_range(seg.byterange, range_end_by_uri.get(seg.absolute_uri or ""))
+        if byte_range is not None:
+            range_end_by_uri[seg.absolute_uri or ""] = byte_range[0] + byte_range[1]
         segments.append(
             TimingSegment(
                 index=index,
@@ -84,6 +99,10 @@ def extract_hls(
                 source_uri=seg.absolute_uri or None,
                 start_time=pdts[index],
                 init_uri=(seg.init_section.absolute_uri if seg.init_section else None) or None,
+                byte_range=byte_range,
+                init_byte_range=_parse_byte_range(
+                    getattr(seg.init_section, "byterange", None) if seg.init_section else None, None
+                ),
             )
         )
 

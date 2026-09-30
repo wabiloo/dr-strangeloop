@@ -9,6 +9,9 @@ import type {
   ChannelListItem,
   ChannelOutputs,
   ChannelStatus,
+  ManifestImportStatus,
+  ManifestInspection,
+  ManifestListItem,
   FrankenTsPlaylist,
   Job,
   MarkersNumberingPreview,
@@ -220,6 +223,57 @@ export async function saveArchiveSelection(name: string, selection: ArchiveSelec
 
 export function getArchiveImportStatus(name: string): Promise<ArchiveImportStatus> {
   return getJson(`${ARCHIVES_BASE}/${encodeURIComponent(name)}/import/status`)
+}
+
+// ---------------------------------------------------------------------------
+// VOD manifest-URL sources (grave-robber ingest-url)
+// ---------------------------------------------------------------------------
+
+const MANIFESTS_BASE = '/api/v1/manifests'
+
+export function listManifests(): Promise<ManifestListItem[]> {
+  return getJson(`${MANIFESTS_BASE}/`)
+}
+
+export function getManifestSource(name: string): Promise<ManifestListItem> {
+  return getJson(`${MANIFESTS_BASE}/${encodeURIComponent(name)}`)
+}
+
+export function createManifestSource(manifestUrl: string, name?: string): Promise<ManifestListItem> {
+  return postJson(`${MANIFESTS_BASE}/`, { manifest_url: manifestUrl, name: name || undefined })
+}
+
+export async function deleteManifestSource(name: string): Promise<void> {
+  await handle(await fetch(`${MANIFESTS_BASE}/${encodeURIComponent(name)}`, { method: 'DELETE' }))
+}
+
+export async function renameManifestSource(name: string, displayName: string): Promise<{ name: string; display_name: string }> {
+  const res = await handle(
+    await fetch(`${MANIFESTS_BASE}/${encodeURIComponent(name)}/name`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ display_name: displayName }),
+    }),
+  )
+  return res.json()
+}
+
+/** Fetches just the manifest (no segments) and describes its rendition ladder. */
+export function inspectManifest(manifestUrl: string): Promise<ManifestInspection> {
+  return postJson(`${MANIFESTS_BASE}/inspect`, { manifest_url: manifestUrl })
+}
+
+/** Spawns `grave-robber ingest-url`, downloading every segment of the chosen renditions
+ * (`renditions`: 'all', 'best' or ranked positions like '#1,#3'). */
+export function importManifest(
+  name: string,
+  options: { renditions?: string; audio?: boolean; allow_missing_segments?: boolean },
+): Promise<Job> {
+  return postJson(`${MANIFESTS_BASE}/${encodeURIComponent(name)}/import`, options)
+}
+
+export function getManifestImportStatus(name: string): Promise<ManifestImportStatus> {
+  return getJson(`${MANIFESTS_BASE}/${encodeURIComponent(name)}/import/status`)
 }
 
 // ---------------------------------------------------------------------------

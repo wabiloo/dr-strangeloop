@@ -77,3 +77,55 @@ def write_segment_list_manifest(manifest: dict, path: Path) -> None:
     with path.open("w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
         f.write("\n")
+
+
+def build_ladder_segment_list_manifest(
+    segments: list[TimingSegment],
+    boundaries: list[AssetBoundary],
+    decoded_markers: list[dict],
+    renditions: list[dict],
+    audio_segments: list | None = None,
+    audio_media_paths: dict[int, Path | None] | None = None,
+) -> dict:
+    """A rendition ladder over ONE shared segment timeline (a VOD's variants
+    are segment-aligned). `renditions` is `[{"name", "variant" (declared
+    codecs/bandwidth/resolution/frame_rate, or None), "media_paths"
+    ({index: Path | None})}, ...]`, best variant first -- the first is the
+    reference rendition bake.py carries the shared audio on.
+
+    One rendition degenerates to the classic single-rendition shape
+    (`segments[].media_file` + top-level `variant`), so a ladder of one stays
+    readable by every older consumer. With more, each rendition carries its
+    own `media_files` list and the shared `segments` entries carry timing only
+    (loop-dee-loop/SCOPE.md §11.2's ladder extension)."""
+    if not renditions:
+        raise ValueError("A segment-list manifest needs at least one rendition")
+    names = [r["name"] for r in renditions]
+    if len(set(names)) != len(names):
+        raise ValueError(f"Duplicate rendition names: {names}")
+
+    first = renditions[0]
+    manifest = build_segment_list_manifest(
+        segments, boundaries, decoded_markers, first["media_paths"], first.get("variant"),
+        audio_segments, audio_media_paths,
+    )
+    if len(renditions) == 1:
+        return manifest
+
+    for entry in manifest["segments"]:
+        del entry["media_file"]
+    manifest.pop("variant", None)
+    manifest["renditions"] = []
+    for rendition in renditions:
+        variant = rendition.get("variant") or {}
+        manifest["renditions"].append({
+            "name": rendition["name"],
+            "variant": {
+                k: variant[k] for k in ("codecs", "bandwidth", "resolution", "frame_rate") if variant.get(k)
+            },
+            "media_files": [
+                str(rendition["media_paths"][s.index]) if rendition["media_paths"].get(s.index) is not None else None
+                for s in segments
+            ],
+        })
+    return manifest

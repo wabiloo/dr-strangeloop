@@ -443,6 +443,33 @@ Bake behavior:
   mechanism `grave-robber/SCOPE.md` §6.1 asks `serve.py` to extend
   to fire at internal boundaries, not just the loop wrap.
 
+**Rendition ladder extension.** A segment-list manifest may carry an ABR
+ladder over one shared timeline (a VOD's variants are segment-aligned). A
+top-level `renditions` list replaces the per-segment `media_file`:
+
+```json
+{
+  "segments": [{"index": 0, "duration_ticks": 540000, "asset_boundary": true}, ...],
+  "renditions": [
+    {"name": "720p", "variant": {"bandwidth": 3000000, "codecs": "avc1.64001f"}, "media_files": ["a0.bin", null, ...]},
+    {"name": "360p", "variant": {"bandwidth": 800000}, "media_files": ["b0.bin", "b1.bin", ...]}
+  ],
+  "markers": [ ... ]
+}
+```
+
+Each `media_files` list has exactly one entry per segment; `name` is a
+`[A-Za-z0-9_.-]+` directory/URL component, unique in the ladder. The
+timing (`duration_ticks`, `asset_boundary`, `gap_ticks`) and `markers` are
+shared, so every rendition gets the same boundary ticks. Holes (`null`)
+and `--allow-missing-segments` apply per rendition, and every rendition
+needs at least one real segment to probe. The first rendition is the
+reference: the one shared audio track (a separate `audio_media_file`
+playlist, or audio muxed into its video segments) is baked from it and
+served under the ladder's single audio Representation/Rendition. Without
+`renditions` the manifest is the classic single-rendition shape (rendition
+name `archive`), which stays valid.
+
 ### 11.3 `serve.py` change: 404 on a missing segment, nothing else
 
 The only `serve.py` change this mode needs: the segment **byte-serving**

@@ -53,3 +53,27 @@ def align_audio_segments(video: list[TimingSegment], audio: list[TimingSegment])
     return [
         dataclasses.replace(a, index=v.index) if a is not None else None for v, a in zip(video, aligned)
     ]
+
+
+def align_audio_segments_by_ticks(video: list[TimingSegment], audio: list[TimingSegment]) -> list[TimingSegment | None]:
+    """Same as `align_audio_segments` for sources with no wall-clock (DASH): both
+    sides are placed on their own cumulative tick timeline, and each video segment
+    takes the audio segment starting nearest to it (within half the video
+    segment's duration), or None."""
+
+    def _starts(segments: list[TimingSegment]) -> list[int]:
+        out, total = [], 0
+        for s in segments:
+            out.append(total)
+            total += s.duration_ticks
+        return out
+
+    if not audio:
+        return [None] * len(video)
+    video_starts, audio_starts = _starts(video), _starts(audio)
+    aligned: list[TimingSegment | None] = []
+    for v, v_start in zip(video, video_starts):
+        best = min(range(len(audio)), key=lambda i: abs(audio_starts[i] - v_start))
+        close = abs(audio_starts[best] - v_start) <= v.duration_ticks / 2
+        aligned.append(dataclasses.replace(audio[best], index=v.index) if close else None)
+    return aligned
