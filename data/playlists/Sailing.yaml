@@ -1,0 +1,15 @@
+output:
+  framerate: 25
+  bitrate_kbps: 10000
+  service_provider: ''
+  service_name: ''
+  file: ../outputs/sailing.ts
+  resolution: 1920x1080
+assets:
+- file: https://bpkioassets.s3-eu-west-1.amazonaws.com/SolitaireFigaro/SolitaireFigaro_wmkd_1080p_8min.mp4
+  id: asset-1
+  duration: 516.72s
+enforce_scte35_marker_semantics: true
+scte35_numbering_scheme: SCTE35_2023R1
+break_numbering_supported: false
+normalize: true

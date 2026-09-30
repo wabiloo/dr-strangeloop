@@ -12,8 +12,8 @@ assets:
   duration: 20
 - file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/slates/test_cards/grid_h264_1080p_7000k_eng_aac_192k.mp4
   id: jingle1
-  duration: 5s
   role: jingle
+  duration: 5s
 - file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-1-10s/ad-1-10s_h264_1080p_5000k_eng_aac_128k.mp4
   id: ad1a
   duration: 10.00s
@@ -39,8 +39,8 @@ osd:
     enabled: true
     color: '#F7A239'
   corners:
-    top_left: time
-    top_right: is_adbreak
+    top_left: loop_time
+    top_right: transition
     bottom_left: asset_id
     bottom_right: next_asset_id
 markers:

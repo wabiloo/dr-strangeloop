@@ -1,5 +1,5 @@
 [deploy]
-name = "break-and-ppos-short-local"
+name = "test-from-manifest"
 backend = "local-docker"
 
 [aws]
@@ -10,8 +10,8 @@ bucket_name = ""
 content_folder = "its-a-live/content"
 
 [input]
-source_path = "../outputs/break-and-ppos-short.ts"
-source_kind = "playlist"
+source_path = "/Users/fabrelambeau/Broadpeak/Code/dr-strangeloop/outputs/manifests/origin.ridgeline.fr_index/manifest.json"
+source_kind = "manifest"
 allow_missing_segments = false
 
 [markers]
@@ -24,7 +24,7 @@ dash_descriptor_mode = "shared"
 
 [packaging]
 segment_duration   = 4.0
-dvr_window_seconds = 30.0
+dvr_window_seconds = 120.0
 hls_format = "cmaf"
 hls_ts_mux_audio = true
 continuous_timeline = true

@@ -11,15 +11,23 @@ content_folder = "its-a-live/content"
 
 [input]
 source_path = "../outputs/break-and-ppos.ts"
+source_kind = "playlist"
+allow_missing_segments = false
 
 [markers]
 daterange_mode      = "shared"
 cue_tags            = "none"
-increment_event_ids = false
+increment_event_ids = true
+daterange_id_format = "{segcode}-{eventid}-{loop}"
+dash_signal_format  = "binary"
+dash_descriptor_mode = "shared"
 
 [packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30.0
+hls_format = "cmaf"
+hls_ts_mux_audio = true
+continuous_timeline = true
 
 [docker]
 port = "auto"

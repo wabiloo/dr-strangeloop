@@ -1,18 +1,18 @@
 [deploy]
-name = "ttesthjdsha"
-backend = "local-docker"
+name = "solitaire-figaro"
+backend = "ecs-express"
 
 [aws]
 region = "eu-west-1"
 
 [s3]
-bucket_name = ""
+bucket_name = "bpkio-cs-demos"
 content_folder = "its-a-live/content"
 
 [input]
-source_path = "/Users/fabrelambeau/Broadpeak/Code/dr-strangeloop/outputs/archives/ndtv24x7/manifest.json"
-source_kind = "archive"
-allow_missing_segments = true
+source_path = "/Users/fabrelambeau/Broadpeak/Code/outputs/sailing.ts"
+source_kind = "playlist"
+allow_missing_segments = false
 
 [markers]
 daterange_mode      = "shared"
@@ -27,6 +27,9 @@ segment_duration   = 4.0
 dvr_window_seconds = 30.0
 hls_format = "cmaf"
 hls_ts_mux_audio = true
+continuous_timeline = true
 
-[docker]
-port = 8080
+[express]
+port   = 8080
+cpu    = 256
+memory = 512
