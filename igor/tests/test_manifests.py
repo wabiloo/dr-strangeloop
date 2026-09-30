@@ -4,6 +4,7 @@ touches the real repo-root data/ or outputs/."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -15,6 +16,7 @@ from igor.integrations import manifests
 client = TestClient(app)
 
 URL = "https://cdn.example.com/vod/movie/master.m3u8"
+_URL_NAME = hashlib.sha256(URL.encode()).hexdigest()[:12]
 
 
 @pytest.fixture()
@@ -45,10 +47,10 @@ def test_create_derives_a_name_from_the_url_and_lists_it(store):
 
     assert response.status_code == 201
     body = response.json()
-    assert body["name"] == "cdn.example.com_master"
+    assert body["name"] == _URL_NAME
     assert body["display_name"] == body["name"]
     assert body["manifest_url"] == URL and body["import"] is None
-    assert [m["name"] for m in client.get("/api/v1/manifests/").json()] == ["cdn.example.com_master"]
+    assert [m["name"] for m in client.get("/api/v1/manifests/").json()] == [_URL_NAME]
 
 
 def test_create_with_explicit_name_and_display_name_and_conflict(store):

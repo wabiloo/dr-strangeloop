@@ -12,6 +12,7 @@ and outputs/manifests/<name>/manifest.json + media/ (the import).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -46,10 +47,9 @@ def _validate_name(name: str) -> str:
 
 
 def _name_from_url(url: str) -> str:
-    parsed = urlparse(url)
-    stem = PurePosixPath(parsed.path).stem or "manifest"
-    name = re.sub(r"[^A-Za-z0-9._-]+", "_", f"{parsed.hostname or ''}_{stem}").strip("._-")[:180]
-    return re.sub(r"^[^A-Za-z0-9]+", "", name) or "manifest"
+    # Hash rather than hostname/filename: many manifests share a CDN host and
+    # often the same "master.m3u8" filename, so those collide or mislead.
+    return hashlib.sha256(url.encode()).hexdigest()[:12]
 
 
 def _source_path(name: str) -> Path:
