@@ -1011,6 +1011,7 @@ class Channel:
         lines = [
             "#EXTM3U",
             f"# {GENERATOR_COMMENT}",
+            f"# current loop: {media_sequence // pkg.segments_per_loop}",
             "#EXT-X-VERSION:6" if init_uri is None and span_init_uri is None else "#EXT-X-VERSION:7",
             f"#EXT-X-TARGETDURATION:{pkg.max_segment_duration_seconds_rounded_up}",
             f"#EXT-X-MEDIA-SEQUENCE:{first_global_index}",
@@ -1827,6 +1828,7 @@ class Channel:
         )
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
 <!-- {GENERATOR_COMMENT} -->
+<!-- current loop: {current_loop_number} -->
 {mpd_open}
 {chr(10).join(period_xml_parts)}
 {self._utc_timing_xml(window)}</MPD>
@@ -2074,6 +2076,7 @@ class Channel:
         )
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
 <!-- {GENERATOR_COMMENT} -->
+<!-- current loop: {last_loop} -->
 {mpd_open}
 {period_xml}
 {self._utc_timing_xml(window)}</MPD>

@@ -476,6 +476,10 @@ def test_manifests_are_stamped_with_generator_version(tmp_path, continuous):
     assert m["master"].splitlines()[1] == f"# {stamp}"
     assert m["hls"].splitlines()[1] == f"# {stamp}"
     assert m["dash"].splitlines()[1] == f"<!-- {stamp} -->"
+    # Second comment: the current (live-edge) loop, on HLS media and DASH.
+    hls_loop = int(m["hls"].splitlines()[2].removeprefix("# current loop: "))
+    assert m["dash"].splitlines()[2] == f"<!-- current loop: {hls_loop} -->"
+    assert hls_loop >= 1
 
 
 @pytest.mark.parametrize("continuous", [True, False])
