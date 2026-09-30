@@ -934,7 +934,8 @@ When true, the range is widened to whole loop iterations
 (`0x22,0x23,0x30,0x31`, ...). Every marker in the package whose type id is
 listed opens a new DASH `<Period>` / emits `#EXT-X-DISCONTINUITY` at the
 segment containing its `pts_time_ticks` (bakes cut segments at marker ticks,
-so that is normally exactly the segment starting at the marker). Plain
+so that is normally exactly the segment starting at the marker). A Start implies its End (and an unambiguous End its Start, per Table 23 --
+`0x22` also matches `0x23`), so only one of the pair needs listing. Plain
 `splice_insert` markers carry no type id and never match. The set is
 resolved once at startup to local segment indices (`Channel.signal_breaks`);
 no re-bake, no new query parameter (nothing for a CDN to key on).

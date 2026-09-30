@@ -369,6 +369,11 @@ export interface ChannelCreatePayload {
    * DASH Period restart at the loop wrap (serve.py rewrites each segment's
    * own timestamps per request instead). ecs-express/local-docker only. */
   continuous_timeline?: boolean
+  /** loop-dee-loop/SCOPE.md §14: segmentation_type_ids (hex, e.g. "0x22";
+   * a Start implies its End) whose markers force a new DASH Period / HLS
+   * discontinuity, signal-only. `apply` picks the formats. */
+  period_on_segmentation?: string[]
+  period_on_segmentation_apply?: 'both' | 'dash' | 'hls'
   /** loop-dee-loop/SCOPE.md §13: startover/catchup via query parameters on
    * the normal manifest URLs. The names are per-channel and also become the
    * CDN's manifest cache-key allow-list. ecs-express/local-docker only. */

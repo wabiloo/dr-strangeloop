@@ -203,3 +203,22 @@ def test_apply_hls_only_default_mode_keeps_real_loop_wrap_in_dash():
 def test_apply_rejects_unknown_value():
     with pytest.raises(ValueError):
         _channel_apply("xml", continuous=True)
+
+
+# ── start implies end ───────────────────────────────────────────────────────
+
+
+def test_start_type_implies_its_end_and_vice_versa():
+    from serve import expand_segmentation_pairs
+
+    assert expand_segmentation_pairs(frozenset({0x22})) == frozenset({0x22, 0x23})
+    assert expand_segmentation_pairs(frozenset({0x31})) == frozenset({0x30, 0x31})
+    # 0x11 (Program End) closes 0x10/0x17/0x19: ambiguous backwards, left alone
+    assert expand_segmentation_pairs(frozenset({0x11})) == frozenset({0x11})
+    assert expand_segmentation_pairs(frozenset({0x10})) == frozenset({0x10, 0x11})
+
+
+def test_listing_only_the_start_breaks_at_the_end_marker_too():
+    markers = [_marker("0x1", 90_000, "0x22"), _marker("0x1", 270_000, "0x23", is_out=False)]
+    ch = _channel([0x22], continuous=True, markers=markers)
+    assert ch.signal_breaks == frozenset({1, 3})

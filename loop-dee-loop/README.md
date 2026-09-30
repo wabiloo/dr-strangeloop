@@ -269,7 +269,7 @@ SCOPE.md §12 for the full design and known limitations).
 
 ### Forced Periods on chosen SCTE-35 segmentations (SCOPE.md §14)
 
-`--period-on-segmentation 0x22,0x23,0x30,0x31` (its-a-live: `[packaging]
+`--period-on-segmentation 0x22,0x30` (a Start implies its End; its-a-live: `[packaging]
 period_on_segmentation = [0x22, 0x30]`) forces a new DASH Period /
 `#EXT-X-DISCONTINUITY` at every marker with one of those
 `segmentation_type_id`s, in either timeline mode. It is signal only: with

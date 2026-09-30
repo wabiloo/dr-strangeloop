@@ -63,6 +63,7 @@ from loop_math import (
 )
 from scte35_signaling import (
     SCTE35_XML_NAMESPACE,
+    SEGMENTATION_END_TYPE_ID,
     SignalingMarker,
     build_cue_breaks,
     build_cue_in_tag,
@@ -208,6 +209,20 @@ def parse_period_apply(value: str | None) -> str:
     if value not in PERIOD_APPLY_CHOICES:
         raise ValueError(f"period-on-segmentation apply must be one of {PERIOD_APPLY_CHOICES}, got {value!r}")
     return value
+
+
+def expand_segmentation_pairs(type_ids: frozenset[int]) -> frozenset[int]:
+    """A Start implies its End and vice versa (SCTE-35 Table 23: 0x22 Break
+    Start <-> 0x23 Break End), so listing one is enough. An End shared by
+    several Starts (0x11 Program End <- 0x10/0x17/0x19) is ambiguous and is
+    not expanded backwards."""
+    expanded = set(type_ids)
+    for start, end in SEGMENTATION_END_TYPE_ID.items():
+        if start in type_ids:
+            expanded.add(end)
+        if end in type_ids and sum(1 for e in SEGMENTATION_END_TYPE_ID.values() if e == end) == 1:
+            expanded.add(start)
+    return frozenset(expanded)
 
 
 def parse_segmentation_type_ids(spec: str | None) -> frozenset[int]:
@@ -719,7 +734,7 @@ class Channel:
         # Channel-level: segmentation_type_ids whose markers force a new
         # Period / #EXT-X-DISCONTINUITY (signal only -- timestamps stay
         # continuous across it). Resolved once to local segment indices.
-        self.period_on_segmentation = frozenset(period_on_segmentation)
+        self.period_on_segmentation = expand_segmentation_pairs(frozenset(period_on_segmentation))
         self.signal_breaks: frozenset[int] = compute_signal_breaks(
             package.markers, package.segment_boundary_ticks, self.period_on_segmentation
         )
