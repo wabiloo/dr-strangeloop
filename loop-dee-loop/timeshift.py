@@ -21,7 +21,7 @@ _NUMERIC = re.compile(r"^\d+(\.\d+)?$")
 # Fixed (not configurable) name and values of the per-request timeline-mode
 # override: `default` = the server's --continuous-timeline setting.
 TIMELINE_PARAM = "timeline"
-TIMELINE_VALUES = ("default", "continuous", "discontinuous")
+TIMELINE_VALUES = ("default", "continuous", "periodic")
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off", ""}
 
@@ -60,14 +60,14 @@ def parse_bool(value: str, name: str) -> bool:
 
 
 def parse_timeline(value: str) -> bool | None:
-    """`timeline=` -> True (continuous), False (discontinuous) or None (use the
+    """`timeline=` -> True (continuous), False (periodic) or None (use the
     server default). Case-insensitive; anything else is a 400."""
     v = value.strip().lower()
     if v == "default":
         return None
     if v == "continuous":
         return True
-    if v == "discontinuous":
+    if v == "periodic":
         return False
     raise TimeshiftError(f"'{TIMELINE_PARAM}' must be one of {', '.join(TIMELINE_VALUES)}, got {value!r}")
 

@@ -27,11 +27,11 @@ export const DEFAULT_TIMESHIFT_PARAMS: TimeshiftParams = {
 
 export type TimeFormat = 'iso' | 'epoch' | 'epoch_ms'
 /** Fixed (not configurable) name of the per-request timeline-mode override,
- * `timeline=default|continuous|discontinuous`; absent == `default`, i.e. the
+ * `timeline=default|continuous|periodic`; absent == `default`, i.e. the
  * channel's own continuous-timeline setting. Mirrors loop-dee-loop's
  * timeshift.TIMELINE_PARAM. */
 export const TIMELINE_PARAM = 'timeline'
-export type TimelineChoice = 'default' | 'continuous' | 'discontinuous'
+export type TimelineChoice = 'default' | 'continuous' | 'periodic'
 
 export interface TimeshiftRequest {
   start: Date | null

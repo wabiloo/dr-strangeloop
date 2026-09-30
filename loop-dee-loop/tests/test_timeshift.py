@@ -70,9 +70,9 @@ def test_parse_bool():
 
 def test_parse_timeline():
     assert parse_timeline("continuous") is True
-    assert parse_timeline("DisContinuous") is False
+    assert parse_timeline("Periodic") is False
     assert parse_timeline("default") is None
-    for bad in ("", "true", "signaled", "continuous_timeline"):
+    for bad in ("", "true", "signaled", "discontinuous"):
         with pytest.raises(TimeshiftError):
             parse_timeline(bad)
 
@@ -230,7 +230,7 @@ def test_continuous_server_can_opt_out_per_request(tmp_path):
     client, epoch = _app(tmp_path, continuous=True)
     live = client.get("/video.m3u8").get_data(as_text=True)
     assert "cseg/" in live and "DISCONTINUITY\n" not in live
-    body = client.get(f"/video.m3u8?start={epoch + 5}&end={epoch + 7}&timeline=discontinuous").get_data(
+    body = client.get(f"/video.m3u8?start={epoch + 5}&end={epoch + 7}&timeline=periodic").get_data(
         as_text=True
     )
     assert "cseg/" not in body and "1080p/seg/0.m4s" in body
@@ -386,7 +386,7 @@ def test_health_reports_timeshift_config(tmp_path):
     ts = client.get("/health").get_json()["timeshift"]
     assert ts["enabled"] and ts["max_span_seconds"] == 123 and ts["continuous_supported"]
     assert ts["start_param"] == "start" and ts["full_loop_param"] == "full_loop"
-    assert ts["timeline_param"] == "timeline" and "continuous_param" not in ts
+    assert ts["timeline_param"] == "timeline"
     off, _ = _app(tmp_path / "off" if (tmp_path / "off").mkdir() is None else tmp_path, enabled=False)
     assert off.get("/health").get_json()["timeshift"] == {"enabled": False}
 
@@ -455,17 +455,14 @@ def test_continuous_override_works_on_plain_live(tmp_path, server_continuous):
     stream's mode either way, in HLS, DASH and the master's child URIs."""
     client, _ = _app(tmp_path, continuous=server_continuous)
     on = client.get("/video.m3u8?timeline=continuous").get_data(as_text=True)
-    off = client.get("/video.m3u8?timeline=discontinuous").get_data(as_text=True)
+    off = client.get("/video.m3u8?timeline=periodic").get_data(as_text=True)
     assert "cseg/" in on and "#EXT-X-DISCONTINUITY\n" not in on and "PLAYLIST-TYPE" not in on
     assert "cseg/" not in off and "#EXT-X-DISCONTINUITY\n" in off
     assert 'id="continuous"' in client.get("/stream.mpd?timeline=continuous").get_data(as_text=True)
-    assert 'id="continuous"' not in client.get("/stream.mpd?timeline=discontinuous").get_data(as_text=True)
+    assert 'id="continuous"' not in client.get("/stream.mpd?timeline=periodic").get_data(as_text=True)
     master = client.get("/index.m3u8?timeline=continuous").get_data(as_text=True)
     assert "video.m3u8?timeline=continuous" in master
     # no param, or an explicit timeline=default: the server default still applies
     for query in ("", "?timeline=default", "?timeline=DEFAULT"):
         default = client.get("/video.m3u8" + query).get_data(as_text=True)
         assert ("cseg/" in default) is server_continuous, query
-    # the old, configurable boolean param is gone
-    legacy = client.get("/video.m3u8?continuous_timeline=true").get_data(as_text=True)
-    assert ("cseg/" in legacy) is server_continuous

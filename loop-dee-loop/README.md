@@ -282,7 +282,7 @@ curl 'http://localhost:8080/stream.mpd?start=1790755200&end=1790755800'       # 
 curl 'http://localhost:8080/index.m3u8?start=2026-09-30T11:55:00Z'
 
 # Whole loops only, and/or pick the timeline mode for this request
-curl 'http://localhost:8080/index.m3u8?start=...&end=...&full_loop=true&timeline=discontinuous'
+curl 'http://localhost:8080/index.m3u8?start=...&end=...&full_loop=true&timeline=periodic'
 
 # The timeline override also works on plain live (no start needed)
 curl 'http://localhost:8080/index.m3u8?timeline=continuous'
@@ -293,7 +293,7 @@ curl 'http://localhost:8080/index.m3u8?timeline=continuous'
 | `start` (name configurable) | Range start: epoch seconds, epoch ms (≥ 1e11) or ISO 8601 (no zone = UTC). Snapped down to a segment boundary. Must be ≥ the channel epoch and not in the future. Without it the URL is plain live. |
 | `end` (name configurable) | Optional range end (needs `start`). Past → catchup (VOD); future → startover that ends there; absent → startover capped at `start + max_span`. Snapped up to a segment boundary. |
 | `full_loop` (name configurable) | Boolean. Widen the range to whole loops: `start` → nearest loop start at or before it, `end` → nearest loop end at or after it. |
-| `timeline` (fixed name) | `default`, `continuous` or `discontinuous`; absent = `default` = the server's `--continuous-timeline` setting. Overrides it for this request, on live URLs too. `continuous` → `400` if the package can't be served continuously. |
+| `timeline` (fixed name) | `default`, `continuous` or `periodic`; absent = `default` = the server's `--continuous-timeline` setting. Overrides it for this request, on live URLs too. `continuous` → `400` if the package can't be served continuously. |
 
 The `start` / `end` / `full_loop` names are configurable
 (`--timeshift-start-param`, `--timeshift-end-param`,

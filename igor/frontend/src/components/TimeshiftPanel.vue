@@ -206,7 +206,7 @@ const zoneOptions = [
 const timelineOptions = [
   { label: 'default (channel setting)', value: 'default' },
   { label: 'continuous (no discontinuities)', value: 'continuous' },
-  { label: 'discontinuous (signaled at each wrap)', value: 'discontinuous' },
+  { label: 'periodic (signaled at each wrap)', value: 'periodic' },
 ]
 const formatOptions = [
   { label: 'ISO 8601', value: 'iso' },
@@ -292,10 +292,10 @@ const formatOptions = [
         <label class="text-xs text-color-secondary">
           Timeline ({{ TIMELINE_PARAM }})
           <FieldHelp label="Timeline override">
-            <code>timeline=default|continuous|discontinuous</code> — works on live URLs too, not just ranges.
+            <code>timeline=default|continuous|periodic</code> — works on live URLs too, not just ranges.
             <em>default</em> (or leaving it out) follows the channel's continuous-timeline setting.
             <em>continuous</em> rewrites timestamps so there is no discontinuity at each loop wrap;
-            <em>discontinuous</em> signals one #EXT-X-DISCONTINUITY (HLS) / Period (DASH) per wrap, which for a
+            <em>periodic</em> signals one #EXT-X-DISCONTINUITY (HLS) / Period (DASH) per wrap, which for a
             long range is many. <em>continuous</em> is refused (HTTP 400) if the baked package cannot support it.
           </FieldHelp>
         </label>
@@ -349,7 +349,7 @@ const formatOptions = [
           <code>[timeshift]</code>: <code>{{ params.start_param }}</code>, <code>{{ params.end_param }}</code>,
           <code>{{ params.full_loop_param }}</code>; the timeline override is always
           <code>{{ TIMELINE_PARAM }}</code> (<code>default</code>, <code>continuous</code> or
-          <code>discontinuous</code>).
+          <code>periodic</code>).
         </p>
         <ul class="m-0 pl-4">
           <li>

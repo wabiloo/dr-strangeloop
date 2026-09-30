@@ -20,7 +20,7 @@ DEFAULTS = {
 _PARAM_KEYS = ("start_param", "end_param", "full_loop_param")
 
 # Fixed name of the per-request timeline-mode override (timeline=default|
-# continuous|discontinuous) -- not configurable, mirrors loop-dee-loop's
+# continuous|periodic) -- not configurable, mirrors loop-dee-loop's
 # timeshift.TIMELINE_PARAM.
 TIMELINE_PARAM = "timeline"
 

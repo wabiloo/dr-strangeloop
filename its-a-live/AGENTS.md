@@ -74,7 +74,7 @@ enabled = true
 start_param = "start"                     # names are configurable; ALSO the CloudFront manifest cache-key allow-list (redeploy after changing)
 end_param = "end"
 full_loop_param = "full_loop"             # widen the range to whole loops
-# (a fixed, non-configurable `timeline=default|continuous|discontinuous` query param also overrides [packaging].continuous_timeline per request, live or ranged)
+# (a fixed, non-configurable `timeline=default|continuous|periodic` query param also overrides [packaging].continuous_timeline per request, live or ranged)
 max_span_seconds = 21600                  # longest range (also caps an open-ended startover)
 
 # `port` lives with whichever backend-specific section already exists for

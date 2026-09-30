@@ -775,7 +775,7 @@ uses; nothing else about segment availability changes.
 
 - `default` (or the param absent) -- follow the server's `--continuous-timeline`;
 - `continuous` -- §12 continuity for this request;
-- `discontinuous` -- the honestly-signaled mode (`#EXT-X-DISCONTINUITY` /
+- `periodic` -- the honestly-signaled mode (`#EXT-X-DISCONTINUITY` /
   a Period per loop) for this request.
 
 It applies to **live URLs as well** as to ranges (no `start` needed), and an
