@@ -340,7 +340,7 @@ const formatOptions = [
         </div>
       </div>
       <div class="col-12 md:col-4 flex flex-column gap-1">
-        <label class="text-xs text-color-secondary">Times entered in</label>
+        <label class="text-xs text-color-secondary ts-label">Times entered in</label>
         <SelectButton
           :model-value="useUtc"
           :options="zoneOptions"
@@ -351,11 +351,11 @@ const formatOptions = [
         />
       </div>
       <div class="col-12 md:col-4 flex flex-column gap-1">
-        <label class="text-xs text-color-secondary">Value format in URL</label>
+        <label class="text-xs text-color-secondary ts-label">Value format in URL</label>
         <Select v-model="format" :options="formatOptions" option-label="label" option-value="value" fluid />
       </div>
       <div class="col-12 md:col-4 flex flex-column gap-1">
-        <label class="text-xs text-color-secondary">
+        <label class="text-xs text-color-secondary ts-label">
           Timeline ({{ TIMELINE_PARAM }})
           <FieldHelp label="Timeline override">
             <code>timeline=default|continuous|periodic</code> — works on live URLs too, not just ranges.
@@ -511,6 +511,13 @@ const formatOptions = [
 </template>
 
 <style scoped>
+/* Same height with or without an inline help button, so the controls below line up. */
+.ts-label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 2rem;
+}
 .url-tag {
   min-width: 3.25rem;
   font-size: 0.7rem;
