@@ -17,8 +17,8 @@
 #     syncing, the flags are parsed here and handed to gunicorn (wsgi:app)
 #     instead of Flask's single-threaded dev server (see PERFS.md) --
 #     serve.py's own argparse remains the source of truth for flag names,
-#     this just extracts the handful gunicorn/wsgi.py need. GUNICORN_WORKERS
-#     overrides the default worker count.
+#     this translates the serving options into environment variables for
+#     gunicorn/wsgi.py. GUNICORN_WORKERS overrides the default worker count.
 #
 #   bake.py:
 #     FRANKEN_TS_S3_URI     s3://bucket/prefix/<channel>-input  (required)
@@ -66,6 +66,7 @@ case "$SUBCOMMAND" in
             EPOCH_UTC=""
             DVR_WINDOW_SECONDS=""
             WINDOW_SEGMENTS=""
+            CONTINUOUS_TIMELINE="false"
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --host) HOST="$2"; shift 2 ;;
@@ -73,6 +74,7 @@ case "$SUBCOMMAND" in
                     --epoch-utc) EPOCH_UTC="$2"; shift 2 ;;
                     --dvr-window-seconds) DVR_WINDOW_SECONDS="$2"; shift 2 ;;
                     --window-segments) WINDOW_SEGMENTS="$2"; shift 2 ;;
+                    --continuous-timeline) CONTINUOUS_TIMELINE="true"; shift ;;
                     *)
                         log "ERROR: unrecognized serve.py flag in production mode: $1"
                         exit 2
@@ -85,7 +87,7 @@ case "$SUBCOMMAND" in
             fi
 
             export LOOP_PACKAGE_DIR="$LOOP_PACKAGE_LOCAL_DIR"
-            export EPOCH_UTC DVR_WINDOW_SECONDS WINDOW_SEGMENTS
+            export EPOCH_UTC DVR_WINDOW_SECONDS WINDOW_SEGMENTS CONTINUOUS_TIMELINE
             WORKERS="${GUNICORN_WORKERS:-4}"
             log "starting gunicorn (${WORKERS} workers) on ${HOST}:${PORT}"
             exec gunicorn --bind "${HOST}:${PORT}" --workers "$WORKERS" wsgi:app
