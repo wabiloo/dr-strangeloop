@@ -73,8 +73,9 @@ continuous_timeline = true   # default true -- serve.py rewrites each segment's 
 enabled = true
 start_param = "start"                     # names are configurable; ALSO the CloudFront manifest cache-key allow-list (redeploy after changing)
 end_param = "end"
-# Two more query params have FIXED names: `full-loops=true` (widen the range to whole loops) and
-# `timeline=default|continuous|periodic` (overrides [packaging].continuous_timeline per request, live or ranged)
+# Three more query params have FIXED names: `full-loops=true` (widen the range to whole loops),
+# `timeline=default|continuous|periodic` (overrides [packaging].continuous_timeline per request, live or ranged) and
+# `offset=-PT1H` / `offset=-3600` (pretend "now" is earlier/later; negative or positive)
 max_span_seconds = 21600                  # longest range (also caps an open-ended startover)
 
 # `port` lives with whichever backend-specific section already exists for

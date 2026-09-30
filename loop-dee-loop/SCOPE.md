@@ -770,6 +770,33 @@ the requested point rather than near the live edge (a growing EVENT playlist
 is otherwise treated like live). DASH has no equivalent; clients seek to
 presentation time 0 themselves.
 
+### 13.7 DECIDED: `offset` -- pretend "now" is earlier or later
+
+A fixed-name parameter, `offset`, takes signed seconds (`-3600`) or an ISO 8601
+duration with optional sign (`-PT1H`, `P1DT2H`; days and below -- months and
+years have no fixed length). The channel then serves as if `now` were
+`now + offset`: the live edge and the DVR window behind it sit there, and the
+manifest is what the server would have produced at that moment (so a viewer
+"plays the stream as it would have played an hour ago"). Positive offsets are
+allowed: the loop is a pure function of time, so "as it will be" is well
+defined (a preview of what goes on air).
+
+- **The epoch and all timestamps are untouched**: `PROGRAM-DATE-TIME`,
+  `DATERANGE` dates and DASH `availabilityStartTime` are true content time;
+  only `now` moves. (`start`/`end` are instants on that same timeline.)
+- It works on plain live, and `start`/`end` are judged against the pretend-now
+  ("start is in the future", ended-vs-growing, the max-span cap).
+- `now + offset` before the epoch -> 400; |offset| over 10 years -> 400.
+- **DASH**: a dynamic-MPD player derives its live edge from its own clock, so
+  a manifest from another time would leave it at the wrong place. A dynamic
+  MPD built with a non-zero offset therefore carries
+  `<UTCTiming schemeIdUri="urn:mpeg:dash:utc:direct:2014" value="<pretend-now>"/>`
+  so the player adopts that time as "now". Static (ended) MPDs have no live
+  edge and get none. HLS players position from the playlist, not a clock.
+- The value is in the CDN manifest cache key like the other parameters.
+- Implementation: `Channel.with_offset` returns a per-request copy whose
+  `now_ticks()` is shifted; nothing else knows about the offset.
+
 ### 13.5 DECIDED: per-request `timeline` override
 
 `--continuous-timeline` (§12) is a startup flag today. It becomes the

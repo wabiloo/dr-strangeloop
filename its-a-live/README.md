@@ -145,7 +145,7 @@ continuous_timeline = true  # default -- see loop-dee-loop/SCOPE.md §12; false 
 enabled = true
 start_param = "start"        # e.g. https://<cdn>/index.m3u8?start=2026-09-30T08:00:00Z&end=2026-09-30T08:10:00Z
 end_param = "end"
-# `full-loops` (bool) and `timeline` (default|continuous|periodic) are fixed query params, not configurable
+# `full-loops` (bool), `timeline` (default|continuous|periodic) and `offset` (e.g. -PT1H) are fixed query params, not configurable
 max_span_seconds = 21600
 # These names are also the only query params CloudFront keys manifest caching on --
 # redeploy (`channel.py redeploy`) after changing them.

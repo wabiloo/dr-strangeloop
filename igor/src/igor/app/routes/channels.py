@@ -161,10 +161,10 @@ class ChannelCreatePayload(BaseModel):
 
     @model_validator(mode="after")
     def _validate_timeshift_names_distinct(self) -> "ChannelCreatePayload":
-        # "full-loops" and "timeline" are fixed, non-configurable query params.
+        # "full-loops", "timeline" and "offset" are fixed, non-configurable query params.
         names = [
             self.timeshift_start_param, self.timeshift_end_param,
-            "full-loops", "timeline",
+            "full-loops", "timeline", "offset",
         ]
         if len(set(names)) != len(names):
             raise ValueError(f"timeshift parameter names must be distinct, got {names}")

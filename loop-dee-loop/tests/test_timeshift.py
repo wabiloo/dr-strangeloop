@@ -27,6 +27,7 @@ from timeshift import (  # noqa: E402
     TimeshiftConfig,
     TimeshiftError,
     parse_bool,
+    parse_offset_ticks,
     parse_timeline,
     parse_instant_ticks,
     resolve_window,
@@ -61,6 +62,33 @@ def test_parse_instant_rejects_garbage(value):
         parse_instant_ticks(value, TS, "start")
 
 
+@pytest.mark.parametrize(
+    "value,seconds",
+    [
+        ("-3600", -3600),
+        ("3600", 3600),
+        ("+90", 90),
+        (" 90", 90),  # a URL-decoded '+'
+        ("0", 0),
+        ("-0.5", -0.5),
+        ("-PT1H", -3600),
+        ("PT1H", 3600),
+        ("+PT1H30M", 5400),
+        ("-P1DT2H", -93600),
+        ("PT0.5S", 0.5),
+        ("p1d", 86400),
+    ],
+)
+def test_parse_offset_accepts_seconds_and_iso_durations(value, seconds):
+    assert parse_offset_ticks(value, TS) == int(seconds * TS)
+
+
+@pytest.mark.parametrize("value", ["", "abc", "PT", "P", "P1M", "P1Y", "1h", "--5", "PT1H-", "999999999999"])
+def test_parse_offset_rejects_garbage(value):
+    with pytest.raises(TimeshiftError):
+        parse_offset_ticks(value, TS)
+
+
 def test_parse_bool():
     assert parse_bool("true", "x") and parse_bool("1", "x") and parse_bool("YES", "x")
     assert not parse_bool("false", "x") and not parse_bool("0", "x") and not parse_bool("", "x")
@@ -77,7 +105,7 @@ def test_parse_timeline():
             parse_timeline(bad)
 
 
-@pytest.mark.parametrize("reserved", ["timeline", "full-loops"])
+@pytest.mark.parametrize("reserved", ["timeline", "full-loops", "offset"])
 def test_config_rejects_a_param_named_like_a_fixed_param(reserved):
     with pytest.raises(ValueError):
         TimeshiftConfig(enabled=True, start_param=reserved)
@@ -472,3 +500,110 @@ def test_continuous_override_works_on_plain_live(tmp_path, server_continuous):
     for query in ("", "?timeline=default", "?timeline=DEFAULT"):
         default = client.get("/video.m3u8" + query).get_data(as_text=True)
         assert ("cseg/" in default) is server_continuous, query
+
+
+# ── offset: pretend "now" is earlier/later (SCOPE.md §13.7) ──────────────────
+
+
+def _last_pdt_seconds(body):
+    import datetime as dt
+
+    stamps = re.findall(r"EXT-X-PROGRAM-DATE-TIME:(\S+)Z", body)
+    return dt.datetime.fromisoformat(stamps[-1]).replace(tzinfo=dt.timezone.utc).timestamp()
+
+
+def _media_sequence(body):
+    return int(re.search(r"EXT-X-MEDIA-SEQUENCE:(\d+)", body).group(1))
+
+
+@ffmpeg
+@pytest.mark.parametrize("offset,delta_loops", [("-30", -30), ("-PT30S", -30), ("30", 30), ("+PT30S", 30)])
+def test_offset_moves_the_live_edge_and_keeps_true_timestamps(tmp_path, offset, delta_loops):
+    client, epoch = _app(tmp_path)
+    base = client.get("/video.m3u8").get_data(as_text=True)
+    shifted = client.get(f"/video.m3u8?offset={offset}").get_data(as_text=True)
+    # 2 segments per 1s loop; allow a segment of clock jitter between the two requests
+    assert abs((_media_sequence(shifted) - _media_sequence(base)) - 2 * delta_loops) <= 2
+    # timestamps are real content time: the edge IS `offset` away from the real clock
+    assert abs(_last_pdt_seconds(shifted) - (time.time() + delta_loops)) < 2.5
+    assert len(_seg_lines(shifted)) == len(_seg_lines(base))  # same DVR window
+
+
+@ffmpeg
+def test_offset_before_the_epoch_is_400(tmp_path):
+    client, _ = _app(tmp_path)  # epoch is 60s ago
+    assert client.get("/video.m3u8?offset=-120").status_code == 400
+    assert client.get("/video.m3u8?offset=-50").status_code == 200
+
+
+@ffmpeg
+@pytest.mark.parametrize("bad", ["abc", "P1M", "PT", "1h", "999999999999"])
+def test_bad_offset_is_400(tmp_path, bad):
+    client, _ = _app(tmp_path)
+    assert client.get(f"/video.m3u8?offset={bad}").status_code == 400
+
+
+@ffmpeg
+def test_offset_is_ignored_when_timeshift_disabled(tmp_path):
+    client, _ = _app(tmp_path, enabled=False)
+    plain = _media_sequence(client.get("/video.m3u8").get_data(as_text=True))
+    assert abs(_media_sequence(client.get("/video.m3u8?offset=-30").get_data(as_text=True)) - plain) <= 2
+
+
+@ffmpeg
+def test_offset_judges_ranges_against_the_pretend_now(tmp_path):
+    client, epoch = _app(tmp_path)  # real now == epoch + 60
+    # start at epoch+40 is fine now, but with "now" 30s earlier it is in the future
+    assert client.get(f"/video.m3u8?start={epoch + 40}&end={epoch + 42}").status_code == 200
+    assert client.get(f"/video.m3u8?start={epoch + 40}&end={epoch + 42}&offset=-30").status_code == 400
+    # ...and with "now" 30s later, a range ending at epoch+80 is already finished
+    assert "ENDLIST" not in client.get(f"/video.m3u8?start={epoch + 50}&end={epoch + 80}").get_data(as_text=True)
+    done = client.get(f"/video.m3u8?start={epoch + 50}&end={epoch + 80}&offset=30").get_data(as_text=True)
+    assert "ENDLIST" in done and len(_seg_lines(done)) == 60
+
+
+@ffmpeg
+def test_offset_range_segments_and_timestamps_are_unchanged_for_a_past_range(tmp_path):
+    client, epoch = _app(tmp_path)
+    q = f"start={epoch + 5}&end={epoch + 8}"
+    assert client.get(f"/video.m3u8?{q}").get_data(as_text=True) == client.get(
+        f"/video.m3u8?{q}&offset=-30"
+    ).get_data(as_text=True)
+
+
+@ffmpeg
+def test_growing_startover_ends_at_the_pretend_edge(tmp_path):
+    client, epoch = _app(tmp_path)
+    body = client.get(f"/video.m3u8?start={epoch + 10}&offset=-30").get_data(as_text=True)
+    assert "PLAYLIST-TYPE:EVENT" in body
+    assert abs(len(_seg_lines(body)) - 2 * 20) <= 3  # epoch+10 .. epoch+30
+
+
+@ffmpeg
+def test_dash_offset_adds_utc_timing_with_the_pretend_now(tmp_path):
+    import datetime as dt
+
+    client, epoch = _app(tmp_path)
+    plain = client.get("/stream.mpd").get_data(as_text=True)
+    assert "UTCTiming" not in plain
+    mpd = client.get("/stream.mpd?offset=-30").get_data(as_text=True)
+    value = re.search(r'UTCTiming schemeIdUri="urn:mpeg:dash:utc:direct:2014" value="([^"]+)Z"', mpd).group(1)
+    when = dt.datetime.fromisoformat(value).replace(tzinfo=dt.timezone.utc).timestamp()
+    assert abs(when - (time.time() - 30)) < 2.5
+    # the epoch (availabilityStartTime) is not moved
+    ast = lambda m: re.search(r'availabilityStartTime="([^"]+)"', m).group(1)  # noqa: E731
+    assert ast(mpd) == ast(plain)
+    # a finished (static) range has no live edge to explain
+    done = client.get(f"/stream.mpd?start={epoch + 5}&end={epoch + 8}&offset=-30").get_data(as_text=True)
+    assert 'type="static"' in done and "UTCTiming" not in done
+    # also in continuous mode
+    cont = client.get("/stream.mpd?offset=-30&timeline=continuous").get_data(as_text=True)
+    assert "UTCTiming" in cont and 'id="continuous"' in cont
+
+
+@ffmpeg
+def test_master_playlist_propagates_offset(tmp_path):
+    client, _ = _app(tmp_path)
+    master = client.get("/index.m3u8?offset=-30&junk=1").get_data(as_text=True)
+    variant = next(l for l in master.splitlines() if "m3u8?" in l)
+    assert "offset=-30" in variant and "junk" not in variant

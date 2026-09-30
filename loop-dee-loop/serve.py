@@ -42,6 +42,7 @@ import cmaf
 import continuity
 from timeshift import (
     FULL_LOOPS_PARAM,
+    OFFSET_PARAM,
     TIMELINE_PARAM,
     TimeWindow,
     TimeshiftConfig,
@@ -49,6 +50,7 @@ from timeshift import (
     global_index_at,
     parse_bool,
     parse_instant_ticks,
+    parse_offset_ticks,
     parse_timeline,
     resolve_window,
 )
@@ -666,6 +668,8 @@ class Channel:
         # serve.py's CLI.
         self.window_segments = window_segments
         self.continuous = continuous
+        # Set only on a per-request with_offset() variant (SCOPE.md §13.7).
+        self.offset_ticks = 0
 
     @staticmethod
     def _validate_continuous(package: "LoopPackage") -> None:
@@ -726,6 +730,21 @@ class Channel:
         variant.continuous_error = None if continuous else self.continuous_error
         return variant
 
+    def with_offset(self, offset_ticks: int) -> "Channel":
+        """This channel as if "now" were `offset_ticks` later (negative:
+        earlier) -- SCOPE.md §13.7. The epoch is untouched and every
+        timestamp stays true content time: the live edge (and the DVR window
+        behind it) simply sits at now+offset, and "is the end in the past",
+        "start in the future" etc. are judged against that pretend-now.
+        Raises TimeshiftError if that would put "now" before the epoch."""
+        if offset_ticks == 0:
+            return self
+        variant = copy.copy(self)
+        variant.offset_ticks = offset_ticks
+        if variant.now_ticks() < self.epoch_ticks:
+            raise TimeshiftError("offset puts 'now' before the channel epoch (nothing existed yet)")
+        return variant
+
     def segment_uri(
         self, template: str, global_index: int, local_index: int, window: "TimeWindow | None"
     ) -> str:
@@ -775,7 +794,7 @@ class Channel:
     def now_ticks(self) -> int:
         """The only place wall-clock time is sampled. Converted to an
         integer tick count exactly once, at the point of measurement."""
-        return round(time.time() * self.package.timescale)
+        return round(time.time() * self.package.timescale) + self.offset_ticks
 
     def current_position(self):
         return compute_loop_position(
@@ -1233,6 +1252,19 @@ class Channel:
     def _iso_ticks(self, ticks: int) -> str:
         seconds = ticks_to_wall_clock_seconds(ticks, self.package.timescale)
         return _dt.datetime.utcfromtimestamp(seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    def _utc_timing_xml(self, window: "TimeWindow | None") -> str:
+        """A dynamic MPD's players derive the live edge from their own clock.
+        With an `offset` (SCOPE.md §13.7) "now" is not the client's now, so
+        tell it what "now" is via a direct UTCTiming value -- the standard
+        DASH mechanism -- and it plays as the stream would have then. Empty
+        for plain live and for static (ended) MPDs."""
+        if self.offset_ticks == 0 or (window is not None and window.ended):
+            return ""
+        return (
+            '  <UTCTiming schemeIdUri="urn:mpeg:dash:utc:direct:2014" '
+            f'value="{self._iso_ticks(self.now_ticks())}"/>\n'
+        )
 
     def _mpd_open_tag(
         self,
@@ -1764,7 +1796,7 @@ class Channel:
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
 {mpd_open}
 {chr(10).join(period_xml_parts)}
-</MPD>
+{self._utc_timing_xml(window)}</MPD>
 '''
         return mpd
 
@@ -2003,7 +2035,7 @@ class Channel:
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
 {mpd_open}
 {period_xml}
-</MPD>
+{self._utc_timing_xml(window)}</MPD>
 '''
         return mpd
 
@@ -2084,6 +2116,9 @@ def create_app(
                     want_continuous = parse_timeline(raw_timeline)
                     if want_continuous is not None:
                         ch = channel.for_mode(want_continuous)
+                raw_offset = args.get(OFFSET_PARAM)
+                if raw_offset is not None:
+                    ch = ch.with_offset(parse_offset_ticks(raw_offset, package.timescale))
                 raw_start, raw_end = args.get(ts_cfg.start_param), args.get(ts_cfg.end_param)
                 if raw_start is None and raw_end is not None:
                     raise TimeshiftError(f"'{ts_cfg.end_param}' requires '{ts_cfg.start_param}'")
@@ -2164,6 +2199,7 @@ def create_app(
                     "start_param": ts_cfg.start_param,
                     "end_param": ts_cfg.end_param,
                     "timeline_param": TIMELINE_PARAM,
+                    "offset_param": OFFSET_PARAM,
                     "full_loops_param": FULL_LOOPS_PARAM,
                     "max_span_seconds": ts_cfg.max_span_seconds,
                     "continuous_supported": channel.continuous or channel.continuous_error is None,

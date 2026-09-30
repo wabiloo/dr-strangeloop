@@ -23,6 +23,10 @@ _NUMERIC = re.compile(r"^\d+(\.\d+)?$")
 TIMELINE_PARAM = "timeline"
 # Also fixed: `full-loops=true` widens the range to whole loops.
 FULL_LOOPS_PARAM = "full-loops"
+# Also fixed: `offset=` pretends "now" is earlier (negative) or later (positive).
+OFFSET_PARAM = "offset"
+# Sanity bound so absurd values fail cleanly instead of overflowing datetimes.
+MAX_ABS_OFFSET_SECONDS = 10 * 365 * 86400
 TIMELINE_VALUES = ("default", "continuous", "periodic")
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off", ""}
@@ -40,7 +44,7 @@ class TimeshiftConfig:
     max_span_seconds: int = 21600
 
     def __post_init__(self):
-        names = [self.start_param, self.end_param, FULL_LOOPS_PARAM, TIMELINE_PARAM]
+        names = [self.start_param, self.end_param, FULL_LOOPS_PARAM, TIMELINE_PARAM, OFFSET_PARAM]
         if any(not n for n in names) or len(set(names)) != len(names):
             raise ValueError(f"timeshift parameter names must be non-empty and distinct: {names}")
         if self.max_span_seconds < 1:
@@ -48,7 +52,7 @@ class TimeshiftConfig:
 
     @property
     def param_names(self) -> tuple[str, ...]:
-        return (self.start_param, self.end_param, FULL_LOOPS_PARAM, TIMELINE_PARAM)
+        return (self.start_param, self.end_param, FULL_LOOPS_PARAM, TIMELINE_PARAM, OFFSET_PARAM)
 
 
 def parse_bool(value: str, name: str) -> bool:
@@ -71,6 +75,35 @@ def parse_timeline(value: str) -> bool | None:
     if v == "periodic":
         return False
     raise TimeshiftError(f"'{TIMELINE_PARAM}' must be one of {', '.join(TIMELINE_VALUES)}, got {value!r}")
+
+
+_SIGNED_SECONDS = re.compile(r"^[+-]?\d+(\.\d+)?$")
+_ISO_DURATION = re.compile(
+    r"^([+-])?P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$", re.IGNORECASE
+)
+
+
+def parse_offset_ticks(value: str, timescale: int) -> int:
+    """`offset=` -> signed integer ticks. Signed seconds (`-3600`, `90.5`) or
+    an ISO 8601 duration with optional sign (`-PT1H`, `P1DT2H30M`; days and
+    below only -- months/years have no fixed length). A leading `+` may
+    arrive as a space (URL decoding), which `strip()` removes."""
+    raw = value.strip()
+    sign = 1
+    if _SIGNED_SECONDS.match(raw):
+        seconds = Decimal(raw)
+    else:
+        m = _ISO_DURATION.match(raw)
+        if not m or not any(m.group(i) for i in range(2, 6)):
+            raise TimeshiftError(
+                f"'{OFFSET_PARAM}' must be signed seconds (-3600) or an ISO 8601 duration (-PT1H), got {value!r}"
+            )
+        sign = -1 if m.group(1) == "-" else 1
+        d, h, mi, s = (Decimal(g) if g else Decimal(0) for g in m.groups()[1:])
+        seconds = sign * (d * 86400 + h * 3600 + mi * 60 + s)
+    if abs(seconds) > MAX_ABS_OFFSET_SECONDS:
+        raise TimeshiftError(f"'{OFFSET_PARAM}' is limited to +/-{MAX_ABS_OFFSET_SECONDS} seconds")
+    return int((seconds * timescale).to_integral_value())
 
 
 def parse_instant_ticks(value: str, timescale: int, name: str = "time") -> int:

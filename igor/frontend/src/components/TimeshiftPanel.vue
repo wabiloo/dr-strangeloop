@@ -16,6 +16,8 @@ import {
   floorToLoopMs,
   formatDuration,
   inputValueToDate,
+  parseOffsetSeconds,
+  OFFSET_PARAM,
   validateRequest,
   type ChannelTiming,
   type TimelineChoice,
@@ -56,6 +58,7 @@ const startText = ref('')
 const endText = ref('')
 const fullLoop = ref(false)
 const timeline = ref<TimelineChoice>('default')
+const offsetText = ref('')
 const format = ref<TimeFormat>('iso')
 
 const nowMs = ref(Date.now())
@@ -79,11 +82,17 @@ const fullTiming = computed(() => {
   return t && Number.isFinite(t.epochMs) && Number.isFinite(t.loopMs) ? (t as Required<ChannelTiming>) : null
 })
 
+// What the server will treat as "now" for this request (real now + offset).
+function pretendNow(): number {
+  return Date.now() + (parseOffsetSeconds(offsetText.value) ?? 0) * 1000
+}
+
 const request = computed<TimeshiftRequest>(() => ({
   start: inputValueToDate(startText.value, useUtc.value),
   end: inputValueToDate(endText.value, useUtc.value),
   fullLoop: fullLoop.value,
   timeline: timeline.value,
+  offset: offsetText.value,
   format: format.value,
 }))
 
@@ -99,8 +108,12 @@ const kindLabel = computed(() => {
       return 'Startover — live-style, plays from the start and ends at the end time'
     case 'startover-open':
       return `Startover — live-style from the start point, capped at ${formatDuration(props.params.max_span_seconds)}`
-    default:
-      return 'Live — no start time set (plain channel URL)'
+    default: {
+      const off = parseOffsetSeconds(offsetText.value) ?? 0
+      return off
+        ? `Live, as it ${off < 0 ? 'was' : 'will be'} ${formatDuration(Math.abs(off))} ${off < 0 ? 'ago' : 'from now'} — no start time set`
+        : 'Live — no start time set (plain channel URL)'
+    }
   }
 })
 
@@ -132,36 +145,36 @@ function setRange(start: Date | null, end: Date | null, loop = false) {
 }
 
 function presetLast(minutes: number) {
-  const now = Date.now()
-  nowMs.value = now
+  const now = pretendNow()
+  nowMs.value = Date.now()
   setRange(new Date(now - minutes * 60_000), new Date(now), false)
 }
 
 function presetStartoverFrom(minutesAgo: number) {
-  const now = Date.now()
-  nowMs.value = now
+  const now = pretendNow()
+  nowMs.value = Date.now()
   setRange(new Date(now - minutesAgo * 60_000), null, false)
 }
 
 function presetCurrentLoop() {
   const t = fullTiming.value
   if (!t) return
-  const now = Date.now()
-  nowMs.value = now
+  const now = pretendNow()
+  nowMs.value = Date.now()
   setRange(new Date(floorToLoopMs(now, t)), null, true)
 }
 
 function presetPreviousLoop() {
   const t = fullTiming.value
   if (!t) return
-  const now = Date.now()
-  nowMs.value = now
+  const now = pretendNow()
+  nowMs.value = Date.now()
   const thisLoop = floorToLoopMs(now, t)
   setRange(new Date(thisLoop - t.loopMs), new Date(thisLoop), true)
 }
 
 function setNow(which: 'start' | 'end') {
-  const text = dateToInputValue(new Date(), useUtc.value)
+  const text = dateToInputValue(new Date(pretendNow()), useUtc.value)
   if (which === 'start') startText.value = text
   else endText.value = text
 }
@@ -302,6 +315,40 @@ const formatOptions = [
         </label>
         <Select v-model="timeline" :options="timelineOptions" option-label="label" option-value="value" fluid />
       </div>
+      <div class="col-12 flex flex-column gap-1">
+        <label class="text-xs text-color-secondary" for="ts-offset">
+          Pretend “now” is… ({{ OFFSET_PARAM }})
+          <FieldHelp label="Offset">
+            Plays the stream as it was (negative) or will be (positive) that long from now: the live edge and the
+            DVR window behind it sit at <em>now + offset</em>, every timestamp is the true content time, and
+            “past”/“future” for start and end are judged against that moment. Signed seconds
+            (<code>-3600</code>) or an ISO 8601 duration (<code>-PT1H</code>, <code>P1DT2H</code>). A negative
+            offset can't reach back before the channel epoch. DASH manifests carry a
+            <code>UTCTiming</code> value so players use that time as “now”.
+          </FieldHelp>
+        </label>
+        <div class="flex gap-2 flex-wrap align-items-center">
+          <InputText id="ts-offset" v-model="offsetText" placeholder="e.g. -PT1H or -3600" class="flex-1" style="min-width: 10rem" />
+          <Button label="−1 h" size="small" outlined @click="offsetText = '-PT1H'" />
+          <Button label="−10 min" size="small" outlined @click="offsetText = '-PT10M'" />
+          <Button label="+1 h" size="small" outlined @click="offsetText = 'PT1H'" />
+          <Button
+            label="−1 loop"
+            size="small"
+            outlined
+            :disabled="!fullTiming"
+            @click="offsetText = String(-Math.round(fullTiming!.loopMs / 1000))"
+          />
+          <Button
+            label="+1 loop"
+            size="small"
+            outlined
+            :disabled="!fullTiming"
+            @click="offsetText = String(Math.round(fullTiming!.loopMs / 1000))"
+          />
+          <Button icon="pi pi-times" size="small" text aria-label="Clear offset" @click="offsetText = ''" />
+        </div>
+      </div>
       <div class="col-12 flex align-items-center gap-2">
         <Checkbox v-model="fullLoop" binary input-id="ts-full-loop" />
         <label for="ts-full-loop">Whole loops only ({{ FULL_LOOPS_PARAM }})</label>
@@ -350,7 +397,8 @@ const formatOptions = [
           <code>[timeshift]</code> (currently <code>{{ params.start_param }}</code> and
           <code>{{ params.end_param }}</code>); <code>{{ FULL_LOOPS_PARAM }}</code> (boolean) and
           <code>{{ TIMELINE_PARAM }}</code> (<code>default</code>, <code>continuous</code> or
-          <code>periodic</code>) always have these fixed names.
+          <code>periodic</code>) and <code>{{ OFFSET_PARAM }}</code> (seconds or ISO 8601 duration) always have
+          these fixed names.
         </p>
         <ul class="m-0 pl-4">
           <li>

@@ -4,6 +4,8 @@ import { test } from 'node:test'
 import {
   DEFAULT_TIMESHIFT_PARAMS as P,
   buildTimeshiftUrl,
+  parseOffsetSeconds,
+  pretendNowMs,
   classify,
   dateToInputValue,
   effectiveRange,
@@ -20,6 +22,7 @@ const req = (over: Partial<TimeshiftRequest> = {}): TimeshiftRequest => ({
   end: at('2026-09-30T08:10:00Z'),
   fullLoop: false,
   timeline: 'default',
+  offset: '',
   format: 'iso',
   ...over,
 })
@@ -123,4 +126,50 @@ test('datetime-local round trip in UTC and local', () => {
   assert.equal(inputValueToDate('', true), null)
   assert.equal(inputValueToDate('garbage', true), null)
   assert.equal(inputValueToDate('2026-09-30T08:05', true)!.getUTCSeconds(), 0) // seconds optional
+})
+
+test('parseOffsetSeconds: seconds and ISO durations, same grammar as the server', () => {
+  assert.equal(parseOffsetSeconds(''), 0)
+  assert.equal(parseOffsetSeconds('-3600'), -3600)
+  assert.equal(parseOffsetSeconds('+90'), 90)
+  assert.equal(parseOffsetSeconds('-PT1H'), -3600)
+  assert.equal(parseOffsetSeconds('PT1H30M'), 5400)
+  assert.equal(parseOffsetSeconds('-P1DT2H'), -93600)
+  assert.equal(parseOffsetSeconds('p1d'), 86400)
+  for (const bad of ['abc', 'P1M', 'P1Y', 'PT', 'P', '1h', '--5', '999999999999']) {
+    assert.equal(parseOffsetSeconds(bad), null, bad)
+  }
+})
+
+test('buildTimeshiftUrl: offset is normalised to plain signed seconds; zero/empty/invalid add nothing', () => {
+  const live = req({ start: null, end: null })
+  assert.equal(buildTimeshiftUrl('http://x/a', P, { ...live, offset: '-PT1H' }), 'http://x/a?offset=-3600')
+  assert.equal(buildTimeshiftUrl('http://x/a', P, { ...live, offset: '+PT1H' }), 'http://x/a?offset=3600')
+  assert.equal(buildTimeshiftUrl('http://x/a', P, { ...live, offset: '0' }), 'http://x/a')
+  assert.equal(buildTimeshiftUrl('http://x/a', P, { ...live, offset: 'junk' }), 'http://x/a')
+  assert.equal(
+    buildTimeshiftUrl('http://x/a', P, req({ end: null, timeline: 'continuous', offset: '-60' })),
+    'http://x/a?start=2026-09-30T08:00:00Z&timeline=continuous&offset=-60',
+  )
+})
+
+test('offset moves "now": classify and validation are judged against the pretend-now', () => {
+  // now = 12:00; range 08:00-08:10 is long over -> catchup
+  assert.equal(classify(req(), NOW), 'catchup')
+  // pretend it is 07:00 -> the same range is in the future
+  const back = req({ offset: '-PT5H' })
+  assert.equal(pretendNowMs(back, NOW), at('2026-09-30T07:00:00Z').getTime())
+  assert.equal(classify(back, NOW), 'startover-bounded')
+  assert.match(validateRequest(back, P, NOW).join(' '), /future/)
+  // pretend it is later: a range ending after the real now is finished
+  const fwd = req({ start: at('2026-09-30T11:00:00Z'), end: at('2026-09-30T13:00:00Z'), offset: 'PT3H' })
+  assert.equal(classify(fwd, NOW), 'catchup')
+  assert.deepEqual(validateRequest(fwd, P, NOW), [])
+})
+
+test('validateRequest: bad offset text, and now pushed before the channel epoch', () => {
+  assert.match(validateRequest(req({ offset: 'nope' }), P, NOW)[0], /Offset must be/)
+  const timing = { epochMs: at('2026-09-30T11:30:00Z').getTime(), loopMs: 60_000 }
+  assert.match(validateRequest(req({ start: null, end: null, offset: '-PT1H' }), P, NOW, timing).join(' '), /before the channel epoch/)
+  assert.deepEqual(validateRequest(req({ start: null, end: null, offset: '-PT10M' }), P, NOW, timing), [])
 })

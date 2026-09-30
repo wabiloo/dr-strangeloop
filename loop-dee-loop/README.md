@@ -286,6 +286,9 @@ curl 'http://localhost:8080/index.m3u8?start=...&end=...&full-loops=true&timelin
 
 # The timeline override also works on plain live (no start needed)
 curl 'http://localhost:8080/index.m3u8?timeline=continuous'
+
+# Play the live stream as it was an hour ago (or will be in an hour with a positive offset)
+curl 'http://localhost:8080/index.m3u8?offset=-PT1H'
 ```
 
 | Param | Meaning |
@@ -293,12 +296,13 @@ curl 'http://localhost:8080/index.m3u8?timeline=continuous'
 | `start` (name configurable) | Range start: epoch seconds, epoch ms (≥ 1e11) or ISO 8601 (no zone = UTC). Snapped down to a segment boundary. Must be ≥ the channel epoch and not in the future. Without it the URL is plain live. |
 | `end` (name configurable) | Optional range end (needs `start`). Past → catchup (VOD); future → startover that ends there; absent → startover capped at `start + max_span`. Snapped up to a segment boundary. |
 | `full-loops` (fixed name) | Boolean. Widen the range to whole loops: `start` → nearest loop start at or before it, `end` → nearest loop end at or after it. |
+| `offset` (fixed name) | Pretend "now" is earlier (negative) or later (positive): signed seconds (`-3600`) or an ISO 8601 duration (`-PT1H`, `P1DT2H`; days and below). The live edge and DVR window sit at `now + offset` and the manifest is what the server would have produced then — the epoch and all timestamps are unchanged. Works on plain live, and start/end are judged against the pretend-now. Dynamic DASH manifests carry a `UTCTiming` element with that time so players use it as their clock. `400` if it would put "now" before the channel epoch or is beyond ±10 years. |
 | `timeline` (fixed name) | `default`, `continuous` or `periodic`; absent = `default` = the server's `--continuous-timeline` setting. Overrides it for this request, on live URLs too. `continuous` → `400` if the package can't be served continuously. |
 
 Only the `start` and `end` names are configurable
 (`--timeshift-start-param`, `--timeshift-end-param`;
-`--timeshift-max-span-seconds`, default 21600); `full-loops` and `timeline`
-are fixed, and neither configured name may equal them. Bad input is a
+`--timeshift-max-span-seconds`, default 21600); `full-loops`, `timeline` and
+`offset` are fixed, and neither configured name may equal them. Bad input is a
 plain-text `400`. Child playlists of an HLS master inherit the params
 automatically.
 

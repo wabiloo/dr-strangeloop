@@ -31,6 +31,10 @@ export type TimeFormat = 'iso' | 'epoch' | 'epoch_ms'
 export const TIMELINE_PARAM = 'timeline'
 /** Also fixed: `full-loops=true` widens the range to whole loops. */
 export const FULL_LOOPS_PARAM = 'full-loops'
+/** Also fixed: `offset=` pretends "now" is earlier (negative) or later
+ * (positive): the live edge, and what "past"/"future" mean for start/end,
+ * move with it. Signed seconds or an ISO 8601 duration. */
+export const OFFSET_PARAM = 'offset'
 export type TimelineChoice = 'default' | 'continuous' | 'periodic'
 
 export interface TimeshiftRequest {
@@ -38,6 +42,8 @@ export interface TimeshiftRequest {
   end: Date | null
   fullLoop: boolean
   timeline: TimelineChoice
+  /** Raw text typed for `offset` ('' = none): signed seconds or ISO 8601 duration. */
+  offset: string
   format: TimeFormat
 }
 
@@ -97,6 +103,9 @@ export function buildTimeshiftQuery(params: TimeshiftParams, req: TimeshiftReque
     if (req.fullLoop) parts.push(`${FULL_LOOPS_PARAM}=true`)
   }
   if (req.timeline !== 'default') parts.push(`${TIMELINE_PARAM}=${req.timeline}`)
+  const offsetSeconds = parseOffsetSeconds(req.offset)
+  // Normalised to plain signed seconds: no '+' to get mangled in a URL.
+  if (typeof offsetSeconds === 'number' && offsetSeconds !== 0) parts.push(`${OFFSET_PARAM}=${offsetSeconds}`)
   return parts.join('&')
 }
 
@@ -108,10 +117,37 @@ export function buildTimeshiftUrl(baseUrl: string, params: TimeshiftParams, req:
   return baseUrl + (baseUrl.includes('?') ? '&' : '?') + query
 }
 
+const MAX_ABS_OFFSET_SECONDS = 10 * 365 * 86400 // same sanity bound as serve.py
+
+const ISO_DURATION = /^([+-])?P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(\d+(?:\.\d+)?S)?)?$/i
+
+/** Same grammar as serve.py: signed seconds (`-3600`) or an ISO 8601
+ * duration with optional sign (`-PT1H`, `P1DT2H`; days and below).
+ * '' -> 0; unparseable -> null. */
+export function parseOffsetSeconds(text: string): number | null {
+  const raw = text.trim()
+  if (raw === '') return 0
+  let seconds: number
+  if (/^[+-]?\d+(\.\d+)?$/.test(raw)) {
+    seconds = Number(raw)
+  } else {
+    const m = ISO_DURATION.exec(raw)
+    if (!m || !(m[2] || m[3] || m[4] || m[5])) return null
+    const sign = m[1] === '-' ? -1 : 1
+    seconds = sign * (Number(m[2] ?? 0) * 86400 + Number(m[3] ?? 0) * 3600 + Number(m[4] ?? 0) * 60 + parseFloat(m[5] ?? '0'))
+  }
+  return Number.isFinite(seconds) && Math.abs(seconds) <= MAX_ABS_OFFSET_SECONDS ? seconds : null
+}
+
+/** The time the server will treat as "now" for this request. */
+export function pretendNowMs(req: TimeshiftRequest, nowMs: number): number {
+  return nowMs + (parseOffsetSeconds(req.offset) ?? 0) * 1000
+}
+
 export function classify(req: TimeshiftRequest, nowMs: number): TimeshiftKind {
   if (!req.start) return 'live'
   if (!req.end) return 'startover-open'
-  return req.end.getTime() <= nowMs ? 'catchup' : 'startover-bounded'
+  return req.end.getTime() <= pretendNowMs(req, nowMs) ? 'catchup' : 'startover-bounded'
 }
 
 export function floorToLoopMs(t: number, timing: Required<ChannelTiming>): number {
@@ -157,6 +193,13 @@ export function validateRequest(
   timing?: ChannelTiming,
 ): string[] {
   const problems: string[] = []
+  if (parseOffsetSeconds(req.offset) === null) {
+    problems.push('Offset must be signed seconds (-3600) or an ISO 8601 duration (-PT1H).')
+  }
+  nowMs = pretendNowMs(req, nowMs)
+  if (timing && Number.isFinite(timing.epochMs) && nowMs < (timing.epochMs as number)) {
+    problems.push('That offset puts “now” before the channel epoch (nothing existed yet).')
+  }
   if (req.end && !req.start) problems.push(`An end time needs a start time (“${params.end_param}” requires “${params.start_param}”).`)
   if (!req.start) return problems
   if (Number.isNaN(req.start.getTime())) problems.push('Start is not a valid date.')

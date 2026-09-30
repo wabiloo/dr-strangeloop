@@ -68,7 +68,7 @@ match, fix the upstream franken-ts input instead.
 ## Startover & catchup
 
 `serve.py --timeshift` (its-a-live: `[timeshift]`, on by default) makes the
-normal `index.m3u8` / `stream.mpd` accept `start`, `end`, `full-loops` and
+normal `index.m3u8` / `stream.mpd` accept `start`, `end`, `full-loops`, `offset` (pretend "now" is earlier/later; `SCOPE.md` §13.7) and
 `continuous_timeline` query params (names configurable) — catchup = VOD of a
 past range, startover = live-style from a past point. Full reference and
 examples: [`README.md`](./README.md) "Startover & catchup"; design:

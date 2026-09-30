@@ -147,6 +147,7 @@ def test_channel_timeshift_defaults_match_loop_dee_loop():
         {"timeshift_end_param": "x&y=1"},
         {"timeshift_start_param": "timeline"},  # reserved: fixed query params
         {"timeshift_end_param": "full-loops"},
+        {"timeshift_end_param": "offset"},
         {"timeshift_start_param": "same", "timeshift_end_param": "same"},
         {"timeshift_max_span_seconds": 0},
     ],
