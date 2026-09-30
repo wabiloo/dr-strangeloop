@@ -1228,8 +1228,8 @@ async function copyUrl(url?: string | null) {
           <span class="stat-pill-value stat-pill-value-uptime">{{ formatUptime(health.uptime_seconds) }}</span>
         </div>
         <div class="stat-pill">
-          <span class="stat-pill-label stat-pill-label-playlist">Playlist</span>
-          <span class="stat-pill-value stat-pill-value-playlist">{{ health.renditions.join(', ') }}</span>
+          <span class="stat-pill-label stat-pill-label-renditions">Renditions</span>
+          <span class="stat-pill-value stat-pill-value-renditions">{{ health.renditions.join(', ') }}</span>
         </div>
       </div>
     </div>
@@ -1527,14 +1527,11 @@ async function copyUrl(url?: string | null) {
   flex-wrap: wrap;
 }
 
-/* One pill per stat, sized to fit its own worst case so it doesn't visibly
- * resize as the numbers inside tick over (loop count climbing, position
- * cycling each loop) -- tabular-nums keeps digit widths uniform, and each
- * value gets a min-width generous enough that a longer number doesn't push
- * the pill wider mid-poll. */
+/* One pill per stat; tabular-nums keeps digit widths uniform so a pill
+ * doesn't visibly resize as its numbers tick over. */
 .stat-pill {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 0.4rem;
   background: #f1f5f9;
   border-radius: 999px;
@@ -1562,36 +1559,19 @@ async function copyUrl(url?: string | null) {
   color: #b07a2e;
 }
 
-.stat-pill-label-playlist {
+.stat-pill-label-renditions {
   color: #8467a8;
 }
 
 .stat-pill-value {
   color: #0f172a;
   font-weight: 700;
-  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
-.stat-pill-value-loop {
-  display: inline-block;
-  min-width: 5.5rem;
-}
 
-.stat-pill-value-position {
-  display: inline-block;
-  min-width: 7.5rem;
-}
 
-.stat-pill-value-uptime {
-  display: inline-block;
-  min-width: 4rem;
-}
 
-.stat-pill-value-playlist {
-  display: inline-block;
-  min-width: 8rem;
-}
 
 .players-grid {
   display: grid;
