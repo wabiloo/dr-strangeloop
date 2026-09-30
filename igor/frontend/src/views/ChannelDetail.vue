@@ -15,6 +15,9 @@ import BackendBadge from '../components/BackendBadge.vue'
 import ItsAliveBanner from '../components/ItsAliveBanner.vue'
 import JobPanel from '../components/JobPanel.vue'
 import PlaybackPanel from '../components/PlaybackPanel.vue'
+import TimeshiftFields from '../components/TimeshiftFields.vue'
+import TimeshiftPanel, { type TimeshiftPreview } from '../components/TimeshiftPanel.vue'
+import { timeshiftParamsFromConfig } from '../utils/timeshift'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import FieldHelp from '../components/FieldHelp.vue'
 import {
@@ -22,6 +25,7 @@ import {
   CONFIG_SECTION_TITLE as T,
   buildConfigSections,
   deriveSourceKind,
+  usesChannelSection,
 } from '../utils/channelConfigLayout'
 import { alignConfirmPopup } from '../utils/confirmPopup'
 import {
@@ -107,6 +111,12 @@ const editForm = reactive<ChannelCreatePayload>({
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
   continuous_timeline: false,
+  timeshift_enabled: true,
+  timeshift_start_param: 'start',
+  timeshift_end_param: 'end',
+  timeshift_continuous_param: 'continuous_timeline',
+  timeshift_full_loop_param: 'full_loop',
+  timeshift_max_span_seconds: 21600,
   port: 8080,
   cpu: 256,
   memory: 512,
@@ -188,6 +198,7 @@ function startEdit() {
   const express = section('express')
   const docker = section('docker')
   const markers = section('markers')
+  const editTimeshift = timeshiftParamsFromConfig(section('timeshift'))
   const backend = (deploy.backend as ChannelCreatePayload['backend']) ?? 'ecs-express'
   // `port` lives in [express] for ecs-express, [docker] for local-docker
   // (see its_a_live.generate_toml()) -- one form field either way.
@@ -206,6 +217,12 @@ function startEdit() {
     hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
     hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
     continuous_timeline: Boolean(packaging.continuous_timeline ?? true),
+    timeshift_enabled: editTimeshift.enabled,
+    timeshift_start_param: editTimeshift.start_param,
+    timeshift_end_param: editTimeshift.end_param,
+    timeshift_continuous_param: editTimeshift.continuous_param,
+    timeshift_full_loop_param: editTimeshift.full_loop_param,
+    timeshift_max_span_seconds: editTimeshift.max_span_seconds,
     port: portSection.port === 'auto' ? 'auto' : Number(portSection.port ?? 8080),
     cpu: Number(express.cpu ?? 256),
     memory: Number(express.memory ?? 512),
@@ -527,6 +544,20 @@ const playbackDashUrl = computed(() =>
 // live phase too (not just URL presence) means Stop actually tears the
 // players down (PlaybackPanel's onBeforeUnmount destroys both) instead of
 // leaving them mounted and auto-playing/erroring against a dead stream.
+// Startover/catchup (loop-dee-loop/SCOPE.md §13): a generated time-shifted
+// URL can be previewed in the players in place of the live one. Only
+// ecs-express/local-docker run serve.py, so only they have this.
+const timeshiftParams = computed(() => timeshiftParamsFromConfig(section('timeshift')))
+const timeshiftAvailable = computed(
+  () => usesChannelSection(String(section('deploy').backend ?? '')) && timeshiftParams.value.enabled,
+)
+const timeshiftPreview = ref<TimeshiftPreview | null>(null)
+// Leaving a preview behind when the channel stops/changes would leave the
+// players pointed at a dead URL.
+watch([playbackHlsUrl, playbackDashUrl], () => (timeshiftPreview.value = null))
+const effectiveHlsUrl = computed(() => timeshiftPreview.value?.hlsUrl ?? playbackHlsUrl.value)
+const effectiveDashUrl = computed(() => timeshiftPreview.value?.dashUrl ?? playbackDashUrl.value)
+
 const showPlayback = computed(
   () => (playbackHlsUrl.value || playbackDashUrl.value) && phase.value !== 'stopped' && phase.value !== 'not-deployed',
 )
@@ -790,10 +821,22 @@ watch(() => props.name, reload)
     <PlaybackPanel
       v-if="showPlayback"
       ref="playbackPanel"
-      :hls-url="playbackHlsUrl"
-      :dash-url="playbackDashUrl"
+      :hls-url="effectiveHlsUrl"
+      :dash-url="effectiveDashUrl"
+      :start-from-beginning="timeshiftPreview?.startEpochSeconds != null"
+      :dash-clock-offset-seconds="timeshiftPreview?.startEpochSeconds ?? 0"
       :health="health"
       :health-error="status?.backend === 'ecs-express' || status?.backend === 'local-docker' ? healthError : ''"
+    />
+
+    <TimeshiftPanel
+      v-if="showPlayback && timeshiftAvailable"
+      :hls-url="playbackHlsUrl"
+      :dash-url="playbackDashUrl"
+      :params="timeshiftParams"
+      :health="health"
+      :previewing="timeshiftPreview !== null"
+      @preview="timeshiftPreview = $event"
     />
 
     <div class="channel-detail-layout">
@@ -1064,6 +1107,11 @@ watch(() => props.name, reload)
                   </FieldHelp>
                 </div>
               </div>
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">{{ T.timeshift }}</h4>
+              <TimeshiftFields :form="editForm" id-prefix="edit" />
             </section>
 
             <section class="config-group">

@@ -77,6 +77,16 @@ dash_signal_format  = "{dash_signal_format}"
 dash_descriptor_mode = "{dash_descriptor_mode}"
 """
 
+_TIMESHIFT_EXTRA = """
+[timeshift]
+enabled          = {enabled}
+start_param      = "{start_param}"
+end_param        = "{end_param}"
+continuous_param = "{continuous_param}"
+full_loop_param  = "{full_loop_param}"
+max_span_seconds = {max_span_seconds}
+"""
+
 _ECS_EXPRESS_EXTRA = """
 [packaging]
 segment_duration   = {segment_duration}
@@ -126,6 +136,12 @@ def generate_toml(
     hls_format: str = "cmaf",
     hls_ts_mux_audio: bool = True,
     continuous_timeline: bool = False,
+    timeshift_enabled: bool = True,
+    timeshift_start_param: str = "start",
+    timeshift_end_param: str = "end",
+    timeshift_continuous_param: str = "continuous_timeline",
+    timeshift_full_loop_param: str = "full_loop",
+    timeshift_max_span_seconds: int = 21600,
     port: int | str = 8080,
     cpu: int = 256,
     memory: int = 512,
@@ -151,6 +167,15 @@ def generate_toml(
         raise ValueError("dash_signal_format must be 'binary' or 'xml'")
     if dash_descriptor_mode not in ("shared", "narrowed"):
         raise ValueError("dash_descriptor_mode must be 'shared' or 'narrowed'")
+    def _timeshift_section() -> str:
+        return _TIMESHIFT_EXTRA.format(
+            enabled=str(timeshift_enabled).lower(),
+            start_param=timeshift_start_param, end_param=timeshift_end_param,
+            continuous_param=timeshift_continuous_param,
+            full_loop_param=timeshift_full_loop_param,
+            max_span_seconds=int(timeshift_max_span_seconds),
+        )
+
     content = _TOML_TEMPLATE.format(
         name=name, backend=backend, region=region, bucket_name=bucket_name,
         content_folder=content_folder, source_path=source_path,
@@ -173,6 +198,7 @@ def generate_toml(
             continuous_timeline=str(continuous_timeline).lower(),
             port=int(port), cpu=cpu, memory=memory,
         )
+        content += _timeshift_section()
     elif backend == "local-docker":
         # No [express] section -- local-docker has no Fargate CPU/memory
         # concept, and [aws]/[s3] above are written but ignored by
@@ -190,6 +216,7 @@ def generate_toml(
             continuous_timeline=str(continuous_timeline).lower(),
             port=_format_local_docker_port(port),
         )
+        content += _timeshift_section()
     return content
 
 

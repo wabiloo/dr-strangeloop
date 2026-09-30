@@ -71,3 +71,65 @@ def test_production_entrypoint_forwards_continuous_timeline(tmp_path: Path):
         "WINDOW_SEGMENTS": "",
         "CONTINUOUS_TIMELINE": "true",
     }
+
+
+def test_production_entrypoint_forwards_timeshift_options(tmp_path: Path):
+    """SCOPE.md §13: the timeshift CLI flags must reach wsgi.py as env vars."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    capture_path = tmp_path / "gunicorn.json"
+    (bin_dir / "aws").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (bin_dir / "aws").chmod(0o755)
+    keys = [
+        "TIMESHIFT", "TIMESHIFT_START_PARAM", "TIMESHIFT_END_PARAM",
+        "TIMESHIFT_CONTINUOUS_PARAM", "TIMESHIFT_FULL_LOOP_PARAM", "TIMESHIFT_MAX_SPAN_SECONDS",
+    ]
+    (bin_dir / "gunicorn").write_text(
+        "#!/usr/bin/env python3\nimport json, os, sys\n"
+        f"json.dump({{k: os.environ.get(k) for k in {keys!r}}}, open(os.environ['CAPTURE_FILE'], 'w'))\n"
+        "sys.exit(0)\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "gunicorn").chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "LOOP_PACKAGE_S3_URI": "s3://example/channel",
+            "LOOP_PACKAGE_LOCAL_DIR": str(tmp_path / "package"),
+            "CAPTURE_FILE": str(capture_path),
+        }
+    )
+    result = subprocess.run(
+        [
+            "bash", str(ENTRYPOINT), "serve.py", "--epoch-utc", "2026-01-01T00:00:00Z",
+            "--timeshift", "--timeshift-start-param", "from", "--timeshift-end-param", "to",
+            "--timeshift-continuous-param", "cont", "--timeshift-full-loop-param", "whole",
+            "--timeshift-max-span-seconds", "600",
+        ],
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(capture_path.read_text(encoding="utf-8")) == {
+        "TIMESHIFT": "true",
+        "TIMESHIFT_START_PARAM": "from",
+        "TIMESHIFT_END_PARAM": "to",
+        "TIMESHIFT_CONTINUOUS_PARAM": "cont",
+        "TIMESHIFT_FULL_LOOP_PARAM": "whole",
+        "TIMESHIFT_MAX_SPAN_SECONDS": "600",
+    }
+
+
+def test_dockerfile_copies_every_module_serve_imports():
+    """serve.py/wsgi.py import sibling modules; the image copies files by
+    name, so a new module that isn't listed fails at container start."""
+    import re
+
+    dockerfile = (ENTRYPOINT.parent / "Dockerfile").read_text(encoding="utf-8")
+    copied = set(re.search(r"^COPY (bake\.py .*?) \./$", dockerfile, re.M).group(1).split())
+    local_modules = {p.stem for p in ENTRYPOINT.parent.glob("*.py")}
+    for entry in ("serve.py", "wsgi.py"):
+        source = (ENTRYPOINT.parent / entry).read_text(encoding="utf-8")
+        imported = set(re.findall(r"^(?:import|from) (\w+)", source, re.M))
+        for module in imported & local_modules:
+            assert f"{module}.py" in copied, f"{entry} imports {module}.py but the Dockerfile does not COPY it"

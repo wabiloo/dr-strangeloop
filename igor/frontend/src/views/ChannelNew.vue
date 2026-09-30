@@ -12,6 +12,7 @@ import { buildPlaylist, defineChannel, listArchives, listManifests, listPlaylist
 import JobPanel from '../components/JobPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import FieldHelp from '../components/FieldHelp.vue'
+import TimeshiftFields from '../components/TimeshiftFields.vue'
 import { CONFIG_FIELD_LABEL as L, CONFIG_SECTION_TITLE as T } from '../utils/channelConfigLayout'
 import type { ArchiveListItem, ChannelCreatePayload, Job, ManifestListItem, PlaylistListItem } from '../api/types'
 
@@ -139,6 +140,12 @@ const form = reactive<ChannelCreatePayload>({
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
   continuous_timeline: false,
+  timeshift_enabled: true,
+  timeshift_start_param: 'start',
+  timeshift_end_param: 'end',
+  timeshift_continuous_param: 'continuous_timeline',
+  timeshift_full_loop_param: 'full_loop',
+  timeshift_max_span_seconds: 21600,
   port: 'auto',
   cpu: 256,
   memory: 512,
@@ -438,6 +445,9 @@ async function submit() {
           </FieldHelp>
         </div>
       </div>
+
+      <h4 class="mb-0 mt-2">{{ T.timeshift }}</h4>
+      <TimeshiftFields :form="form" id-prefix="new" />
 
       <h4 class="mb-0 mt-2">{{ T.hls }}</h4>
       <div class="grid">

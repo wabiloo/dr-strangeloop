@@ -38,6 +38,23 @@ directly, prefer the per-tool `AGENTS.md` files (`franken-ts/AGENTS.md`,
 for the interactive/monitoring use case, not to be scripted against by
 another agent unless you're specifically building on its HTTP API.
 
+## Startover & catchup (channel detail page)
+
+For `ecs-express` / `local-docker` channels with `[timeshift]` enabled (the
+default), a running channel's page shows a **Startover & catchup** panel under
+the players: pick a start (and optional end) in UTC or local time, presets
+(last N minutes, previous/current loop), *whole loops only*, and a timeline
+override; it builds the HLS and DASH URLs (param names from the channel's
+`[timeshift]` config, values as ISO 8601 / epoch s / epoch ms), validates them
+the way `serve.py` will, lets you copy them, and **Preview** swaps them into
+the HLS/DASH players (which then start from the beginning of the range rather
+than the live edge; *Back to live* restores). URL building/validation lives
+in `frontend/src/utils/timeshift.ts` (tests: `node --test
+--experimental-strip-types src/utils/timeshift.test.ts`). The per-channel
+settings are in the New/Edit forms' "Startover & catchup" group
+(`timeshift_*` fields → `[timeshift]`). The DASH playhead clock shown during
+a preview is approximate. Design: `loop-dee-loop/SCOPE.md` §13.
+
 ## API surface (backend)
 
 | Prefix | Purpose |

@@ -141,6 +141,16 @@ segment_duration   = 4.0
 dvr_window_seconds = 30
 continuous_timeline = true  # default -- see loop-dee-loop/SCOPE.md §12; false reverts to signaled discontinuities/Period restarts at the loop wrap
 
+[timeshift]                  # optional; startover/catchup (loop-dee-loop/SCOPE.md §13), on by default
+enabled = true
+start_param = "start"        # e.g. https://<cdn>/index.m3u8?start=2026-09-30T08:00:00Z&end=2026-09-30T08:10:00Z
+end_param = "end"
+continuous_param = "continuous_timeline"
+full_loop_param = "full_loop"
+max_span_seconds = 21600
+# These names are also the only query params CloudFront keys manifest caching on --
+# redeploy (`channel.py redeploy`) after changing them.
+
 [express]
 port   = 8080
 cpu    = 256

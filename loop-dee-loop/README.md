@@ -267,6 +267,48 @@ small fixed one, aging old entries out via ordinary LRU as they leave the
 live/DVR window rather than reusing the same handful of keys forever (see
 SCOPE.md §12 for the full design and known limitations).
 
+### Startover & catchup (SCOPE.md §13)
+
+The normal manifest URLs also serve a **past range**, selected by query
+parameters (opt in with `serve.py --timeshift`, or `[timeshift]` in an
+its-a-live channel config; its-a-live enables it by default):
+
+```bash
+# Catchup: a finished VOD of a past range (ENDLIST / static MPD)
+curl 'http://localhost:8080/index.m3u8?start=2026-09-30T08:00:00Z&end=2026-09-30T08:10:00Z'
+curl 'http://localhost:8080/stream.mpd?start=1790755200&end=1790755800'       # epoch seconds (ms also accepted)
+
+# Startover: plays from the start point, grows to the live edge (end optional)
+curl 'http://localhost:8080/index.m3u8?start=2026-09-30T11:55:00Z'
+
+# Whole loops only / force continuity on or off for this request
+curl 'http://localhost:8080/index.m3u8?start=...&end=...&full_loop=true&continuous_timeline=false'
+```
+
+| Param (default name) | Meaning |
+|---|---|
+| `start` | Range start: epoch seconds, epoch ms (≥ 1e11) or ISO 8601 (no zone = UTC). Snapped down to a segment boundary. Must be ≥ the channel epoch and not in the future. Without it the URL is plain live. |
+| `end` | Optional range end (needs `start`). Past → catchup (VOD); future → startover that ends there; absent → startover capped at `start + max_span`. Snapped up to a segment boundary. |
+| `full_loop` | Boolean. Widen the range to whole loops: `start` → nearest loop start at or before it, `end` → nearest loop end at or after it. |
+| `continuous_timeline` | Boolean. Overrides the server's `--continuous-timeline` for this request; `400` if the package can't be served continuously. |
+
+All four names are configurable (`--timeshift-start-param`,
+`--timeshift-end-param`, `--timeshift-continuous-param`,
+`--timeshift-full-loop-param`; `--timeshift-max-span-seconds`, default
+21600). Bad input is a plain-text `400`. Child playlists of an HLS master
+inherit the params automatically.
+
+Segment URLs: `/<r>/seg/<local>` is always the loop-local index;
+`/<r>/cseg/<global>` the continuous-timeline (global index) form;
+`/<r>/rseg/<origin_loop>/<global>.ts` continuous HLS-TS for a time-shifted
+range, shifted relative to the range origin so 33-bit PTS never wraps. Every
+one is path-keyed, so they cache forever at a CDN. **Manifests must be cached
+per the param values** (its-a-live's CloudFront stack does this from
+`[timeshift]`).
+
+**History is derived, not recorded:** it is only right while the epoch and
+the baked package are unchanged.
+
 ### Controlling the DVR window / manifest size
 
 Both `run.sh` and `serve.py` accept `--dvr-window-seconds` (default 30) to

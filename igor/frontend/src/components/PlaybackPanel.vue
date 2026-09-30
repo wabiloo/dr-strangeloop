@@ -11,6 +11,14 @@ const props = defineProps<{
   dashUrl?: string | null
   health?: ChannelHealth | null
   healthError?: string
+  /** Startover/catchup preview (loop-dee-loop/SCOPE.md §13): play from the
+   * beginning of the range instead of joining near the live edge, and
+   * don't chase the live edge afterwards. */
+  startFromBeginning?: boolean
+  /** Wall-clock instant (epoch seconds) that DASH presentation time 0
+   * corresponds to. 0 for the normal live MPD (availabilityStartTime is
+   * the unix epoch); a time-shifted MPD is anchored at its range start. */
+  dashClockOffsetSeconds?: number
 }>()
 
 const toast = useToast()
@@ -461,7 +469,8 @@ function syncDashVideoState() {
   dashMuted.value = video.muted
   dashVolume.value = video.volume
   if (Number.isFinite(video.currentTime) && video.currentTime > 0) {
-    dashPlayheadTime.value = new Date(video.currentTime * 1000).toISOString().replace('T', ' ')
+    const wallSeconds = video.currentTime + (props.dashClockOffsetSeconds ?? 0)
+    dashPlayheadTime.value = new Date(wallSeconds * 1000).toISOString().replace('T', ' ')
   }
   updateDashDvrRange()
 }
@@ -819,11 +828,21 @@ async function playHls() {
       // specifically: past this absolute latency, hls.js seeks forward
       // immediately instead of waiting for a slow multi-minute gradual
       // catch-up at a capped, mild speed-up.
-      hlsInstance = new Hls({
-        liveSyncDuration: TARGET_LIVE_DELAY_SECONDS,
-        maxLiveSyncPlaybackRate: 1.5,
-        liveMaxLatencyDuration: TARGET_LIVE_DELAY_SECONDS * 2,
-      })
+      hlsInstance = new Hls(
+        props.startFromBeginning
+          ? {
+              // Startover: begin at the start of the playlist and never
+              // seek/speed up towards the live edge.
+              startPosition: 0,
+              maxLiveSyncPlaybackRate: 1,
+              liveMaxLatencyDuration: Infinity,
+            }
+          : {
+              liveSyncDuration: TARGET_LIVE_DELAY_SECONDS,
+              maxLiveSyncPlaybackRate: 1.5,
+              liveMaxLatencyDuration: TARGET_LIVE_DELAY_SECONDS * 2,
+            },
+      )
       hlsOriginalMaxLatency = hlsInstance.config.liveMaxLatencyDuration
       hlsInstance.loadSource(url)
       hlsInstance.attachMedia(video)
@@ -935,14 +954,19 @@ async function playDash() {
     dashInstance.updateSettings({
       streaming: {
         delay: { liveDelay: TARGET_LIVE_DELAY_SECONDS },
-        liveCatchup: {
-          enabled: true,
-          maxDrift: TARGET_LIVE_DELAY_SECONDS * 2,
-          playbackRate: { min: -0.5, max: 0.5 },
-        },
+        liveCatchup: props.startFromBeginning
+          ? { enabled: false }
+          : {
+              enabled: true,
+              maxDrift: TARGET_LIVE_DELAY_SECONDS * 2,
+              playbackRate: { min: -0.5, max: 0.5 },
+            },
       },
     })
-    dashInstance.initialize(video, url, true)
+    // Startover/catchup MPDs are anchored at their own range start, so
+    // offset 0 == the first segment; the default is to join near live.
+    if (props.startFromBeginning) dashInstance.initialize(video, url, true, 0)
+    else dashInstance.initialize(video, url, true)
     dashInstance.on(dashjs.MediaPlayer.events.ERROR, (e: { error?: { message?: string } }) => {
       dashError.value = `dash.js error: ${e?.error?.message ?? 'unknown'}`
     })

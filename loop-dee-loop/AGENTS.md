@@ -62,7 +62,27 @@ match, fix the upstream franken-ts input instead.
 | `loop_math.py` | Integer epoch/loop_number/position_in_loop arithmetic — the drift-freedom guarantee (`SCOPE.md` §4.2/§5). No floats in persisted timing state, ever. |
 | `serve.py` | Stateless HTTP serving of manifests + segments per request. |
 | `continuity.py` | Opt-in `--continuous-timeline` mode (`SCOPE.md` §12): per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite so the channel has no discontinuity/Period-restart at the loop wrap — header patch only, never a re-mux. |
+| `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig`, and integer-tick `resolve_window` (segment snapping, `full_loop` widening, max-span cap). Pure ints, no Flask. |
 | `load_test.py` | Concurrent-viewer load generator (see `PERFS.md`). |
+
+## Startover & catchup
+
+`serve.py --timeshift` (its-a-live: `[timeshift]`, on by default) makes the
+normal `index.m3u8` / `stream.mpd` accept `start`, `end`, `full_loop` and
+`continuous_timeline` query params (names configurable) — catchup = VOD of a
+past range, startover = live-style from a past point. Full reference and
+examples: [`README.md`](./README.md) "Startover & catchup"; design:
+`SCOPE.md` §13. Things an agent must not get wrong:
+
+- **Segment URL forms are part of the contract**: `/seg/<local>` (loop-local),
+  `/cseg/<global>` (continuous), `/rseg/<origin_loop>/<global>.ts`
+  (continuous HLS-TS range). Continuous live URLs moved from `/seg/` to
+  `/cseg/` — anything that assumed global indices under `/seg/` is stale.
+- A CDN must key **manifests** on exactly the configured param names
+  (its-a-live's `loop_stack.py` does), or viewers share each other's ranges.
+- History is re-derived from the epoch + baked package, never recorded; a new
+  `--epoch-utc` or a re-bake changes what past times contain.
+- `tests/test_timeshift.py` covers parsing, range math and served manifests.
 
 ## Requirements
 

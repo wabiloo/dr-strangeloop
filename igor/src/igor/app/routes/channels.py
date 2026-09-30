@@ -20,6 +20,9 @@ router = APIRouter()
 # -- a container/service name, so it needs to be a safe DNS-label-like
 # token rather than just "non-empty".
 _NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+# A query-string parameter name that is safe to put unescaped in a URL and
+# in CloudFront's cache-key allow-list.
+_QUERY_PARAM_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
 
 
 class ChannelCreatePayload(BaseModel):
@@ -49,6 +52,15 @@ class ChannelCreatePayload(BaseModel):
     # loop wrap. ecs-express/local-docker only, same as hls_format/
     # hls_ts_mux_audio above.
     continuous_timeline: bool = False
+    # loop-dee-loop/SCOPE.md §13: startover/catchup via query parameters on
+    # the normal manifest URLs. Names are configurable per channel and
+    # also drive CloudFront's manifest cache key (its-a-live/loop_stack.py).
+    timeshift_enabled: bool = True
+    timeshift_start_param: str = "start"
+    timeshift_end_param: str = "end"
+    timeshift_continuous_param: str = "continuous_timeline"
+    timeshift_full_loop_param: str = "full_loop"
+    timeshift_max_span_seconds: int = 21600
     # int to pin an explicit host port, "auto" (local-docker only) to let
     # it self-select a free one at start/refresh time -- see
     # its-a-live/AGENTS.md and _local_docker_ops._resolve_port.
@@ -129,6 +141,36 @@ class ChannelCreatePayload(BaseModel):
         if v not in ("shared", "narrowed"):
             raise ValueError("dash_descriptor_mode must be 'shared' or 'narrowed'")
         return v
+
+    @field_validator(
+        "timeshift_start_param", "timeshift_end_param",
+        "timeshift_continuous_param", "timeshift_full_loop_param",
+    )
+    @classmethod
+    def _validate_timeshift_param_name(cls, v: str) -> str:
+        if not _QUERY_PARAM_RE.match(v):
+            raise ValueError(
+                "timeshift parameter names must start with a letter or underscore and contain "
+                "only letters, digits, '_', '-' or '.'"
+            )
+        return v
+
+    @field_validator("timeshift_max_span_seconds")
+    @classmethod
+    def _validate_timeshift_max_span(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("timeshift_max_span_seconds must be >= 1")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_timeshift_names_distinct(self) -> "ChannelCreatePayload":
+        names = [
+            self.timeshift_start_param, self.timeshift_end_param,
+            self.timeshift_continuous_param, self.timeshift_full_loop_param,
+        ]
+        if len(set(names)) != len(names):
+            raise ValueError(f"timeshift parameter names must be distinct, got {names}")
+        return self
 
     @model_validator(mode="after")
     def _validate_port_backend(self) -> "ChannelCreatePayload":

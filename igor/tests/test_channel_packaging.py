@@ -111,3 +111,49 @@ def test_invalid_dash_descriptor_mode_rejected():
             bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
             dash_descriptor_mode="invalid",
         )
+
+
+@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+def test_channel_timeshift_roundtrip(backend):
+    payload = ChannelCreatePayload(
+        name="test-channel", backend=backend, region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+        timeshift_start_param="from", timeshift_end_param="to",
+        timeshift_continuous_param="cont", timeshift_full_loop_param="whole",
+        timeshift_max_span_seconds=3600,
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["timeshift"] == {
+        "enabled": True, "start_param": "from", "end_param": "to",
+        "continuous_param": "cont", "full_loop_param": "whole", "max_span_seconds": 3600,
+    }
+
+
+def test_channel_timeshift_defaults_match_loop_dee_loop():
+    payload = ChannelCreatePayload(
+        name="test-channel", backend="ecs-express", region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["timeshift"]["enabled"] is True
+    assert (config["timeshift"]["start_param"], config["timeshift"]["end_param"]) == ("start", "end")
+    assert config["timeshift"]["max_span_seconds"] == 21600
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"timeshift_start_param": "a b"},
+        {"timeshift_start_param": "1start"},
+        {"timeshift_end_param": "x&y=1"},
+        {"timeshift_start_param": "same", "timeshift_end_param": "same"},
+        {"timeshift_max_span_seconds": 0},
+    ],
+)
+def test_invalid_timeshift_config_rejected(kwargs):
+    with pytest.raises(ValueError):
+        ChannelCreatePayload(
+            name="test-channel", backend="ecs-express", region="eu-west-1",
+            bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+            **kwargs,
+        )

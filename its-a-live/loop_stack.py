@@ -13,6 +13,7 @@ from aws_cdk import (
 from constructs import Construct
 from loop_shared_stack import CLUSTER_NAME
 from _host_paths import to_host_path
+from _timeshift_cfg import timeshift_param_names, timeshift_serve_args
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 
@@ -189,6 +190,7 @@ class LoopStack(Stack):
                     "--dvr-window-seconds", dvr_window_seconds,
                     "--epoch-utc", "1970-01-01T00:00:00Z",
                     *(["--continuous-timeline"] if continuous_timeline else []),
+                    *timeshift_serve_args(config),
                 ],
                 environment=[
                     ecs.CfnExpressGatewayService.KeyValuePairProperty(
@@ -201,9 +203,21 @@ class LoopStack(Stack):
         # ── CloudFront: public entrypoint, caches /seg/* aggressively ────────
         # Manifests are dynamic (sliding window) -- never cached. Segments are
         # immutable within a loop package version -- cache them (SCOPE.md §8).
+        # Startover/catchup (loop-dee-loop/SCOPE.md §13) selects the range via
+        # query parameters on the manifest URLs, so manifests MUST be cached
+        # per value of exactly those parameters -- CloudFront's default is to
+        # drop the query string entirely, which would serve one viewer's range
+        # to everyone. Nothing else in the query string is keyed or forwarded.
+        timeshift_params = timeshift_param_names(config)
+        manifest_query_strings = (
+            cloudfront.CacheQueryStringBehavior.allow_list(*timeshift_params)
+            if timeshift_params
+            else cloudfront.CacheQueryStringBehavior.none()
+        )
         manifest_cache_policy = cloudfront.CachePolicy(
             self,
             "ManifestCachePolicy",
+            query_string_behavior=manifest_query_strings,
             cache_policy_name=f"loop-dee-loop-{name}-manifests",
             default_ttl=Duration.seconds(0),
             min_ttl=Duration.seconds(0),
@@ -237,13 +251,16 @@ class LoopStack(Stack):
                 cache_policy=manifest_cache_policy,
                 allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
             ),
+            # seg = loop-local, cseg = continuous (global index), rseg =
+            # range-relative TS (SCOPE.md §13.5): all immutable per URL.
             additional_behaviors={
-                "*/seg/*": cloudfront.BehaviorOptions(
+                pattern: cloudfront.BehaviorOptions(
                     origin=origin,
                     viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                     cache_policy=segment_cache_policy,
                     allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
-                ),
+                )
+                for pattern in ("*/seg/*", "*/cseg/*", "*/rseg/*")
             },
         )
 

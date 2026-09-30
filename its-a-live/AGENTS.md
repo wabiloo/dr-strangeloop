@@ -66,6 +66,17 @@ hls_format = "cmaf"          # "cmaf" (default) | "ts"; HLS only, DASH remains C
 hls_ts_mux_audio = true      # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
 continuous_timeline = true   # default true -- serve.py rewrites each segment's own timestamps per request (header patch, never a re-mux -- loop-dee-loop/SCOPE.md §12) so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the loop wrap. false falls back to the honestly-signaled discontinuity/Period-restart default (e.g. if a package's CMAF fragments have a 32-bit tfdt, which continuity mode's startup check refuses). ecs-express/local-docker only -- aws-media (MediaLive/MediaPackage) doesn't run loop-dee-loop at all.
 
+# Startover/catchup (loop-dee-loop/SCOPE.md §13) -- ecs-express/local-docker only. The
+# channel's normal HLS/DASH URLs accept start/end/full_loop/continuous_timeline query
+# params. Defaults shown; the whole table is optional (missing = enabled with these).
+[timeshift]
+enabled = true
+start_param = "start"                     # names are configurable; ALSO the CloudFront manifest cache-key allow-list (redeploy after changing)
+end_param = "end"
+continuous_param = "continuous_timeline"  # per-request override of [packaging].continuous_timeline
+full_loop_param = "full_loop"             # widen the range to whole loops
+max_span_seconds = 21600                  # longest range (also caps an open-ended startover)
+
 # `port` lives with whichever backend-specific section already exists for
 # that backend, not a shared section:
 [express]

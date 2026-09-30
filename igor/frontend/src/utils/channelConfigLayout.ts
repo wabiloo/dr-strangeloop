@@ -2,6 +2,8 @@
 // read-only Configuration panel and the Configuration edit form on the
 // channel detail page: same sections, same order, same field labels.
 
+import { timeshiftParamsFromConfig } from './timeshift'
+
 export type ConfigBackend = 'aws-media' | 'ecs-express' | 'local-docker'
 export type ConfigSourceKind = 'playlist' | 'archive' | 'manifest'
 
@@ -12,6 +14,7 @@ export const CONFIG_SECTION_TITLE = {
   aws: 'AWS / S3',
   serving: 'Serving',
   packaging: 'Packaging',
+  timeshift: 'Startover & catchup',
   hls: 'HLS packaging',
   scte35: 'SCTE-35 signaling',
 } as const
@@ -28,6 +31,12 @@ export const CONFIG_FIELD_LABEL = {
   bucket_name: 'S3 bucket name',
   content_folder: 'S3 content folder',
   continuous_timeline: 'Continuous timeline across the loop wrap',
+  timeshift_enabled: 'Enable startover & catchup',
+  timeshift_start_param: 'Start parameter',
+  timeshift_end_param: 'End parameter',
+  timeshift_continuous_param: 'Continuous-timeline parameter',
+  timeshift_full_loop_param: 'Whole-loops parameter',
+  timeshift_max_span_seconds: 'Maximum range (s)',
   segment_duration: 'Segment duration (s)',
   dvr_window_seconds: 'DVR window (s)',
   hls_format: 'HLS segment format',
@@ -128,6 +137,17 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
       ['memory', isEcsExpress ? portTable.memory : undefined],
     ])
     add('packaging', [['continuous_timeline', packaging.continuous_timeline]])
+    // A channel written before [timeshift] existed gets its-a-live's
+    // defaults (enabled) -- show those rather than hiding the section.
+    const ts = timeshiftParamsFromConfig(table(config, 'timeshift'))
+    add('timeshift', [
+      ['timeshift_enabled', ts.enabled],
+      ['timeshift_start_param', ts.enabled ? ts.start_param : undefined],
+      ['timeshift_end_param', ts.enabled ? ts.end_param : undefined],
+      ['timeshift_continuous_param', ts.enabled ? ts.continuous_param : undefined],
+      ['timeshift_full_loop_param', ts.enabled ? ts.full_loop_param : undefined],
+      ['timeshift_max_span_seconds', ts.enabled ? ts.max_span_seconds : undefined],
+    ])
     add('hls', [
       // Archive/manifest segment lists keep each segment's own duration.
       ['segment_duration', sourceKind === 'playlist' ? packaging.segment_duration : 'as source'],

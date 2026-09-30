@@ -335,6 +335,18 @@ export interface ChannelHealth {
   renditions: string[]
   has_audio: boolean
   window_segments: number
+  /** Newer serve.py only (loop-dee-loop/SCOPE.md §13). */
+  epoch_utc?: string
+  continuous_timeline?: boolean
+  timeshift?: {
+    enabled: boolean
+    start_param?: string
+    end_param?: string
+    continuous_param?: string
+    full_loop_param?: string
+    max_span_seconds?: number
+    continuous_supported?: boolean
+  }
 }
 
 export interface ChannelCreatePayload {
@@ -357,6 +369,15 @@ export interface ChannelCreatePayload {
    * DASH Period restart at the loop wrap (serve.py rewrites each segment's
    * own timestamps per request instead). ecs-express/local-docker only. */
   continuous_timeline?: boolean
+  /** loop-dee-loop/SCOPE.md §13: startover/catchup via query parameters on
+   * the normal manifest URLs. The names are per-channel and also become the
+   * CDN's manifest cache-key allow-list. ecs-express/local-docker only. */
+  timeshift_enabled?: boolean
+  timeshift_start_param?: string
+  timeshift_end_param?: string
+  timeshift_continuous_param?: string
+  timeshift_full_loop_param?: string
+  timeshift_max_span_seconds?: number
   // int to pin an explicit host port, "auto" (local-docker only) to let
   // it self-select a free one at start/refresh time.
   port?: number | 'auto'
