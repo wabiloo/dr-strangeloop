@@ -7,18 +7,20 @@ import Message from 'primevue/message'
 import Tag from 'primevue/tag'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { deleteChannel, getJob, listChannels, startChannel, stopChannel } from '../api/client'
 import type { ChannelListItem, Job } from '../api/types'
 import { PHASE_LABEL, isUpButMaybeUnreachable, listItemPhase, phaseSeverity } from '../utils/channelPhase'
 import BackendBadge from '../components/BackendBadge.vue'
 import { alignConfirmPopup } from '../utils/confirmPopup'
+import { usePersistedSort } from '../utils/persistedSort'
 
 const router = useRouter()
 const confirm = useConfirm()
 const toast = useToast()
 const channels = ref<ChannelListItem[]>([])
+const { sortField, sortOrder } = usePersistedSort('channels')
 const loading = ref(true)
 const error = ref('')
 
@@ -95,6 +97,18 @@ function stackSeverity(channel: ChannelListItem) {
   if (channel.stack_status.includes('COMPLETE')) return 'success'
   return 'secondary'
 }
+
+// Sort key for the Actions column: rows group by the primary action they
+// currently offer (Start, then Stop, then delete-only, then nothing).
+function actionsSortKey(channel: ChannelListItem) {
+  if (isStartRelevant(channel)) return '1-start'
+  if (isStopRelevant(channel)) return '2-stop'
+  return isDeletable(channel) ? '3-delete' : '4-none'
+}
+
+const rows = computed(() =>
+  channels.value.map((c) => ({ ...c, _state_sort: runningStatusLabel(c), _actions_sort: actionsSortKey(c) })),
+)
 
 // Deleting only removes igor's local TOML config, never touches AWS/Docker
 // (see routes/channels.py's delete_channel) -- restrict it in the UI to
@@ -251,9 +265,9 @@ onBeforeUnmount(() => {
 
     <Message v-if="error" severity="error">{{ error }}</Message>
 
-    <DataTable :value="channels" :loading="loading" data-key="name" @row-click="(e) => router.push(`/channels/${e.data.name}`)" class="cursor-pointer">
-      <Column field="name" header="Name" />
-      <Column header="Backend">
+    <DataTable v-model:sort-field="sortField" v-model:sort-order="sortOrder" :value="rows" :loading="loading" data-key="name" @row-click="(e) => router.push(`/channels/${e.data.name}`)" class="cursor-pointer">
+      <Column field="name" header="Name" sortable />
+      <Column field="backend" header="Backend" sortable>
         <template #body="{ data }">
           <BackendBadge :backend="data.backend" />
         </template>
@@ -295,7 +309,7 @@ onBeforeUnmount(() => {
           <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>
-      <Column header="State">
+      <Column header="State"  sort-field="_state_sort" sortable>
         <template #body="{ data }">
           <Tag :value="runningStatusLabel(data)" :severity="statusSeverity(data)" />
         </template>
@@ -312,7 +326,7 @@ onBeforeUnmount(() => {
           <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>
-      <Column header="Actions">
+      <Column header="Actions"  sort-field="_actions_sort" sortable>
         <template #body="{ data }">
           <div class="flex gap-2" @click.stop>
             <Button
@@ -347,7 +361,7 @@ onBeforeUnmount(() => {
         </template>
       </Column>
       <template #empty>
-        No channels defined yet. Click "New channel" to define one from a franken-ts output.
+        No channels defined yet. Click "New channel" to create one from a playlist build, an imported archive, or an imported manifest.
       </template>
     </DataTable>
     <ConfirmPopup />

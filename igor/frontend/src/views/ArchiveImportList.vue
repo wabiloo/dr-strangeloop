@@ -5,19 +5,26 @@ import ConfirmPopup from 'primevue/confirmpopup'
 import DataTable from 'primevue/datatable'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import { deleteArchive, listArchives, uploadArchive } from '../api/client'
 import type { ArchiveListItem } from '../api/types'
 import { alignConfirmPopup } from '../utils/confirmPopup'
+import { usePersistedSort } from '../utils/persistedSort'
 
 const router = useRouter()
 const confirm = useConfirm()
 const toast = useToast()
 
+function displayName(archive: ArchiveListItem): string {
+  return archive.display_name || archive.name
+}
+
 const archives = ref<ArchiveListItem[]>([])
+const rows = computed(() => archives.value.map((a) => ({ ...a, _name_sort: displayName(a) })))
+const { sortField, sortOrder } = usePersistedSort('archives')
 const loading = ref(true)
 const error = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -178,15 +185,17 @@ onMounted(load)
     <Message v-if="error" severity="error">{{ error }}</Message>
 
     <DataTable
-      :value="archives"
+      v-model:sort-field="sortField"
+      v-model:sort-order="sortOrder"
+      :value="rows"
       :loading="loading"
       data-key="name"
       row-hover
       class="cursor-pointer"
       @row-click="({ data }) => router.push(`/archives/${data.name}`)"
     >
-      <Column header="Name">
-        <template #body="{ data }">{{ data.display_name || data.name }}</template>
+      <Column header="Name" sort-field="_name_sort" sortable>
+        <template #body="{ data }">{{ displayName(data) }}</template>
       </Column>
       <Column header="Format">
         <template #body="{ data }">

@@ -13,12 +13,14 @@ import { useRouter } from 'vue-router'
 import { buildPlaylist, deletePlaylist, duplicatePlaylist, listPlaylists } from '../api/client'
 import type { PlaylistListItem } from '../api/types'
 import { alignConfirmPopup } from '../utils/confirmPopup'
+import { usePersistedSort } from '../utils/persistedSort'
 
 const router = useRouter()
 const confirm = useConfirm()
 const toast = useToast()
 
 const playlists = ref<PlaylistListItem[]>([])
+const { sortField, sortOrder } = usePersistedSort('playlists')
 const loading = ref(true)
 const error = ref('')
 
@@ -139,6 +141,8 @@ onMounted(load)
     <Message v-if="error" severity="error">{{ error }}</Message>
 
     <DataTable
+      v-model:sort-field="sortField"
+      v-model:sort-order="sortOrder"
       :value="playlists"
       :loading="loading"
       data-key="name"
@@ -146,7 +150,7 @@ onMounted(load)
       class="cursor-pointer"
       @row-click="({ data }) => router.push(`/playlists/${data.name}`)"
     >
-      <Column field="name" header="Name" />
+      <Column field="name" header="Name" sortable />
       <Column header="Output">
         <template #body="{ data }">
           <div v-if="data.output_file || data.output_dir" class="flex align-items-center gap-2" :title="data.output_file || data.output_dir">

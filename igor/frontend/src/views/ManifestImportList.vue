@@ -6,19 +6,22 @@ import DataTable from 'primevue/datatable'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import { createManifestSource, deleteManifestSource, listManifests } from '../api/client'
 import type { ManifestListItem } from '../api/types'
 import { alignConfirmPopup } from '../utils/confirmPopup'
+import { usePersistedSort } from '../utils/persistedSort'
 
 const router = useRouter()
 const confirm = useConfirm()
 const toast = useToast()
 
 const manifests = ref<ManifestListItem[]>([])
+const rows = computed(() => manifests.value.map((m) => ({ ...m, _name_sort: displayName(m) })))
+const { sortField, sortOrder } = usePersistedSort('manifests')
 const loading = ref(true)
 const error = ref('')
 const newUrl = ref('')
@@ -69,6 +72,10 @@ function confirmDelete(event: MouseEvent, manifest: ManifestListItem) {
   alignConfirmPopup(target)
 }
 
+function displayName(manifest: ManifestListItem): string {
+  return manifest.display_name || manifest.name
+}
+
 function formatDuration(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined) return ''
   const minutes = Math.floor(seconds / 60)
@@ -109,15 +116,17 @@ onMounted(load)
     <Message v-if="error" severity="error">{{ error }}</Message>
 
     <DataTable
-      :value="manifests"
+      v-model:sort-field="sortField"
+      v-model:sort-order="sortOrder"
+      :value="rows"
       :loading="loading"
       data-key="name"
       row-hover
       class="cursor-pointer"
       @row-click="({ data }) => router.push(`/manifests/${data.name}`)"
     >
-      <Column header="Name">
-        <template #body="{ data }">{{ data.display_name || data.name }}</template>
+      <Column header="Name" sort-field="_name_sort" sortable>
+        <template #body="{ data }">{{ displayName(data) }}</template>
       </Column>
       <Column header="URL">
         <template #body="{ data }">
