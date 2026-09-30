@@ -701,7 +701,7 @@ attempted here.
 
 ## 13. Extension: startover + catchup (time-shifted playback via query params)
 
-**PROPOSED** (design agreed in interview; not yet implemented). Adds two
+**DECIDED** (design agreed in interview; implemented in `serve.py` / `timeshift.py`). Adds two
 playback modes next to the live DVR window, served from the *same*
 manifest URLs, selected purely by query parameters. No bake changes, no
 segment-byte changes, no new stored state.
@@ -746,6 +746,7 @@ enabled            = true
 start_param        = "start"
 end_param          = "end"
 continuous_param   = "continuous_timeline"   # per-request override, bool
+full_loop_param    = "full_loop"             # bool: widen range to whole loops (13.5b)
 max_span_seconds   = 21600
 ```
 
@@ -760,7 +761,7 @@ Plumbing: `its-a-live` TOML -> `serve.py` CLI flags and `wsgi.py` env vars
 | - | - | live DVR window (unchanged) | unchanged |
 | set | set, `<= now` | VOD: full range, `#EXT-X-ENDLIST`, `PLAYLIST-TYPE:VOD` | `type="static"`, `mediaPresentationDuration` |
 | set | set, `> now` | EVENT-style: from `start`, grows with live edge, no trimming; `ENDLIST` appended once `end` passes | `dynamic`, fixed `availabilityStartTime`=start, no `timeShiftBufferDepth` trim; `static` once `end` passes |
-| set | - | as above, never ends | as above, never ends |
+| set | - | as above, ends at `start + max_span_seconds` | as above |
 | - | set | 400 (`end` requires `start`) | 400 |
 
 "Live edge" for a still-growing range is the same `now`-derived edge live
@@ -778,9 +779,9 @@ This forces a URL-scheme decision, because the segment URL means
 different things in the two modes (§12.2: local index vs. global index)
 and one server must serve both:
 
-- `/<rendition>/seg/<local>.m4s` -> always the *local* physical index
+- `/<rendition>/seg/<local>.{m4s,ts}` -> always the *local* physical index
   (default-mode semantics, byte-identical, discontinuity-signaled).
-- `/<rendition>/cseg/<global>.m4s` -> always the *global* index
+- `/<rendition>/cseg/<global>.{m4s,ts}` -> always the *global* index
   (continuous semantics, timestamps rewritten per §12.2).
 - A manifest emits whichever form matches the mode it was built in. The
   choice is therefore encoded in the path, so CDN cache keys stay correct
@@ -799,12 +800,50 @@ over a 10-minute loop is ~36. This is accepted (see interview); players
 that dislike it can request `continuous_timeline=true`.
 
 Existing limit that catchup makes reachable: MPEG-TS PTS/DTS/PCR wrap at
-33 bits (~26.5h). Continuous-TS with `shift_ticks = loop_number *
-total_loop_duration_ticks` for a start days after the epoch will wrap.
-v1: continuous + TS + (`start - epoch` > 26h) -> 400 with an explanatory
-message. (Follow-up: shift relative to the range start instead of the
-epoch, at the cost of range-specific segment URLs.) CMAF (64-bit `tfdt`)
-is unaffected.
+33 bits (~26.5h), and continuous mode's shift of `loop_number *
+total_loop_duration_ticks` grows without bound since the epoch. DECIDED
+(not a 400): time-shifted continuous **HLS-TS** requests shift timestamps
+relative to the *range origin* instead of the epoch, via a third segment
+path:
+
+- `/<rendition>/rseg/<origin_loop>/<global>.ts` -> shift =
+  `(loop(global) - origin_loop) * total_loop_duration_ticks`, where
+  `origin_loop` is the loop number containing the snapped range start.
+  Timestamps stay within (range span + one loop) of zero however long after
+  the epoch the range is. The origin is in the path, so URL identity is
+  still content identity and CDN caching is unaffected.
+- Used only for continuous + HLS-TS + a `start` param. Live and CMAF/DASH
+  keep `/cseg/` (64-bit `tfdt` never wraps; live TS wraps like any
+  long-running TS stream, as before).
+
+Open-ended startover (`start` only): capped at `start + max_span_seconds`;
+the manifest becomes an ended VOD after that. An explicit `end` further than
+`max_span_seconds` from `start` (measured after any `full_loop` snapping) is
+a 400.
+
+Time-shifted DASH: `availabilityStartTime` = wall clock of the snapped range
+start, Period/timeline rebased so the range begins at presentation time 0
+(non-continuous: Period `start` rebased; continuous: `presentationTimeOffset`).
+Ended ranges are `type="static"` with `mediaPresentationDuration` and no
+`availabilityStartTime`.
+
+### 13.5b DECIDED: `full_loop` (whole-loop snapping)
+
+A fourth, boolean, configurable parameter (`full_loop_param`, default
+`full_loop`). When true, the range is widened to whole loop iterations
+*before* segment snapping:
+
+- `start` -> the start of the loop iteration containing it (nearest loop
+  start at or before `start`);
+- `end` (if given) -> the end of the loop iteration containing `end - 1`
+  (nearest loop end at or after `end`; an `end` exactly on a loop boundary
+  is unchanged);
+- no `end` -> the implicit `start + max_span_seconds` cap is rounded *down*
+  to whole loops (minimum one loop; a single loop longer than
+  `max_span_seconds` -> 400).
+
+`max_span_seconds` is enforced on the widened range. `full_loop` without
+`start` is ignored (live is unaffected).
 
 ### 13.6 Implementation notes (serve.py / scte35_signaling.py)
 

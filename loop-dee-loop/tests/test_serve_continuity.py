@@ -218,7 +218,7 @@ def test_continuous_hls_manifest_has_no_discontinuity_and_uses_global_index(tmp_
     media_sequence_line = next(l for l in body.splitlines() if l.startswith("#EXT-X-MEDIA-SEQUENCE:"))
     media_sequence = int(media_sequence_line.split(":")[1])
     assert media_sequence > 1  # sanity: this really is a huge running index
-    assert f"seg/{media_sequence}.m4s" in body
+    assert f"cseg/{media_sequence}.m4s" in body
 
 
 def test_continuous_segment_route_shifts_tfdt_by_loop_number(tmp_path):
@@ -227,7 +227,7 @@ def test_continuous_segment_route_shifts_tfdt_by_loop_number(tmp_path):
     client = app.test_client()
 
     # global index 0 -> loop 0, local 0: byte-identical to the source (shift 0).
-    resp0 = client.get("/1080p/seg/0.m4s")
+    resp0 = client.get("/1080p/cseg/0.m4s")
     assert resp0.status_code == 200
     moof0 = cmaf._find(resp0.data, ("moof",))
     tfdt0 = cmaf._find(resp0.data, ("traf", "tfdt"), moof0[0] + 8, moof0[1])
@@ -241,7 +241,7 @@ def test_continuous_segment_route_shifts_tfdt_by_loop_number(tmp_path):
     tfdt_l1 = cmaf._find(resp_local1.data, ("traf", "tfdt"), moof_l1[0] + 8, moof_l1[1])
     value_local1_loop0 = struct.unpack(">Q", resp_local1.data[tfdt_l1[0] + 12 : tfdt_l1[0] + 20])[0]
 
-    resp3 = client.get("/1080p/seg/3.m4s")
+    resp3 = client.get("/1080p/cseg/3.m4s")
     assert resp3.status_code == 200
     moof3 = cmaf._find(resp3.data, ("moof",))
     tfdt3 = cmaf._find(resp3.data, ("traf", "tfdt"), moof3[0] + 8, moof3[1])
@@ -433,7 +433,7 @@ def test_continuous_sparse_segment_route_shifts_tfdt_by_loop_number(tmp_path):
 
     # global index 0 -> loop 0, local 0: unshifted (each segment's own
     # independent encode starts at its own tfdt 0).
-    resp0 = client.get("/archive/seg/0.m4s")
+    resp0 = client.get("/archive/cseg/0.m4s")
     assert resp0.status_code == 200
     moof0 = cmaf._find(resp0.data, ("moof",))
     tfdt0 = cmaf._find(resp0.data, ("traf", "tfdt"), moof0[0] + 8, moof0[1])
@@ -442,7 +442,7 @@ def test_continuous_sparse_segment_route_shifts_tfdt_by_loop_number(tmp_path):
 
     # global index 2 -> loop 1, local 0: same physical bytes, shifted by
     # exactly one total_loop_duration_ticks.
-    resp2 = client.get("/archive/seg/2.m4s")
+    resp2 = client.get("/archive/cseg/2.m4s")
     assert resp2.status_code == 200
     moof2 = cmaf._find(resp2.data, ("moof",))
     tfdt2 = cmaf._find(resp2.data, ("traf", "tfdt"), moof2[0] + 8, moof2[1])

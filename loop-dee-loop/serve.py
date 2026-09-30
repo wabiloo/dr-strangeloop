@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import copy
 import dataclasses
 import datetime as _dt
 import json
@@ -33,10 +34,13 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from flask import Flask, Response, abort, send_file
+from urllib.parse import urlencode
+
+from flask import Flask, Response, abort, request, send_file
 
 import cmaf
 import continuity
+from timeshift import TimeWindow, TimeshiftConfig, TimeshiftError, global_index_at, parse_bool, parse_instant_ticks, resolve_window
 from loop_math import (
     compute_loop_position,
     global_segment_number,
@@ -631,8 +635,16 @@ class Channel:
             raise ValueError("epoch_ticks must be int")
         if window_segments < 1:
             raise ValueError("window_segments must be >= 1")
+        self.continuous_error: str | None = None
         if continuous:
             self._validate_continuous(package)
+        else:
+            # SCOPE.md §13.5: a request may opt in to continuity per-request,
+            # so learn once, at startup, whether the package supports it.
+            try:
+                self._validate_continuous(package)
+            except Exception as exc:  # noqa: BLE001 -- any reason means 'unsupported'
+                self.continuous_error = str(exc)
         self.package = package
         self.epoch_ticks = epoch_ticks
         # Controls the DVR window / manifest size: how many segments ahead
@@ -689,6 +701,54 @@ class Channel:
                     f"that emits v1 tfdt boxes (SCOPE.md §12.4)."
                 )
 
+    def for_mode(self, continuous: bool) -> "Channel":
+        """This channel, but serving in the requested continuity mode
+        (SCOPE.md §13.5). Channel is immutable after construction, so a
+        shallow copy with the flag flipped is a safe per-request variant.
+        Raises TimeshiftError if the package can't be served continuously."""
+        if continuous == self.continuous:
+            return self
+        if continuous and self.continuous_error is not None:
+            raise TimeshiftError(f"continuous timeline is not supported: {self.continuous_error}")
+        variant = copy.copy(self)
+        variant.continuous = continuous
+        variant.continuous_error = None if continuous else self.continuous_error
+        return variant
+
+    def segment_uri(
+        self, template: str, global_index: int, local_index: int, window: "TimeWindow | None"
+    ) -> str:
+        """Segment URI for a manifest entry (SCOPE.md §13.5). `template`
+        contains `/seg/{index}`. Default mode: `/seg/<local>`. Continuity:
+        `/cseg/<global>`; continuity + HLS-TS + a time-shifted range:
+        `/rseg/<origin_loop>/<global>` so timestamps are shifted relative to
+        the range origin instead of the epoch (33-bit PTS wrap)."""
+        if not self.continuous:
+            return template.format(index=local_index)
+        if window is not None and template.endswith(".ts"):
+            return template.replace("/seg/", f"/rseg/{window.origin_loop}/").format(index=global_index)
+        return template.replace("/seg/", "/cseg/").format(index=global_index)
+
+    def resolve_timeshift(
+        self,
+        start_ticks: int,
+        end_ticks: int | None,
+        max_span_seconds: int,
+        full_loop: bool,
+    ) -> TimeWindow:
+        pkg = self.package
+        return resolve_window(
+            start_ticks=start_ticks,
+            end_ticks=end_ticks,
+            now_ticks=self.now_ticks(),
+            epoch_ticks=self.epoch_ticks,
+            total_loop_duration_ticks=pkg.total_loop_duration_ticks,
+            segment_boundary_ticks=pkg.segment_boundary_ticks,
+            segments_per_loop=pkg.segments_per_loop,
+            max_span_ticks=max_span_seconds * pkg.timescale,
+            full_loop=full_loop,
+        )
+
     def loop_number_and_local_index(self, global_index: int) -> tuple[int, int]:
         """(loop_number, local_index) decoded from a continuity-mode
         segment URL's index, which -- unlike the default mode's plain
@@ -711,7 +771,7 @@ class Channel:
             self.now_ticks(), self.epoch_ticks, self.package.total_loop_duration_ticks
         )
 
-    def build_hls_master_playlist(self) -> str:
+    def build_hls_master_playlist(self, query: str = "") -> str:
         """Build the HLS multivariant (master) playlist -- required by the
         HLS spec and by most real players (Safari/hls.js, etc. generally
         expect the entry-point URL to be a multivariant playlist, even for
@@ -730,6 +790,9 @@ class Channel:
         the video and audio codec strings (per HLS spec).
         """
         pkg = self.package
+        # SCOPE.md §13.5: a time-shifted request's params must ride along on
+        # every child playlist URI, else players would fetch the live ones.
+        suffix = f"?{query}" if query else ""
 
         lines = ["#EXTM3U", "#EXT-X-VERSION:6" if pkg.hls_format == "ts" else "#EXT-X-VERSION:7"]
 
@@ -743,7 +806,7 @@ class Channel:
             if separate_audio:
                 lines.append(
                     '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Default",'
-                    'DEFAULT=YES,AUTOSELECT=YES,URI="audio.m3u8"'
+                    f'DEFAULT=YES,AUTOSELECT=YES,URI="audio.m3u8{suffix}"'
                 )
 
         for rendition in pkg.video_renditions:
@@ -758,11 +821,13 @@ class Channel:
                 stream_inf_attrs.append('AUDIO="audio"')
 
             lines.append("#EXT-X-STREAM-INF:" + ",".join(stream_inf_attrs))
-            lines.append(pkg.video_playlist_name(rendition))
+            lines.append(pkg.video_playlist_name(rendition) + suffix)
 
         return "\n".join(lines) + "\n"
 
-    def build_hls_manifest(self, rendition_name: str, window_segments: int | None = None) -> str:
+    def build_hls_manifest(
+        self, rendition_name: str, window_segments: int | None = None, window: TimeWindow | None = None
+    ) -> str:
         rendition = self.package.rendition_by_name(rendition_name)
         is_ts = self.package.hls_format == "ts"
         # A sparse-mode rendition's segments are self-initializing (SCOPE.md
@@ -776,9 +841,12 @@ class Channel:
             span_init_uri=(lambda k: f"{rendition.name}/init_{k}.mp4") if per_span else None,
             seg_uri_template=f"{rendition.name}/seg/{{index}}.ts" if is_ts else f"{rendition.name}/seg/{{index}}.m4s",
             window_segments=window_segments,
+            window=window,
         )
 
-    def build_hls_audio_manifest(self, window_segments: int | None = None) -> str:
+    def build_hls_audio_manifest(
+        self, window_segments: int | None = None, window: TimeWindow | None = None
+    ) -> str:
         pkg = self.package
         if not pkg.has_audio:
             raise RuntimeError("This loop package has no audio track to serve.")
@@ -791,6 +859,7 @@ class Channel:
             span_init_uri=(lambda k: f"audio/init_{k}.mp4") if pkg.audio_rendition.audio_sparse and not is_ts else None,
             seg_uri_template="audio/seg/{index}.ts" if is_ts else "audio/seg/{index}.m4s",
             window_segments=window_segments,
+            window=window,
         )
 
     def _build_hls_media_playlist(
@@ -801,6 +870,7 @@ class Channel:
         seg_uri_template: str,
         window_segments: int | None = None,
         span_init_uri: Callable[[int], str] | None = None,
+        window: TimeWindow | None = None,
     ) -> str:
         """Shared builder for every video rendition's HLS media playlist and
         for the (single, shared) audio HLS media playlist.
@@ -822,14 +892,19 @@ class Channel:
         playlist and in the audio playlist.
         """
         window_segments = window_segments or self.window_segments
-        pos = self.current_position()
         pkg = self.package
-        seg_index = segment_index_for_position(
-            pos.position_in_loop_ticks, pkg.segment_boundary_ticks
-        )
-        media_sequence = global_segment_number(
-            pos.loop_number, seg_index, pkg.segments_per_loop
-        )
+        if window is not None:
+            # SCOPE.md §13: explicit startover/catchup range instead of the
+            # sliding live window ending at "now".
+            media_sequence = window.last_global
+        else:
+            pos = self.current_position()
+            seg_index = segment_index_for_position(
+                pos.position_in_loop_ticks, pkg.segment_boundary_ticks
+            )
+            media_sequence = global_segment_number(
+                pos.loop_number, seg_index, pkg.segments_per_loop
+            )
 
         # Every physical segment file is reused, byte-for-byte, on every
         # loop iteration (SCOPE.md §4.1 step 6): its internal fMP4
@@ -865,7 +940,9 @@ class Channel:
         # process starts, when fewer than `window_segments` have "aged"
         # yet -- the window is simply smaller than requested until then,
         # same as any real live stream's startup ramp-up.
-        first_global_index = max(0, media_sequence - window_segments + 1)
+        first_global_index = (
+            window.first_global if window is not None else max(0, media_sequence - window_segments + 1)
+        )
         # grave-robber/SCOPE.md §6.1: generalizes the original "one
         # discontinuity per loop wrap" counter (previously just
         # `first_global_index // segments_per_loop`) to also count internal
@@ -886,6 +963,8 @@ class Channel:
             f"#EXT-X-MEDIA-SEQUENCE:{first_global_index}",
             f"#EXT-X-DISCONTINUITY-SEQUENCE:{first_discontinuity_sequence}",
         ]
+        if window is not None:
+            lines.append("#EXT-X-PLAYLIST-TYPE:VOD" if window.ended else "#EXT-X-PLAYLIST-TYPE:EVENT")
         sorted_boundaries = sorted(pkg.boundaries)
 
         def _span_map_line(local_index: int) -> str:
@@ -1130,11 +1209,63 @@ class Channel:
             # physical file is reused every loop. This does trade away the
             # default mode's "one URL forever, cacheable across every loop
             # iteration" property (SCOPE.md §4.2) for continuity mode.
-            lines.append(seg_uri_template.format(index=global_index if self.continuous else local_index))
+            lines.append(self.segment_uri(seg_uri_template, global_index, local_index, window))
 
+        if window is not None and window.ended:
+            lines.append("#EXT-X-ENDLIST")
         return "\n".join(lines) + "\n"
 
-    def build_dash_manifest(self, window_segments: int | None = None) -> str:
+    def _iso_ticks(self, ticks: int) -> str:
+        seconds = ticks_to_wall_clock_seconds(ticks, self.package.timescale)
+        return _dt.datetime.utcfromtimestamp(seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    def _mpd_open_tag(
+        self,
+        *,
+        window: "TimeWindow | None",
+        window_segments: int,
+        origin_abs_ticks: int = 0,
+        duration_ticks: int = 0,
+    ) -> str:
+        """The `<MPD ...>` start tag shared by both DASH builders. Live
+        (window is None) is exactly the pre-§13 output. A time-shifted range
+        (SCOPE.md §13): `availabilityStartTime` is the wall clock of the
+        range origin so presentation time 0 == the snapped start; an ended
+        range is a static MPD with a fixed duration; a growing one is
+        dynamic with the whole range kept (no timeShiftBufferDepth)."""
+        pkg = self.package
+        max_seg = pkg.max_segment_duration_seconds_rounded_up
+        ns = (
+            f'<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"\n'
+            f'     xmlns:scte35="{SCTE35_XML_NAMESPACE}"\n'
+            f'     profiles="urn:mpeg:dash:profile:isoff-live:2011"\n'
+        )
+        if window is not None and window.ended:
+            duration = ticks_to_wall_clock_seconds(duration_ticks, pkg.timescale)
+            return (
+                ns + f'     type="static"\n'
+                f'     mediaPresentationDuration="PT{duration}S"\n'
+                f'     minBufferTime="PT2S">'
+            )
+        if window is not None:
+            ast = self._iso_ticks(self.epoch_ticks + origin_abs_ticks)
+            depth = ""
+        else:
+            ast = self._iso_ticks(self.epoch_ticks)
+            depth = f'     timeShiftBufferDepth="PT{max_seg * window_segments}S"\n'
+        return (
+            ns + f'     type="dynamic"\n'
+            f'     availabilityStartTime="{ast}"\n'
+            f'     publishTime="{self._iso_ticks(self.now_ticks())}"\n'
+            f'     minimumUpdatePeriod="PT{max_seg}S"\n'
+            + depth
+            + f'     suggestedPresentationDelay="PT{max_seg * 2}S"\n'
+            f'     minBufferTime="PT2S">'
+        )
+
+    def build_dash_manifest(
+        self, window_segments: int | None = None, window: TimeWindow | None = None
+    ) -> str:
         """Build a DASH MPD (@type=dynamic) covering the same sliding window
         of segments as the HLS playlists, using one <AdaptationSet> per
         media type. The video AdaptationSet contains one <Representation>
@@ -1177,26 +1308,20 @@ class Channel:
         state" rule (bounded naturally by `segments_per_loop`).
         """
         if self.continuous:
-            return self._build_dash_manifest_continuous(window_segments)
+            return self._build_dash_manifest_continuous(window_segments, window)
 
         window_segments = window_segments or self.window_segments
-        pos = self.current_position()
         pkg = self.package
-        seg_index = segment_index_for_position(
-            pos.position_in_loop_ticks, pkg.segment_boundary_ticks
-        )
-        current_loop_number = pos.loop_number
+        if window is not None:
+            seg_index = window.last_global % pkg.segments_per_loop
+            current_loop_number = window.last_global // pkg.segments_per_loop
+        else:
+            pos = self.current_position()
+            seg_index = segment_index_for_position(
+                pos.position_in_loop_ticks, pkg.segment_boundary_ticks
+            )
+            current_loop_number = pos.loop_number
 
-        epoch_seconds = ticks_to_wall_clock_seconds(self.epoch_ticks, pkg.timescale)
-        availability_start_time = (
-            _dt.datetime.utcfromtimestamp(epoch_seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
-            + "Z"
-        )
-        now_seconds = ticks_to_wall_clock_seconds(self.now_ticks(), pkg.timescale)
-        publish_time = (
-            _dt.datetime.utcfromtimestamp(now_seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
-            + "Z"
-        )
 
         # Build the list of (loop_number, [local_index, ...]) pairs, one per
         # <Period> to emit. Crucially, the CURRENTLY OPEN loop iteration
@@ -1261,31 +1386,43 @@ class Channel:
                     break
             return idx
 
-        current_span_index = _span_index_for_local(seg_index)
-        current_span_start, _ = _span_bounds(current_span_index)
-        # Segments served so far in the CURRENT open span -- never
-        # front-pruned (same DASH-client requirement as before, now scoped
-        # to the span rather than the whole loop).
-        open_count = seg_index - current_span_start + 1
-
         periods_plan: list[tuple[int, int, list[int]]] = []
-        if open_count < window_segments:
-            if current_span_index > 0:
-                prev_loop_number, prev_span_index = current_loop_number, current_span_index - 1
-            elif current_loop_number > 0:
-                prev_loop_number, prev_span_index = current_loop_number - 1, spans_per_loop - 1
-            else:
-                prev_loop_number = None
-            if prev_loop_number is not None:
-                prev_start, prev_end = _span_bounds(prev_span_index)
-                needed_from_prev = min(window_segments - open_count, prev_end - prev_start)
-                start_local = prev_end - needed_from_prev
-                periods_plan.append(
-                    (prev_loop_number, prev_span_index, list(range(start_local, prev_end)))
-                )
-        periods_plan.append(
-            (current_loop_number, current_span_index, list(range(current_span_start, seg_index + 1)))
-        )
+        if window is not None:
+            # SCOPE.md §13: one Period per (loop, span) run covering the
+            # whole [first_global, last_global] range -- never front-pruned.
+            for g in range(window.first_global, window.last_global + 1):
+                g_loop, g_local = divmod(g, pkg.segments_per_loop)
+                g_span = _span_index_for_local(g_local)
+                if periods_plan and periods_plan[-1][0] == g_loop and periods_plan[-1][1] == g_span:
+                    periods_plan[-1][2].append(g_local)
+                else:
+                    periods_plan.append((g_loop, g_span, [g_local]))
+        else:
+            current_span_index = _span_index_for_local(seg_index)
+            current_span_start, _ = _span_bounds(current_span_index)
+            # Segments served so far in the CURRENT open span -- never
+            # front-pruned (same DASH-client requirement as before, now scoped
+            # to the span rather than the whole loop).
+            open_count = seg_index - current_span_start + 1
+
+            if open_count < window_segments:
+                if current_span_index > 0:
+                    prev_loop_number, prev_span_index = current_loop_number, current_span_index - 1
+                elif current_loop_number > 0:
+                    prev_loop_number, prev_span_index = current_loop_number - 1, spans_per_loop - 1
+                else:
+                    prev_loop_number = None
+                if prev_loop_number is not None:
+                    prev_start, prev_end = _span_bounds(prev_span_index)
+                    needed_from_prev = min(window_segments - open_count, prev_end - prev_start)
+                    start_local = prev_end - needed_from_prev
+                    periods_plan.append(
+                        (prev_loop_number, prev_span_index, list(range(start_local, prev_end)))
+                    )
+            periods_plan.append(
+                (current_loop_number, current_span_index, list(range(current_span_start, seg_index + 1)))
+            )
+
 
         def _period_entries(
             boundary_ticks: list[int], local_indices: list[int], span_start_local: int
@@ -1306,8 +1443,31 @@ class Channel:
                 entries.append((segment_start_ticks - span_start_ticks, duration_ticks, local_index))
             return entries
 
+        window_origin_abs = 0
+        window_duration_ticks = 0
+        if window is not None:
+            first_loop, _first_span, first_locals = periods_plan[0]
+            window_origin_abs = (
+                first_loop * pkg.total_loop_duration_ticks
+                + pkg.segment_boundary_ticks[first_locals[0]]
+                + pkg.declared_offset_ticks_by_local_index[first_locals[0]]
+            )
+            last_loop, _last_span, last_locals = periods_plan[-1]
+            last_local = last_locals[-1]
+            last_end_local = (
+                pkg.segment_boundary_ticks[last_local + 1]
+                if last_local + 1 < len(pkg.segment_boundary_ticks)
+                else pkg.total_loop_duration_ticks
+            )
+            window_duration_ticks = (
+                last_loop * pkg.total_loop_duration_ticks
+                + last_end_local
+                + pkg.declared_offset_ticks_by_local_index[last_local]
+                - window_origin_abs
+            )
+
         period_xml_parts = []
-        for loop_number, span_index, local_indices in periods_plan:
+        for period_number, (loop_number, span_index, local_indices) in enumerate(periods_plan):
             if not local_indices:
                 continue
             span_start_local, _ = _span_bounds(span_index)
@@ -1322,6 +1482,18 @@ class Channel:
                 + pkg.segment_boundary_ticks[span_start_local]
                 + pkg.declared_offset_ticks_by_local_index[span_start_local]
             )
+            # SCOPE.md §13: rebase a time-shifted range so its first segment is
+            # presentation time 0 -- the first Period starts at 0 with a
+            # presentationTimeOffset covering the lead-in to its first
+            # segment; later Periods start relative to the range origin.
+            pto_ticks = 0
+            if window is not None:
+                if period_number == 0:
+                    pto_ticks = window_origin_abs - period_start_ticks_relative
+                    period_start_ticks_relative = 0
+                else:
+                    period_start_ticks_relative -= window_origin_abs
+            pto_attr = f' presentationTimeOffset="{pto_ticks}"' if pto_ticks else ""
             period_start_seconds = ticks_to_wall_clock_seconds(
                 period_start_ticks_relative, pkg.timescale
             )
@@ -1474,7 +1646,7 @@ class Channel:
                 # no-op subtraction of pkg.segment_boundary_ticks[0]==0 in
                 # the common single-span-per-loop case).
                 event_presentation_time = (
-                    marker["pts_time_ticks"] - pkg.segment_boundary_ticks[span_start_local]
+                    marker["pts_time_ticks"] - pkg.segment_boundary_ticks[span_start_local] - pto_ticks
                 )
                 event_xml.append(
                     f'    <Event presentationTime="{event_presentation_time}"'
@@ -1503,7 +1675,7 @@ class Channel:
 
                 video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
         <SegmentTemplate media="{rendition.name}/seg/$Number$.m4s"{init_attr}
-                         timescale="{pkg.timescale}" startNumber="{first_number}">
+                         timescale="{pkg.timescale}" startNumber="{first_number}"{pto_attr}>
           <SegmentTimeline>
 {timeline_lines}
           </SegmentTimeline>
@@ -1524,7 +1696,7 @@ class Channel:
     <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
       <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
         <SegmentTemplate media="audio/seg/$Number$.m4s" initialization="{audio_init}"
-                         timescale="{pkg.timescale}" startNumber="{first_number}">
+                         timescale="{pkg.timescale}" startNumber="{first_number}"{pto_attr}>
           <SegmentTimeline>
 {audio_timeline_lines}
           </SegmentTimeline>
@@ -1568,23 +1740,22 @@ class Channel:
         # own "jump the gap" recovery instead of just comfortably waiting
         # behind it. Two segment durations of delay margin is a
         # conservative, standard buffer for this.
+        mpd_open = self._mpd_open_tag(
+            window=window,
+            window_segments=window_segments,
+            origin_abs_ticks=window_origin_abs,
+            duration_ticks=window_duration_ticks,
+        )
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
-<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
-     xmlns:scte35="{SCTE35_XML_NAMESPACE}"
-     profiles="urn:mpeg:dash:profile:isoff-live:2011"
-     type="dynamic"
-     availabilityStartTime="{availability_start_time}"
-     publishTime="{publish_time}"
-     minimumUpdatePeriod="PT{pkg.max_segment_duration_seconds_rounded_up}S"
-     timeShiftBufferDepth="PT{pkg.max_segment_duration_seconds_rounded_up * window_segments}S"
-     suggestedPresentationDelay="PT{pkg.max_segment_duration_seconds_rounded_up * 2}S"
-     minBufferTime="PT2S">
+{mpd_open}
 {chr(10).join(period_xml_parts)}
 </MPD>
 '''
         return mpd
 
-    def _build_dash_manifest_continuous(self, window_segments: int | None = None) -> str:
+    def _build_dash_manifest_continuous(
+        self, window_segments: int | None = None, window: TimeWindow | None = None
+    ) -> str:
         """SCOPE.md §12.3: continuity mode's DASH output is ONE Period that
         never restarts -- its <SegmentTimeline> `t` values are each
         segment's real ABSOLUTE tick position (`loop_number *
@@ -1606,22 +1777,33 @@ class Channel:
         """
         window_segments = window_segments or self.window_segments
         pkg = self.package
-        pos = self.current_position()
-        seg_index = segment_index_for_position(
-            pos.position_in_loop_ticks, pkg.segment_boundary_ticks
-        )
-        media_sequence = global_segment_number(pos.loop_number, seg_index, pkg.segments_per_loop)
-        first_global_index = max(0, media_sequence - window_segments + 1)
+        if window is not None:
+            # SCOPE.md §13: explicit range; presentation time 0 is the first
+            # segment (presentationTimeOffset below), t values stay absolute
+            # so they match the tfdt the cseg route writes.
+            first_global_index, media_sequence = window.first_global, window.last_global
+        else:
+            pos = self.current_position()
+            seg_index = segment_index_for_position(
+                pos.position_in_loop_ticks, pkg.segment_boundary_ticks
+            )
+            media_sequence = global_segment_number(pos.loop_number, seg_index, pkg.segments_per_loop)
+            first_global_index = max(0, media_sequence - window_segments + 1)
         global_indices = list(range(first_global_index, media_sequence + 1))
+        first_loop, first_local = divmod(first_global_index, pkg.segments_per_loop)
+        last_loop, last_local = divmod(media_sequence, pkg.segments_per_loop)
+        origin_abs = (
+            first_loop * pkg.total_loop_duration_ticks + pkg.segment_boundary_ticks[first_local]
+            if window is not None
+            else 0
+        )
+        end_abs = last_loop * pkg.total_loop_duration_ticks + (
+            pkg.segment_boundary_ticks[last_local + 1]
+            if last_local + 1 < len(pkg.segment_boundary_ticks)
+            else pkg.total_loop_duration_ticks
+        )
+        pto_attr = f' presentationTimeOffset="{origin_abs}"' if origin_abs else ""
 
-        epoch_seconds = ticks_to_wall_clock_seconds(self.epoch_ticks, pkg.timescale)
-        availability_start_time = (
-            _dt.datetime.utcfromtimestamp(epoch_seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-        )
-        now_seconds = ticks_to_wall_clock_seconds(self.now_ticks(), pkg.timescale)
-        publish_time = (
-            _dt.datetime.utcfromtimestamp(now_seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-        )
 
         def _entries(boundary_ticks: list[int]) -> list[tuple[int, int, int]]:
             """(absolute_start_ticks, duration_ticks, local_index) -- this
@@ -1717,8 +1899,17 @@ class Channel:
                 # once would need more room than this, but that is already
                 # a pathological window/loop-duration combination, not
                 # something continuity mode introduces.
-                synthetic_id = (event_id_dec * 4 + DIRECTION_CODE[direction]) * 2 + (loop_number & 1)
-                event_presentation_time = loop_number * pkg.total_loop_duration_ticks + marker["pts_time_ticks"]
+                base_id = event_id_dec * 4 + DIRECTION_CODE[direction]
+                if window is None:
+                    synthetic_id = base_id * 2 + (loop_number & 1)
+                else:
+                    # A range can span many loops and must keep stable ids
+                    # as a growing manifest is refreshed: fold in the low 16
+                    # bits of the absolute loop number (SCOPE.md §13.6).
+                    synthetic_id = (base_id << 16) | (loop_number & 0xFFFF)
+                event_presentation_time = (
+                    loop_number * pkg.total_loop_duration_ticks + marker["pts_time_ticks"] - origin_abs
+                )
                 event_xml.append(
                     f'    <Event presentationTime="{event_presentation_time}"'
                     f'{duration_attr} id="{synthetic_id}">\n'
@@ -1749,8 +1940,8 @@ class Channel:
             else:
                 init_attr = f' initialization="{rendition.name}/init.mp4"'
             video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
-        <SegmentTemplate media="{rendition.name}/seg/$Number$.m4s"{init_attr}
-                         timescale="{pkg.timescale}" startNumber="{first_global_index}">
+        <SegmentTemplate media="{rendition.name}/cseg/$Number$.m4s"{init_attr}
+                         timescale="{pkg.timescale}" startNumber="{first_global_index}"{pto_attr}>
           <SegmentTimeline>
 {timeline_lines}
           </SegmentTimeline>
@@ -1772,8 +1963,8 @@ class Channel:
             audio_adaptation_set = f'''
     <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
       <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
-        <SegmentTemplate media="audio/seg/$Number$.m4s" initialization="{audio_init}"
-                         timescale="{pkg.timescale}" startNumber="{first_global_index}">
+        <SegmentTemplate media="audio/cseg/$Number$.m4s" initialization="{audio_init}"
+                         timescale="{pkg.timescale}" startNumber="{first_global_index}"{pto_attr}>
           <SegmentTimeline>
 {audio_timeline_lines}
           </SegmentTimeline>
@@ -1788,17 +1979,14 @@ class Channel:
     </AdaptationSet>{audio_adaptation_set}
   </Period>'''
 
+        mpd_open = self._mpd_open_tag(
+            window=window,
+            window_segments=window_segments,
+            origin_abs_ticks=origin_abs,
+            duration_ticks=end_abs - origin_abs,
+        )
         mpd = f'''<?xml version="1.0" encoding="utf-8"?>
-<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
-     xmlns:scte35="{SCTE35_XML_NAMESPACE}"
-     profiles="urn:mpeg:dash:profile:isoff-live:2011"
-     type="dynamic"
-     availabilityStartTime="{availability_start_time}"
-     publishTime="{publish_time}"
-     minimumUpdatePeriod="PT{pkg.max_segment_duration_seconds_rounded_up}S"
-     timeShiftBufferDepth="PT{pkg.max_segment_duration_seconds_rounded_up * window_segments}S"
-     suggestedPresentationDelay="PT{pkg.max_segment_duration_seconds_rounded_up * 2}S"
-     minBufferTime="PT2S">
+{mpd_open}
 {period_xml}
 </MPD>
 '''
@@ -1829,7 +2017,9 @@ def create_app(
     epoch_ticks: int,
     window_segments: int = 6,
     continuous: bool = False,
+    timeshift: TimeshiftConfig | None = None,
 ) -> Flask:
+    ts_cfg = timeshift or TimeshiftConfig()
     package = LoopPackage(package_dir)
     channel = Channel(package, epoch_ticks, window_segments=window_segments, continuous=continuous)
     process_start_ticks = channel.now_ticks()
@@ -1865,6 +2055,66 @@ def create_app(
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
+    def _request_view() -> tuple[Channel, TimeWindow | None, str]:
+        """SCOPE.md §13: resolve this request's (channel variant, time-shift
+        window, query string to propagate to child playlists). Without
+        timeshift enabled -- or without the params -- this is (channel,
+        None, "") and behavior is exactly the pre-§13 live stream."""
+        ch, window = channel, None
+        if ts_cfg.enabled:
+            args = request.args
+            try:
+                raw_cont = args.get(ts_cfg.continuous_param)
+                if raw_cont is not None:
+                    ch = channel.for_mode(parse_bool(raw_cont, ts_cfg.continuous_param))
+                raw_start, raw_end = args.get(ts_cfg.start_param), args.get(ts_cfg.end_param)
+                if raw_start is None and raw_end is not None:
+                    raise TimeshiftError(f"'{ts_cfg.end_param}' requires '{ts_cfg.start_param}'")
+                if raw_start is not None:
+                    ts = package.timescale
+                    window = ch.resolve_timeshift(
+                        parse_instant_ticks(raw_start, ts, ts_cfg.start_param),
+                        parse_instant_ticks(raw_end, ts, ts_cfg.end_param) if raw_end is not None else None,
+                        ts_cfg.max_span_seconds,
+                        parse_bool(args.get(ts_cfg.full_loop_param, "false"), ts_cfg.full_loop_param),
+                    )
+            except TimeshiftError as exc:
+                abort(Response(f"{exc}\n", status=400, mimetype="text/plain"))
+            query = urlencode([(k, args[k]) for k in ts_cfg.param_names if k in args])
+        else:
+            query = ""
+        return ch, window, query
+
+    def _manifest_response(body: str, mimetype: str, window: TimeWindow | None) -> Response:
+        resp = Response(body, mimetype=mimetype)
+        if window is not None:
+            # An ended range never changes again; a growing one changes once
+            # per segment. Live responses keep whatever caching they had.
+            resp.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable"
+                if window.ended
+                else f"public, max-age={package.max_segment_duration_seconds_rounded_up}"
+            )
+        return resp
+
+    def _decode_segment_index(index: int, mode: str, origin_loop: int | None) -> tuple[int, int | None]:
+        """(local_index, shift_ticks) for a segment URL (SCOPE.md §13.5):
+        `seg` -> index is the local one, bytes untouched; `cseg` -> index is
+        global, shift by loop*D; `rseg` -> global, shift relative to
+        `origin_loop`."""
+        if mode == "local":
+            return index, None
+        try:
+            ch = channel.for_mode(True)
+        except TimeshiftError:
+            abort(404)
+        loop_number, local_index = ch.loop_number_and_local_index(index)
+        if mode == "origin":
+            if origin_loop is None or loop_number < origin_loop:
+                abort(404)
+            return local_index, ch.continuity_shift_ticks(loop_number - origin_loop)
+        return local_index, ch.continuity_shift_ticks(loop_number)
+
     @app.get("/health")
     def health():
         """Lightweight JSON status for external monitoring (e.g. a channel
@@ -1889,22 +2139,40 @@ def create_app(
             "hls_format": package.hls_format,
             "hls_ts_mux_audio": package.hls_ts_mux_audio,
             "window_segments": channel.window_segments,
+            "continuous_timeline": channel.continuous,
+            "epoch_utc": channel._iso_ticks(epoch_ticks),
+            "timeshift": (
+                {
+                    "enabled": True,
+                    "start_param": ts_cfg.start_param,
+                    "end_param": ts_cfg.end_param,
+                    "continuous_param": ts_cfg.continuous_param,
+                    "full_loop_param": ts_cfg.full_loop_param,
+                    "max_span_seconds": ts_cfg.max_span_seconds,
+                    "continuous_supported": channel.continuous or channel.continuous_error is None,
+                }
+                if ts_cfg.enabled
+                else {"enabled": False}
+            ),
         }
 
     @app.get(f"/{LoopPackage.INDEX_PLAYLIST}")
     def hls_master_playlist():
-        body = channel.build_hls_master_playlist()
-        return Response(body, mimetype="application/vnd.apple.mpegurl")
+        ch, window, query = _request_view()
+        return _manifest_response(
+            ch.build_hls_master_playlist(query), "application/vnd.apple.mpegurl", window
+        )
 
     @app.get(f"/{LoopPackage.DASH_MANIFEST}")
     def dash_manifest():
-        body = channel.build_dash_manifest()
-        return Response(body, mimetype="application/dash+xml")
+        ch, window, _query = _request_view()
+        return _manifest_response(ch.build_dash_manifest(window=window), "application/dash+xml", window)
 
     def _register_video_playlist(rendition):
         def view():
-            body = channel.build_hls_manifest(rendition.name)
-            return Response(body, mimetype="application/vnd.apple.mpegurl")
+            ch, window, _query = _request_view()
+            body = ch.build_hls_manifest(rendition.name, window=window)
+            return _manifest_response(body, "application/vnd.apple.mpegurl", window)
 
         name = package.video_playlist_name(rendition)
         app.add_url_rule(f"/{name}", endpoint=f"hls_{name}", view_func=view)
@@ -1938,19 +2206,14 @@ def create_app(
             abort(404)
         return send_file(path)
 
-    @app.get("/<rendition_name>/seg/<int:physical_index>.m4s")
-    def segment(rendition_name: str, physical_index: int):
-        # SCOPE.md §12.2: in continuity mode, `physical_index` (as named in
-        # the URL by every other mode) is actually the ever-increasing
-        # GLOBAL segment index -- decode it back to which loop iteration
-        # this request belongs to (for the tick shift) and which physical
-        # file backs it (for the actual bytes).
-        if channel.continuous:
-            loop_number, local_index = channel.loop_number_and_local_index(physical_index)
-            shift_ticks = channel.continuity_shift_ticks(loop_number)
-        else:
-            local_index = physical_index
-            shift_ticks = None
+    _SEG_DEFAULTS = {"mode": "local", "origin_loop": None}
+
+    @app.get("/<rendition_name>/seg/<int:physical_index>.m4s", defaults=_SEG_DEFAULTS)
+    @app.get("/<rendition_name>/cseg/<int:physical_index>.m4s", defaults={"mode": "global", "origin_loop": None})
+    def segment(rendition_name: str, physical_index: int, mode: str, origin_loop: int | None):
+        # SCOPE.md §13.5: /seg/ is always the loop-local physical index;
+        # /cseg/ always the global index (continuity shift, §12.2).
+        local_index, shift_ticks = _decode_segment_index(physical_index, mode, origin_loop)
         try:
             path = channel.segment_bytes_path(rendition_name, local_index)
         except (KeyError, IndexError):
@@ -1962,16 +2225,13 @@ def create_app(
             path, "video/iso.segment", ts=False, shift_ticks=shift_ticks, sequence_number=physical_index
         )
 
-    @app.get("/<rendition_name>/seg/<int:physical_index>.ts")
-    def hls_ts_segment(rendition_name: str, physical_index: int):
+    @app.get("/<rendition_name>/seg/<int:physical_index>.ts", defaults=_SEG_DEFAULTS)
+    @app.get("/<rendition_name>/cseg/<int:physical_index>.ts", defaults={"mode": "global", "origin_loop": None})
+    @app.get("/<rendition_name>/rseg/<int:origin_loop>/<int:physical_index>.ts", defaults={"mode": "origin"})
+    def hls_ts_segment(rendition_name: str, physical_index: int, mode: str, origin_loop: int | None):
         if package.hls_format != "ts":
             abort(404)
-        if channel.continuous:
-            loop_number, local_index = channel.loop_number_and_local_index(physical_index)
-            shift_ticks = channel.continuity_shift_ticks(loop_number)
-        else:
-            local_index = physical_index
-            shift_ticks = None
+        local_index, shift_ticks = _decode_segment_index(physical_index, mode, origin_loop)
         try:
             path = channel.hls_ts_segment_path(rendition_name, local_index)
         except (KeyError, IndexError):
@@ -1983,8 +2243,9 @@ def create_app(
         def hls_audio_manifest():
             if package.hls_format == "ts" and package.hls_ts_mux_audio:
                 abort(404)
-            body = channel.build_hls_audio_manifest()
-            return Response(body, mimetype="application/vnd.apple.mpegurl")
+            ch, window, _query = _request_view()
+            body = ch.build_hls_audio_manifest(window=window)
+            return _manifest_response(body, "application/vnd.apple.mpegurl", window)
 
         @app.get("/audio/init.mp4")
         def audio_init_segment():
@@ -1999,18 +2260,14 @@ def create_app(
                 abort(404)
             return send_file(path)
 
-        @app.get("/audio/seg/<int:physical_index>.m4s")
-        def audio_segment(physical_index: int):
-            if channel.continuous:
-                loop_number, local_index = channel.loop_number_and_local_index(physical_index)
-                audio_ts = package.audio_rendition.audio_timescale(package.timescale)
+        @app.get("/audio/seg/<int:physical_index>.m4s", defaults=_SEG_DEFAULTS)
+        @app.get("/audio/cseg/<int:physical_index>.m4s", defaults={"mode": "global", "origin_loop": None})
+        def audio_segment(physical_index: int, mode: str, origin_loop: int | None):
+            local_index, shift_ticks = _decode_segment_index(physical_index, mode, origin_loop)
+            if shift_ticks is not None:
                 # tfdt is in the audio track's own timescale, the shift in the package's.
-                shift_ticks = round(
-                    channel.continuity_shift_ticks(loop_number) * audio_ts / package.timescale
-                )
-            else:
-                local_index = physical_index
-                shift_ticks = None
+                audio_ts = package.audio_rendition.audio_timescale(package.timescale)
+                shift_ticks = round(shift_ticks * audio_ts / package.timescale)
             try:
                 path = channel.audio_segment_bytes_path(local_index)
             except IndexError:
@@ -2020,16 +2277,13 @@ def create_app(
                 path, "audio/iso.segment", ts=False, shift_ticks=shift_ticks, sequence_number=physical_index
             )
 
-        @app.get("/audio/seg/<int:physical_index>.ts")
-        def hls_ts_audio_segment(physical_index: int):
+        @app.get("/audio/seg/<int:physical_index>.ts", defaults=_SEG_DEFAULTS)
+        @app.get("/audio/cseg/<int:physical_index>.ts", defaults={"mode": "global", "origin_loop": None})
+        @app.get("/audio/rseg/<int:origin_loop>/<int:physical_index>.ts", defaults={"mode": "origin"})
+        def hls_ts_audio_segment(physical_index: int, mode: str, origin_loop: int | None):
             if package.hls_format != "ts" or package.hls_ts_mux_audio:
                 abort(404)
-            if channel.continuous:
-                loop_number, local_index = channel.loop_number_and_local_index(physical_index)
-                shift_ticks = channel.continuity_shift_ticks(loop_number)
-            else:
-                local_index = physical_index
-                shift_ticks = None
+            local_index, shift_ticks = _decode_segment_index(physical_index, mode, origin_loop)
             if local_index >= package.segments_per_loop:
                 abort(404)
             path = package.package_dir / "hls-ts" / "audio" / f"{local_index}.ts"
@@ -2106,6 +2360,17 @@ def main() -> int:
         "asset-boundary discontinuities and 64-bit (v1) tfdt CMAF "
         "fragments -- checked once at startup, hard-fails otherwise.",
     )
+    parser.add_argument(
+        "--timeshift",
+        action="store_true",
+        help="SCOPE.md §13: enable startover/catchup via query parameters on "
+        "the normal manifest URLs.",
+    )
+    parser.add_argument("--timeshift-start-param", default="start")
+    parser.add_argument("--timeshift-end-param", default="end")
+    parser.add_argument("--timeshift-continuous-param", default="continuous_timeline")
+    parser.add_argument("--timeshift-full-loop-param", default="full_loop")
+    parser.add_argument("--timeshift-max-span-seconds", type=int, default=21600)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -2137,6 +2402,14 @@ def main() -> int:
         epoch_ticks,
         window_segments=window_segments,
         continuous=args.continuous_timeline,
+        timeshift=TimeshiftConfig(
+            enabled=args.timeshift,
+            start_param=args.timeshift_start_param,
+            end_param=args.timeshift_end_param,
+            continuous_param=args.timeshift_continuous_param,
+            full_loop_param=args.timeshift_full_loop_param,
+            max_span_seconds=args.timeshift_max_span_seconds,
+        ),
     )
     app.run(host=args.host, port=args.port)
     return 0
