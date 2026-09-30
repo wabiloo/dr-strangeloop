@@ -42,7 +42,8 @@ another agent unless you're specifically building on its HTTP API.
 
 For `ecs-express` / `local-docker` channels with `[timeshift]` enabled (the
 default), a running channel's page shows a **Startover & catchup** panel under
-the players: pick a start (and optional end) in UTC or local time, presets
+the players (**collapsed by default**, open/closed remembered in the browser; while a
+preview is active the collapsed header summarises it and offers *Back to live*): pick a start (and optional end) in UTC or local time, presets
 (last N minutes, previous/current loop), *whole loops only*, and a timeline
 override (`timeline=default|continuous|periodic`, fixed name, also usable on
 live URLs by leaving the start empty), and *Pretend “now” is…* (`offset=-PT1H` /

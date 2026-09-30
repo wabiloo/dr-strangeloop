@@ -53,6 +53,37 @@ const emit = defineEmits<{ preview: [value: TimeshiftPreview | null] }>()
 
 const toast = useToast()
 
+// --- collapsible ---------------------------------------------------------------
+// Collapsed by default so live viewing isn't crowded by a big form; the choice
+// is remembered per browser. The body is v-show (not v-if) so form state
+// survives collapsing.
+const STORAGE_KEY = 'igor.timeshiftPanel.open'
+function readOpen(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY) === '1'
+  } catch {
+    return false // storage blocked/unavailable: just stay collapsed
+  }
+}
+const open = ref(readOpen())
+function toggleOpen() {
+  open.value = !open.value
+  try {
+    localStorage.setItem(STORAGE_KEY, open.value ? '1' : '0')
+  } catch {
+    /* non-persistent is fine */
+  }
+}
+// What is being previewed, for the header while collapsed. Captured at
+// Preview time (the form may be edited afterwards).
+const activeSummary = ref('')
+watch(
+  () => props.previewing,
+  (now) => {
+    if (!now) activeSummary.value = ''
+  },
+)
+
 // --- request form ------------------------------------------------------------
 
 const useUtc = ref(true)
@@ -250,9 +281,25 @@ function startEpochSeconds(): number | null {
   return r ? r.startMs / 1000 : null
 }
 
+function describeRequest(): string {
+  const r = range.value
+  const fmt = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace('T', ' ') + 'Z'
+  const word = { live: 'Live', catchup: 'Catchup', 'startover-bounded': 'Startover', 'startover-open': 'Startover' }[kind.value]
+  const off = offsetSecondsNow.value
+  return [
+    word,
+    r ? `${fmt(r.startMs)} → ${kind.value === 'startover-open' ? 'open' : fmt(r.endMs)}` : '',
+    off ? `as if ${off < 0 ? '' : 'in '}${formatDuration(Math.abs(off))}${off < 0 ? ' ago' : ''}` : '',
+    timeline.value !== 'default' ? timeline.value : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
 function preview(target: 'both' | 'hls' | 'dash') {
   freezeOffset() // a datetime-based offset is relative to the moment the stream starts
   if (!canPreview.value) return
+  activeSummary.value = describeRequest()
   emit('preview', {
     hlsUrl: target === 'dash' ? null : hlsUrlOut.value || null,
     dashUrl: target === 'hls' ? null : dashUrlOut.value || null,
@@ -284,16 +331,41 @@ const formatOptions = [
 <template>
   <section class="timeshift-panel surface-card border-round p-3 flex flex-column gap-3">
     <div class="flex align-items-center gap-2 flex-wrap">
-      <h3 class="m-0 text-base">Startover &amp; catchup</h3>
+      <button
+        type="button"
+        class="ts-toggle flex align-items-center gap-2"
+        :aria-expanded="open"
+        aria-controls="ts-body"
+        @click="toggleOpen"
+      >
+        <i :class="['pi', open ? 'pi-chevron-down' : 'pi-chevron-right']" aria-hidden="true" />
+        <h3 class="m-0 text-base">Startover &amp; catchup</h3>
+      </button>
       <FieldHelp label="Startover and catchup">
         The same manifest URLs the channel serves live also accept a start (and optional end) time as query
         parameters. With a past end it is a finished VOD (catchup); with a future or missing end it is a live-style
         stream that starts at the start point (startover). Nothing is recorded: the past is re-derived from the loop
         and the channel epoch, so it stays correct only while the epoch and the baked content are unchanged.
       </FieldHelp>
-      <span v-if="previewing" class="ml-auto text-sm text-color-secondary">Previewing in the players above</span>
+      <span v-if="previewing" class="ts-active text-sm">
+        <i class="pi pi-play-circle" aria-hidden="true" />
+        Previewing{{ activeSummary ? ': ' + activeSummary : '' }}
+      </span>
+      <span v-else-if="!open" class="text-sm text-color-secondary">Play past ranges or “as if it were another time”</span>
+      <Button
+        v-if="previewing"
+        label="Back to live"
+        icon="pi pi-replay"
+        size="small"
+        severity="secondary"
+        class="ml-auto"
+        @click="emit('preview', null)"
+      />
     </div>
 
+    <!-- v-show on a plain wrapper: primeflex's `.flex` is display:flex !important and would defeat it. -->
+    <div v-show="open" id="ts-body">
+      <div class="flex flex-column gap-3">
     <div class="flex gap-2 flex-wrap align-items-center">
       <span class="text-xs text-color-secondary uppercase">Presets</span>
       <Button label="Last 5 min" size="small" outlined @click="presetLast(5)" />
@@ -456,7 +528,6 @@ const formatOptions = [
 
     <div class="flex gap-2 flex-wrap">
       <Button label="Preview in both players" icon="pi pi-play" size="small" :disabled="!canPreview" @click="preview('both')" />
-      <Button label="Back to live" icon="pi pi-replay" size="small" severity="secondary" :disabled="!previewing" @click="emit('preview', null)" />
     </div>
 
     <details class="text-sm">
@@ -507,10 +578,23 @@ const formatOptions = [
         </ul>
       </div>
     </details>
+      </div>
+    </div>
   </section>
 </template>
 
 <style scoped>
+.ts-toggle {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+}
+.ts-active {
+  color: var(--p-primary-color, #c0392b);
+  font-weight: 600;
+}
 /* Same height with or without an inline help button, so the controls below line up. */
 .ts-label {
   display: flex;
