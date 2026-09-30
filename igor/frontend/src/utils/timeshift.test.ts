@@ -111,7 +111,7 @@ test('timeshiftParamsFromConfig: missing table = defaults (enabled); overrides a
   const p = timeshiftParamsFromConfig({ start_param: 'from', max_span_seconds: 60, end_param: '', full_loop_param: 7 })
   assert.equal(p.start_param, 'from')
   assert.equal(p.end_param, 'end')
-  assert.equal(p.full_loop_param, 'full_loop')
+  assert.equal(p.full_loop_param, 'full-loops')
   assert.equal(p.max_span_seconds, 60)
 })
 

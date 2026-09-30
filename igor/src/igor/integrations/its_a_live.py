@@ -138,7 +138,7 @@ def generate_toml(
     timeshift_enabled: bool = True,
     timeshift_start_param: str = "start",
     timeshift_end_param: str = "end",
-    timeshift_full_loop_param: str = "full_loop",
+    timeshift_full_loop_param: str = "full-loops",
     timeshift_max_span_seconds: int = 21600,
     port: int | str = 8080,
     cpu: int = 256,

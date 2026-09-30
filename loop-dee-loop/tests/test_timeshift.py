@@ -257,7 +257,7 @@ def test_open_ended_startover_grows_and_respects_max_span(tmp_path):
 @ffmpeg
 def test_full_loop_widens_start_and_end_to_loop_boundaries(tmp_path):
     client, epoch = _app(tmp_path)
-    body = client.get(f"/video.m3u8?start={epoch + 5.6}&end={epoch + 7.2}&full_loop=true").get_data(as_text=True)
+    body = client.get(f"/video.m3u8?start={epoch + 5.6}&end={epoch + 7.2}&full-loops=true").get_data(as_text=True)
     uris = _seg_lines(body)
     # loops 5, 6 and 7 in full: start floored to 5.0, end 7.2 ceiled to 8.0
     assert len(uris) == 6
@@ -269,10 +269,10 @@ def test_full_loop_widens_start_and_end_to_loop_boundaries(tmp_path):
 @ffmpeg
 def test_master_playlist_propagates_timeshift_params(tmp_path):
     client, epoch = _app(tmp_path)
-    q = f"start={epoch + 5}&end={epoch + 8}&full_loop=true&unrelated=1"
+    q = f"start={epoch + 5}&end={epoch + 8}&full-loops=true&unrelated=1"
     body = client.get(f"/index.m3u8?{q}").get_data(as_text=True)
     variant = next(l for l in body.splitlines() if "m3u8?" in l)
-    assert "start=" in variant and "end=" in variant and "full_loop=true" in variant
+    assert "start=" in variant and "end=" in variant and "full-loops=true" in variant
     assert "unrelated" not in variant  # only configured params are forwarded
     assert "?" not in client.get("/index.m3u8").get_data(as_text=True)
 
@@ -296,7 +296,7 @@ def test_custom_param_names(tmp_path):
         "start=1&end=2",  # before epoch
         "start=$S&end=$S1",  # malformed end
         "start=$S&timeline=sometimes",
-        "start=$S&full_loop=2",
+        "start=$S&full-loops=2",
     ],
 )
 def test_bad_requests_are_400_with_a_message(tmp_path, query):
@@ -385,7 +385,7 @@ def test_health_reports_timeshift_config(tmp_path):
     client, _ = _app(tmp_path, max_span_seconds=123)
     ts = client.get("/health").get_json()["timeshift"]
     assert ts["enabled"] and ts["max_span_seconds"] == 123 and ts["continuous_supported"]
-    assert ts["start_param"] == "start" and ts["full_loop_param"] == "full_loop"
+    assert ts["start_param"] == "start" and ts["full_loop_param"] == "full-loops"
     assert ts["timeline_param"] == "timeline"
     off, _ = _app(tmp_path / "off" if (tmp_path / "off").mkdir() is None else tmp_path, enabled=False)
     assert off.get("/health").get_json()["timeshift"] == {"enabled": False}

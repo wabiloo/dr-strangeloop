@@ -2380,7 +2380,7 @@ def main() -> int:
     )
     parser.add_argument("--timeshift-start-param", default="start")
     parser.add_argument("--timeshift-end-param", default="end")
-    parser.add_argument("--timeshift-full-loop-param", default="full_loop")
+    parser.add_argument("--timeshift-full-loop-param", default="full-loops")
     parser.add_argument("--timeshift-max-span-seconds", type=int, default=21600)
     args = parser.parse_args()
 

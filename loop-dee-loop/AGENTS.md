@@ -62,13 +62,13 @@ match, fix the upstream franken-ts input instead.
 | `loop_math.py` | Integer epoch/loop_number/position_in_loop arithmetic — the drift-freedom guarantee (`SCOPE.md` §4.2/§5). No floats in persisted timing state, ever. |
 | `serve.py` | Stateless HTTP serving of manifests + segments per request. |
 | `continuity.py` | Opt-in `--continuous-timeline` mode (`SCOPE.md` §12): per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite so the channel has no discontinuity/Period-restart at the loop wrap — header patch only, never a re-mux. |
-| `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig`, and integer-tick `resolve_window` (segment snapping, `full_loop` widening, max-span cap). Pure ints, no Flask. |
+| `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig`, and integer-tick `resolve_window` (segment snapping, `full-loops` widening, max-span cap). Pure ints, no Flask. |
 | `load_test.py` | Concurrent-viewer load generator (see `PERFS.md`). |
 
 ## Startover & catchup
 
 `serve.py --timeshift` (its-a-live: `[timeshift]`, on by default) makes the
-normal `index.m3u8` / `stream.mpd` accept `start`, `end`, `full_loop` and
+normal `index.m3u8` / `stream.mpd` accept `start`, `end`, `full-loops` and
 `continuous_timeline` query params (names configurable) — catchup = VOD of a
 past range, startover = live-style from a past point. Full reference and
 examples: [`README.md`](./README.md) "Startover & catchup"; design:

@@ -32,7 +32,7 @@ timeshift = TimeshiftConfig(
     enabled=os.environ.get("TIMESHIFT", "").lower() in ("1", "true", "yes"),
     start_param=os.environ.get("TIMESHIFT_START_PARAM") or "start",
     end_param=os.environ.get("TIMESHIFT_END_PARAM") or "end",
-    full_loop_param=os.environ.get("TIMESHIFT_FULL_LOOP_PARAM") or "full_loop",
+    full_loop_param=os.environ.get("TIMESHIFT_FULL_LOOP_PARAM") or "full-loops",
     max_span_seconds=int(os.environ.get("TIMESHIFT_MAX_SPAN_SECONDS") or 21600),
 )
 

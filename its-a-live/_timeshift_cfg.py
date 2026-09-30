@@ -13,7 +13,7 @@ DEFAULTS = {
     "enabled": True,
     "start_param": "start",
     "end_param": "end",
-    "full_loop_param": "full_loop",
+    "full_loop_param": "full-loops",
     "max_span_seconds": 21600,
 }
 

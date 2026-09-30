@@ -745,7 +745,7 @@ milliseconds when > 1e11) or ISO8601 (`Z` or numeric offset).
 enabled            = true
 start_param        = "start"
 end_param          = "end"
-full_loop_param    = "full_loop"             # bool: widen range to whole loops (13.5b)
+full_loop_param    = "full-loops"             # bool: widen range to whole loops (13.5b)
 max_span_seconds   = 21600
 ```
 
@@ -771,7 +771,7 @@ uses; nothing else about segment availability changes.
 `--continuous-timeline` (§12) is a startup flag today. It becomes the
 *default* for a new per-request query parameter with a **fixed name,
 `timeline`** (deliberately not configurable, unlike `start`/`end`/
-`full_loop`; a configured name equal to `timeline` is rejected), with values:
+`full-loops`; a configured name equal to `timeline` is rejected), with values:
 
 - `default` (or the param absent) -- follow the server's `--continuous-timeline`;
 - `continuous` -- §12 continuity for this request;
@@ -827,7 +827,7 @@ path:
 
 Open-ended startover (`start` only): capped at `start + max_span_seconds`;
 the manifest becomes an ended VOD after that. An explicit `end` further than
-`max_span_seconds` from `start` (measured after any `full_loop` snapping) is
+`max_span_seconds` from `start` (measured after any `full-loops` snapping) is
 a 400.
 
 Time-shifted DASH: `availabilityStartTime` = wall clock of the snapped range
@@ -836,10 +836,10 @@ start, Period/timeline rebased so the range begins at presentation time 0
 Ended ranges are `type="static"` with `mediaPresentationDuration` and no
 `availabilityStartTime`.
 
-### 13.5b DECIDED: `full_loop` (whole-loop snapping)
+### 13.5b DECIDED: `full-loops` (whole-loop snapping)
 
 A boolean, configurable parameter (`full_loop_param`, default
-`full_loop`). When true, the range is widened to whole loop iterations
+`full-loops`). When true, the range is widened to whole loop iterations
 *before* segment snapping:
 
 - `start` -> the start of the loop iteration containing it (nearest loop
@@ -851,7 +851,7 @@ A boolean, configurable parameter (`full_loop_param`, default
   to whole loops (minimum one loop; a single loop longer than
   `max_span_seconds` -> 400).
 
-`max_span_seconds` is enforced on the widened range. `full_loop` without
+`max_span_seconds` is enforced on the widened range. `full-loops` without
 `start` is ignored (live is unaffected).
 
 ### 13.6 Implementation notes (serve.py / scte35_signaling.py)

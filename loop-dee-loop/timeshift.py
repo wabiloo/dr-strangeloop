@@ -35,7 +35,7 @@ class TimeshiftConfig:
     enabled: bool = False
     start_param: str = "start"
     end_param: str = "end"
-    full_loop_param: str = "full_loop"
+    full_loop_param: str = "full-loops"
     max_span_seconds: int = 21600
 
     def __post_init__(self):

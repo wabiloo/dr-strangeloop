@@ -143,7 +143,7 @@ const form = reactive<ChannelCreatePayload>({
   timeshift_enabled: true,
   timeshift_start_param: 'start',
   timeshift_end_param: 'end',
-  timeshift_full_loop_param: 'full_loop',
+  timeshift_full_loop_param: 'full-loops',
   timeshift_max_span_seconds: 21600,
   port: 'auto',
   cpu: 256,
