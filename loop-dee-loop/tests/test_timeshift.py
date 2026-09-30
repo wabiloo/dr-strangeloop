@@ -191,7 +191,7 @@ def _seg_lines(body):
 def test_no_params_is_unchanged_live(tmp_path):
     client, _ = _app(tmp_path)
     body = client.get("/video.m3u8").get_data(as_text=True)
-    assert "PLAYLIST-TYPE" not in body and "ENDLIST" not in body
+    assert "PLAYLIST-TYPE" not in body and "ENDLIST" not in body and "EXT-X-START" not in body
     assert len(_seg_lines(body)) == 4
 
 
@@ -210,6 +210,7 @@ def test_catchup_hls_non_continuous_is_vod_with_one_discontinuity_per_wrap(tmp_p
     assert "immutable" in resp.headers["Cache-Control"]
     body = resp.get_data(as_text=True)
     assert "#EXT-X-PLAYLIST-TYPE:VOD" in body and body.rstrip().endswith("#EXT-X-ENDLIST")
+    assert "#EXT-X-START:TIME-OFFSET=0" in body
     uris = _seg_lines(body)
     assert len(uris) == 6  # 3 loops x 2 segments
     assert uris == [f"1080p/seg/{i}.m4s" for i in (0, 1, 0, 1, 0, 1)]  # local, like live
@@ -245,6 +246,8 @@ def test_growing_startover_is_event_style_until_end_passes(tmp_path):
     client, epoch = _app(tmp_path)
     body = client.get(f"/video.m3u8?start={epoch + 50}&end={epoch + 500}").get_data(as_text=True)
     assert "#EXT-X-PLAYLIST-TYPE:EVENT" in body and "ENDLIST" not in body
+    # a generic player must start at the requested point, not join near the live edge
+    assert "#EXT-X-START:TIME-OFFSET=0" in body
     # from the start point up to the live edge (~loop 60): ~20 segments, well past the 4-seg live window
     assert len(_seg_lines(body)) >= 18
     assert body.count("#EXT-X-MEDIA-SEQUENCE:100") == 1

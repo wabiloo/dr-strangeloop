@@ -765,6 +765,11 @@ Plumbing: `its-a-live` TOML -> `serve.py` CLI flags and `wsgi.py` env vars
 "Live edge" for a still-growing range is the same `now`-derived edge live
 uses; nothing else about segment availability changes.
 
+HLS ranges also emit `#EXT-X-START:TIME-OFFSET=0` so a generic player starts at
+the requested point rather than near the live edge (a growing EVENT playlist
+is otherwise treated like live). DASH has no equivalent; clients seek to
+presentation time 0 themselves.
+
 ### 13.5 DECIDED: per-request `timeline` override
 
 `--continuous-timeline` (§12) is a startup flag today. It becomes the

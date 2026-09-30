@@ -976,6 +976,10 @@ class Channel:
         ]
         if window is not None:
             lines.append("#EXT-X-PLAYLIST-TYPE:VOD" if window.ended else "#EXT-X-PLAYLIST-TYPE:EVENT")
+            # Without this, players treat a growing EVENT playlist like live
+            # and join a few segments from its end, ignoring the requested
+            # start point. TIME-OFFSET=0 == the first segment (RFC 8216 4.3.5.2).
+            lines.append("#EXT-X-START:TIME-OFFSET=0")
         sorted_boundaries = sorted(pkg.boundaries)
 
         def _span_map_line(local_index: int) -> str:

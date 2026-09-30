@@ -302,6 +302,12 @@ are fixed, and neither configured name may equal them. Bad input is a
 plain-text `400`. Child playlists of an HLS master inherit the params
 automatically.
 
+Time-shifted HLS playlists carry `#EXT-X-PLAYLIST-TYPE` (`EVENT` while
+growing, `VOD` once ended) and `#EXT-X-START:TIME-OFFSET=0`, so a generic
+player begins at the requested start instead of joining near the live edge.
+DASH has no manifest-side equivalent: a player given a growing (dynamic) MPD
+needs to seek to presentation time 0 itself (dash.js: start time `0`).
+
 Segment URLs: `/<r>/seg/<local>` is always the loop-local index;
 `/<r>/cseg/<global>` the continuous-timeline (global index) form;
 `/<r>/rseg/<origin_loop>/<global>.ts` continuous HLS-TS for a time-shifted
