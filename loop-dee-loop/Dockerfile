@@ -66,6 +66,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 COPY bake.py serve.py wsgi.py gpac_pipeline.py scte35_signaling.py scte35_table23_data.py loop_math.py cmaf.py continuity.py timeshift.py ./
+COPY pyproject.toml ./
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
