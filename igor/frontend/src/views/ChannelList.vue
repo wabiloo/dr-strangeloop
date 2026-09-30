@@ -13,6 +13,20 @@ import { deleteChannel, getJob, listChannels, startChannel, stopChannel } from '
 import type { ChannelListItem, Job } from '../api/types'
 import { PHASE_LABEL, isUpButMaybeUnreachable, listItemPhase, phaseSeverity } from '../utils/channelPhase'
 import { alignConfirmPopup } from '../utils/confirmPopup'
+import awsIcon from '../assets/backends/aws.svg'
+import dockerIcon from '../assets/backends/docker.svg'
+
+const BACKEND_ICON: Record<ChannelListItem['backend'], string> = {
+  'local-docker': dockerIcon,
+  'ecs-express': awsIcon,
+  'aws-media': awsIcon,
+}
+
+// Quoted: bundled SVGs may be inlined as data URIs containing ' and ( ),
+// which are invalid inside an unquoted CSS url().
+function backendIconUrl(channel: ChannelListItem) {
+  return `url("${BACKEND_ICON[channel.backend]}")`
+}
 
 const router = useRouter()
 const confirm = useConfirm()
@@ -252,13 +266,24 @@ onBeforeUnmount(() => {
 
     <DataTable :value="channels" :loading="loading" data-key="name" @row-click="(e) => router.push(`/channels/${e.data.name}`)" class="cursor-pointer">
       <Column field="name" header="Name" />
-      <Column field="backend" header="Backend" />
+      <Column header="Backend">
+        <template #body="{ data }">
+          <div class="flex align-items-center gap-2 backend-cell">
+            <span
+              class="backend-icon"
+              :style="{ '--icon-url': backendIconUrl(data) }"
+              aria-hidden="true"
+            />
+            <span>{{ data.backend }}</span>
+          </div>
+        </template>
+      </Column>
       <Column header="Source">
         <template #body="{ data }">
           <div v-if="data.source_path" class="flex align-items-center gap-2" :title="data.source_path">
             <i
               class="source-kind-icon"
-              :class="data.source_kind === 'archive' ? 'pi pi-box' : data.source_kind === 'manifest' ? 'pi pi-cloud-download' : 'pi pi-objects-column'"
+              :class="data.source_kind === 'archive' ? 'pi pi-database' : data.source_kind === 'manifest' ? 'pi pi-megaphone' : 'pi pi-objects-column'"
               aria-hidden="true"
             />
             <RouterLink
@@ -358,6 +383,19 @@ onBeforeUnmount(() => {
 
 .source-kind-icon {
   font-size: 1.25rem;
+}
+
+.backend-icon {
+  display: inline-block;
+  width: 1.5rem;
+  height: 1.5rem;
+  background-color: currentColor;
+  mask: var(--icon-url) center / contain no-repeat;
+  -webkit-mask: var(--icon-url) center / contain no-repeat;
+}
+
+.backend-cell {
+  white-space: nowrap;
 }
 
 .source-link:hover {
