@@ -374,3 +374,41 @@ def terminate_channel(name: str) -> dict:
     see channel.py's `terminate` command. Not available for local-docker
     (no stack); `stop` alone is complete teardown there."""
     return _spawn("terminate", name)
+
+
+class ScheduleWindowPayload(BaseModel):
+    """Both optional: no `start` means the window begins immediately
+    (this also starts the channel now); no `end` means it runs until a
+    manual Stop. See channel.py's `schedule add` docstring."""
+    start: str | None = None
+    end: str | None = None
+
+
+@router.get("/{name}/schedule")
+def list_schedule_windows(name: str) -> list[dict]:
+    """aws-media/ecs-express only -- see channel.py's `schedule list`.
+    local-docker channels have no AWS presence to schedule against;
+    channel.py itself refuses the command, which surfaces here as a 502."""
+    try:
+        return its_a_live.schedule_list(channel_store.config_path_for(name))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/{name}/schedule")
+def add_schedule_window(name: str, payload: ScheduleWindowPayload) -> dict:
+    """Spawned as a background Job -- see its_a_live.schedule_add_job's
+    docstring for why (an immediate window also starts the channel)."""
+    job = its_a_live.schedule_add_job(channel_store.config_path_for(name), name, payload.start, payload.end)
+    return job.to_dict()
+
+
+@router.delete("/{name}/schedule/{window_id}")
+def remove_schedule_window(name: str, window_id: str) -> dict:
+    """Only cancels the window's future EventBridge triggers -- does NOT
+    stop the channel if the window is currently active (windows are
+    automation triggers, not an enforced on/off state)."""
+    try:
+        return its_a_live.schedule_remove(channel_store.config_path_for(name), window_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -48,6 +48,7 @@ another agent unless you're specifically building on its HTTP API.
 | ↳ Infrastructure: `/create`, `/redeploy`, `/terminate` (job-spawning), `/outputs` | does the stack/container exist -- `/redeploy`, `/terminate` and `/outputs` are no-ops/unavailable for local-docker channels (no stack); igor's UI hides all three for local-docker. No `/list` -- igor lists channels from its local TOML store directly, not by shelling out to `channel.py list` |
 | ↳ Stream: `/spark`, `/start`, `/stop`, `/refresh`, `/update` (job-spawning), `/status` | is content actually playing -- available for every backend. `/update` is `/spark`+`/refresh` combined (channel.py's `update`); igor's UI shows it instead of a separate Spark/Refresh pair once the channel is running, and plain `/spark` otherwise (staging never depends on deploy state) |
 | ↳ `/health` (ecs-express) | loop-dee-loop `serve.py` proxy, not a `channel.py` command |
+| ↳ `GET/POST /api/v1/channels/{name}/schedule`, `DELETE .../schedule/{window_id}` | scheduled on-air windows (`channel.py schedule list/add/remove`) -- aws-media/ecs-express only, hidden in igor's UI for local-docker. `POST` is job-spawning (an immediate window also runs `start`); `GET`/`DELETE` are synchronous (fast EventBridge Scheduler API calls). Requires `ItsALiveSharedStack-scheduler` deployed once per account/region -- see `its-a-live/README.md`'s "Scheduling" |
 | `GET /api/v1/jobs/*` | poll job status/log (`?log_offset=` for incremental tailing) |
 
 See `src/igor/app/routes/*.py` for the authoritative request/response

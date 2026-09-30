@@ -370,6 +370,20 @@ export interface ChannelCreatePayload {
   dash_descriptor_mode?: 'shared' | 'narrowed'
 }
 
+/** A scheduled on-air window (aws-media/ecs-express only -- see
+ * channel.py's `schedule` command). `start`/`end` are ISO8601 UTC
+ * timestamps, or null: null `start` means the window began immediately
+ * (and the channel was started at `created_at`); null `end` means it
+ * runs until a manual Stop. `status` is derived server-side from `now`
+ * vs. the window's effective start/end on every read, not stored. */
+export interface ScheduleWindow {
+  id: string
+  start: string | null
+  end: string | null
+  created_at: string
+  status: 'upcoming' | 'active' | 'past'
+}
+
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 
 export interface Job {

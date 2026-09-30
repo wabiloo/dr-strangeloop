@@ -243,3 +243,26 @@ def spawn_job(job_type: str, config_path: str, channel_name: str, extra_args: li
         raise ValueError(f"Unsupported job_type: {job_type!r}")
     cmd = _channel_py_cmd([job_type, *(extra_args or [])], config_path=config_path, as_json=False)
     return runner.spawn(job_type, cmd, cwd=paths.ITS_A_LIVE_DIR, channel_name=channel_name)
+
+
+def schedule_list(config_path: str) -> list[dict]:
+    return _run_json(["schedule", "list"], config_path=config_path)
+
+
+def schedule_remove(config_path: str, window_id: str) -> dict:
+    return _run_json(["schedule", "remove", window_id], config_path=config_path)
+
+
+def schedule_add_job(config_path: str, channel_name: str, start: str | None, end: str | None) -> Job:
+    """Dispatched as a background Job (not run synchronously like
+    schedule_list/schedule_remove above) because an immediate window
+    (start=None) also runs `channel.py start` right after the EventBridge
+    bookkeeping -- see channel.py's cmd_schedule -- which can take as long
+    as the existing Start button's job already does."""
+    extra: list[str] = ["add"]
+    if start:
+        extra += ["--start", start]
+    if end:
+        extra += ["--end", end]
+    cmd = _channel_py_cmd(["schedule", *extra], config_path=config_path, as_json=False)
+    return runner.spawn("schedule-add", cmd, cwd=paths.ITS_A_LIVE_DIR, channel_name=channel_name)
