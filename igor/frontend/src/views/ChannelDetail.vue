@@ -11,11 +11,18 @@ import Tag from 'primevue/tag'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
+import BackendBadge from '../components/BackendBadge.vue'
 import ItsAliveBanner from '../components/ItsAliveBanner.vue'
 import JobPanel from '../components/JobPanel.vue'
 import PlaybackPanel from '../components/PlaybackPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import FieldHelp from '../components/FieldHelp.vue'
+import {
+  CONFIG_FIELD_LABEL as L,
+  CONFIG_SECTION_TITLE as T,
+  buildConfigSections,
+  deriveSourceKind,
+} from '../utils/channelConfigLayout'
 import { alignConfirmPopup } from '../utils/confirmPopup'
 import {
   addScheduleWindow,
@@ -94,6 +101,7 @@ const editForm = reactive<ChannelCreatePayload>({
   content_folder: '',
   source_path: '',
   source_kind: 'playlist',
+  allow_missing_segments: false,
   segment_duration: 4.0,
   dvr_window_seconds: 30,
   hls_format: 'cmaf',
@@ -191,11 +199,8 @@ function startEdit() {
     bucket_name: String(s3.bucket_name ?? ''),
     content_folder: String(s3.content_folder ?? ''),
     source_path: String(input.source_path ?? ''),
-    source_kind: input.source_kind === 'manifest'
-      ? 'manifest'
-      : input.source_kind === 'archive' || /(?:^|[\\/])manifest\.json$/i.test(String(input.source_path ?? ''))
-        ? 'archive'
-        : 'playlist',
+    source_kind: deriveSourceKind(input),
+    allow_missing_segments: Boolean(input.allow_missing_segments ?? false),
     segment_duration: Number(packaging.segment_duration ?? 4.0),
     dvr_window_seconds: Number(packaging.dvr_window_seconds ?? 30),
     hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
@@ -237,60 +242,9 @@ async function saveEdit() {
   }
 }
 
-// Flattened "section.key: value" rows for the read-only config panel, in
-// TOML order. Local Docker configs may still contain placeholder AWS/S3
-// values, but those sections are unused by that backend.
-const configRows = computed(() => {
-  if (!config.value) return []
-  const rows: { section: string; key: string; value: string }[] = []
-  const isLocalDocker = (config.value.deploy as Record<string, unknown> | undefined)?.backend === 'local-docker'
-  const input = config.value.input as Record<string, unknown> | undefined
-  const sourcePath = String(input?.source_path ?? '')
-  // Archive imports use grave-robber's segment-list manifest.json. Sparse
-  // baking preserves each segment's declared source duration; the channel's
-  // packaging.segment_duration value is not used for this input mode. The
-  // path match supports configs created before input.source_kind was added.
-  const isArchiveSegmentList = input?.source_kind === 'archive' || input?.source_kind === 'manifest' || /(?:^|[\\/])manifest\.json$/i.test(sourcePath)
-  for (const [section, fields] of Object.entries(config.value)) {
-    if (isLocalDocker && (section === 'aws' || section === 's3')) continue
-    if (!fields || typeof fields !== 'object') continue
-    for (const [key, value] of Object.entries(fields as Record<string, unknown>)) {
-      const displayValue = isArchiveSegmentList && section === 'packaging' && key === 'segment_duration'
-        ? 'as source'
-        : String(value)
-      rows.push({ section, key, value: displayValue })
-    }
-  }
-  return rows
-})
-
-// Friendly display names for known TOML section keys -- anything not
-// listed here (e.g. a future section) falls back to a capitalized form
-// of the raw key, so the panel never silently drops a section.
-const SECTION_TITLES: Record<string, string> = {
-  deploy: 'Deploy', aws: 'AWS', s3: 'S3', input: 'Input', bake: 'Bake',
-  markers: 'Markers', packaging: 'Packaging', express: 'Express', docker: 'Docker',
-}
-function sectionTitle(section: string): string {
-  return SECTION_TITLES[section] ?? section.charAt(0).toUpperCase() + section.slice(1)
-}
-
-// `configRows` grouped back into per-section blocks, for the read-only
-// panel's visual sections (one card per TOML section, with a real title
-// instead of a raw "[section]" label).
-const configSections = computed(() => {
-  const sections: { section: string; title: string; rows: { key: string; value: string }[] }[] = []
-  for (const row of configRows.value) {
-    const current = sections[sections.length - 1]
-    if (!current || current.section !== row.section) {
-      sections.push({ section: row.section, title: sectionTitle(row.section), rows: [{ key: row.key, value: row.value }] })
-    } else {
-      current.rows.push({ key: row.key, value: row.value })
-    }
-  }
-  return sections
-})
-
+// Read-only Configuration panel: same sections/labels as the edit form
+// and the New channel form (see utils/channelConfigLayout.ts).
+const configSections = computed(() => (config.value ? buildConfigSections(config.value) : []))
 // A missing CloudFormation stack is an expected, common state (not yet
 // deployed) rather than a real error -- `channel.py status`'s traceback
 // always contains this phrase in that case. Anything else is a genuine
@@ -815,7 +769,7 @@ watch(() => props.name, reload)
         class="pi pi-exclamation-triangle text-yellow-600 text-sm"
         :title="`List and live status briefly disagree (list: ${PHASE_LABEL[listPhase]}, live: ${PHASE_LABEL[phase]}) -- usually settles within a poll or two.`"
       />
-      <Tag v-if="status" class="ml-auto" :value="status.backend" />
+      <BackendBadge v-if="status" class="ml-auto" :backend="status.backend" pill />
     </div>
 
     <Message v-if="statusError && !statusErrorIsMissingStack" severity="warn">
@@ -999,7 +953,7 @@ watch(() => props.name, reload)
         <div v-else-if="!editing" class="flex flex-column gap-2">
           <div
             v-for="sec in configSections"
-            :key="sec.section"
+            :key="sec.id"
             class="surface-100 border-round p-2"
             style="border-left: 3px solid var(--p-primary-color, #b91c1c)"
           >
@@ -1009,7 +963,7 @@ watch(() => props.name, reload)
             <table class="text-sm config-table">
               <tbody>
                 <tr v-for="row in sec.rows" :key="row.key">
-                  <td class="pr-3 text-color-secondary vertical-align-top config-key">{{ row.key }}</td>
+                  <td class="pr-3 text-color-secondary vertical-align-top config-key" :title="row.label">{{ row.key }}</td>
                   <td class="font-mono config-value">{{ row.value }}</td>
                 </tr>
               </tbody>
@@ -1021,36 +975,45 @@ watch(() => props.name, reload)
           <Message v-if="editError" severity="error" :closable="false">{{ editError }}</Message>
 
           <section class="config-group">
-            <h4 class="config-group-title">Channel &amp; source</h4>
+            <h4 class="config-group-title">{{ T.channel }}</h4>
             <div class="config-fields">
               <div class="flex flex-column gap-1">
-                <label class="text-xs text-color-secondary">Backend (immutable)</label>
+                <label class="text-xs text-color-secondary">{{ L.backend }} (immutable)</label>
                 <InputText :model-value="editForm.backend" disabled />
               </div>
               <div class="flex flex-column gap-1">
-                <label class="text-xs text-color-secondary">Source kind (immutable)</label>
+                <label class="text-xs text-color-secondary">{{ L.source_kind }} (immutable)</label>
                 <InputText :model-value="editForm.source_kind" disabled />
               </div>
               <div class="flex flex-column gap-1 config-field-wide">
-                <label class="text-xs text-color-secondary">Source path</label>
+                <label class="text-xs text-color-secondary">{{ L.source_path }}</label>
                 <InputText v-model="editForm.source_path" />
+              </div>
+              <div class="flex align-items-center gap-2 config-field-wide">
+                <Checkbox v-model="editForm.allow_missing_segments" binary input-id="edit-allow-missing-segments" />
+                <label for="edit-allow-missing-segments" class="text-xs text-color-secondary">{{ L.allow_missing_segments }}</label>
+                <FieldHelp label="Allow missing segments">
+                  Only meaningful for a grave-robber segment-list manifest (archive or manifest import). A
+                  request for a missing segment's bytes 404s, but the served manifest is otherwise
+                  indistinguishable from a fully-populated one.
+                </FieldHelp>
               </div>
             </div>
           </section>
 
           <section v-if="!editIsLocalDocker" class="config-group">
-            <h4 class="config-group-title">AWS / S3</h4>
+            <h4 class="config-group-title">{{ T.aws }}</h4>
             <div class="config-fields">
               <div class="flex flex-column gap-1">
-                <label class="text-xs text-color-secondary">AWS region</label>
+                <label class="text-xs text-color-secondary">{{ L.region }}</label>
                 <InputText v-model="editForm.region" />
               </div>
               <div class="flex flex-column gap-1">
-                <label class="text-xs text-color-secondary">S3 bucket name</label>
+                <label class="text-xs text-color-secondary">{{ L.bucket_name }}</label>
                 <InputText v-model="editForm.bucket_name" />
               </div>
               <div class="flex flex-column gap-1 config-field-wide">
-                <label class="text-xs text-color-secondary">S3 content folder</label>
+                <label class="text-xs text-color-secondary">{{ L.content_folder }}</label>
                 <InputText v-model="editForm.content_folder" />
               </div>
             </div>
@@ -1058,46 +1021,10 @@ watch(() => props.name, reload)
 
           <template v-if="editUsesChannelSection">
             <section class="config-group">
-              <h4 class="config-group-title">HLS packaging</h4>
+              <h4 class="config-group-title">{{ T.serving }}</h4>
               <div class="config-fields">
-                <div class="flex flex-column gap-1">
-                  <label class="text-xs text-color-secondary">Segment duration (s)</label>
-                  <div v-if="editIsArchiveSource" class="text-color-secondary p-2 surface-ground border-round">As source</div>
-                  <InputNumber v-else v-model="editForm.segment_duration" :min-fraction-digits="1" fluid />
-                </div>
-                <div class="flex flex-column gap-1">
-                  <label class="text-xs text-color-secondary">DVR window (s)</label>
-                  <InputNumber v-model="editForm.dvr_window_seconds" fluid />
-                </div>
-                <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">HLS segment format</label>
-                  <Select v-model="editForm.hls_format" :options="hlsFormatOptions" option-label="label" option-value="value" fluid />
-                </div>
-                <div v-if="editForm.hls_format === 'ts'" class="flex align-items-center gap-2 config-field-wide">
-                  <Checkbox v-model="editForm.hls_ts_mux_audio" binary input-id="edit-hls-ts-mux-audio" />
-                  <label for="edit-hls-ts-mux-audio" class="text-xs text-color-secondary">Mux audio into each HLS TS video segment</label>
-                </div>
-              </div>
-            </section>
-
-            <section class="config-group">
-              <h4 class="config-group-title">Serving</h4>
-              <div class="config-fields">
-                <div class="flex align-items-center gap-2 config-field-wide">
-                  <Checkbox v-model="editForm.continuous_timeline" binary input-id="edit-continuous-timeline" />
-                  <label for="edit-continuous-timeline" class="text-xs text-color-secondary">
-                    Continuous timeline across the loop wrap
-                  </label>
-                  <FieldHelp label="Continuous timeline">
-                    Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
-                    the channel has no discontinuity/Period restart at the loop wrap. Off by default: the loop wrap
-                    is then honestly signaled with #EXT-X-DISCONTINUITY / a DASH Period restart. Turn on for a
-                    seamless wrap -- serve.py refuses to start in this mode against a source baked with a 32-bit
-                    tfdt (loop-dee-loop/SCOPE.md &sect;12).
-                  </FieldHelp>
-                </div>
                 <div class="flex flex-column gap-1" :class="{ 'config-field-wide': editIsLocalDocker }">
-                  <label class="text-xs text-color-secondary">Serve port</label>
+                  <label class="text-xs text-color-secondary">{{ L.port }}</label>
                   <div v-if="editIsLocalDocker" class="flex align-items-center gap-2">
                     <Checkbox v-model="editAutoPort" binary input-id="edit-auto-port" />
                     <label for="edit-auto-port" class="text-sm">Auto-select a free port</label>
@@ -1109,11 +1036,11 @@ watch(() => props.name, reload)
                 </div>
                 <template v-if="editIsEcsExpress">
                   <div class="flex flex-column gap-1">
-                    <label class="text-xs text-color-secondary">Express CPU units</label>
+                    <label class="text-xs text-color-secondary">{{ L.cpu }}</label>
                     <InputNumber v-model="editForm.cpu" :use-grouping="false" fluid />
                   </div>
                   <div class="flex flex-column gap-1">
-                    <label class="text-xs text-color-secondary">Express memory (MB)</label>
+                    <label class="text-xs text-color-secondary">{{ L.memory }}</label>
                     <InputNumber v-model="editForm.memory" :use-grouping="false" fluid />
                   </div>
                 </template>
@@ -1121,27 +1048,69 @@ watch(() => props.name, reload)
             </section>
 
             <section class="config-group">
-              <h4 class="config-group-title">SCTE-35 signaling</h4>
+              <h4 class="config-group-title">{{ T.packaging }}</h4>
+              <div class="config-fields">
+                <div class="flex align-items-center gap-2 config-field-wide">
+                  <Checkbox v-model="editForm.continuous_timeline" binary input-id="edit-continuous-timeline" />
+                  <label for="edit-continuous-timeline" class="text-xs text-color-secondary">
+                    {{ L.continuous_timeline }}
+                  </label>
+                  <FieldHelp label="Continuous timeline">
+                    Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
+                    the channel has no discontinuity/Period restart at the loop wrap. Off by default: the loop wrap
+                    is then honestly signaled with #EXT-X-DISCONTINUITY / a DASH Period restart. Turn on for a
+                    seamless wrap -- serve.py refuses to start in this mode against a source baked with a 32-bit
+                    tfdt (loop-dee-loop/SCOPE.md &sect;12).
+                  </FieldHelp>
+                </div>
+              </div>
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">{{ T.hls }}</h4>
+              <div class="config-fields">
+                <div class="flex flex-column gap-1">
+                  <label class="text-xs text-color-secondary">{{ L.segment_duration }}</label>
+                  <div v-if="editIsArchiveSource" class="text-color-secondary p-2 surface-ground border-round">As source</div>
+                  <InputNumber v-else v-model="editForm.segment_duration" :min-fraction-digits="1" fluid />
+                </div>
+                <div class="flex flex-column gap-1">
+                  <label class="text-xs text-color-secondary">{{ L.dvr_window_seconds }}</label>
+                  <InputNumber v-model="editForm.dvr_window_seconds" fluid />
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <label class="text-xs text-color-secondary">{{ L.hls_format }}</label>
+                  <Select v-model="editForm.hls_format" :options="hlsFormatOptions" option-label="label" option-value="value" fluid />
+                </div>
+                <div v-if="editForm.hls_format === 'ts'" class="flex align-items-center gap-2 config-field-wide">
+                  <Checkbox v-model="editForm.hls_ts_mux_audio" binary input-id="edit-hls-ts-mux-audio" />
+                  <label for="edit-hls-ts-mux-audio" class="text-xs text-color-secondary">{{ L.hls_ts_mux_audio }}</label>
+                </div>
+              </div>
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">{{ T.scte35 }}</h4>
               <div class="config-fields">
                 <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">HLS DATERANGE mode</label>
+                  <label class="text-xs text-color-secondary">{{ L.daterange_mode }}</label>
                   <Select v-model="editForm.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" fluid />
                 </div>
                 <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">HLS CUE-OUT/CUE-IN tags</label>
+                  <label class="text-xs text-color-secondary">{{ L.cue_tags }}</label>
                   <Select v-model="editForm.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" fluid />
                 </div>
                 <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">DASH SCTE-35 signal format</label>
+                  <label class="text-xs text-color-secondary">{{ L.dash_signal_format }}</label>
                   <Select v-model="editForm.dash_signal_format" :options="dashSignalFormatOptions" option-label="label" option-value="value" fluid />
                 </div>
                 <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">DASH coincident descriptor mode</label>
+                  <label class="text-xs text-color-secondary">{{ L.dash_descriptor_mode }}</label>
                   <Select v-model="editForm.dash_descriptor_mode" :options="dashDescriptorModeOptions" option-label="label" option-value="value" fluid />
                 </div>
                 <div class="flex align-items-center gap-2 config-field-wide">
                   <Checkbox v-model="editForm.increment_event_ids" binary input-id="edit-increment-event-ids" />
-                  <label for="edit-increment-event-ids" class="text-xs text-color-secondary">Increment SCTE-35 event ids each loop (HLS + DASH)</label>
+                  <label for="edit-increment-event-ids" class="text-xs text-color-secondary">{{ L.increment_event_ids }}</label>
                   <FieldHelp label="Increment SCTE-35 event ids">
                     Off (default) repeats the same event id every loop -- easiest to test against. On bumps
                     each id by loop_number &times; a shared step (a power of 10 above the channel's largest
@@ -1152,7 +1121,7 @@ watch(() => props.name, reload)
                 </div>
                 <div class="flex flex-column gap-1 config-field-wide">
                   <div class="flex align-items-center gap-1">
-                    <label class="text-xs text-color-secondary" for="edit-daterange-id-format">HLS DATERANGE ID format</label>
+                    <label class="text-xs text-color-secondary" for="edit-daterange-id-format">{{ L.daterange_id_format }}</label>
                     <DaterangeIdFormatHelp />
                   </div>
                   <InputText id="edit-daterange-id-format" v-model="editForm.daterange_id_format" />

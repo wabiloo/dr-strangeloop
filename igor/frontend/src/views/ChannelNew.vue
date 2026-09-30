@@ -12,6 +12,7 @@ import { buildPlaylist, defineChannel, listArchives, listManifests, listPlaylist
 import JobPanel from '../components/JobPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import FieldHelp from '../components/FieldHelp.vue'
+import { CONFIG_FIELD_LABEL as L, CONFIG_SECTION_TITLE as T } from '../utils/channelConfigLayout'
 import type { ArchiveListItem, ChannelCreatePayload, Job, ManifestListItem, PlaylistListItem } from '../api/types'
 
 const router = useRouter()
@@ -270,59 +271,20 @@ async function submit() {
 
     <Message v-if="error" severity="error">{{ error }}</Message>
 
-    <h4 class="mb-0">Channel</h4>
+    <h4 class="mb-0">{{ T.channel }}</h4>
     <div class="flex flex-column gap-1">
-      <label for="name">Channel name</label>
+      <label for="name">{{ L.name }}</label>
       <InputText id="name" v-model="form.name" placeholder="my-channel" :invalid="Boolean(form.name) && Boolean(nameError)" />
       <div v-if="form.name && nameError" class="text-red-500 text-xs">{{ nameError }}</div>
     </div>
 
-    <h4 class="mb-0 mt-2">Infrastructure</h4>
     <div class="flex flex-column gap-1">
-      <label for="backend">Backend</label>
+      <label for="backend">{{ L.backend }}</label>
       <Select id="backend" v-model="form.backend" :options="backendOptions" option-label="label" option-value="value" />
     </div>
 
-    <div v-if="usesChannelSection" class="flex flex-column gap-1">
-      <label for="port">Serve port{{ isLocalDocker ? ' (also the host port -- http://localhost:<port>)' : '' }}</label>
-      <div v-if="isLocalDocker" class="flex align-items-center gap-2">
-        <Checkbox v-model="autoPort" binary input-id="auto-port" />
-        <label for="auto-port" class="text-sm">Auto-select a free port</label>
-        <FieldHelp label="Auto-select a free port">
-          A free port (8080-8179, skipping any already in use -- e.g. by other local-docker
-          channels) is picked when the container is first started, and reused by
-          start/refresh/status afterwards.
-        </FieldHelp>
-      </div>
-      <InputNumber
-        v-if="!isLocalDocker || !autoPort"
-        id="port"
-        v-model="form.port as number"
-        :use-grouping="false"
-      />
-    </div>
-
-    <template v-if="!isLocalDocker">
-      <h4 class="mb-0 mt-2">AWS / S3</h4>
-      <div class="flex flex-column gap-1">
-        <label for="region">AWS region</label>
-        <InputText id="region" v-model="form.region" placeholder="eu-west-1" />
-      </div>
-
-      <div class="flex flex-column gap-1">
-        <label for="bucket">Existing S3 bucket name</label>
-        <InputText id="bucket" v-model="form.bucket_name" placeholder="my-existing-bucket" />
-      </div>
-
-      <div class="flex flex-column gap-1">
-        <label for="folder">S3 content folder (prefix)</label>
-        <InputText id="folder" v-model="form.content_folder" placeholder="its-a-live/content" />
-      </div>
-    </template>
-
-    <h4 class="mb-0 mt-2">Content</h4>
     <div class="flex flex-column gap-1">
-      <label>Source kind</label>
+      <label>{{ L.source_kind }}</label>
       <SelectButton v-model="sourceKind" :options="sourceKindOptions" option-label="label" option-value="value" />
     </div>
 
@@ -399,7 +361,7 @@ async function submit() {
     <div class="flex align-items-center gap-2">
       <Checkbox v-model="form.allow_missing_segments" binary input-id="allow-missing-segments" />
       <label for="allow-missing-segments">
-        Allow missing segments (manifest-complete, media-optional)
+        {{ L.allow_missing_segments }} (manifest-complete, media-optional)
       </label>
       <FieldHelp label="Allow missing segments">
         Only meaningful for a grave-robber segment-list manifest (an archive import almost always has
@@ -410,28 +372,63 @@ async function submit() {
       </FieldHelp>
     </div>
 
+    <template v-if="!isLocalDocker">
+      <h4 class="mb-0 mt-2">{{ T.aws }}</h4>
+      <div class="flex flex-column gap-1">
+        <label for="region">{{ L.region }}</label>
+        <InputText id="region" v-model="form.region" placeholder="eu-west-1" />
+      </div>
+
+      <div class="flex flex-column gap-1">
+        <label for="bucket">{{ L.bucket_name }} (existing bucket)</label>
+        <InputText id="bucket" v-model="form.bucket_name" placeholder="my-existing-bucket" />
+      </div>
+
+      <div class="flex flex-column gap-1">
+        <label for="folder">{{ L.content_folder }} (prefix)</label>
+        <InputText id="folder" v-model="form.content_folder" placeholder="its-a-live/content" />
+      </div>
+    </template>
+
     <template v-if="usesChannelSection">
-      <h4 class="mb-0 mt-2">Packaging</h4>
+      <h4 class="mb-0 mt-2">{{ T.serving }}</h4>
+      <div class="flex flex-column gap-1">
+        <label for="port">{{ L.port }}{{ isLocalDocker ? ' (also the host port -- http://localhost:<port>)' : '' }}</label>
+        <div v-if="isLocalDocker" class="flex align-items-center gap-2">
+          <Checkbox v-model="autoPort" binary input-id="auto-port" />
+          <label for="auto-port" class="text-sm">Auto-select a free port</label>
+          <FieldHelp label="Auto-select a free port">
+            A free port (8080-8179, skipping any already in use -- e.g. by other local-docker
+            channels) is picked when the container is first started, and reused by
+            start/refresh/status afterwards.
+          </FieldHelp>
+        </div>
+        <InputNumber
+          v-if="!isLocalDocker || !autoPort"
+          id="port"
+          v-model="form.port as number"
+          :use-grouping="false"
+        />
+      </div>
+
+      <div v-if="isEcsExpress" class="grid">
+        <div class="col-6 flex flex-column gap-1">
+          <label for="cpu">{{ L.cpu }}</label>
+          <InputNumber id="cpu" v-model="form.cpu" :use-grouping="false" />
+        </div>
+        <div class="col-6 flex flex-column gap-1">
+          <label for="memory">{{ L.memory }}</label>
+          <InputNumber id="memory" v-model="form.memory" :use-grouping="false" />
+        </div>
+      </div>
+    </template>
+
+    <template v-if="usesChannelSection">
+      <h4 class="mb-0 mt-2">{{ T.packaging }}</h4>
       <div class="grid">
-        <div v-if="sourceKind === 'playlist'" class="col-6 flex flex-column gap-1">
-          <label for="segdur">Segment duration (s)</label>
-          <InputNumber id="segdur" v-model="form.segment_duration" :min-fraction-digits="1" />
-        </div>
-        <div :class="[sourceKind === 'playlist' ? 'col-6' : 'col-12', 'flex flex-column gap-1']">
-          <label for="dvr">DVR window (s)</label>
-          <InputNumber id="dvr" v-model="form.dvr_window_seconds" />
-        </div>
-        <div class="col-12 flex flex-column gap-1">
-          <label for="hls-format">HLS segment format</label>
-          <Select id="hls-format" v-model="form.hls_format" :options="hlsFormatOptions" option-label="label" option-value="value" />
-        </div>
-        <div v-if="form.hls_format === 'ts'" class="col-12 flex align-items-center gap-2">
-          <Checkbox v-model="form.hls_ts_mux_audio" binary input-id="hls-ts-mux-audio" />
-          <label for="hls-ts-mux-audio">Mux audio into each HLS TS video segment</label>
-        </div>
         <div class="col-12 flex align-items-center gap-2">
           <Checkbox v-model="form.continuous_timeline" binary input-id="continuous-timeline" />
-          <label for="continuous-timeline">Continuous timeline across the loop wrap</label>
+          <label for="continuous-timeline">{{ L.continuous_timeline }}</label>
           <FieldHelp label="Continuous timeline">
             Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
             the channel has no discontinuity/Period restart at the loop wrap. Off by default: the loop wrap
@@ -440,38 +437,48 @@ async function submit() {
             tfdt (loop-dee-loop/SCOPE.md &sect;12).
           </FieldHelp>
         </div>
-        <template v-if="isEcsExpress">
-          <div class="col-6 flex flex-column gap-1">
-            <label for="cpu">Express CPU units</label>
-            <InputNumber id="cpu" v-model="form.cpu" :use-grouping="false" />
-          </div>
-          <div class="col-6 flex flex-column gap-1">
-            <label for="memory">Express memory (MB)</label>
-            <InputNumber id="memory" v-model="form.memory" :use-grouping="false" />
-          </div>
-        </template>
       </div>
 
-      <h4 class="mb-0 mt-2">SCTE-35 signaling</h4>
+      <h4 class="mb-0 mt-2">{{ T.hls }}</h4>
+      <div class="grid">
+        <div v-if="sourceKind === 'playlist'" class="col-6 flex flex-column gap-1">
+          <label for="segdur">{{ L.segment_duration }}</label>
+          <InputNumber id="segdur" v-model="form.segment_duration" :min-fraction-digits="1" />
+        </div>
+        <div :class="[sourceKind === 'playlist' ? 'col-6' : 'col-12', 'flex flex-column gap-1']">
+          <label for="dvr">{{ L.dvr_window_seconds }}</label>
+          <InputNumber id="dvr" v-model="form.dvr_window_seconds" />
+        </div>
+        <div class="col-12 flex flex-column gap-1">
+          <label for="hls-format">{{ L.hls_format }}</label>
+          <Select id="hls-format" v-model="form.hls_format" :options="hlsFormatOptions" option-label="label" option-value="value" />
+        </div>
+        <div v-if="form.hls_format === 'ts'" class="col-12 flex align-items-center gap-2">
+          <Checkbox v-model="form.hls_ts_mux_audio" binary input-id="hls-ts-mux-audio" />
+          <label for="hls-ts-mux-audio">{{ L.hls_ts_mux_audio }}</label>
+        </div>
+      </div>
+
+      <h4 class="mb-0 mt-2">{{ T.scte35 }}</h4>
       <div class="flex flex-column gap-1">
-        <label for="daterange-mode">HLS DATERANGE mode</label>
+        <label for="daterange-mode">{{ L.daterange_mode }}</label>
         <Select id="daterange-mode" v-model="form.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" />
       </div>
       <div class="flex flex-column gap-1">
-        <label for="cue-tags">HLS CUE-OUT/CUE-IN tags</label>
+        <label for="cue-tags">{{ L.cue_tags }}</label>
         <Select id="cue-tags" v-model="form.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" />
       </div>
       <div class="flex flex-column gap-1">
-        <label for="dash-signal-format">DASH SCTE-35 signal format</label>
+        <label for="dash-signal-format">{{ L.dash_signal_format }}</label>
         <Select id="dash-signal-format" v-model="form.dash_signal_format" :options="dashSignalFormatOptions" option-label="label" option-value="value" />
       </div>
       <div class="flex flex-column gap-1">
-        <label for="dash-descriptor-mode">DASH coincident descriptor mode</label>
+        <label for="dash-descriptor-mode">{{ L.dash_descriptor_mode }}</label>
         <Select id="dash-descriptor-mode" v-model="form.dash_descriptor_mode" :options="dashDescriptorModeOptions" option-label="label" option-value="value" />
       </div>
       <div class="flex align-items-center gap-2">
         <Checkbox v-model="form.increment_event_ids" binary input-id="increment-event-ids" />
-        <label for="increment-event-ids">Increment SCTE-35 event ids each loop (HLS + DASH)</label>
+        <label for="increment-event-ids">{{ L.increment_event_ids }}</label>
         <FieldHelp label="Increment SCTE-35 event ids">
           Off (default) repeats the same event id every loop -- easiest to test against. On bumps
           each id by loop_number &times; a shared step (a power of 10 above the channel's largest
@@ -482,7 +489,7 @@ async function submit() {
       </div>
       <div class="flex flex-column gap-1">
         <div class="flex align-items-center gap-1">
-          <label for="daterange-id-format">HLS DATERANGE ID format</label>
+          <label for="daterange-id-format">{{ L.daterange_id_format }}</label>
           <DaterangeIdFormatHelp />
         </div>
         <InputText id="daterange-id-format" v-model="form.daterange_id_format" />

@@ -12,27 +12,8 @@ import { RouterLink, useRouter } from 'vue-router'
 import { deleteChannel, getJob, listChannels, startChannel, stopChannel } from '../api/client'
 import type { ChannelListItem, Job } from '../api/types'
 import { PHASE_LABEL, isUpButMaybeUnreachable, listItemPhase, phaseSeverity } from '../utils/channelPhase'
+import BackendBadge from '../components/BackendBadge.vue'
 import { alignConfirmPopup } from '../utils/confirmPopup'
-import awsIcon from '../assets/backends/aws.svg'
-import dockerIcon from '../assets/backends/docker.svg'
-
-const BACKEND_ICON: Record<ChannelListItem['backend'], string> = {
-  'local-docker': dockerIcon,
-  'ecs-express': awsIcon,
-  'aws-media': awsIcon,
-}
-
-const BACKEND_COLOR: Record<ChannelListItem['backend'], string> = {
-  'local-docker': '#2496ed',
-  'ecs-express': '#ed7100',
-  'aws-media': '#8c4fff',
-}
-
-// Quoted: bundled SVGs may be inlined as data URIs containing ' and ( ),
-// which are invalid inside an unquoted CSS url().
-function backendIconUrl(channel: ChannelListItem) {
-  return `url("${BACKEND_ICON[channel.backend]}")`
-}
 
 const router = useRouter()
 const confirm = useConfirm()
@@ -274,14 +255,7 @@ onBeforeUnmount(() => {
       <Column field="name" header="Name" />
       <Column header="Backend">
         <template #body="{ data }">
-          <div class="flex align-items-center gap-2 backend-cell">
-            <span
-              class="backend-icon"
-              :style="{ '--icon-url': backendIconUrl(data), color: BACKEND_COLOR[data.backend as ChannelListItem['backend']] }"
-              aria-hidden="true"
-            />
-            <span>{{ data.backend }}</span>
-          </div>
+          <BackendBadge :backend="data.backend" />
         </template>
       </Column>
       <Column header="Source">
@@ -389,19 +363,6 @@ onBeforeUnmount(() => {
 
 .source-kind-icon {
   font-size: 1.25rem;
-}
-
-.backend-icon {
-  display: inline-block;
-  width: 1.5rem;
-  height: 1.5rem;
-  background-color: currentColor;
-  mask: var(--icon-url) center / contain no-repeat;
-  -webkit-mask: var(--icon-url) center / contain no-repeat;
-}
-
-.backend-cell {
-  white-space: nowrap;
 }
 
 .source-link:hover {
