@@ -125,7 +125,7 @@ def generate_toml(
     dvr_window_seconds: float = 30,
     hls_format: str = "cmaf",
     hls_ts_mux_audio: bool = True,
-    continuous_timeline: bool = True,
+    continuous_timeline: bool = False,
     port: int | str = 8080,
     cpu: int = 256,
     memory: int = 512,

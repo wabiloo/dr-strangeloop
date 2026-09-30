@@ -33,13 +33,13 @@ def test_channel_continuous_timeline_roundtrip(backend, continuous_timeline):
     assert config["packaging"]["continuous_timeline"] is continuous_timeline
 
 
-def test_channel_continuous_timeline_defaults_true():
+def test_channel_continuous_timeline_defaults_false():
     payload = ChannelCreatePayload(
         name="test-channel", backend="ecs-express", region="eu-west-1",
         bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
     )
     config = tomllib.loads(generate_toml(**payload.model_dump()))
-    assert config["packaging"]["continuous_timeline"] is True
+    assert config["packaging"]["continuous_timeline"] is False
 
 
 @pytest.mark.parametrize("source_kind", ["playlist", "archive"])

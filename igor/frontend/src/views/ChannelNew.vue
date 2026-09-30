@@ -11,6 +11,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import { buildPlaylist, defineChannel, listArchives, listManifests, listPlaylists } from '../api/client'
 import JobPanel from '../components/JobPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
+import FieldHelp from '../components/FieldHelp.vue'
 import type { ArchiveListItem, ChannelCreatePayload, Job, ManifestListItem, PlaylistListItem } from '../api/types'
 
 const router = useRouter()
@@ -125,7 +126,7 @@ const playlistOptions = computed(() =>
 
 const form = reactive<ChannelCreatePayload>({
   name: '',
-  backend: 'ecs-express',
+  backend: 'local-docker',
   region: 'eu-west-1',
   bucket_name: '',
   content_folder: 'its-a-live/content',
@@ -136,8 +137,8 @@ const form = reactive<ChannelCreatePayload>({
   dvr_window_seconds: 30,
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
-  continuous_timeline: true,
-  port: 8080,
+  continuous_timeline: false,
+  port: 'auto',
   cpu: 256,
   memory: 512,
   daterange_mode: 'shared',
@@ -151,7 +152,7 @@ const form = reactive<ChannelCreatePayload>({
 // kept as separate UI state rather than storing 'auto' directly in
 // form.port so InputNumber always gets a number to work with, and
 // switching the toggle off restores whatever port was last typed in.
-const autoPort = ref(false)
+const autoPort = ref(true)
 const lastExplicitPort = ref(8080)
 watch(autoPort, (auto) => {
   if (auto) {
@@ -210,9 +211,7 @@ const isLocalDocker = computed(() => form.backend === 'local-docker')
 watch(
   () => form.backend,
   (backend) => {
-    if (backend !== 'local-docker' && autoPort.value) {
-      autoPort.value = false
-    }
+    autoPort.value = backend === 'local-docker'
   },
 )
 // Both ecs-express and local-docker bake+serve via loop-dee-loop and share
@@ -278,9 +277,29 @@ async function submit() {
       <div v-if="form.name && nameError" class="text-red-500 text-xs">{{ nameError }}</div>
     </div>
 
+    <h4 class="mb-0 mt-2">Infrastructure</h4>
     <div class="flex flex-column gap-1">
       <label for="backend">Backend</label>
       <Select id="backend" v-model="form.backend" :options="backendOptions" option-label="label" option-value="value" />
+    </div>
+
+    <div v-if="usesChannelSection" class="flex flex-column gap-1">
+      <label for="port">Serve port{{ isLocalDocker ? ' (also the host port -- http://localhost:<port>)' : '' }}</label>
+      <div v-if="isLocalDocker" class="flex align-items-center gap-2">
+        <Checkbox v-model="autoPort" binary input-id="auto-port" />
+        <label for="auto-port" class="text-sm">Auto-select a free port</label>
+        <FieldHelp label="Auto-select a free port">
+          A free port (8080-8179, skipping any already in use -- e.g. by other local-docker
+          channels) is picked when the container is first started, and reused by
+          start/refresh/status afterwards.
+        </FieldHelp>
+      </div>
+      <InputNumber
+        v-if="!isLocalDocker || !autoPort"
+        id="port"
+        v-model="form.port as number"
+        :use-grouping="false"
+      />
     </div>
 
     <template v-if="!isLocalDocker">
@@ -382,13 +401,13 @@ async function submit() {
       <label for="allow-missing-segments">
         Allow missing segments (manifest-complete, media-optional)
       </label>
-    </div>
-    <div class="text-color-secondary text-xs">
-      Only meaningful for a grave-robber segment-list manifest (an archive import almost always has
-      some segments with no recovered media -- HAR captures are frequently manifest-only). A
-      request for a missing segment's bytes 404s, but the served manifest is otherwise
-      indistinguishable from a fully-populated one. Off by default for a franken-ts playlist, since
-      that path never has missing segments to begin with.
+      <FieldHelp label="Allow missing segments">
+        Only meaningful for a grave-robber segment-list manifest (an archive import almost always has
+        some segments with no recovered media -- HAR captures are frequently manifest-only). A
+        request for a missing segment's bytes 404s, but the served manifest is otherwise
+        indistinguishable from a fully-populated one. Off by default for a franken-ts playlist, since
+        that path never has missing segments to begin with.
+      </FieldHelp>
     </div>
 
     <template v-if="usesChannelSection">
@@ -413,31 +432,13 @@ async function submit() {
         <div class="col-12 flex align-items-center gap-2">
           <Checkbox v-model="form.continuous_timeline" binary input-id="continuous-timeline" />
           <label for="continuous-timeline">Continuous timeline across the loop wrap</label>
-        </div>
-        <div class="col-12 text-color-secondary text-xs">
-          Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
-          the channel has no discontinuity/Period restart at the loop wrap. On by default; turn off
-          to fall back to the honestly-signaled #EXT-X-DISCONTINUITY / DASH Period restart, e.g. if
-          the source was baked with a 32-bit tfdt (loop-dee-loop/SCOPE.md §12 -- serve.py refuses to
-          start in this mode against one).
-        </div>
-        <div class="col-12 flex flex-column gap-1">
-          <label for="port">Serve port{{ isLocalDocker ? ' (also the host port -- http://localhost:<port>)' : '' }}</label>
-          <div v-if="isLocalDocker" class="flex align-items-center gap-2">
-            <Checkbox v-model="autoPort" binary input-id="auto-port" />
-            <label for="auto-port" class="text-sm">Auto-select a free port</label>
-          </div>
-          <InputNumber
-            v-if="!isLocalDocker || !autoPort"
-            id="port"
-            v-model="form.port as number"
-            :use-grouping="false"
-          />
-          <div v-else class="text-color-secondary text-sm">
-            A free port (8080-8179, skipping any already in use -- e.g. by other local-docker
-            channels) is picked when the container is first started, and reused by
-            start/refresh/status afterwards.
-          </div>
+          <FieldHelp label="Continuous timeline">
+            Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
+            the channel has no discontinuity/Period restart at the loop wrap. Off by default: the loop wrap
+            is then honestly signaled with #EXT-X-DISCONTINUITY / a DASH Period restart. Turn on for a
+            seamless wrap -- serve.py refuses to start in this mode against a source baked with a 32-bit
+            tfdt (loop-dee-loop/SCOPE.md &sect;12).
+          </FieldHelp>
         </div>
         <template v-if="isEcsExpress">
           <div class="col-6 flex flex-column gap-1">
@@ -471,6 +472,13 @@ async function submit() {
       <div class="flex align-items-center gap-2">
         <Checkbox v-model="form.increment_event_ids" binary input-id="increment-event-ids" />
         <label for="increment-event-ids">Increment SCTE-35 event ids each loop (HLS + DASH)</label>
+        <FieldHelp label="Increment SCTE-35 event ids">
+          Off (default) repeats the same event id every loop -- easiest to test against. On bumps
+          each id by loop_number &times; a shared step (a power of 10 above the channel's largest
+          base id, e.g. base ids 100-190 &rarr; step 1000, so loop 1 emits 1100/1190, loop 2 emits
+          2100/2190, ...) -- predictable from wall-clock time alone, and wraps back to the base id
+          at the 32-bit SCTE-35 ceiling.
+        </FieldHelp>
       </div>
       <div class="flex flex-column gap-1">
         <div class="flex align-items-center gap-1">
@@ -478,13 +486,6 @@ async function submit() {
           <DaterangeIdFormatHelp />
         </div>
         <InputText id="daterange-id-format" v-model="form.daterange_id_format" />
-      </div>
-      <div class="text-color-secondary text-xs">
-        Off (default) repeats the same event id every loop -- easiest to test against. On bumps
-        each id by loop_number &times; a shared step (a power of 10 above the channel's largest
-        base id, e.g. base ids 100-190 &rarr; step 1000, so loop 1 emits 1100/1190, loop 2 emits
-        2100/2190, ...) -- predictable from wall-clock time alone, and wraps back to the base id
-        at the 32-bit SCTE-35 ceiling.
       </div>
     </template>
 

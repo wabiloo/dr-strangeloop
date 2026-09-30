@@ -48,7 +48,7 @@ class ChannelCreatePayload(BaseModel):
     # so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the
     # loop wrap. ecs-express/local-docker only, same as hls_format/
     # hls_ts_mux_audio above.
-    continuous_timeline: bool = True
+    continuous_timeline: bool = False
     # int to pin an explicit host port, "auto" (local-docker only) to let
     # it self-select a free one at start/refresh time -- see
     # its-a-live/AGENTS.md and _local_docker_ops._resolve_port.

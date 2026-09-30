@@ -15,6 +15,7 @@ import ItsAliveBanner from '../components/ItsAliveBanner.vue'
 import JobPanel from '../components/JobPanel.vue'
 import PlaybackPanel from '../components/PlaybackPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
+import FieldHelp from '../components/FieldHelp.vue'
 import { alignConfirmPopup } from '../utils/confirmPopup'
 import {
   addScheduleWindow,
@@ -97,7 +98,7 @@ const editForm = reactive<ChannelCreatePayload>({
   dvr_window_seconds: 30,
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
-  continuous_timeline: true,
+  continuous_timeline: false,
   port: 8080,
   cpu: 256,
   memory: 512,
@@ -1087,17 +1088,24 @@ watch(() => props.name, reload)
                   <label for="edit-continuous-timeline" class="text-xs text-color-secondary">
                     Continuous timeline across the loop wrap
                   </label>
+                  <FieldHelp label="Continuous timeline">
+                    Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
+                    the channel has no discontinuity/Period restart at the loop wrap. Off by default: the loop wrap
+                    is then honestly signaled with #EXT-X-DISCONTINUITY / a DASH Period restart. Turn on for a
+                    seamless wrap -- serve.py refuses to start in this mode against a source baked with a 32-bit
+                    tfdt (loop-dee-loop/SCOPE.md &sect;12).
+                  </FieldHelp>
                 </div>
                 <div class="flex flex-column gap-1" :class="{ 'config-field-wide': editIsLocalDocker }">
                   <label class="text-xs text-color-secondary">Serve port</label>
                   <div v-if="editIsLocalDocker" class="flex align-items-center gap-2">
                     <Checkbox v-model="editAutoPort" binary input-id="edit-auto-port" />
                     <label for="edit-auto-port" class="text-sm">Auto-select a free port</label>
+                    <FieldHelp label="Auto-select a free port">
+                      A free port (8080-8179) is picked on next start/refresh and reused afterward.
+                    </FieldHelp>
                   </div>
                   <InputNumber v-if="!editIsLocalDocker || !editAutoPort" v-model="editForm.port as number" :use-grouping="false" fluid />
-                  <div v-else class="text-color-secondary text-xs">
-                    A free port (8080-8179) is picked on next start/refresh and reused afterward.
-                  </div>
                 </div>
                 <template v-if="editIsEcsExpress">
                   <div class="flex flex-column gap-1">
@@ -1134,6 +1142,13 @@ watch(() => props.name, reload)
                 <div class="flex align-items-center gap-2 config-field-wide">
                   <Checkbox v-model="editForm.increment_event_ids" binary input-id="edit-increment-event-ids" />
                   <label for="edit-increment-event-ids" class="text-xs text-color-secondary">Increment SCTE-35 event ids each loop (HLS + DASH)</label>
+                  <FieldHelp label="Increment SCTE-35 event ids">
+                    Off (default) repeats the same event id every loop -- easiest to test against. On bumps
+                    each id by loop_number &times; a shared step (a power of 10 above the channel's largest
+                    base id, e.g. base ids 100-190 &rarr; step 1000, so loop 1 emits 1100/1190, loop 2 emits
+                    2100/2190, ...) -- predictable from wall-clock time alone, and wraps back to the base id
+                    at the 32-bit SCTE-35 ceiling.
+                  </FieldHelp>
                 </div>
                 <div class="flex flex-column gap-1 config-field-wide">
                   <div class="flex align-items-center gap-1">
