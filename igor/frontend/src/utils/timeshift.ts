@@ -139,6 +139,27 @@ export function parseOffsetSeconds(text: string): number | null {
   return Number.isFinite(seconds) && Math.abs(seconds) <= MAX_ABS_OFFSET_SECONDS ? seconds : null
 }
 
+/** Signed seconds -> an ISO 8601 duration `parseOffsetSeconds` reads back
+ * (`-PT1H2M3S`, `P1DT2H`, `PT0S`). Whole seconds only. */
+export function formatIsoDuration(seconds: number): string {
+  const total = Math.round(Math.abs(seconds))
+  const d = Math.floor(total / 86400)
+  const h = Math.floor((total % 86400) / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const time = `${h ? `${h}H` : ''}${m ? `${m}M` : ''}${s ? `${s}S` : ''}`
+  const body = `${d ? `${d}D` : ''}${time ? `T${time}` : ''}`
+  return body ? `${seconds < 0 ? '-' : ''}P${body}` : 'PT0S'
+}
+
+/** Whole-second offset that makes "now" equal `target` when the stream is
+ * started at `startedAtMs`. Used when the user picks a pretend-"now"
+ * datetime instead of a duration: the offset is fixed at start time and the
+ * stream then advances in real time from there. */
+export function offsetSecondsForTarget(target: Date, startedAtMs: number): number {
+  return Math.round((target.getTime() - startedAtMs) / 1000) || 0 // `|| 0`: no -0
+}
+
 /** The time the server will treat as "now" for this request. */
 export function pretendNowMs(req: TimeshiftRequest, nowMs: number): number {
   return nowMs + (parseOffsetSeconds(req.offset) ?? 0) * 1000
@@ -194,7 +215,7 @@ export function validateRequest(
 ): string[] {
   const problems: string[] = []
   if (parseOffsetSeconds(req.offset) === null) {
-    problems.push('Offset must be signed seconds (-3600) or an ISO 8601 duration (-PT1H).')
+    problems.push('Offset must be signed seconds (-3600) or an ISO 8601 duration (-PT1H), within ±10 years.')
   }
   nowMs = pretendNowMs(req, nowMs)
   if (timing && Number.isFinite(timing.epochMs) && nowMs < (timing.epochMs as number)) {

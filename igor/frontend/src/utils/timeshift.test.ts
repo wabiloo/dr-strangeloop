@@ -4,6 +4,8 @@ import { test } from 'node:test'
 import {
   DEFAULT_TIMESHIFT_PARAMS as P,
   buildTimeshiftUrl,
+  formatIsoDuration,
+  offsetSecondsForTarget,
   parseOffsetSeconds,
   pretendNowMs,
   classify,
@@ -172,4 +174,25 @@ test('validateRequest: bad offset text, and now pushed before the channel epoch'
   const timing = { epochMs: at('2026-09-30T11:30:00Z').getTime(), loopMs: 60_000 }
   assert.match(validateRequest(req({ start: null, end: null, offset: '-PT1H' }), P, NOW, timing).join(' '), /before the channel epoch/)
   assert.deepEqual(validateRequest(req({ start: null, end: null, offset: '-PT10M' }), P, NOW, timing), [])
+})
+
+test('formatIsoDuration round-trips through parseOffsetSeconds', () => {
+  assert.equal(formatIsoDuration(0), 'PT0S')
+  assert.equal(formatIsoDuration(-3600), '-PT1H')
+  assert.equal(formatIsoDuration(3723), 'PT1H2M3S')
+  assert.equal(formatIsoDuration(-93600), '-P1DT2H')
+  assert.equal(formatIsoDuration(86400), 'P1D')
+  assert.equal(formatIsoDuration(90.4), 'PT1M30S')
+  for (const n of [0, 1, -1, 59, 60, -3599, 3600, 86399, 86400, -172861, 7 * 86400 + 5]) {
+    assert.equal(parseOffsetSeconds(formatIsoDuration(n)), n, String(n))
+  }
+})
+
+test('offsetSecondsForTarget: target minus the moment the stream starts, in whole seconds', () => {
+  const started = at('2026-09-30T12:00:00.400Z').getTime()
+  assert.equal(offsetSecondsForTarget(at('2026-09-30T11:00:00Z'), started), -3600)
+  assert.equal(offsetSecondsForTarget(at('2026-09-30T12:00:30Z'), started), 30)
+  assert.equal(offsetSecondsForTarget(at('2026-09-30T12:00:00Z'), started), 0)
+  // the same target a minute later yields an offset a minute more negative
+  assert.equal(offsetSecondsForTarget(at('2026-09-30T11:00:00Z'), started + 60_000), -3660)
 })

@@ -6,7 +6,7 @@ import Message from 'primevue/message'
 import Select from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
 import { useToast } from 'primevue/usetoast'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChannelHealth } from '../api/types'
 import {
   buildTimeshiftUrl,
@@ -17,6 +17,8 @@ import {
   formatDuration,
   inputValueToDate,
   parseOffsetSeconds,
+  formatIsoDuration,
+  offsetSecondsForTarget,
   OFFSET_PARAM,
   validateRequest,
   type ChannelTiming,
@@ -58,7 +60,37 @@ const startText = ref('')
 const endText = ref('')
 const fullLoop = ref(false)
 const timeline = ref<TimelineChoice>('default')
-const offsetText = ref('')
+// The offset can be typed as a duration (-PT1H / -3600) or given as the
+// datetime "now" should pretend to be. A datetime is turned into an offset
+// relative to the moment the stream is started (Preview/Copy), then frozen
+// into the URL -- the stream advances in real time from there.
+const offsetMode = ref<'duration' | 'datetime'>('duration')
+const offsetDurationText = ref('')
+const pretendText = ref('')
+const offsetSnapshot = ref('')
+
+function freezeOffset() {
+  if (offsetMode.value !== 'datetime') return
+  const target = inputValueToDate(pretendText.value, useUtc.value)
+  offsetSnapshot.value = target ? String(offsetSecondsForTarget(target, Date.now())) : ''
+}
+watch([offsetMode, pretendText, useUtc], freezeOffset, { immediate: true })
+
+// What the URL carries: the typed duration, or the datetime's frozen offset.
+const offsetText = computed({
+  get: () => (offsetMode.value === 'duration' ? offsetDurationText.value : offsetSnapshot.value),
+  set: (v: string) => {
+    offsetMode.value = 'duration'
+    offsetDurationText.value = v
+  },
+})
+const offsetSecondsNow = computed(() => parseOffsetSeconds(offsetText.value))
+const offsetHint = computed(() => {
+  const s = offsetSecondsNow.value
+  if (s === null || s === 0) return ''
+  const pretend = new Date(nowMs.value + s * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z')
+  return `offset ${s} s = ${formatIsoDuration(s)}; “now” would be ${pretend}`
+})
 const format = ref<TimeFormat>('iso')
 
 const nowMs = ref(Date.now())
@@ -96,7 +128,18 @@ const request = computed<TimeshiftRequest>(() => ({
   format: format.value,
 }))
 
-const problems = computed(() => validateRequest(request.value, props.params, nowMs.value, timing.value))
+const problems = computed(() => {
+  const found = validateRequest(request.value, props.params, nowMs.value, timing.value)
+  // A datetime that can't become an offset (beyond ±10 years, which also
+  // covers anything before a long-ago epoch) deserves a clearer message.
+  if (offsetMode.value === 'datetime' && pretendText.value && offsetSecondsNow.value === null) {
+    return [
+      ...found.filter((p) => !p.startsWith('Offset must be')),
+      'That “now” is too far from the present (limit ±10 years) or before the channel epoch.',
+    ]
+  }
+  return found
+})
 const kind = computed(() => classify(request.value, nowMs.value))
 const range = computed(() => effectiveRange(request.value, props.params, timing.value))
 
@@ -183,13 +226,17 @@ function onZoneChange(utc: boolean) {
   // Keep the same instants when the display zone flips.
   const { start, end } = request.value
   useUtc.value = utc
+  const pretend = inputValueToDate(pretendText.value, !utc)
   startText.value = dateToInputValue(start, utc)
   endText.value = dateToInputValue(end, utc)
+  if (pretend) pretendText.value = dateToInputValue(pretend, utc)
 }
 
 // --- actions --------------------------------------------------------------------
 
-async function copy(url: string) {
+async function copy(which: 'hls' | 'dash') {
+  freezeOffset() // a datetime-based offset is relative to the moment of copying
+  const url = which === 'hls' ? hlsUrlOut.value : dashUrlOut.value
   try {
     await navigator.clipboard.writeText(url)
     toast.add({ severity: 'success', summary: 'Copied', detail: url, life: 2500 })
@@ -204,6 +251,7 @@ function startEpochSeconds(): number | null {
 }
 
 function preview(target: 'both' | 'hls' | 'dash') {
+  freezeOffset() // a datetime-based offset is relative to the moment the stream starts
   if (!canPreview.value) return
   emit('preview', {
     hlsUrl: target === 'dash' ? null : hlsUrlOut.value || null,
@@ -213,6 +261,10 @@ function preview(target: 'both' | 'hls' | 'dash') {
   })
 }
 
+const offsetModeOptions = [
+  { label: 'Duration', value: 'duration' },
+  { label: 'Pretend “now” is (datetime)', value: 'datetime' },
+]
 const zoneOptions = [
   { label: 'UTC', value: true },
   { label: 'Local', value: false },
@@ -323,12 +375,22 @@ const formatOptions = [
             DVR window behind it sit at <em>now + offset</em>, every timestamp is the true content time, and
             “past”/“future” for start and end are judged against that moment. Signed seconds
             (<code>-3600</code>) or an ISO 8601 duration (<code>-PT1H</code>, <code>P1DT2H</code>). A negative
-            offset can't reach back before the channel epoch. DASH manifests carry a
+            offset can't reach back before the channel epoch. Instead of a duration you can pick the
+            datetime “now” should pretend to be: Igor converts it to an offset when you press Preview or Copy
+            (<em>that datetime minus the moment you start</em>) and fixes it in the URL, so the stream plays on in
+            real time from that instant; copy again later and the offset will differ accordingly. DASH manifests carry a
             <code>UTCTiming</code> value so players use that time as “now”.
           </FieldHelp>
         </label>
-        <div class="flex gap-2 flex-wrap align-items-center">
-          <InputText id="ts-offset" v-model="offsetText" placeholder="e.g. -PT1H or -3600" class="flex-1" style="min-width: 10rem" />
+        <SelectButton
+          v-model="offsetMode"
+          :options="offsetModeOptions"
+          option-label="label"
+          option-value="value"
+          :allow-empty="false"
+        />
+        <div v-if="offsetMode === 'duration'" class="flex gap-2 flex-wrap align-items-center">
+          <InputText id="ts-offset" v-model="offsetDurationText" placeholder="e.g. -PT1H or -3600" class="flex-1" style="min-width: 10rem" />
           <Button label="−1 h" size="small" outlined @click="offsetText = '-PT1H'" />
           <Button label="−10 min" size="small" outlined @click="offsetText = '-PT10M'" />
           <Button label="+1 h" size="small" outlined @click="offsetText = 'PT1H'" />
@@ -348,6 +410,15 @@ const formatOptions = [
           />
           <Button icon="pi pi-times" size="small" text aria-label="Clear offset" @click="offsetText = ''" />
         </div>
+        <div v-else class="flex gap-2 align-items-center">
+          <input id="ts-pretend" v-model="pretendText" type="datetime-local" step="1" class="p-inputtext flex-1" />
+          <Button icon="pi pi-times" size="small" text aria-label="Clear" @click="pretendText = ''" />
+        </div>
+        <div v-if="offsetMode === 'datetime'" class="text-xs text-color-secondary">
+          Turned into an offset when you press Preview or Copy (the stream then plays on in real time from
+          that instant), in the same zone as the other times above.
+        </div>
+        <div v-if="offsetHint" class="text-xs text-color-secondary">{{ offsetHint }}</div>
       </div>
       <div class="col-12 flex align-items-center gap-2">
         <Checkbox v-model="fullLoop" binary input-id="ts-full-loop" />
@@ -372,13 +443,13 @@ const formatOptions = [
       <div v-if="hlsUrlOut" class="flex align-items-center gap-2">
         <span class="url-tag">HLS</span>
         <InputText :model-value="hlsUrlOut" readonly fluid class="font-mono text-xs" />
-        <Button icon="pi pi-copy" text size="small" title="Copy HLS URL" @click="copy(hlsUrlOut)" />
+        <Button icon="pi pi-copy" text size="small" title="Copy HLS URL" @click="copy('hls')" />
         <Button icon="pi pi-play" text size="small" title="Preview in the HLS player" :disabled="!canPreview" @click="preview('hls')" />
       </div>
       <div v-if="dashUrlOut" class="flex align-items-center gap-2">
         <span class="url-tag">DASH</span>
         <InputText :model-value="dashUrlOut" readonly fluid class="font-mono text-xs" />
-        <Button icon="pi pi-copy" text size="small" title="Copy DASH URL" @click="copy(dashUrlOut)" />
+        <Button icon="pi pi-copy" text size="small" title="Copy DASH URL" @click="copy('dash')" />
         <Button icon="pi pi-play" text size="small" title="Preview in the DASH player" :disabled="!canPreview" @click="preview('dash')" />
       </div>
     </div>

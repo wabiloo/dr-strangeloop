@@ -47,7 +47,10 @@ the players: pick a start (and optional end) in UTC or local time, presets
 override (`timeline=default|continuous|periodic`, fixed name, also usable on
 live URLs by leaving the start empty), and *Pretend “now” is…* (`offset=-PT1H` /
 `-3600`, fixed name, negative or positive, with presets; plays the live edge as it
-was/will be, and start/end are judged against that moment); it builds the HLS and DASH URLs (param names from the channel's
+was/will be, and start/end are judged against that moment). The offset can also be
+given as the **datetime “now” should pretend to be**: Igor computes `offset =
+datetime − moment of Preview/Copy` (whole seconds) and freezes it in the URL, so the
+stream then advances in real time from that instant; it builds the HLS and DASH URLs (param names from the channel's
 `[timeshift]` config, values as ISO 8601 / epoch s / epoch ms), validates them
 the way `serve.py` will, lets you copy them, and **Preview** swaps them into
 the HLS/DASH players (which then start from the beginning of the range rather
