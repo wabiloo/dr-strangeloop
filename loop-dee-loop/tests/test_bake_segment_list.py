@@ -528,6 +528,34 @@ def test_bake_segment_list_ladder_holes_are_per_rendition(tmp_path, _stub_media_
     assert by_name["360p"]["segment_present"] == [True, False, True]
 
 
+def test_bake_segment_list_no_media_uses_declared_variant(tmp_path, _stub_media_io):
+    segments = [_segment(0, media_file=None), _segment(1, media_file=None)]
+    manifest_path = _write_manifest(tmp_path, segments)
+    data = json.loads(manifest_path.read_text())
+    data["variant"] = {"codecs": "avc1.4D401F,mp4a.40.2", "bandwidth": 800000, "resolution": "640x360"}
+    manifest_path.write_text(json.dumps(data))
+
+    output_dir = tmp_path / "out"
+    bake_segment_list(manifest_path, output_dir, allow_missing_segments=True)
+
+    rendition = json.loads((output_dir / "loop_descriptor.json").read_text())["video_renditions"][0]
+    assert rendition["segment_present"] == [False, False]
+    assert rendition["video_variant"] == {
+        "codecs": "avc1.4D401F", "width": 640, "height": 360, "frame_rate": 25.0, "bandwidth": 800000,
+    }
+
+
+def test_bake_segment_list_no_media_incomplete_variant_fails(tmp_path, _stub_media_io):
+    segments = [_segment(0, media_file=None)]
+    manifest_path = _write_manifest(tmp_path, segments)
+    data = json.loads(manifest_path.read_text())
+    data["variant"] = {"bandwidth": 800000}
+    manifest_path.write_text(json.dumps(data))
+
+    with pytest.raises(ValidationError, match="cannot probe"):
+        bake_segment_list(manifest_path, tmp_path / "out", allow_missing_segments=True)
+
+
 def test_bake_segment_list_ladder_rendition_with_no_media_fails(tmp_path, _stub_media_io):
     segments = [_segment(0), _segment(1)]
     ladder = _ladder(tmp_path, 2, missing={"360p": {0, 1}})

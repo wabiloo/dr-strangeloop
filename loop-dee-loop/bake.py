@@ -1278,6 +1278,27 @@ def apply_declared_variant(video: dict, declared: dict | None) -> None:
         video["bandwidth"] = int(declared["bandwidth"])
 
 
+def video_variant_from_declared(declared: dict | None) -> dict | None:
+    """The `video_variant` dict built purely from a declared variant, for a
+    rendition with no media to probe; None unless video codec, bandwidth and
+    resolution are all declared. A missing frame rate defaults to 25 (it is
+    informational in the playlists)."""
+    if not declared or not declared.get("bandwidth") or not declared.get("resolution"):
+        return None
+    codecs = [c.strip() for c in (declared.get("codecs") or "").split(",")]
+    video_codec = next((c for c in codecs if c.startswith(("avc1", "avc3", "hvc1", "hev1"))), None)
+    if not video_codec:
+        return None
+    width, _, height = str(declared["resolution"]).partition("x")
+    return {
+        "codecs": video_codec,
+        "width": int(width),
+        "height": int(height),
+        "frame_rate": float(declared.get("frame_rate") or 25.0),
+        "bandwidth": int(declared["bandwidth"]),
+    }
+
+
 def probe_has_audio(path: Path) -> bool:
     result = _run(
         ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)]
@@ -1597,16 +1618,26 @@ def bake_segment_list(
     for r_idx, (spec, state) in enumerate(zip(rendition_specs, built)):
         name = spec["name"]
         if state["reference_segment_path"] is None:
-            raise ValidationError(
-                f"Rendition '{name}': every segment is missing media_file -- cannot probe codec/"
-                f"resolution/bandwidth metadata with nothing to probe. At least "
-                f"one real segment per rendition is required even with --allow-missing-segments."
+            video_variant = video_variant_from_declared(spec["variant"])
+            if video_variant is None:
+                raise ValidationError(
+                    f"Rendition '{name}': every segment is missing media_file and the manifest "
+                    f"declares no usable 'variant' (codecs, bandwidth, resolution) -- cannot probe "
+                    f"codec/resolution/bandwidth metadata with nothing to probe. Provide at least "
+                    f"one real segment per rendition, or a 'variant' from the source's "
+                    f"multivariant playlist."
+                )
+            logger.warning(
+                "Rendition '%s': no media at all -- using the manifest's declared variant %s",
+                name, video_variant,
             )
-        first_init = next(f for f in state["init_files"] if f)
-        variant_metadata = probe_segment_variant_metadata(
-            state["reference_segment_path"], output_package_dir / "segments" / name / first_init
-        )
-        apply_declared_variant(variant_metadata["video"], spec["variant"])
+            variant_metadata = {"video": video_variant, "audio": None}
+        else:
+            first_init = next(f for f in state["init_files"] if f)
+            variant_metadata = probe_segment_variant_metadata(
+                state["reference_segment_path"], output_package_dir / "segments" / name / first_init
+            )
+            apply_declared_variant(variant_metadata["video"], spec["variant"])
 
         audio_variant = None
         if r_idx == 0 and shared_audio_variant is not None:
