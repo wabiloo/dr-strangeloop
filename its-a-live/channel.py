@@ -86,6 +86,7 @@ import tomllib
 import boto3
 
 from _infra_cfg import infra_table, reject_legacy_tables
+from _paths_cfg import resolve_source_path
 
 _DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "config.toml")
 
@@ -121,6 +122,9 @@ def _config(config_path):
     if backend not in _BACKENDS:
         sys.exit(f"[deploy].backend must be one of {_BACKENDS!r} in {config_path}, got {backend!r}")
     reject_legacy_tables(cfg, config_path)
+    source = cfg.get("input", {})
+    if source.get("source_path"):
+        source["source_path"] = resolve_source_path(source["source_path"], config_path)
     return cfg
 
 

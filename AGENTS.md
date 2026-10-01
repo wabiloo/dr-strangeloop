@@ -98,6 +98,18 @@ rename or move a table/key in one place only -- see
 
 ## Where things live
 
+Defaults below; all of them are overridable via an optional
+`~/.dr-strangeloop/config.toml` (or the file `$DR_STRANGELOOP_CONFIG` points
+at). With no such file the repo-relative layout below applies; with one,
+unset keys default to folders inside its directory (`~/.dr-strangeloop/data`,
+`outputs`, `packages`). Format:
+[`dr-strangeloop.config.example.toml`](./dr-strangeloop.config.example.toml)
+(sits next to `data/` and `outputs/`, so
+`DR_STRANGELOOP_CONFIG=$PWD/dr-strangeloop.config.example.toml` reproduces the
+repo layout). The code is [`dr_strangeloop_config.py`](./dr_strangeloop_config.py)
+(stdlib only; igor, `galvanise.py` and `its-a-live` all read it). **Never
+hardcode `data/...` / `outputs/...` in new code -- call `get_paths()`.**
+
 - `data/playlists/*.yaml` — content/marker (ad break/PPO/etc) definitions
   (source of truth for what a loop contains).
 - `data/channels/*.toml` — its-a-live per-channel deploy config (backend,

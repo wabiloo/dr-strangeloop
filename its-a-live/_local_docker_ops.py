@@ -24,6 +24,7 @@ import sys
 
 from _host_paths import to_host_path
 from _infra_cfg import infra_table
+from _paths_cfg import get_paths
 from _markers_cfg import period_on_segmentation_serve_args
 from _reachability import check_manifest_reachable
 from _epoch_cfg import config_epoch_utc
@@ -56,7 +57,7 @@ def _resolve_python_cmd():
 
 def _local_output_dir(cfg, channel_name):
     return os.path.abspath(cfg.get("bake", {}).get(
-        "local_output_dir", os.path.join(os.path.dirname(__file__), ".local-loop-package", channel_name)
+        "local_output_dir", os.path.join(get_paths().local_package_dir, channel_name)
     ))
 
 

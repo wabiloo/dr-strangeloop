@@ -1,0 +1,25 @@
+# Example dr-strangeloop config. Relative paths resolve against the folder
+# holding this file; as it sits at the repo root, "data" and "outputs" are
+# its sibling folders, i.e. the repo's own layout:
+#
+#   DR_STRANGELOOP_CONFIG=$PWD/dr-strangeloop.config.example.toml
+#
+# For a per-user setup, copy it to ~/.dr-strangeloop/config.toml (picked up
+# automatically; nothing else is searched). Keys left out default to folders
+# inside the config's folder, so an empty ~/.dr-strangeloop/config.toml gives
+#   ~/.dr-strangeloop/data/{playlists,channels,assets,archives,manifests}
+#   ~/.dr-strangeloop/outputs/   (+ archives/, manifests/ imports)
+#   ~/.dr-strangeloop/packages/  (baked loop packages)
+# With no config file at all, the repo layout below is used.
+
+[paths]
+data_dir          = "data"       # parent of the five folders below
+outputs_dir       = "outputs"    # franken-ts builds + archives/ + manifests/ imports
+local_package_dir = "its-a-live/.local-loop-package"   # baked loop packages
+
+# Each of these derives from data_dir (<data_dir>/playlists, ...) unless set:
+# playlists_dir   = "data/playlists"    # franken-ts YAML playlists
+# channels_dir    = "data/channels"     # its-a-live channel TOMLs
+# assets_dir      = "data/assets"       # files uploaded through Igor
+# archives_dir    = "data/archives"     # HAR / Proxyman captures
+# manifests_dir   = "data/manifests"    # saved VOD manifest URLs

@@ -10,7 +10,7 @@ Paths may be absolute or relative to the current working directory.
 
 Pipeline (its-a-live backend selected by --backend, default aws-media):
   1. Run franken-ts to build the .ts file
-  2. Generate data/channels/<basename>.toml at the repo root
+  2. Generate <channels_dir>/<basename>.toml (default data/channels/)
   3. (ecs-express only) Ensure the shared ECS cluster stack is deployed
   4. Run CDK deploy (cdk deploy) for the channel stack
   5. Spark: stage the input for the chosen backend (upload .ts for
@@ -26,6 +26,8 @@ import os
 import shutil
 import sys
 import subprocess
+
+from dr_strangeloop_config import get_paths
 
 # PyYAML is available via franken-ts; load lazily so the import error is clear.
 try:
@@ -165,7 +167,7 @@ def main() -> None:
 
     repo_root    = _repo_root()
     push_dir     = os.path.join(repo_root, "its-a-live")
-    configs_dir  = os.path.join(repo_root, "data", "channels")
+    configs_dir  = str(get_paths().channels_dir)
 
     # Derive basename (e.g. "break-and-popos") from the YAML filename.
     basename = os.path.splitext(os.path.basename(config_yaml))[0]
@@ -226,7 +228,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Step 2 — Generate TOML config
     # ------------------------------------------------------------------
-    _header(2, f"Generate TOML config (data/channels/{basename}.toml)")
+    _header(2, f"Generate TOML config ({toml_path})")
     toml_content = _generate_toml(backend=backend, name=basename, ts_file_abs=ts_file_abs)
     print(f"  Will write : {toml_path}\n")
     print("  Content preview:")

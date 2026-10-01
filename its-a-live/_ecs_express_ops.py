@@ -15,6 +15,7 @@ import sys
 import time
 
 from _infra_cfg import infra_table
+from _paths_cfg import get_paths
 from _reachability import check_manifest_reachable
 
 _LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
@@ -40,7 +41,7 @@ def spark(cfg, session, channel_name, extra_args=None):
     segment_duration = str(cfg.get("packaging", {}).get("segment_duration", 4.0))
     packaging = cfg.get("packaging", {})
     local_output_dir = cfg.get("bake", {}).get(
-        "local_output_dir", os.path.join(os.path.dirname(__file__), ".local-loop-package", channel_name)
+        "local_output_dir", os.path.join(get_paths().local_package_dir, channel_name)
     )
     markers_cfg = cfg.get("markers", {})
     daterange_mode = markers_cfg.get("daterange_mode", "shared")

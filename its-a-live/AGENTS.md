@@ -44,13 +44,13 @@ bucket_name = "..."    # required (ignored by local-docker) — must already exi
 content_folder = "..." # required (ignored by local-docker) — content lives under <content_folder>/<name>/
 
 [input]
-source_path = "..."    # required — franken-ts output (.ts file, or ladder dir for ecs-express/local-docker), or a grave-robber segment-list manifest.json (from `grave-robber ingest`/`ingest-url`; ecs-express/local-docker only)
+source_path = "..."    # required — franken-ts output (.ts file, or ladder dir for ecs-express/local-docker), or a grave-robber segment-list manifest.json (from `grave-robber ingest`/`ingest-url`; ecs-express/local-docker only). Relative paths resolve against this TOML's directory (legacy `../outputs/x.ts`, relative to the cwd, still works if nothing exists at the TOML-relative spot); prefer absolute
 source_kind = "playlist" # optional metadata written by igor: "playlist" | "archive" | "manifest" -- not read by channel.py
 allow_missing_segments = false # optional -- pass --allow-missing-segments to bake.py (segment-list manifests with holes)
 
 # ecs-express/local-docker only (ignored by aws-media):
 [bake]
-local_output_dir = "..."   # optional, defaults to ./.local-loop-package/<name>
+local_output_dir = "..."   # optional, defaults to <local_package_dir>/<name> (see root AGENTS.md; default its-a-live/.local-loop-package)
 
 # Shape of the HLS/DASH SCTE-35 signaling loop-dee-loop's bake.py renders
 # (see loop-dee-loop/scte35_signaling.py) -- fixed per bake, read back by

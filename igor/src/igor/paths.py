@@ -3,35 +3,39 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 
 # igor/src/igor/paths.py -> repo root is 4 parents up.
 IGOR_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = IGOR_DIR.parent
 
+# dr_strangeloop_config.py lives at the repo root (stdlib-only, shared with
+# galvanise.py and its-a-live) and igor is not installed with it on sys.path.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+from dr_strangeloop_config import get_paths  # noqa: E402
+
 FRANKEN_TS_DIR = REPO_ROOT / "franken-ts"
 ITS_A_LIVE_DIR = REPO_ROOT / "its-a-live"
 LOOP_DEE_LOOP_DIR = REPO_ROOT / "loop-dee-loop"
 GRAVE_ROBBER_DIR = REPO_ROOT / "grave-robber"
 
-FRANKEN_TS_PLAYLISTS_DIR = REPO_ROOT / "data" / "playlists"
-ITS_A_LIVE_CONFIGS_DIR = REPO_ROOT / "data" / "channels"
-ASSET_UPLOADS_DIR = REPO_ROOT / "data" / "assets"
-OUTPUTS_DIR = REPO_ROOT / "outputs"
+_cfg = get_paths()
 
-# grave-robber/SCOPE.md §10: "available archives (HAR/Proxyman logs dropped
-# into a store this tool owns, e.g. data/archives/)".
-ARCHIVES_DIR = REPO_ROOT / "data" / "archives"
-# Import output lands alongside franken-ts's own outputs/ tree, in its own
-# subdirectory so a grave-robber import (manifest.json + media/) never
-# collides with a franken-ts playlist's own <name>.ts/<name>/ output.
-ARCHIVE_IMPORTS_DIR = OUTPUTS_DIR / "archives"
+FRANKEN_TS_PLAYLISTS_DIR = _cfg.playlists_dir
+ITS_A_LIVE_CONFIGS_DIR = _cfg.channels_dir
+ASSET_UPLOADS_DIR = _cfg.assets_dir
+OUTPUTS_DIR = _cfg.outputs_dir
 
-# VOD manifest-URL sources (`grave-robber ingest-url`): the saved URL +
-# display name live under data/manifests/, the downloaded import
-# (manifest.json + media/) under outputs/manifests/<name>/.
-MANIFESTS_DIR = REPO_ROOT / "data" / "manifests"
-MANIFEST_IMPORTS_DIR = OUTPUTS_DIR / "manifests"
+# grave-robber archive captures (HAR/Proxyman logs) and their imports.
+ARCHIVES_DIR = _cfg.archives_dir
+ARCHIVE_IMPORTS_DIR = _cfg.archive_imports_dir
+
+# VOD manifest-URL sources (`grave-robber ingest-url`): saved URL + display
+# name, and the downloaded import (manifest.json + media/).
+MANIFESTS_DIR = _cfg.manifests_dir
+MANIFEST_IMPORTS_DIR = _cfg.manifest_imports_dir
 
 
 def its_a_live_python() -> list[str]:
