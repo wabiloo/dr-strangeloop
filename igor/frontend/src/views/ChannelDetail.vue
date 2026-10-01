@@ -9,6 +9,7 @@ import Message from 'primevue/message'
 import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import BackendBadge from '../components/BackendBadge.vue'
@@ -59,6 +60,7 @@ import type {
 import { type Phase, PHASE_LABEL, isUpButMaybeUnreachable, listItemPhase, liveStatusPhase, phaseSeverity } from '../utils/channelPhase'
 
 const props = defineProps<{ name: string }>()
+const router = useRouter()
 
 const status = ref<ChannelStatus | null>(null)
 const outputs = ref<ChannelOutputs | null>(null)
@@ -978,14 +980,24 @@ watch(() => props.name, reload)
       <div class="flex flex-column gap-2 p-3 border-round surface-card channel-config" style="border: 1px solid var(--surface-border)">
         <div class="flex align-items-center justify-content-between">
           <h3 class="m-0">Configuration</h3>
-          <Button
-            v-if="config && !editing"
-            label="Edit"
-            icon="pi pi-pencil"
-            size="small"
-            text
-            @click="startEdit"
-          />
+          <div class="flex align-items-center gap-1">
+            <Button
+              v-if="config && !editing && section('deploy').backend === 'local-docker'"
+              label="Duplicate to ecs-express"
+              icon="pi pi-clone"
+              size="small"
+              text
+              @click="router.push({ path: '/channels/new', query: { from: name } })"
+            />
+            <Button
+              v-if="config && !editing"
+              label="Edit"
+              icon="pi pi-pencil"
+              size="small"
+              text
+              @click="startEdit"
+            />
+          </div>
         </div>
         <div v-if="!config" class="text-color-secondary text-sm">Loading...</div>
 
