@@ -142,7 +142,7 @@ const form = reactive<ChannelCreatePayload>({
   epoch_utc: DEFAULT_EPOCH_UTC,
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
-  continuous_timeline: false,
+  continuous: false,
   timeshift_enabled: true,
   timeshift_start_param: 'start',
   timeshift_end_param: 'end',
@@ -438,8 +438,8 @@ async function submit() {
           <EpochFields :form="form" id-prefix="new" />
         </div>
         <div class="col-12 flex align-items-center gap-2">
-          <Checkbox v-model="form.continuous_timeline" binary input-id="continuous-timeline" />
-          <label for="continuous-timeline">{{ L.continuous_timeline }}</label>
+          <Checkbox v-model="form.continuous" binary input-id="continuous-timeline" />
+          <label for="continuous-timeline">{{ L.continuous }}</label>
           <FieldHelp label="Continuous timeline">
             Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
             the channel has no discontinuity/Period restart at the loop wrap. Off by default: the loop wrap

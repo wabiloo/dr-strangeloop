@@ -109,7 +109,7 @@ hls_ts_mux_audio = {hls_ts_mux_audio}
 
 [timeline]
 epoch_utc = "{epoch_utc}"
-continuous_timeline = {continuous_timeline}
+continuous = {continuous}
 
 [express]
 port   = {port}
@@ -126,7 +126,7 @@ hls_ts_mux_audio = {hls_ts_mux_audio}
 
 [timeline]
 epoch_utc = "{epoch_utc}"
-continuous_timeline = {continuous_timeline}
+continuous = {continuous}
 
 [docker]
 port = {port}
@@ -155,7 +155,7 @@ def generate_toml(
     epoch_utc: str = DEFAULT_EPOCH_UTC,
     hls_format: str = "cmaf",
     hls_ts_mux_audio: bool = True,
-    continuous_timeline: bool = False,
+    continuous: bool = False,
     timeshift_enabled: bool = True,
     timeshift_start_param: str = "start",
     timeshift_end_param: str = "end",
@@ -213,7 +213,7 @@ def generate_toml(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
-            continuous_timeline=str(continuous_timeline).lower(),
+            continuous=str(continuous).lower(),
             port=int(port), cpu=cpu, memory=memory,
         )
         content += _timeshift_section()
@@ -232,7 +232,7 @@ def generate_toml(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
-            continuous_timeline=str(continuous_timeline).lower(),
+            continuous=str(continuous).lower(),
             port=_format_local_docker_port(port),
         )
         content += _timeshift_section()

@@ -337,7 +337,7 @@ export interface ChannelHealth {
   window_segments: number
   /** Newer serve.py only (loop-dee-loop/SCOPE.md §13). */
   epoch_utc?: string
-  continuous_timeline?: boolean
+  continuous?: boolean
   timeshift?: {
     enabled: boolean
     start_param?: string
@@ -371,7 +371,7 @@ export interface ChannelCreatePayload {
   /** loop-dee-loop/SCOPE.md §12: default true -- no #EXT-X-DISCONTINUITY /
    * DASH Period restart at the loop wrap (serve.py rewrites each segment's
    * own timestamps per request instead). ecs-express/local-docker only. */
-  continuous_timeline?: boolean
+  continuous?: boolean
   /** loop-dee-loop/SCOPE.md §13: startover/catchup via query parameters on
    * the normal manifest URLs. The names are per-channel and also become the
    * CDN's manifest cache-key allow-list. ecs-express/local-docker only. */

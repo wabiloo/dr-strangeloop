@@ -29,7 +29,7 @@ hls_format = "cmaf"
 hls_ts_mux_audio = true
 
 [timeline]
-continuous_timeline = true
+continuous = true
 
 [docker]
 port = "auto"

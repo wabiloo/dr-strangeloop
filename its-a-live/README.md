@@ -142,7 +142,7 @@ dvr_window_seconds = 30
 
 [timeline]                  # ecs-express/local-docker only
 epoch_utc          = "2026-01-01T00:00:00Z"  # optional, this is the default; loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
-continuous_timeline = true  # default -- see loop-dee-loop/SCOPE.md §12; false reverts to signaled discontinuities/Period restarts at the loop wrap
+continuous = true  # default -- see loop-dee-loop/SCOPE.md §12; false reverts to signaled discontinuities/Period restarts at the loop wrap
 
 [timeshift]                  # optional; startover/catchup (loop-dee-loop/SCOPE.md §13), on by default
 enabled = true

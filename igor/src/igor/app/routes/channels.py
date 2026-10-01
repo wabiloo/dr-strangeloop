@@ -59,7 +59,7 @@ class ChannelCreatePayload(BaseModel):
     # so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the
     # loop wrap. ecs-express/local-docker only, same as hls_format/
     # hls_ts_mux_audio above.
-    continuous_timeline: bool = False
+    continuous: bool = False
     # loop-dee-loop/SCOPE.md §13: startover/catchup via query parameters on
     # the normal manifest URLs. Names are configurable per channel and
     # also drive CloudFront's manifest cache key (its-a-live/loop_stack.py).

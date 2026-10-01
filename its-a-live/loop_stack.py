@@ -78,7 +78,7 @@ class LoopStack(Stack):
         # the loop wrap. `false` falls back to the honestly-signaled
         # default serve.py behavior (e.g. if a package was baked with a
         # 32-bit tfdt and continuity mode's startup check would refuse it).
-        continuous_timeline = bool(config.get("timeline", {}).get("continuous_timeline", True))
+        continuous = bool(config.get("timeline", {}).get("continuous", True))
 
         express_cfg = config.get("express", {})
         port = int(express_cfg.get("port", 8080))
@@ -192,7 +192,7 @@ class LoopStack(Stack):
                     "--port", str(port),
                     "--dvr-window-seconds", dvr_window_seconds,
                     "--epoch-utc", config_epoch_utc(config),
-                    *(["--continuous-timeline"] if continuous_timeline else []),
+                    *(["--continuous-timeline"] if continuous else []),
                     *timeshift_serve_args(config),
                 ],
                 environment=[

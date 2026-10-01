@@ -31,7 +31,7 @@ export const CONFIG_FIELD_LABEL = {
   region: 'AWS region',
   bucket_name: 'S3 bucket name',
   content_folder: 'S3 content folder',
-  continuous_timeline: 'Continuous timeline across the loop wrap',
+  continuous: 'Continuous timeline across the loop wrap',
   timeshift_enabled: 'Enable startover & catchup',
   timeshift_start_param: 'Start parameter',
   timeshift_end_param: 'End parameter',
@@ -139,7 +139,7 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
     ])
     add('timeline', [
       ['epoch_utc', timeline.epoch_utc ?? DEFAULT_EPOCH_UTC],
-      ['continuous_timeline', timeline.continuous_timeline],
+      ['continuous', timeline.continuous],
     ])
     // A channel written before [timeshift] existed gets its-a-live's
     // defaults (enabled) -- show those rather than hiding the section.

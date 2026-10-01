@@ -131,9 +131,9 @@ def _dvr_window_seconds(cfg):
 
 def _continuous_timeline_args(cfg):
     """loop-dee-loop/SCOPE.md §12: default on -- `[timeline]
-    continuous_timeline = false` opts back out to the honestly-signaled
+    continuous = false` opts back out to the honestly-signaled
     #EXT-X-DISCONTINUITY/Period-restart default."""
-    if cfg.get("timeline", {}).get("continuous_timeline", True):
+    if cfg.get("timeline", {}).get("continuous", True):
         return ["--continuous-timeline"]
     return []
 

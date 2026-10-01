@@ -113,7 +113,7 @@ const editForm = reactive<ChannelCreatePayload>({
   epoch_utc: DEFAULT_EPOCH_UTC,
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
-  continuous_timeline: false,
+  continuous: false,
   timeshift_enabled: true,
   timeshift_start_param: 'start',
   timeshift_end_param: 'end',
@@ -219,7 +219,7 @@ function startEdit() {
     epoch_utc: String(timeline.epoch_utc ?? DEFAULT_EPOCH_UTC),
     hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
     hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
-    continuous_timeline: Boolean(timeline.continuous_timeline ?? true),
+    continuous: Boolean(timeline.continuous ?? true),
     timeshift_enabled: editTimeshift.enabled,
     timeshift_start_param: editTimeshift.start_param,
     timeshift_end_param: editTimeshift.end_param,
@@ -1098,9 +1098,9 @@ watch(() => props.name, reload)
                   <EpochFields :form="editForm" id-prefix="edit" />
                 </div>
                 <div class="flex align-items-center gap-2 config-field-wide">
-                  <Checkbox v-model="editForm.continuous_timeline" binary input-id="edit-continuous-timeline" />
+                  <Checkbox v-model="editForm.continuous" binary input-id="edit-continuous-timeline" />
                   <label for="edit-continuous-timeline" class="text-xs text-color-secondary">
-                    {{ L.continuous_timeline }}
+                    {{ L.continuous }}
                   </label>
                   <FieldHelp label="Continuous timeline">
                     Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
