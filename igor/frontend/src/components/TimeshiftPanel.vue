@@ -318,8 +318,8 @@ const zoneOptions = [
 ]
 const timelineOptions = [
   { label: 'default (channel setting)', value: 'default' },
-  { label: 'continuous (no discontinuities)', value: 'continuous' },
-  { label: 'periodic (signaled at each wrap)', value: 'periodic' },
+  { label: 'continuous (no HLS discontinuity / DASH Period at the wrap)', value: 'continuous' },
+  { label: 'periodic (an HLS discontinuity / DASH Period at each wrap)', value: 'periodic' },
 ]
 const formatOptions = [
   { label: 'ISO 8601', value: 'iso' },
@@ -366,53 +366,28 @@ const formatOptions = [
     <!-- v-show on a plain wrapper: primeflex's `.flex` is display:flex !important and would defeat it. -->
     <div v-show="open" id="ts-body">
       <div class="flex flex-column gap-3">
-    <div class="flex gap-2 flex-wrap align-items-center">
-      <span class="text-xs text-color-secondary uppercase">Presets</span>
-      <Button label="Last 5 min" size="small" outlined @click="presetLast(5)" />
-      <Button label="Last 15 min" size="small" outlined @click="presetLast(15)" />
-      <Button label="Last hour" size="small" outlined @click="presetLast(60)" />
-      <Button label="Startover from 2 min ago" size="small" outlined @click="presetStartoverFrom(2)" />
-      <Button
-        label="Previous loop"
-        size="small"
-        outlined
-        :disabled="!fullTiming"
-        :title="fullTiming ? '' : 'Needs the channel running (loop timing from /health)'"
-        @click="presetPreviousLoop"
-      />
-      <Button
-        label="Startover from current loop"
-        size="small"
-        outlined
-        :disabled="!fullTiming"
-        :title="fullTiming ? '' : 'Needs the channel running (loop timing from /health)'"
-        @click="presetCurrentLoop"
-      />
-    </div>
-
     <div class="grid">
-      <div class="col-12 md:col-6 flex flex-column gap-1">
+      <div class="col-12 md:col-6 lg:col-4 flex flex-column gap-1">
         <label class="text-xs text-color-secondary" for="ts-start">
-          Start ({{ params.start_param }})
+          Start <code class="qp">{{ params.start_param }}</code>
         </label>
         <div class="flex gap-2">
           <input id="ts-start" v-model="startText" type="datetime-local" step="1" class="p-inputtext flex-1" />
-          <Button label="Now" size="small" text @click="setNow('start')" />
-          <Button icon="pi pi-times" size="small" text aria-label="Clear start" @click="startText = ''" />
+          <Button label="Now" size="small" severity="secondary" text @click="setNow('start')" />
+          <Button icon="pi pi-times" size="small" severity="secondary" text aria-label="Clear start" @click="startText = ''" />
         </div>
       </div>
-      <div class="col-12 md:col-6 flex flex-column gap-1">
+      <div class="col-12 md:col-6 lg:col-4 flex flex-column gap-1">
         <label class="text-xs text-color-secondary" for="ts-end">
-          End ({{ params.end_param }}, optional)
+          End <code class="qp">{{ params.end_param }}</code> <span>(optional)</span>
         </label>
         <div class="flex gap-2">
           <input id="ts-end" v-model="endText" type="datetime-local" step="1" class="p-inputtext flex-1" />
-          <Button label="Now" size="small" text @click="setNow('end')" />
-          <Button icon="pi pi-times" size="small" text aria-label="Clear end" @click="endText = ''" />
+          <Button label="Now" size="small" severity="secondary" text @click="setNow('end')" />
+          <Button icon="pi pi-times" size="small" severity="secondary" text aria-label="Clear end" @click="endText = ''" />
         </div>
       </div>
-      <div class="col-12 md:col-4 flex flex-column gap-1">
-        <label class="text-xs text-color-secondary ts-label">Times entered in</label>
+      <div class="col-12 md:col-6 lg:col-4 flex flex-column justify-content-end">
         <SelectButton
           :model-value="useUtc"
           :options="zoneOptions"
@@ -422,26 +397,44 @@ const formatOptions = [
           @update:model-value="onZoneChange"
         />
       </div>
-      <div class="col-12 md:col-4 flex flex-column gap-1">
-        <label class="text-xs text-color-secondary ts-label">Value format in URL</label>
-        <Select v-model="format" :options="formatOptions" option-label="label" option-value="value" fluid />
+      <div class="col-12 flex gap-2 flex-wrap align-items-center">
+        <span class="text-xs text-color-secondary uppercase">Presets</span>
+        <Button label="Last 5 min" size="small" severity="secondary" outlined @click="presetLast(5)" />
+        <Button label="Last 15 min" size="small" severity="secondary" outlined @click="presetLast(15)" />
+        <Button label="Last hour" size="small" severity="secondary" outlined @click="presetLast(60)" />
+        <Button label="Startover from 2 min ago" size="small" severity="secondary" outlined @click="presetStartoverFrom(2)" />
+        <Button
+          label="Previous loop"
+          size="small"
+          severity="secondary"
+          outlined
+          :disabled="!fullTiming"
+          :title="fullTiming ? '' : 'Needs the channel running (loop timing from /health)'"
+          @click="presetPreviousLoop"
+        />
+        <Button
+          label="Startover from current loop"
+          size="small"
+          severity="secondary"
+          outlined
+          :disabled="!fullTiming"
+          :title="fullTiming ? '' : 'Needs the channel running (loop timing from /health)'"
+          @click="presetCurrentLoop"
+        />
       </div>
-      <div class="col-12 md:col-4 flex flex-column gap-1">
-        <label class="text-xs text-color-secondary ts-label">
-          Timeline ({{ TIMELINE_PARAM }})
-          <FieldHelp label="Timeline override">
-            <code>timeline=default|continuous|periodic</code> — works on live URLs too, not just ranges.
-            <em>default</em> (or leaving it out) follows the channel's continuous-timeline setting.
-            <em>continuous</em> rewrites timestamps so there is no discontinuity at each loop wrap;
-            <em>periodic</em> signals one #EXT-X-DISCONTINUITY (HLS) / Period (DASH) per wrap, which for a
-            long range is many. <em>continuous</em> is refused (HTTP 400) if the baked package cannot support it.
-          </FieldHelp>
-        </label>
-        <Select v-model="timeline" :options="timelineOptions" option-label="label" option-value="value" fluid />
+      <div class="col-12 flex align-items-center gap-2">
+        <Checkbox v-model="fullLoop" binary input-id="ts-full-loop" />
+        <label for="ts-full-loop">Whole loops only <code class="qp">{{ FULL_LOOPS_PARAM }}</code></label>
+        <FieldHelp label="Whole loops only">
+          Widens the range to complete loop iterations: the start moves back to the nearest loop start at or before
+          it, and the end (if given) moves forward to the nearest loop end at or after it. With no end, the
+          range runs for as many whole loops as fit within the maximum span. The maximum span applies to the
+          widened range.
+        </FieldHelp>
       </div>
       <div class="col-12 flex flex-column gap-1">
         <label class="text-xs text-color-secondary" for="ts-offset">
-          Pretend “now” is… ({{ OFFSET_PARAM }})
+          Pretend “now” is… <code class="qp">{{ OFFSET_PARAM }}</code>
           <FieldHelp label="Offset">
             Plays the stream as it was (negative) or will be (positive) that long from now: the live edge and the
             DVR window behind it sit at <em>now + offset</em>, every timestamp is the true content time, and
@@ -463,12 +456,13 @@ const formatOptions = [
         />
         <div v-if="offsetMode === 'duration'" class="flex gap-2 flex-wrap align-items-center">
           <InputText id="ts-offset" v-model="offsetDurationText" placeholder="e.g. -PT1H or -3600" class="flex-1" style="min-width: 10rem" />
-          <Button label="−1 h" size="small" outlined @click="offsetText = '-PT1H'" />
-          <Button label="−10 min" size="small" outlined @click="offsetText = '-PT10M'" />
-          <Button label="+1 h" size="small" outlined @click="offsetText = 'PT1H'" />
+          <Button label="−1 h" size="small" severity="secondary" outlined @click="offsetText = '-PT1H'" />
+          <Button label="−10 min" size="small" severity="secondary" outlined @click="offsetText = '-PT10M'" />
+          <Button label="+1 h" size="small" severity="secondary" outlined @click="offsetText = 'PT1H'" />
           <Button
             label="−1 loop"
             size="small"
+            severity="secondary"
             outlined
             :disabled="!fullTiming"
             @click="offsetText = String(-Math.round(fullTiming!.loopMs / 1000))"
@@ -476,15 +470,16 @@ const formatOptions = [
           <Button
             label="+1 loop"
             size="small"
+            severity="secondary"
             outlined
             :disabled="!fullTiming"
             @click="offsetText = String(Math.round(fullTiming!.loopMs / 1000))"
           />
-          <Button icon="pi pi-times" size="small" text aria-label="Clear offset" @click="offsetText = ''" />
+          <Button icon="pi pi-times" size="small" severity="secondary" text aria-label="Clear offset" @click="offsetText = ''" />
         </div>
         <div v-else class="flex gap-2 align-items-center">
           <input id="ts-pretend" v-model="pretendText" type="datetime-local" step="1" class="p-inputtext flex-1" />
-          <Button icon="pi pi-times" size="small" text aria-label="Clear" @click="pretendText = ''" />
+          <Button icon="pi pi-times" size="small" severity="secondary" text aria-label="Clear" @click="pretendText = ''" />
         </div>
         <div v-if="offsetMode === 'datetime'" class="text-xs text-color-secondary">
           Turned into an offset when you press Preview or Copy (the stream then plays on in real time from
@@ -492,42 +487,52 @@ const formatOptions = [
         </div>
         <div v-if="offsetHint" class="text-xs text-color-secondary">{{ offsetHint }}</div>
       </div>
-      <div class="col-12 flex align-items-center gap-2">
-        <Checkbox v-model="fullLoop" binary input-id="ts-full-loop" />
-        <label for="ts-full-loop">Whole loops only ({{ FULL_LOOPS_PARAM }})</label>
-        <FieldHelp label="Whole loops only">
-          Widens the range to complete loop iterations: the start moves back to the nearest loop start at or before
-          it, and the end (if given) moves forward to the nearest loop end at or after it. With no end, the
-          range runs for as many whole loops as fit within the maximum span. The maximum span applies to the
-          widened range.
-        </FieldHelp>
+      <div class="col-12 md:col-6 flex flex-column gap-1">
+        <label class="text-xs text-color-secondary ts-label">
+          Timeline <code class="qp">{{ TIMELINE_PARAM }}</code>
+          <FieldHelp label="Timeline override">
+            <code>timeline=default|continuous|periodic</code> — works on live URLs too, not just ranges.
+            <em>default</em> (or leaving it out) follows the channel's continuous-timeline setting.
+            <em>continuous</em> rewrites timestamps so there is no discontinuity at each loop wrap;
+            <em>periodic</em> signals one #EXT-X-DISCONTINUITY (HLS) / Period (DASH) per wrap, which for a
+            long range is many. <em>continuous</em> is refused (HTTP 400) if the baked package cannot support it.
+          </FieldHelp>
+        </label>
+        <Select v-model="timeline" :options="timelineOptions" option-label="label" option-value="value" fluid />
       </div>
     </div>
 
-    <div class="text-sm">
-      <strong>{{ kindLabel }}</strong>
-      <div v-if="summary" class="text-color-secondary mt-1">{{ summary }}</div>
-    </div>
-
-    <Message v-for="p in problems" :key="p" severity="warn" :closable="false">{{ p }}</Message>
-
-    <div class="flex flex-column gap-2">
-      <div v-if="hlsUrlOut" class="flex align-items-center gap-2">
-        <span class="url-tag">HLS</span>
-        <InputText :model-value="hlsUrlOut" readonly fluid class="font-mono text-xs" />
-        <Button icon="pi pi-copy" text size="small" title="Copy HLS URL" @click="copy('hls')" />
-        <Button icon="pi pi-play" text size="small" title="Preview in the HLS player" :disabled="!canPreview" @click="preview('hls')" />
+    <div class="ts-output flex flex-column gap-3">
+      <div class="text-sm">
+        <strong>{{ kindLabel }}</strong>
+        <div v-if="summary" class="text-color-secondary mt-1">{{ summary }}</div>
       </div>
-      <div v-if="dashUrlOut" class="flex align-items-center gap-2">
-        <span class="url-tag">DASH</span>
-        <InputText :model-value="dashUrlOut" readonly fluid class="font-mono text-xs" />
-        <Button icon="pi pi-copy" text size="small" title="Copy DASH URL" @click="copy('dash')" />
-        <Button icon="pi pi-play" text size="small" title="Preview in the DASH player" :disabled="!canPreview" @click="preview('dash')" />
-      </div>
-    </div>
 
-    <div class="flex gap-2 flex-wrap">
-      <Button label="Preview in both players" icon="pi pi-play" size="small" :disabled="!canPreview" @click="preview('both')" />
+      <Message v-for="p in problems" :key="p" severity="warn" :closable="false">{{ p }}</Message>
+
+      <div class="flex align-items-center gap-2">
+        <label class="text-xs text-color-secondary" for="ts-format">Value format in URL</label>
+        <Select v-model="format" input-id="ts-format" :options="formatOptions" option-label="label" option-value="value" />
+      </div>
+
+      <div class="flex flex-column gap-2">
+        <div v-if="hlsUrlOut" class="flex align-items-center gap-2">
+          <span class="url-tag">HLS</span>
+          <InputText :model-value="hlsUrlOut" readonly fluid class="font-mono text-xs" />
+          <Button icon="pi pi-copy" severity="secondary" text size="small" title="Copy HLS URL" @click="copy('hls')" />
+          <Button icon="pi pi-play" severity="secondary" text size="small" title="Preview in the HLS player" :disabled="!canPreview" @click="preview('hls')" />
+        </div>
+        <div v-if="dashUrlOut" class="flex align-items-center gap-2">
+          <span class="url-tag">DASH</span>
+          <InputText :model-value="dashUrlOut" readonly fluid class="font-mono text-xs" />
+          <Button icon="pi pi-copy" severity="secondary" text size="small" title="Copy DASH URL" @click="copy('dash')" />
+          <Button icon="pi pi-play" severity="secondary" text size="small" title="Preview in the DASH player" :disabled="!canPreview" @click="preview('dash')" />
+        </div>
+      </div>
+
+      <div class="flex gap-2 flex-wrap">
+        <Button label="Preview in both players" icon="pi pi-play" size="small" :disabled="!canPreview" @click="preview('both')" />
+      </div>
     </div>
 
     <details class="text-sm">
@@ -601,6 +606,19 @@ const formatOptions = [
   align-items: center;
   gap: 0.25rem;
   min-height: 2rem;
+}
+.ts-output {
+  padding: 1rem;
+  border-radius: var(--p-border-radius, 0.5rem);
+  background: var(--p-surface-0, #fff);
+  border: 1px solid var(--p-surface-200, #e5e7eb);
+}
+.qp {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  background: var(--p-surface-200, #e5e7eb);
+  color: var(--p-text-color, #111827);
 }
 .url-tag {
   min-width: 3.25rem;

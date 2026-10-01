@@ -66,8 +66,8 @@ const maxRangeReadable = computed(() => {
             size="small"
             :label="preset.label"
             class="white-space-nowrap"
-            :severity="form.timeshift_max_span_seconds === preset.seconds ? undefined : 'secondary'"
-            :outlined="form.timeshift_max_span_seconds !== preset.seconds"
+            severity="secondary"
+            outlined
             @click="form.timeshift_max_span_seconds = preset.seconds"
           />
           </div>

@@ -5,7 +5,6 @@ import { CONFIG_FIELD_LABEL as L } from '../utils/channelConfigLayout'
 import type { ChannelCreatePayload } from '../api/types'
 import {
   EPOCH_PRESETS,
-  epochPresetFor,
   epochToInputValue,
   inputValueToEpoch,
   isValidEpochUtc,
@@ -26,7 +25,6 @@ const inputValue = computed({
   },
 })
 const valid = computed(() => isValidEpochUtc(props.form.epoch_utc ?? ''))
-const activePreset = computed(() => epochPresetFor(props.form.epoch_utc ?? ''))
 </script>
 
 <template>
@@ -63,8 +61,8 @@ const activePreset = computed(() => epochPresetFor(props.form.epoch_utc ?? ''))
           type="button"
           size="small"
           :label="preset.label"
-          :severity="activePreset === preset.id ? undefined : 'secondary'"
-          :outlined="activePreset !== preset.id"
+          severity="secondary"
+          outlined
           @click="form.epoch_utc = preset.value()"
         />
       </div>
