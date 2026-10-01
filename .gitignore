@@ -30,3 +30,7 @@ its-a-live/.local-loop-package/
 # Personal/real per-channel deploy configs (bucket names, etc.): not committed.
 its-a-live/configs/*.toml
 outputs
+
+# Imported HAR captures and saved VOD manifest URLs (may contain tokens)
+data/archives/
+data/manifests/
