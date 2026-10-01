@@ -534,66 +534,85 @@ def test_dash_default_mode_has_loop_comment_inside_each_period_before_first_segm
 
 
 
+def _marker(event_id, pts, type_id, *, out=True, duration=None):
+    return {
+        "event_id": event_id,
+        "pts_time_ticks": pts,
+        "segmentation_type_id": type_id,
+        "segmentation_duration_ticks": duration,
+        "is_out": out,
+        "splice_command_b64": _SPLICE_INSERT_B64,
+        "splice_command_b64_narrowed": _SPLICE_INSERT_B64,
+    }
+
+
+def _set_markers(package_dir, markers, **extra):
+    path = package_dir / "loop_descriptor.json"
+    descriptor = json.loads(path.read_text())
+    descriptor["markers"] = markers
+    descriptor.update(extra)
+    path.write_text(json.dumps(descriptor))
+
+
 @pytest.mark.parametrize("continuous", [True, False])
-def test_marker_comments_list_type_codes_and_event_ids(tmp_path, continuous):
+def test_marker_comments_use_compact_codes_and_event_ids(tmp_path, continuous):
     import re
 
     _write_continuous_package(tmp_path)
-    descriptor_path = tmp_path / "loop_descriptor.json"
-    descriptor = json.loads(descriptor_path.read_text())
-    descriptor["markers"] = [
-        {
-            "event_id": "0x00000001",
-            "pts_time_ticks": 0,
-            "segmentation_type_id": "0x34",
-            "segmentation_duration_ticks": 45_000,
-            "is_out": True,
-            "splice_command_b64": "AAAA",
-            "splice_command_b64_narrowed": "AAAA",
-        }
-    ]
-    descriptor_path.write_text(json.dumps(descriptor))
+    _set_markers(tmp_path, [_marker("0x00000001", 0, "0x34", duration=45_000)])
     client = create_app(tmp_path, epoch_ticks=0, window_segments=6, continuous=continuous).test_client()
 
     hls = client.get("/video.m3u8").get_data(as_text=True).splitlines()
-    marker_lines = [i for i, l in enumerate(hls) if l.startswith("# markers: ")]
+    marker_lines = [i for i, l in enumerate(hls) if l.startswith("# markers @ ")]
     assert marker_lines, "no marker description in HLS"
     for i in marker_lines:
-        assert re.fullmatch(
-            r"# markers: 0x34 \(id 0x00000001, \d{4}-\d\d-\d\dT[\d:.]+Z\)", hls[i]
-        ), hls[i]
-        # ISO start == the DATERANGE's own START-DATE
-        iso = re.search(r", (\S+)\)$", hls[i]).group(1)
-        assert f'START-DATE="{iso}"' in hls[i + 1]
-        assert hls[i + 1].startswith("#EXT-X-DATERANGE")  # right before the marker tags
+        assert re.fullmatch(r"# markers @ \S+Z: PPOs \(id 0x00000001\)", hls[i]), hls[i]
+        iso = hls[i].split(" ")[3].rstrip(":")
+        assert f'START-DATE="{iso}"' in hls[i + 1]  # right before the marker tags
 
     dash = client.get("/stream.mpd").get_data(as_text=True)
-    descriptions = re.findall(r"<!-- markers: ([^>]*) -->\n\s+<EventStream", dash)
+    descriptions = re.findall(r"<!-- markers @ ([^>]*) -->\n\s+<EventStream", dash)
     assert descriptions
-    assert all(re.match(r"0x34 \(id 0x00000001, \d{4}-[\d\-T:.]+Z", d) for d in descriptions)
-    if continuous:  # one Period spans several loops, so each entry names its loop
-        assert re.search(r"0x34 \(id 0x00000001, \S+Z, loop \d+\)", descriptions[0])
+    assert all(re.match(r"\S+Z( \(loop \d+\))?: PPOs \(id 0x00000001\)$", d) for d in descriptions)
+    if continuous:  # one Period spans several loops, so each group names its loop
+        assert "(loop " in descriptions[0]
+
+
+def test_coincident_markers_share_one_timestamp_and_others_get_their_own(tmp_path):
+    import re
+
+    _write_continuous_package(tmp_path)
+    # PPOs + a coincident DPOs at 0, then a PPOe later in the same loop.
+    _set_markers(
+        tmp_path,
+        [
+            _marker("0x00000001", 0, "0x34", duration=45_000),
+            _marker("0x00000002", 0, "0x36", duration=45_000),
+            _marker("0x00000001", 45_000, "0x35", out=False),
+        ],
+    )
+    client = create_app(tmp_path, epoch_ticks=0, window_segments=6, continuous=False).test_client()
+
+    hls = client.get("/video.m3u8").get_data(as_text=True)
+    assert re.search(r"# markers @ (\S+Z): PPOs \(id 0x00000001\), DPOs \(id 0x00000002\)\n", hls)
+    # the later marker sits in the next segment, with its own (different) time
+    times = re.findall(r"# markers @ (\S+Z): ", hls)
+    assert len(set(times)) == 2
+
+    dash = client.get("/stream.mpd").get_data(as_text=True)
+    # each Period lists its coincident pair on one line, the later PPOe on its own
+    assert re.search(
+        r"<!-- markers @ (\S+Z): PPOs \(id 0x00000001\), DPOs \(id 0x00000002\) -->\n"
+        r"\s+<!-- markers @ (?!\1)\S+Z: PPOe \(id 0x00000001\) -->\n\s+<EventStream",
+        dash,
+    )
 
 
 def test_marker_comments_show_original_event_id_when_incrementing(tmp_path):
     import re
 
     _write_continuous_package(tmp_path)
-    path = tmp_path / "loop_descriptor.json"
-    descriptor = json.loads(path.read_text())
-    descriptor["increment_event_ids"] = True
-    descriptor["markers"] = [
-        {
-            "event_id": "0x00000064",
-            "pts_time_ticks": 0,
-            "segmentation_type_id": "0x34",
-            "segmentation_duration_ticks": 45_000,
-            "is_out": True,
-            "splice_command_b64": _SPLICE_INSERT_B64,
-            "splice_command_b64_narrowed": _SPLICE_INSERT_B64,
-        }
-    ]
-    path.write_text(json.dumps(descriptor))
+    _set_markers(tmp_path, [_marker("0x00000064", 0, "0x34", duration=45_000)], increment_event_ids=True)
     client = create_app(
         tmp_path, epoch_ticks=round(time.time() * 90_000) - 5 * 90_000, window_segments=6, continuous=False
     ).test_client()
@@ -602,5 +621,5 @@ def test_marker_comments_show_original_event_id_when_incrementing(tmp_path):
         client.get("/video.m3u8").get_data(as_text=True),
         client.get("/stream.mpd").get_data(as_text=True),
     ):
-        m = re.search(r"markers: 0x34 \(id (0x[0-9A-F]+) \(was 0x00000064\), ", body)
+        m = re.search(r"PPOs \(id (0x[0-9A-F]+) \(was 0x00000064\)\)", body)
         assert m and m.group(1) != "0x00000064"  # remapped past loop 0, original alongside

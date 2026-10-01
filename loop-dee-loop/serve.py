@@ -64,6 +64,7 @@ from loop_math import (
 from scte35_signaling import (
     SCTE35_XML_NAMESPACE,
     SignalingMarker,
+    _segmentation_code,
     build_cue_breaks,
     build_cue_in_tag,
     build_cue_out_cont_tag,
@@ -100,32 +101,35 @@ logger = logging.getLogger(__name__)
 
 
 def _marker_type_code(marker: dict) -> str:
-    """The marker's SCTE-35 segmentation type code as `0xNN`; markers with no
-    segmentation descriptor (splice_insert) fall back to their splice type."""
-    type_id = marker.get("segmentation_type_id")
-    if type_id is None:
-        return str(marker.get("splice_type") or "unknown")
-    value = int(type_id, 16) if isinstance(type_id, str) else int(type_id)
-    return f"0x{value:02X}"
+    """The marker's compact SCTE-35 code with direction suffix, as used for
+    DATERANGE ids (`PPOs` = Provider Placement Opportunity Start, `PPOe` =
+    End; `SPIs`/`SPIe` for a bare splice_insert)."""
+    return _segmentation_code(markers_to_signaling([marker])[0])
 
 
-def _describe_markers(entries: list[tuple[dict, dict[str, str], int | None, str]]) -> str:
-    """One-line summary for a manifest comment: each marker's segmentation
-    type code, event id (loop-remapped, with the original, if `increment_event_ids`) and ISO 8601
-    start time. Entries are (marker, event-id map, loop number or None to omit
-    it, start time)."""
-    parts = []
+def _describe_markers(entries: list[tuple[dict, dict[str, str], int | None, str]]) -> list[str]:
+    """Comment lines summarizing markers: one line per distinct start time
+    (ISO 8601, UTC) -- coincident markers share a line -- each listing the
+    markers' compact type codes and event ids (loop-remapped, with the
+    original, if `increment_event_ids`). Entries are (marker, event-id map,
+    loop number or None to omit it, start time)."""
+    groups: dict[tuple[str, int | None], list[str]] = {}
     for marker, id_map, loop, start_iso in entries:
-        # With increment_event_ids the map is non-empty: show the original id too.
         event_id = id_map.get(marker["event_id"], marker["event_id"])
         detail = f"id {event_id}"
+        # With increment_event_ids the map is non-empty: show the original id too.
         if id_map:
             detail += f" (was {marker['event_id']})"
-        detail += f", {start_iso}"
-        if loop is not None:
-            detail += f", loop {loop}"
-        parts.append(f"{_marker_type_code(marker)} ({detail})")
-    return "markers: " + ", ".join(parts)
+        groups.setdefault((start_iso, loop), []).append(f"{_marker_type_code(marker)} ({detail})")
+    return [
+        f"markers @ {start_iso}{'' if loop is None else f' (loop {loop})'}: {', '.join(parts)}"
+        for (start_iso, loop), parts in groups.items()
+    ]
+
+
+def _dash_marker_comments(entries: list[tuple[dict, dict[str, str], int | None, str]]) -> str:
+    """`_describe_markers` as indented XML comment lines, each newline-ended."""
+    return "".join(f"    <!-- {line} -->\n" for line in _describe_markers(entries))
 
 
 def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: int) -> bool:
@@ -1215,9 +1219,12 @@ class Channel:
                 segment_id_map = (
                     build_event_id_map(pkg.markers, local_loop_number) if pkg.increment_event_ids else {}
                 )
-                lines.append("# " + _describe_markers(
-                    [(m, segment_id_map, None, self._marker_start_iso(m, local_loop_number)) for m in segment_markers]
-                ))
+                lines.extend(
+                    f"# {line}"
+                    for line in _describe_markers(
+                        [(m, segment_id_map, None, self._marker_start_iso(m, local_loop_number)) for m in segment_markers]
+                    )
+                )
 
             if pkg.cue_tags != "only":
                 matching_markers = [
@@ -1887,8 +1894,10 @@ class Channel:
             # can't fold events from two Periods of the same loop together.
             stream_value_attr = f' value="{loop_number}-{span_index}"' if spans_per_loop > 1 else ""
             event_streams_xml = (
-                f"    <!-- {_describe_markers([(m, event_id_map, None, self._marker_start_iso(m, loop_number)) for m in event_markers])} -->\n"
-                f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}"{stream_value_attr}>\n'
+                _dash_marker_comments(
+                    [(m, event_id_map, None, self._marker_start_iso(m, loop_number)) for m in event_markers]
+                )
+                + f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}"{stream_value_attr}>\n'
                 + "\n".join(event_xml)
                 + "\n    </EventStream>"
                 if event_xml else ""
@@ -2110,8 +2119,8 @@ class Channel:
                 )
 
         event_streams_xml = (
-            f"    <!-- {_describe_markers(event_markers)} -->\n"
-            f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}">\n'
+            _dash_marker_comments(event_markers)
+            + f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}">\n'
             + "\n".join(event_xml)
             + "\n    </EventStream>"
             if event_xml else ""
