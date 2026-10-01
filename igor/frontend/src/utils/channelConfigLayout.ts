@@ -14,7 +14,7 @@ export const CONFIG_SECTION_TITLE = {
   channel: 'Channel & source',
   aws: 'AWS / S3',
   serving: 'Serving',
-  packaging: 'Packaging',
+  packaging: 'Timeline',
   timeshift: 'Startover & catchup',
   hls: 'HLS packaging',
   scte35: 'SCTE-35 signaling',

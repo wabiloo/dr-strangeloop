@@ -62,7 +62,7 @@ settings are in the New/Edit forms' "Startover & catchup" group
 (`timeshift_*` fields → `[timeshift]`). The DASH playhead clock shown during
 a preview is approximate. Design: `loop-dee-loop/SCOPE.md` §13.
 
-## Channel epoch (New/Edit forms, "Packaging" group)
+## Channel epoch (New/Edit forms, "Timeline" group)
 
 `ecs-express` / `local-docker` channels have a **Channel epoch (UTC)**
 (`[packaging] epoch_utc`, API field `epoch_utc`): loop 0's start and the DASH
