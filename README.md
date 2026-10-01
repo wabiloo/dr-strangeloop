@@ -91,7 +91,7 @@ The three sources:
    https://.../master.m3u8 → grave-robber ingest-url → outputs/x/manifest.json
    ```
 
-Signalling and timeline options are set per channel in the its-a-live TOML config (`[markers]`, `[packaging]`) and fixed at bake time. They include:
+Signalling and timeline options are set per channel in the its-a-live TOML config (`[markers]`, `[packaging]`, `[timeline]`) and fixed at bake time. They include:
 - The HLS marker shape (`EXT-X-DATERANGE` layout, optionally `EXT-X-CUE-OUT/-IN` alongside or instead).
 - Event ID behaviour across loops, and the DATERANGE ID format.
 - HLS as CMAF or TS.

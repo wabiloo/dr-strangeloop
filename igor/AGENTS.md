@@ -65,7 +65,7 @@ a preview is approximate. Design: `loop-dee-loop/SCOPE.md` §13.
 ## Channel epoch (New/Edit forms, "Timeline" group)
 
 `ecs-express` / `local-docker` channels have a **Channel epoch (UTC)**
-(`[packaging] epoch_utc`, API field `epoch_utc`): loop 0's start and the DASH
+(`[timeline] epoch_utc`, API field `epoch_utc`): loop 0's start and the DASH
 `availabilityStartTime`. A UTC date-time picker with three presets -- **Unix
 epoch (1970)**, **1 Jan 2026** (the default) and **Now** (fills in the current
 UTC time as a fixed value, not a moving one) -- stored as

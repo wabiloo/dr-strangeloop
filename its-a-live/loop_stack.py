@@ -78,7 +78,7 @@ class LoopStack(Stack):
         # the loop wrap. `false` falls back to the honestly-signaled
         # default serve.py behavior (e.g. if a package was baked with a
         # 32-bit tfdt and continuity mode's startup check would refuse it).
-        continuous_timeline = bool(packaging_cfg.get("continuous_timeline", True))
+        continuous_timeline = bool(config.get("timeline", {}).get("continuous_timeline", True))
 
         express_cfg = config.get("express", {})
         port = int(express_cfg.get("port", 8080))
@@ -163,7 +163,7 @@ class LoopStack(Stack):
         # other channel.
 
         # ── Express service (long-running, auto-scaling `serve.py`) ──────────
-        # --epoch-utc comes from [packaging] epoch_utc (default
+        # --epoch-utc comes from [timeline] epoch_utc (default
         # 2026-01-01T00:00:00Z -- recent enough to keep loop numbers small;
         # the Unix epoch gave ~1.8e9-sized ones) and is then left alone --
         # this is looping content simulating live, not a real broadcast start

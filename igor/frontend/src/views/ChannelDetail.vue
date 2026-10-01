@@ -196,6 +196,7 @@ function startEdit() {
   const s3 = section('s3')
   const input = section('input')
   const packaging = section('packaging')
+  const timeline = section('timeline')
   const express = section('express')
   const docker = section('docker')
   const markers = section('markers')
@@ -215,10 +216,10 @@ function startEdit() {
     allow_missing_segments: Boolean(input.allow_missing_segments ?? false),
     segment_duration: Number(packaging.segment_duration ?? 4.0),
     dvr_window_seconds: Number(packaging.dvr_window_seconds ?? 30),
-    epoch_utc: String(packaging.epoch_utc ?? DEFAULT_EPOCH_UTC),
+    epoch_utc: String(timeline.epoch_utc ?? DEFAULT_EPOCH_UTC),
     hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
     hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
-    continuous_timeline: Boolean(packaging.continuous_timeline ?? true),
+    continuous_timeline: Boolean(timeline.continuous_timeline ?? true),
     timeshift_enabled: editTimeshift.enabled,
     timeshift_start_param: editTimeshift.start_param,
     timeshift_end_param: editTimeshift.end_param,
@@ -1091,7 +1092,7 @@ watch(() => props.name, reload)
             </section>
 
             <section class="config-group">
-              <h4 class="config-group-title">{{ T.packaging }}</h4>
+              <h4 class="config-group-title">{{ T.timeline }}</h4>
               <div class="config-fields">
                 <div class="config-field-wide">
                   <EpochFields :form="editForm" id-prefix="edit" />

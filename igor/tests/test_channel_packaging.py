@@ -30,7 +30,7 @@ def test_channel_continuous_timeline_roundtrip(backend, continuous_timeline):
         continuous_timeline=continuous_timeline,
     )
     config = tomllib.loads(generate_toml(**payload.model_dump()))
-    assert config["packaging"]["continuous_timeline"] is continuous_timeline
+    assert config["timeline"]["continuous_timeline"] is continuous_timeline
 
 
 def test_channel_continuous_timeline_defaults_false():
@@ -39,7 +39,7 @@ def test_channel_continuous_timeline_defaults_false():
         bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
     )
     config = tomllib.loads(generate_toml(**payload.model_dump()))
-    assert config["packaging"]["continuous_timeline"] is False
+    assert config["timeline"]["continuous_timeline"] is False
 
 
 @pytest.mark.parametrize("source_kind", ["playlist", "archive"])
@@ -170,7 +170,7 @@ def test_channel_epoch_utc_roundtrip(backend, epoch_utc):
         epoch_utc=epoch_utc,
     )
     config = tomllib.loads(generate_toml(**payload.model_dump()))
-    assert config["packaging"]["epoch_utc"] == epoch_utc
+    assert config["timeline"]["epoch_utc"] == epoch_utc
 
 
 def test_channel_epoch_utc_defaults_to_2026():
@@ -179,7 +179,7 @@ def test_channel_epoch_utc_defaults_to_2026():
         bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
     )
     config = tomllib.loads(generate_toml(**payload.model_dump()))
-    assert config["packaging"]["epoch_utc"] == "2026-01-01T00:00:00Z"
+    assert config["timeline"]["epoch_utc"] == "2026-01-01T00:00:00Z"
 
 
 @pytest.mark.parametrize("bad", ["now", "2026-01-01", "2026-01-01T00:00:00", "2026-01-01 00:00:00Z", "2026-13-01T00:00:00Z", ""])

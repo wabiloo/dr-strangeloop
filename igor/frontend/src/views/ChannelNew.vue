@@ -432,7 +432,7 @@ async function submit() {
     </template>
 
     <template v-if="usesChannelSection">
-      <h4 class="mb-0 mt-2">{{ T.packaging }}</h4>
+      <h4 class="mb-0 mt-2">{{ T.timeline }}</h4>
       <div class="grid">
         <div class="col-12">
           <EpochFields :form="form" id-prefix="new" />

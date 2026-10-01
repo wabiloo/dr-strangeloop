@@ -104,9 +104,11 @@ _ECS_EXPRESS_EXTRA = """
 [packaging]
 segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
-epoch_utc = "{epoch_utc}"
 hls_format = "{hls_format}"
 hls_ts_mux_audio = {hls_ts_mux_audio}
+
+[timeline]
+epoch_utc = "{epoch_utc}"
 continuous_timeline = {continuous_timeline}
 
 [express]
@@ -119,9 +121,11 @@ _LOCAL_DOCKER_EXTRA = """
 [packaging]
 segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
-epoch_utc = "{epoch_utc}"
 hls_format = "{hls_format}"
 hls_ts_mux_audio = {hls_ts_mux_audio}
+
+[timeline]
+epoch_utc = "{epoch_utc}"
 continuous_timeline = {continuous_timeline}
 
 [docker]

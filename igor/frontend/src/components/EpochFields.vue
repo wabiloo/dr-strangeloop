@@ -12,7 +12,7 @@ import {
 } from '../utils/epoch'
 import FieldHelp from './FieldHelp.vue'
 
-// The [packaging] epoch_utc field, shared by the New channel form and the
+// The [timeline] epoch_utc field, shared by the New channel form and the
 // Configuration edit form on the channel detail page. Edits `form` in place.
 const props = defineProps<{ form: ChannelCreatePayload; idPrefix: string }>()
 

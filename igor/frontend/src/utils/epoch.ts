@@ -1,4 +1,4 @@
-// Channel epoch ([packaging].epoch_utc): loop 0's start and the DASH
+// Channel epoch ([timeline].epoch_utc): loop 0's start and the DASH
 // availabilityStartTime. serve.py's --epoch-utc only accepts the exact form
 // YYYY-MM-DDTHH:MM:SSZ (UTC, whole seconds), so everything here produces it.
 import { dateToInputValue, inputValueToDate } from './timeshift.ts'

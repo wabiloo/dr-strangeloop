@@ -14,7 +14,7 @@ export const CONFIG_SECTION_TITLE = {
   channel: 'Channel & source',
   aws: 'AWS / S3',
   serving: 'Serving',
-  packaging: 'Timeline',
+  timeline: 'Timeline',
   timeshift: 'Startover & catchup',
   hls: 'HLS packaging',
   scte35: 'SCTE-35 signaling',
@@ -102,6 +102,7 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
   const s3 = table(config, 's3')
   const input = table(config, 'input')
   const packaging = table(config, 'packaging')
+  const timeline = table(config, 'timeline')
   const markers = table(config, 'markers')
   const backend = String(deploy.backend ?? '')
   const isLocalDocker = backend === 'local-docker'
@@ -136,9 +137,9 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
       ['cpu', isEcsExpress ? portTable.cpu : undefined],
       ['memory', isEcsExpress ? portTable.memory : undefined],
     ])
-    add('packaging', [
-      ['epoch_utc', packaging.epoch_utc ?? DEFAULT_EPOCH_UTC],
-      ['continuous_timeline', packaging.continuous_timeline],
+    add('timeline', [
+      ['epoch_utc', timeline.epoch_utc ?? DEFAULT_EPOCH_UTC],
+      ['continuous_timeline', timeline.continuous_timeline],
     ])
     // A channel written before [timeshift] existed gets its-a-live's
     // defaults (enabled) -- show those rather than hiding the section.

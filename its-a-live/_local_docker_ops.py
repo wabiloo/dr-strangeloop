@@ -130,10 +130,10 @@ def _dvr_window_seconds(cfg):
 
 
 def _continuous_timeline_args(cfg):
-    """loop-dee-loop/SCOPE.md §12: default on -- `[packaging]
+    """loop-dee-loop/SCOPE.md §12: default on -- `[timeline]
     continuous_timeline = false` opts back out to the honestly-signaled
     #EXT-X-DISCONTINUITY/Period-restart default."""
-    if cfg.get("packaging", {}).get("continuous_timeline", True):
+    if cfg.get("timeline", {}).get("continuous_timeline", True):
         return ["--continuous-timeline"]
     return []
 
@@ -289,7 +289,7 @@ def start(cfg, session, outputs, extra_args=None):
     behavior). Otherwise it's recreated -- if that recreate is happening
     ONLY because the image changed underneath it (not because of an
     explicit --epoch-utc), the container's own currently-running epoch is
-    preserved rather than reset to the configured `[packaging] epoch_utc`, so a rebuild-triggered
+    preserved rather than reset to the configured `[timeline] epoch_utc`, so a rebuild-triggered
     restart never visibly jumps the stream's playback position. Pass
     `--epoch-utc now|<ISO8601>` to reset it explicitly."""
     _require_docker()
@@ -362,7 +362,7 @@ def stop(cfg, session, outputs):
 def refresh(cfg, session, outputs):
     """Recreate the container so it picks up whatever was last `spark`ed
     into the bind-mounted loop package directory. The container is
-    recreated with the configured `[packaging] epoch_utc` (default
+    recreated with the configured `[timeline] epoch_utc` (default
     2026-01-01T00:00:00Z) -- this is also how a changed epoch is applied
     (`redeploy` runs this). Pass `channel.py start --epoch-utc ...`
     directly for a one-off epoch."""

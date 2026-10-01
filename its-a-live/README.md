@@ -139,6 +139,8 @@ source_path = "../outputs/mychannel"   # franken-ts output
 [packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30
+
+[timeline]                  # ecs-express/local-docker only
 epoch_utc          = "2026-01-01T00:00:00Z"  # optional, this is the default; loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
 continuous_timeline = true  # default -- see loop-dee-loop/SCOPE.md §12; false reverts to signaled discontinuities/Period restarts at the loop wrap
 
@@ -249,7 +251,7 @@ always `http://localhost:<channel.port>/...`.
 
 ## Notes / gotchas
 
-- **Epoch (`ecs-express` / `local-docker`)** is `[packaging] epoch_utc`,
+- **Epoch (`ecs-express` / `local-docker`)** is `[timeline] epoch_utc`,
   default `2026-01-01T00:00:00Z` (set it in igor's channel form, which offers
   1970, 2026 and "now" presets, or in the TOML). It is loop 0's start and the
   DASH `availabilityStartTime`, so a recent one keeps loop numbers, media

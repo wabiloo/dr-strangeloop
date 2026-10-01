@@ -49,7 +49,7 @@ class ChannelCreatePayload(BaseModel):
     allow_missing_segments: bool = False
     segment_duration: float = 4.0
     dvr_window_seconds: float = 30
-    # [packaging].epoch_utc -- loop 0's start / DASH availabilityStartTime
+    # [timeline].epoch_utc -- loop 0's start / DASH availabilityStartTime
     # (ecs-express/local-docker). UTC, exactly YYYY-MM-DDTHH:MM:SSZ.
     epoch_utc: str = DEFAULT_EPOCH_UTC
     hls_format: str = "cmaf"

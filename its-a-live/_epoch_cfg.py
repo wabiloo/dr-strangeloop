@@ -1,4 +1,4 @@
-"""`[packaging] epoch_utc` channel config -> loop-dee-loop serve.py's
+"""`[timeline] epoch_utc` channel config -> loop-dee-loop serve.py's
 `--epoch-utc` (loop 0's start, and the DASH availabilityStartTime).
 
 The epoch only needs to be a stable instant in the past: looping content
@@ -27,6 +27,6 @@ def validate_epoch_utc(raw: str) -> str:
 
 
 def config_epoch_utc(cfg: dict) -> str:
-    """The channel's configured `[packaging] epoch_utc`, else the default."""
-    raw = cfg.get("packaging", {}).get("epoch_utc")
+    """The channel's configured `[timeline] epoch_utc`, else the default."""
+    raw = cfg.get("timeline", {}).get("epoch_utc")
     return DEFAULT_EPOCH_UTC if raw is None else validate_epoch_utc(raw)
