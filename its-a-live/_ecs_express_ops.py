@@ -161,7 +161,7 @@ def start(cfg, session, outputs, extra_args=None):
     """Scale the Express service to 1 task (if it was stopped).
 
     Epoch defaults to whatever is already baked into the service (the
-    stack's own default is the Unix epoch, 1970-01-01T00:00:00Z -- see
+    stack's own default is 2026-01-01T00:00:00Z -- see
     loop_stack.py) and is left untouched, making this a pure scaling
     operation: no primaryContainer change, no new task revision, no canary
     deployment. Pass `--epoch-utc now` or `--epoch-utc <ISO8601>` to

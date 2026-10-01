@@ -234,7 +234,7 @@ groups: **Infrastructure** (does the stack/container exist at all) and
 | Command | `ecs-express` | `aws-media` | `local-docker` |
 |---|---|---|---|
 | `spark` | Bake locally (GPAC via `bake.py`), push loop package to S3 | Upload the raw `.ts` to S3 as-is | Bake locally (GPAC via `bake.py`), no upload — package stays on disk |
-| `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Start the MediaLive channel, wait for `RUNNING` | `docker run` a container bind-mounting the baked package (building the image on first use); epoch defaults to the Unix epoch, `--epoch-utc` works the same as `ecs-express` |
+| `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Start the MediaLive channel, wait for `RUNNING` | `docker run` a container bind-mounting the baked package (building the image on first use); epoch defaults to 2026-01-01T00:00:00Z, `--epoch-utc` works the same as `ecs-express` |
 | `stop` | Scale ECS to 0 tasks (shared ALB keeps running for other channels) | Stop the MediaLive channel, wait for `IDLE` | `docker rm -f` the container |
 | `refresh` | Force a new ECS task launch to re-sync S3 content | Full stop→start cycle (no hot-reload exists) | Recreate the container (seconds, no canary) |
 | `update` | `spark` then `refresh` in one step — the routine "ship new content to a running channel" combo | (same) | (same) |
@@ -248,8 +248,10 @@ always `http://localhost:<channel.port>/...`.
 
 ## Notes / gotchas
 
-- **Epoch (ecs-express only) defaults to the Unix epoch**
-  (`1970-01-01T00:00:00Z`, set in `loop_stack.py`) and is left untouched
+- **Epoch (ecs-express only) defaults to 2026-01-01T00:00:00Z**
+  (set in `loop_stack.py`; also the `local-docker` default). It is the
+  DASH `availabilityStartTime` and loop 0's start, so it keeps loop numbers,
+  media sequence numbers and Period ids small and is left untouched
   by a plain `channel.py start` — this is looping content simulating
   live, not a real broadcast, so there's no need to force loop position 0
   on every start; landing mid-ad-break on start/restart is an accepted

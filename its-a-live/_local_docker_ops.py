@@ -29,7 +29,7 @@ from _timeshift_cfg import timeshift_serve_args
 _LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 _IMAGE_TAG = "loop-dee-loop:local"
 _CONTAINER_PREFIX = "its-a-live-"
-_DEFAULT_EPOCH = "1970-01-01T00:00:00Z"
+_DEFAULT_EPOCH = "2026-01-01T00:00:00Z"
 
 
 def _container_name(channel_name):
