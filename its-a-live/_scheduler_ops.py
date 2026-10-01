@@ -26,6 +26,8 @@ import os
 import sys
 import uuid
 
+from _infra_cfg import infra_table
+
 _SCHEDULER_STACK_NAME = "ItsALiveSharedStack-scheduler"
 _TIME_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _MAX_DT = datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)
@@ -159,9 +161,9 @@ def add_window(cfg, session, channel_name, config_path, start_iso, end_iso):
     `start` command right after this when that's the case, so "what
     start means" still has exactly one implementation."""
     backend = cfg["deploy"]["backend"]
-    region = cfg.get("aws", {}).get("region")
+    region = infra_table(cfg, "aws").get("region")
     if not region:
-        sys.exit("[aws].region must be set in the config to schedule start/stop.")
+        sys.exit("[infrastructure.aws].region must be set in the config to schedule start/stop.")
 
     now = _now()
     new_start = _parse(start_iso) if start_iso else now

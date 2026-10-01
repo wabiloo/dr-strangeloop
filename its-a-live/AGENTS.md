@@ -34,10 +34,12 @@ determines whether `output.file` (single-rendition) or `output.dir` +
 name = "..."          # required — drives stack name + all AWS resource names
 backend = "..."        # required — "ecs-express" | "aws-media" | "local-docker"
 
-[aws]
+# The deployment target lives under [infrastructure.*]: aws, s3, express, docker.
+# (The old top-level [aws]/[s3]/[express]/[docker] tables are rejected.)
+[infrastructure.aws]
 region = "..."         # required (ignored by local-docker)
 
-[s3]
+[infrastructure.s3]
 bucket_name = "..."    # required (ignored by local-docker) — must already exist, never created/destroyed by the stack
 content_folder = "..." # required (ignored by local-docker) — content lives under <content_folder>/<name>/
 
@@ -58,14 +60,19 @@ daterange_mode = "shared"        # "shared" (default) | "narrowed" | "grouped" -
 cue_tags = "none"                # "none" (default) | "alongside" | "only" -- also emit EXT-X-CUE-OUT/-CONT/-IN next to DATERANGE, or instead of it entirely ("only" requires every marker to be a bare splice_insert). Both modes only ever build CUE-OUT/-CONT/-IN from bare splice_insert markers -- "alongside" still DATERANGE-tags every marker regardless of splice_type, but silently skips CUE-OUT/-IN for non-splice_insert ones, since nested/overlapping time_signal types (e.g. Break containing PPO containing Ad) have no well-formed single CUE-OUT/-IN pair the way a flat splice_insert avail does
 increment_event_ids = false      # bump every event id by (loop number * step) each iteration instead of repeating it every loop -- step is the smallest power of 10 above the channel's largest base event id (e.g. base ids 100-190 -> step 1000, so loop 1 emits 1100/1190, loop 2 emits 2100/2190, ...), so each id's original base stays recognizable as its low-order remainder, and the id at any moment is predictable purely from wall-clock time against the channel's epoch (no runtime counter). Wraps the loop-number component back to 0 at the 32-bit SCTE-35 ceiling.
 daterange_id_format = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template, ecs-express/local-docker only
+period_on_segmentation_apply = "both"  # which formats get it: "both" (default) | "dash" (Periods only) | "hls" (discontinuities only)
+period_on_segmentation = []   # optional list of SCTE-35 segmentation_type_ids (e.g. [0x22, 0x30]; a Start implies its End) that force a new DASH Period / #EXT-X-DISCONTINUITY at matching markers; signal only, so timestamps stay continuous when [timeline] continuous = true (loop-dee-loop/SCOPE.md §14)
+
+# Table names are shared vocabulary: igor's New/Edit forms and read-only config
+# panel show one group per table, titled with the table name (see igor/AGENTS.md
+# "Channel config sections"). Keep a setting in the table where it belongs and
+# update igor in the same change when you add/rename/move a table or key.
 
 [packaging]
 segment_duration = 4.0
 dvr_window_seconds = 30
 hls_format = "cmaf"          # "cmaf" (default) | "ts"; HLS only, DASH remains CMAF
 hls_ts_mux_audio = true      # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
-period_on_segmentation_apply = "both"  # which formats get it: "both" (default) | "dash" (Periods only) | "hls" (discontinuities only)
-period_on_segmentation = []   # optional list of SCTE-35 segmentation_type_ids (e.g. [0x22, 0x30]; a Start implies its End) that force a new DASH Period / #EXT-X-DISCONTINUITY at matching markers; signal only, so timestamps stay continuous when [timeline] continuous = true (loop-dee-loop/SCOPE.md §14)
 
 [timeline]                  # ecs-express/local-docker only
 epoch_utc = "2026-01-01T00:00:00Z"   # optional (this is the default) -- loop 0's start and the DASH availabilityStartTime; UTC, exactly this form. A recent epoch keeps loop numbers small. ecs-express/local-docker only; applied on create/redeploy (local-docker: redeploy/refresh), not by a plain `start`. Changing it on a running channel restarts loop numbering.
@@ -85,12 +92,12 @@ max_span_seconds = 21600                  # longest range (also caps an open-end
 
 # `port` lives with whichever backend-specific section already exists for
 # that backend, not a shared section:
-[express]
+[infrastructure.express]
 port = 8080    # ecs-express only
 cpu = 256      # 0.25 vCPU units, Fargate convention -- ecs-express only, ignored by local-docker
 memory = 512   # MB
-# local-docker instead gets, in place of [express]:
-# [docker]
+# local-docker instead gets, in place of [infrastructure.express]:
+# [infrastructure.docker]
 # port = "auto"  # default -- auto-picks a free host port (8080-8179, skipping
 #                # ports already bound, e.g. by other local-docker channels)
 #                # and remembers it across start/refresh/status via the

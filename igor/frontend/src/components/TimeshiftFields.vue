@@ -1,14 +1,29 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import Button from 'primevue/button'
 import Checkbox from 'primevue/checkbox'
 import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import { CONFIG_FIELD_LABEL as L } from '../utils/channelConfigLayout'
 import type { ChannelCreatePayload } from '../api/types'
+import { formatDuration } from '../utils/timeshift'
 import FieldHelp from './FieldHelp.vue'
 
 // The [timeshift] form group, shared by the New channel form and the
 // Configuration edit form on the channel detail page. Edits `form` in place.
-defineProps<{ form: ChannelCreatePayload; idPrefix: string }>()
+const props = defineProps<{ form: ChannelCreatePayload; idPrefix: string }>()
+
+const MAX_RANGE_PRESETS = [
+  { label: '15 min', seconds: 900 },
+  { label: '30 min', seconds: 1800 },
+  { label: '1 h', seconds: 3600 },
+  { label: '2 h', seconds: 7200 },
+  { label: '4 h', seconds: 14400 },
+]
+const maxRangeReadable = computed(() => {
+  const s = props.form.timeshift_max_span_seconds
+  return typeof s === 'number' && s >= 1 ? formatDuration(s) : ''
+})
 </script>
 
 <template>
@@ -35,9 +50,28 @@ defineProps<{ form: ChannelCreatePayload; idPrefix: string }>()
         <label :for="`${idPrefix}-ts-end`">{{ L.timeshift_end_param }}</label>
         <InputText :id="`${idPrefix}-ts-end`" v-model="form.timeshift_end_param" fluid />
       </div>
-      <div class="col-12 md:col-6 flex flex-column gap-1">
+      <div class="col-12 flex flex-column gap-1">
         <label :for="`${idPrefix}-ts-span`">{{ L.timeshift_max_span_seconds }}</label>
-        <InputNumber :input-id="`${idPrefix}-ts-span`" v-model="form.timeshift_max_span_seconds" :min="1" :use-grouping="false" fluid />
+        <div class="flex align-items-center gap-2">
+          <InputNumber :input-id="`${idPrefix}-ts-span`" v-model="form.timeshift_max_span_seconds" :min="1" :use-grouping="false" input-style="width: 10rem" />
+          <span v-if="maxRangeReadable" class="text-color-secondary">= {{ maxRangeReadable }}</span>
+        </div>
+        <div class="flex flex-wrap align-items-center gap-2">
+          <span class="text-xs text-color-secondary">Set to:</span>
+          <div class="flex flex-nowrap align-items-center gap-2">
+          <Button
+            v-for="preset in MAX_RANGE_PRESETS"
+            :key="preset.seconds"
+            type="button"
+            size="small"
+            :label="preset.label"
+            class="white-space-nowrap"
+            :severity="form.timeshift_max_span_seconds === preset.seconds ? undefined : 'secondary'"
+            :outlined="form.timeshift_max_span_seconds !== preset.seconds"
+            @click="form.timeshift_max_span_seconds = preset.seconds"
+          />
+          </div>
+        </div>
       </div>
     </template>
   </div>

@@ -125,10 +125,10 @@ schema). The key field is `[deploy].backend`:
 name = "my-channel"
 backend = "ecs-express"        # or "aws-media"
 
-[aws]
+[infrastructure.aws]
 region = "eu-west-1"
 
-[s3]
+[infrastructure.s3]
 bucket_name = "my-existing-bucket"
 content_folder = "its-a-live/content"
 
@@ -139,7 +139,6 @@ source_path = "../outputs/mychannel"   # franken-ts output
 [packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30
-# period_on_segmentation = [0x22, 0x30]  # optional: force a Period/discontinuity at these SCTE-35 segmentation_type_ids, even with [timeline] continuous (loop-dee-loop/SCOPE.md §14)
 
 [timeline]                  # ecs-express/local-docker only
 epoch_utc          = "2026-01-01T00:00:00Z"  # optional, this is the default; loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
@@ -154,7 +153,10 @@ max_span_seconds = 21600
 # These names are also the only query params CloudFront keys manifest caching on --
 # redeploy (`channel.py redeploy`) after changing them.
 
-[express]
+[markers]
+# period_on_segmentation = [0x22, 0x30]  # optional: force a Period/discontinuity at these SCTE-35 segmentation_type_ids, even with continuous (loop-dee-loop/SCOPE.md §14)
+
+[infrastructure.express]
 port   = 8080
 cpu    = 256
 memory = 512
@@ -162,8 +164,8 @@ memory = 512
 
 See `AGENTS.md`'s config reference for the full schema, including the
 `[markers]` section controlling the shape of the HLS/DASH SCTE-35
-signaling `loop-dee-loop` renders, and `local-docker`'s `[docker]`
-section (in place of `[express]`, holding just `port`).
+signaling `loop-dee-loop` renders, and `local-docker`'s `[infrastructure.docker]`
+section (in place of `[infrastructure.express]`, holding just `port`).
 
 For `ecs-express` and `local-docker`, `[markers].daterange_id_format`
 controls HLS DATERANGE IDs. Its default is

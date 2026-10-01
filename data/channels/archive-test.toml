@@ -2,10 +2,10 @@
 name = "archive-test"
 backend = "local-docker"
 
-[aws]
+[infrastructure.aws]
 region = "eu-west-1"
 
-[s3]
+[infrastructure.s3]
 bucket_name = ""
 content_folder = "its-a-live/content"
 
@@ -25,5 +25,5 @@ dvr_window_seconds = 30.0
 hls_format = "ts"
 hls_ts_mux_audio = false
 
-[docker]
+[infrastructure.docker]
 port = "auto"

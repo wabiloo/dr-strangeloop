@@ -13,6 +13,7 @@ import {
   inspectManifest,
   renameManifestSource,
 } from '../api/client'
+import ManifestPreviewDialog from '../components/ManifestPreviewDialog.vue'
 import JobPanel from '../components/JobPanel.vue'
 import type { Job, ManifestImportStatus, ManifestInspection, ManifestListItem } from '../api/types'
 
@@ -21,6 +22,7 @@ const props = defineProps<{ name: string }>()
 const source = ref<ManifestListItem | null>(null)
 const importStatus = ref<ManifestImportStatus | null>(null)
 const inspection = ref<ManifestInspection | null>(null)
+const previewUrl = ref<string | null>(null)
 const loading = ref(true)
 const inspecting = ref(false)
 const error = ref('')
@@ -163,7 +165,17 @@ async function onImportFinished(job: Job) {
           />
         </div>
         <small v-if="displayNameError" class="p-error">{{ displayNameError }}</small>
-        <code class="text-sm text-color-secondary manifest-source-url">{{ source.manifest_url }}</code>
+        <div class="flex align-items-center gap-2">
+          <code class="text-sm text-color-secondary manifest-source-url">{{ source.manifest_url }}</code>
+          <Button
+            icon="pi pi-play-circle"
+            severity="secondary"
+            outlined
+            title="Preview manifest"
+            aria-label="Preview manifest"
+            @click="previewUrl = source.manifest_url"
+          />
+        </div>
       </div>
 
       <h4 class="mb-0 mt-2">1. Renditions</h4>
@@ -255,6 +267,11 @@ async function onImportFinished(job: Job) {
         source kind, and select "{{ name }}".
       </div>
     </template>
+    <ManifestPreviewDialog
+      :url="previewUrl"
+      :format="inspection ? (inspection.format.toLowerCase() as 'hls' | 'dash') : null"
+      @close="previewUrl = null"
+    />
   </div>
 </template>
 

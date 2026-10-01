@@ -88,10 +88,10 @@ _AWS_MEDIA_TOML_TEMPLATE = """\
 name = "{name}"
 backend = "aws-media"
 
-[aws]
+[infrastructure.aws]
 region = "us-east-1"
 
-[s3]
+[infrastructure.s3]
 bucket_name = "bpkio-cs-demos"
 content_folder = "fabre/ts-files-with-scte"  # prefix inside the bucket
 
@@ -104,10 +104,10 @@ _ECS_EXPRESS_TOML_TEMPLATE = """\
 name = "{name}"
 backend = "ecs-express"
 
-[aws]
+[infrastructure.aws]
 region = "eu-west-1"
 
-[s3]
+[infrastructure.s3]
 bucket_name = "bpkio-cs-demos"
 content_folder = "fabre/its-a-live"  # prefix inside the bucket
 
@@ -118,7 +118,7 @@ source_path = "{ts_file}"
 segment_duration   = 4.0
 dvr_window_seconds = 30
 
-[express]
+[infrastructure.express]
 port   = 8080
 cpu    = 256   # 0.25 vCPU
 memory = 512   # 0.5 GB

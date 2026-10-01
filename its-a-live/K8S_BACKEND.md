@@ -240,9 +240,9 @@ object makes no network call and needs no credentials on its own).
 
 ## 9. Config schema addition
 
-New `[deploy].backend = "k8s"` value; `[aws]`/`[s3]` sections ignored
+New `[deploy].backend = "k8s"` value; `[infrastructure.aws]`/`[infrastructure.s3]` sections ignored
 (same convention `local-docker` already uses -- comment them as such). New
-section in place of `[express]`/`[docker]`:
+section in place of `[infrastructure.express]`/`[infrastructure.docker]`:
 
 ```toml
 [kubernetes]

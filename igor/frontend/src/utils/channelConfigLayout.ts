@@ -1,6 +1,14 @@
 // One layout for channel configuration, shared by the New channel form, the
 // read-only Configuration panel and the Configuration edit form on the
 // channel detail page: same sections, same order, same field labels.
+//
+// NAMING RULE (keep it): a section here IS one its-a-live TOML table. Its id
+// is the table name and its title is that name, capitalised ([timeline] ->
+// "Timeline"; [infrastructure.aws] -> "Infrastructure · AWS"). A field is shown in the section of the table it is stored in,
+// never anywhere else. To add a setting, put it in the table it belongs to
+// (or add a new table + section together); to rename a table, rename the
+// section id/title, the New/Edit templates and the docs in the same change.
+// See igor/AGENTS.md "Channel config sections".
 
 import { DEFAULT_EPOCH_UTC } from './epoch'
 import { timeshiftParamsFromConfig } from './timeshift'
@@ -8,16 +16,20 @@ import { timeshiftParamsFromConfig } from './timeshift'
 export type ConfigBackend = 'aws-media' | 'ecs-express' | 'local-docker'
 export type ConfigSourceKind = 'playlist' | 'archive' | 'manifest'
 
-// Display order: channel, then infrastructure (AWS / S3, Serving), then
-// what gets baked and signaled.
+// Display order: identity ([deploy], [input]), infrastructure
+// ([infrastructure.aws], .s3, .express or .docker), then what gets baked and
+// signaled.
 export const CONFIG_SECTION_TITLE = {
-  channel: 'Channel & source',
-  aws: 'AWS / S3',
-  serving: 'Serving',
+  deploy: 'Deploy',
+  input: 'Input',
+  'infrastructure.aws': 'Infrastructure · AWS',
+  'infrastructure.s3': 'Infrastructure · S3',
+  'infrastructure.express': 'Infrastructure · Express',
+  'infrastructure.docker': 'Infrastructure · Docker',
   timeline: 'Timeline',
-  timeshift: 'Startover & catchup',
-  hls: 'HLS packaging',
-  scte35: 'SCTE-35 signaling',
+  timeshift: 'Timeshift',
+  packaging: 'Packaging',
+  markers: 'Markers',
 } as const
 
 export type ConfigSectionId = keyof typeof CONFIG_SECTION_TITLE
@@ -91,7 +103,12 @@ function table(config: TomlConfig, name: string): Record<string, unknown> {
   return t && typeof t === 'object' ? (t as Record<string, unknown>) : {}
 }
 
-/** TOML `period_on_segmentation` (ints or strings) -> hex strings ("0x22"),
+/** `[infrastructure.<name>]` -- aws, s3, express or docker. */
+export function infraTable(config: TomlConfig, name: 'aws' | 's3' | 'express' | 'docker'): Record<string, unknown> {
+  return table(table(config, 'infrastructure'), name)
+}
+
+/** TOML `[markers] period_on_segmentation` (ints or strings) -> hex strings ("0x22"),
  * the form the channel form and API use. */
 export function periodTypesFromConfig(raw: unknown): string[] {
   if (!Array.isArray(raw)) return []
@@ -109,11 +126,12 @@ function display(value: unknown): string {
 }
 
 // Read-only view of a channel's TOML in the shared layout. `port` lives in
-// [docker] for local-docker and [express] for ecs-express.
+// [infrastructure.docker] for local-docker and [infrastructure.express] for
+// ecs-express.
 export function buildConfigSections(config: TomlConfig): ConfigSection[] {
   const deploy = table(config, 'deploy')
-  const aws = table(config, 'aws')
-  const s3 = table(config, 's3')
+  const aws = infraTable(config, 'aws')
+  const s3 = infraTable(config, 's3')
   const input = table(config, 'input')
   const packaging = table(config, 'packaging')
   const timeline = table(config, 'timeline')
@@ -122,7 +140,7 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
   const isLocalDocker = backend === 'local-docker'
   const isEcsExpress = backend === 'ecs-express'
   const sourceKind = deriveSourceKind(input)
-  const portTable = isLocalDocker ? table(config, 'docker') : table(config, 'express')
+  const portTable = isLocalDocker ? infraTable(config, 'docker') : infraTable(config, 'express')
 
   const sections: ConfigSection[] = []
   const add = (id: ConfigSectionId, fields: [ConfigFieldKey, unknown][]) => {
@@ -132,31 +150,35 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
     if (rows.length) sections.push({ id, title: CONFIG_SECTION_TITLE[id], rows })
   }
 
-  add('channel', [
-    ['backend', backend],
+  add('input', [
     ['source_kind', sourceKind],
     ['source_path', input.source_path],
     ['allow_missing_segments', input.allow_missing_segments],
   ])
   if (!isLocalDocker) {
-    add('aws', [
-      ['region', aws.region],
+    add('infrastructure.aws', [['region', aws.region]])
+    add('infrastructure.s3', [
       ['bucket_name', s3.bucket_name],
       ['content_folder', s3.content_folder],
     ])
   }
   if (usesChannelSection(backend)) {
-    add('serving', [
+    add(isLocalDocker ? 'infrastructure.docker' : 'infrastructure.express', [
       ['port', portTable.port],
       ['cpu', isEcsExpress ? portTable.cpu : undefined],
       ['memory', isEcsExpress ? portTable.memory : undefined],
     ])
-    const periodTypes = periodTypesFromConfig(packaging.period_on_segmentation)
+    const periodTypes = periodTypesFromConfig(markers.period_on_segmentation)
     add('timeline', [
       ['epoch_utc', timeline.epoch_utc ?? DEFAULT_EPOCH_UTC],
       ['continuous', timeline.continuous],
-      ['period_on_segmentation',periodTypes.length ? periodTypes : undefined],
-      ['period_on_segmentation_apply', periodTypes.length ? (packaging.period_on_segmentation_apply ?? 'both') : undefined],
+    ])
+    add('packaging', [
+      // Archive/manifest segment lists keep each segment's own duration.
+      ['segment_duration', sourceKind === 'playlist' ? packaging.segment_duration : 'as source'],
+      ['dvr_window_seconds', packaging.dvr_window_seconds],
+      ['hls_format', packaging.hls_format],
+      ['hls_ts_mux_audio', packaging.hls_format === 'ts' ? packaging.hls_ts_mux_audio : undefined],
     ])
     // A channel written before [timeshift] existed gets its-a-live's
     // defaults (enabled) -- show those rather than hiding the section.
@@ -167,20 +189,15 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
       ['timeshift_end_param', ts.enabled ? ts.end_param : undefined],
       ['timeshift_max_span_seconds', ts.enabled ? ts.max_span_seconds : undefined],
     ])
-    add('hls', [
-      // Archive/manifest segment lists keep each segment's own duration.
-      ['segment_duration', sourceKind === 'playlist' ? packaging.segment_duration : 'as source'],
-      ['dvr_window_seconds', packaging.dvr_window_seconds],
-      ['hls_format', packaging.hls_format],
-      ['hls_ts_mux_audio', packaging.hls_format === 'ts' ? packaging.hls_ts_mux_audio : undefined],
-    ])
-    add('scte35', [
+    add('markers', [
       ['daterange_mode', markers.daterange_mode],
       ['cue_tags', markers.cue_tags],
       ['dash_signal_format', markers.dash_signal_format],
       ['dash_descriptor_mode', markers.dash_descriptor_mode],
       ['increment_event_ids', markers.increment_event_ids],
       ['daterange_id_format', markers.daterange_id_format],
+      ['period_on_segmentation', periodTypes.length ? periodTypes : undefined],
+      ['period_on_segmentation_apply', periodTypes.length ? (markers.period_on_segmentation_apply ?? 'both') : undefined],
     ])
   }
   return sections

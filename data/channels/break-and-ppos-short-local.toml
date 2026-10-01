@@ -2,10 +2,10 @@
 name = "break-and-ppos-short-local"
 backend = "local-docker"
 
-[aws]
+[infrastructure.aws]
 region = "eu-west-1"
 
-[s3]
+[infrastructure.s3]
 bucket_name = ""
 content_folder = "its-a-live/content"
 
@@ -31,5 +31,5 @@ hls_ts_mux_audio = true
 [timeline]
 continuous = true
 
-[docker]
+[infrastructure.docker]
 port = "auto"

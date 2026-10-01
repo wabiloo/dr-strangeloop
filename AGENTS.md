@@ -79,6 +79,15 @@ can also be run/inspected/torn down independently afterward (see
 `its-a-live/AGENTS.md`) — `galvanise.py` prints the exact follow-up
 commands at the end of its run.
 
+## Config section naming (its-a-live TOML ↔ Igor UI)
+
+The its-a-live channel TOML tables (`[deploy]`, `[input]`, `[infrastructure.aws]`,
+`[infrastructure.s3]`, `[infrastructure.express]`/`[infrastructure.docker]`,
+`[timeline]`, `[timeshift]`, `[packaging]`, `[markers]`) and Igor's config groups (create form, read-only panel, edit form)
+use the **same names, one group per table, same keys in each**. Never add,
+rename or move a table/key in one place only -- see
+[`igor/AGENTS.md`](./igor/AGENTS.md) "Channel config sections".
+
 ## Environments
 
 - Repo-root `.venv` (`uv sync --all-packages`): `franken-ts`,

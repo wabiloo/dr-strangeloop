@@ -11,6 +11,7 @@ import os
 import sys
 import time
 
+from _infra_cfg import infra_table
 from _reachability import check_manifest_reachable
 
 
@@ -18,8 +19,8 @@ def spark(cfg, session, channel_name, extra_args=None):
     """Upload the franken-ts .ts file to S3 as MediaLive's TS_FILE input
     source. No transformation happens -- MediaLive re-encodes it live."""
     source_path = cfg.get("input", {}).get("source_path", "")
-    bucket_name = cfg.get("s3", {}).get("bucket_name", "")
-    folder = cfg.get("s3", {}).get("content_folder", "").strip("/")
+    bucket_name = infra_table(cfg, "s3").get("bucket_name", "")
+    folder = infra_table(cfg, "s3").get("content_folder", "").strip("/")
 
     if not source_path or not bucket_name:
         sys.exit("input.source_path and s3.bucket_name must be set in the config")

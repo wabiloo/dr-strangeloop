@@ -14,7 +14,8 @@ from constructs import Construct
 from loop_shared_stack import CLUSTER_NAME
 from _host_paths import to_host_path
 from _epoch_cfg import config_epoch_utc
-from _packaging_cfg import period_on_segmentation_serve_args
+from _infra_cfg import infra_table
+from _markers_cfg import period_on_segmentation_serve_args
 from _timeshift_cfg import timeshift_param_names, timeshift_serve_args
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
@@ -63,13 +64,13 @@ class LoopStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         name = config.get("deploy", {}).get("name", "default")
-        bucket_name = config.get("s3", {}).get("bucket_name", "")
+        bucket_name = infra_table(config, "s3").get("bucket_name", "")
 
         if not bucket_name:
             # During cdk bootstrap no config values are required -- empty stack.
             return
 
-        loop_package_folder = config.get("s3", {}).get("content_folder", "its-a-live/content").strip("/")
+        loop_package_folder = infra_table(config, "s3").get("content_folder", "its-a-live/content").strip("/")
 
         packaging_cfg = config.get("packaging", {})
         dvr_window_seconds = str(packaging_cfg.get("dvr_window_seconds", 30))
@@ -81,7 +82,7 @@ class LoopStack(Stack):
         # 32-bit tfdt and continuity mode's startup check would refuse it).
         continuous = bool(config.get("timeline", {}).get("continuous", True))
 
-        express_cfg = config.get("express", {})
+        express_cfg = infra_table(config, "express")
         port = int(express_cfg.get("port", 8080))
         # Same numeric codes as Fargate (256=0.25 vCPU, 512 MiB, etc.).
         serve_cpu = str(express_cfg.get("cpu", 256))

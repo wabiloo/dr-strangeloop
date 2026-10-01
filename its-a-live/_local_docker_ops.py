@@ -23,7 +23,8 @@ import subprocess
 import sys
 
 from _host_paths import to_host_path
-from _packaging_cfg import period_on_segmentation_serve_args
+from _infra_cfg import infra_table
+from _markers_cfg import period_on_segmentation_serve_args
 from _reachability import check_manifest_reachable
 from _epoch_cfg import config_epoch_utc
 from _timeshift_cfg import timeshift_serve_args
@@ -79,7 +80,7 @@ def _find_free_port():
         if _port_is_free(candidate):
             return candidate
     sys.exit(f"Could not find a free port in {_AUTO_PORT_RANGE.start}-{_AUTO_PORT_RANGE.stop - 1} "
-              f"for local-docker auto port selection -- set docker.port explicitly in the config.")
+              f"for local-docker auto port selection -- set infrastructure.docker.port explicitly in the config.")
 
 
 def _running_port(name):
@@ -117,7 +118,7 @@ def _resolve_port(cfg, name):
     bound on this host, which naturally avoids other running channels'
     containers too -- when there's truly no prior container to recover
     one from."""
-    raw = cfg.get("docker", {}).get("port", "auto")
+    raw = infra_table(cfg, "docker").get("port", "auto")
     if raw != "auto":
         return int(raw)
     running_port = _running_port(name)
@@ -416,7 +417,7 @@ def status(cfg, session, outputs):
     # read-only and shouldn't claim a free port that nothing is bound to.
     # In "auto" mode with no container ever created for this channel yet,
     # there simply isn't a port to report.
-    raw_port = cfg.get("docker", {}).get("port", "auto")
+    raw_port = infra_table(cfg, "docker").get("port", "auto")
     port = int(raw_port) if raw_port != "auto" else _running_port(name)
     hls_url = f"http://localhost:{port}/index.m3u8" if docker_status == "running" and port else None
     dash_url = f"http://localhost:{port}/stream.mpd" if docker_status == "running" and port else None

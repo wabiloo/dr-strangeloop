@@ -201,8 +201,8 @@ def test_channel_period_on_segmentation_roundtrip(backend):
         period_on_segmentation=["0x22", "0x30", "0x22"], period_on_segmentation_apply="dash",
     )
     config = tomllib.loads(generate_toml(**payload.model_dump()))
-    assert config["packaging"]["period_on_segmentation"] == [0x22, 0x30]
-    assert config["packaging"]["period_on_segmentation_apply"] == "dash"
+    assert config["markers"]["period_on_segmentation"] == [0x22, 0x30]
+    assert config["markers"]["period_on_segmentation_apply"] == "dash"
     assert config["timeline"]["continuous"] is True
 
 
@@ -212,8 +212,8 @@ def test_channel_period_on_segmentation_omitted_by_default():
         bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
     )
     config = tomllib.loads(generate_toml(**payload.model_dump()))
-    assert "period_on_segmentation" not in config["packaging"]
-    assert "period_on_segmentation_apply" not in config["packaging"]
+    assert "period_on_segmentation" not in config["markers"]
+    assert "period_on_segmentation_apply" not in config["markers"]
 
 
 def test_channel_period_on_segmentation_rejects_bad_values():
@@ -227,3 +227,18 @@ def test_channel_period_on_segmentation_rejects_bad_values():
         ChannelCreatePayload(**base, period_on_segmentation=["0x100"])
     with pytest.raises(ValueError):
         ChannelCreatePayload(**base, period_on_segmentation_apply="xml")
+
+
+@pytest.mark.parametrize("backend,table", [("ecs-express", "express"), ("local-docker", "docker")])
+def test_generated_toml_groups_infrastructure_tables(backend, table):
+    payload = ChannelCreatePayload(
+        name="test-channel", backend=backend, region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    infra = config["infrastructure"]
+    assert infra["aws"]["region"] == "eu-west-1"
+    assert infra["s3"]["bucket_name"] == "test-bucket"
+    assert "port" in infra[table]
+    for legacy in ("aws", "s3", "express", "docker"):
+        assert legacy not in config

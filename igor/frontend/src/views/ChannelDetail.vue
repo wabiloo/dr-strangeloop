@@ -198,17 +198,19 @@ function section(key: string): Record<string, unknown> {
 function startEdit() {
   if (!config.value) return
   const deploy = section('deploy')
-  const aws = section('aws')
-  const s3 = section('s3')
+  const infra = section('infrastructure')
+  const sub = (key: string) => (infra[key] as Record<string, unknown>) ?? {}
+  const aws = sub('aws')
+  const s3 = sub('s3')
   const input = section('input')
   const packaging = section('packaging')
   const timeline = section('timeline')
-  const express = section('express')
-  const docker = section('docker')
+  const express = sub('express')
+  const docker = sub('docker')
   const markers = section('markers')
   const editTimeshift = timeshiftParamsFromConfig(section('timeshift'))
   const backend = (deploy.backend as ChannelCreatePayload['backend']) ?? 'ecs-express'
-  // `port` lives in [express] for ecs-express, [docker] for local-docker
+  // `port` lives in [infrastructure.express] for ecs-express, [infrastructure.docker] for local-docker
   // (see its_a_live.generate_toml()) -- one form field either way.
   const portSection = backend === 'local-docker' ? docker : express
   Object.assign(editForm, {
@@ -226,9 +228,9 @@ function startEdit() {
     hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
     hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
     continuous: Boolean(timeline.continuous ?? true),
-    period_on_segmentation: periodTypesFromConfig(packaging.period_on_segmentation),
+    period_on_segmentation: periodTypesFromConfig(markers.period_on_segmentation),
     period_on_segmentation_apply:
-      (packaging.period_on_segmentation_apply as ChannelCreatePayload['period_on_segmentation_apply']) ?? 'both',
+      (markers.period_on_segmentation_apply as ChannelCreatePayload['period_on_segmentation_apply']) ?? 'both',
     timeshift_enabled: editTimeshift.enabled,
     timeshift_start_param: editTimeshift.start_param,
     timeshift_end_param: editTimeshift.end_param,
@@ -1038,14 +1040,10 @@ watch(() => props.name, reload)
           <Message v-if="editError" severity="error" :closable="false">{{ editError }}</Message>
 
           <section class="config-group">
-            <h4 class="config-group-title">{{ T.channel }}</h4>
+            <h4 class="config-group-title">{{ T.input }}</h4>
             <div class="config-fields">
               <div class="flex flex-column gap-1">
-                <label class="text-xs text-color-secondary">{{ L.backend }} (immutable)</label>
-                <InputText :model-value="editForm.backend" disabled />
-              </div>
-              <div class="flex flex-column gap-1">
-                <label class="text-xs text-color-secondary">{{ L.source_kind }} (immutable)</label>
+                <label class="text-xs text-color-secondary">{{ L.source_kind }}</label>
                 <InputText :model-value="editForm.source_kind" disabled />
               </div>
               <div class="flex flex-column gap-1 config-field-wide">
@@ -1065,12 +1063,18 @@ watch(() => props.name, reload)
           </section>
 
           <section v-if="!editIsLocalDocker" class="config-group">
-            <h4 class="config-group-title">{{ T.aws }}</h4>
+            <h4 class="config-group-title">{{ T['infrastructure.aws'] }}</h4>
             <div class="config-fields">
               <div class="flex flex-column gap-1">
                 <label class="text-xs text-color-secondary">{{ L.region }}</label>
                 <InputText v-model="editForm.region" />
               </div>
+            </div>
+          </section>
+
+          <section v-if="!editIsLocalDocker" class="config-group">
+            <h4 class="config-group-title">{{ T['infrastructure.s3'] }}</h4>
+            <div class="config-fields">
               <div class="flex flex-column gap-1">
                 <label class="text-xs text-color-secondary">{{ L.bucket_name }}</label>
                 <InputText v-model="editForm.bucket_name" />
@@ -1084,7 +1088,7 @@ watch(() => props.name, reload)
 
           <template v-if="editUsesChannelSection">
             <section class="config-group">
-              <h4 class="config-group-title">{{ T.serving }}</h4>
+              <h4 class="config-group-title">{{ editIsLocalDocker ? T['infrastructure.docker'] : T['infrastructure.express'] }}</h4>
               <div class="config-fields">
                 <div class="flex flex-column gap-1" :class="{ 'config-field-wide': editIsLocalDocker }">
                   <label class="text-xs text-color-secondary">{{ L.port }}</label>
@@ -1129,19 +1133,11 @@ watch(() => props.name, reload)
                     tfdt (loop-dee-loop/SCOPE.md &sect;12).
                   </FieldHelp>
                 </div>
-                <div class="config-field-wide">
-                  <PeriodSegmentationFields :form="editForm" id-prefix="edit" />
-                </div>
               </div>
             </section>
 
             <section class="config-group">
-              <h4 class="config-group-title">{{ T.timeshift }}</h4>
-              <TimeshiftFields :form="editForm" id-prefix="edit" />
-            </section>
-
-            <section class="config-group">
-              <h4 class="config-group-title">{{ T.hls }}</h4>
+              <h4 class="config-group-title">{{ T.packaging }}</h4>
               <div class="config-fields">
                 <div class="flex flex-column gap-1">
                   <label class="text-xs text-color-secondary">{{ L.segment_duration }}</label>
@@ -1164,7 +1160,12 @@ watch(() => props.name, reload)
             </section>
 
             <section class="config-group">
-              <h4 class="config-group-title">{{ T.scte35 }}</h4>
+              <h4 class="config-group-title">{{ T.timeshift }}</h4>
+              <TimeshiftFields :form="editForm" id-prefix="edit" />
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">{{ T.markers }}</h4>
               <div class="config-fields">
                 <div class="flex flex-column gap-1 config-field-wide">
                   <label class="text-xs text-color-secondary">{{ L.daterange_mode }}</label>
@@ -1199,6 +1200,9 @@ watch(() => props.name, reload)
                     <DaterangeIdFormatHelp />
                   </div>
                   <InputText id="edit-daterange-id-format" v-model="editForm.daterange_id_format" />
+                </div>
+                <div class="config-field-wide">
+                  <PeriodSegmentationFields :form="editForm" id-prefix="edit" />
                 </div>
               </div>
             </section>

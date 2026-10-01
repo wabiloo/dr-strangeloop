@@ -58,7 +58,7 @@ the HLS/DASH players (which then start from the beginning of the range rather
 than the live edge; *Back to live* restores). URL building/validation lives
 in `frontend/src/utils/timeshift.ts` (tests: `node --test
 --experimental-strip-types src/utils/timeshift.test.ts`). The per-channel
-settings are in the New/Edit forms' "Startover & catchup" group
+settings are in the New/Edit forms' "Timeshift" group
 (`timeshift_*` fields → `[timeshift]`). The DASH playhead clock shown during
 a preview is approximate. Design: `loop-dee-loop/SCOPE.md` §13.
 
@@ -76,6 +76,44 @@ redeploy/refresh), not by a plain `start`; changing it on a running channel
 restarts the numbering. Helpers/tests: `frontend/src/utils/epoch.ts` (`node
 --test --experimental-strip-types src/utils/epoch.test.ts`), component
 `EpochFields.vue`.
+
+## Channel config sections ↔ TOML tables (keep these in lockstep)
+
+The New channel form, the read-only Configuration panel and the Configuration
+edit form (channel detail page) share one layout,
+`frontend/src/utils/channelConfigLayout.ts`, and **every section in it is
+exactly one its-a-live TOML table, named after it**:
+
+| TOML table | UI group | Holds |
+|---|---|---|
+| `[deploy]` | Deploy | `name`, `backend` (New form only; the detail page shows the backend as a pill) |
+| `[input]` | Input | `source_kind`, `source_path`, `allow_missing_segments` |
+| `[infrastructure.aws]` | Infrastructure · AWS | `region` (not local-docker) |
+| `[infrastructure.s3]` | Infrastructure · S3 | `bucket_name`, `content_folder` (not local-docker) |
+| `[infrastructure.express]` / `[infrastructure.docker]` | Infrastructure · Express / Docker | `port` (+ `cpu`, `memory` for express) |
+| `[timeline]` | Timeline | `epoch_utc`, `continuous` |
+| `[packaging]` | Packaging | `segment_duration`, `dvr_window_seconds`, `hls_format`, `hls_ts_mux_audio` |
+| `[timeshift]` | Timeshift | `enabled`, `start_param`, `end_param`, `max_span_seconds` |
+| `[markers]` | Markers | `daterange_mode`, `cue_tags`, `dash_*`, `increment_event_ids`, `daterange_id_format`, `period_on_segmentation(_apply)` |
+
+Rules, for any change that touches channel config:
+
+- A group title is the table path, capitalised (`[timeline]` → "Timeline", `[infrastructure.aws]` → "Infrastructure · AWS"). Do
+  not invent friendlier group names ("Serving", "HLS packaging", "SCTE-35
+  signaling" were retired for this reason) -- field *labels* can be friendly,
+  group titles cannot.
+- A setting is shown in the group of the table it is stored in, in all three
+  places (create form, read-only panel, edit form) and in the same order. If a
+  setting looks like it belongs in another group, move it in the TOML
+  (generator, reader, docs, tests) -- do not just display it elsewhere.
+- Adding a table means adding its section (id = table name) to
+  `CONFIG_SECTION_TITLE`, `buildConfigSections`, and both Vue templates
+  (`ChannelNew.vue`, `ChannelDetail.vue` edit form) together. Renaming a
+  table or key means the same plus `its-a-live/` readers, `generate_toml`
+  (`src/igor/integrations/its_a_live.py`), `its-a-live/config.toml`,
+  `its-a-live/README.md`, `its-a-live/AGENTS.md`, every `data/channels/*.toml`
+  and `its-a-live/configs/*.toml`, and the tests, in one change. The form/API
+  field names equal the TOML key names.
 
 ## API surface (backend)
 

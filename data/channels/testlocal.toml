@@ -2,10 +2,10 @@
 name = "testlocal"
 backend = "local-docker"
 
-[aws]
+[infrastructure.aws]
 region = "eu-west-1"
 
-[s3]
+[infrastructure.s3]
 bucket_name = ""
 content_folder = "its-a-live/content"
 
@@ -16,5 +16,5 @@ source_path = "../outputs/short-loop-1min.ts"
 segment_duration   = 4.0
 dvr_window_seconds = 30.0
 
-[docker]
+[infrastructure.docker]
 port = 8090

@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 
+from _infra_cfg import infra_table
 from _reachability import check_manifest_reachable
 
 _LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
@@ -34,8 +35,8 @@ def spark(cfg, session, channel_name, extra_args=None):
     push the resulting loop package to S3. No AWS compute involved -- this
     is a one-shot, run-once-per-schedule-change process."""
     source_path = cfg.get("input", {}).get("source_path", "")
-    bucket_name = cfg.get("s3", {}).get("bucket_name", "")
-    folder = cfg.get("s3", {}).get("content_folder", "its-a-live/content").strip("/")
+    bucket_name = infra_table(cfg, "s3").get("bucket_name", "")
+    folder = infra_table(cfg, "s3").get("content_folder", "its-a-live/content").strip("/")
     segment_duration = str(cfg.get("packaging", {}).get("segment_duration", 4.0))
     packaging = cfg.get("packaging", {})
     local_output_dir = cfg.get("bake", {}).get(
@@ -88,8 +89,8 @@ def spark(cfg, session, channel_name, extra_args=None):
     s3_uri = f"s3://{bucket_name}/{prefix}"
     print(f"==> Pushing loop package to {s3_uri} ...")
     sync_args = ["aws", "s3", "sync", local_output_dir, s3_uri, "--delete"]
-    if cfg.get("aws", {}).get("region"):
-        sync_args += ["--region", cfg["aws"]["region"]]
+    if infra_table(cfg, "aws").get("region"):
+        sync_args += ["--region", infra_table(cfg, "aws")["region"]]
     result = subprocess.run(sync_args)
     if result.returncode != 0:
         sys.exit(f"aws s3 sync failed (exit {result.returncode}) -- is the AWS CLI installed and configured?")

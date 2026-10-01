@@ -2,10 +2,10 @@
 name = "solitaire-figaro"
 backend = "ecs-express"
 
-[aws]
+[infrastructure.aws]
 region = "eu-west-1"
 
-[s3]
+[infrastructure.s3]
 bucket_name = "bpkio-cs-demos"
 content_folder = "its-a-live/content"
 
@@ -31,7 +31,7 @@ hls_ts_mux_audio = true
 [timeline]
 continuous = true
 
-[express]
+[infrastructure.express]
 port   = 8080
 cpu    = 256
 memory = 512

@@ -1,10 +1,10 @@
 [deploy]
 name = "break-and-popos"
 
-[aws]
+[infrastructure.aws]
 region = "us-east-1"
 
-[s3]
+[infrastructure.s3]
 bucket_name = "bpkio-cs-demos"
 folder = "fabre/ts-files-with-scte"          # prefix inside the bucket
 

@@ -2,10 +2,10 @@
 name = "ecs-short-loop"
 backend = "ecs-express"
 
-[aws]
+[infrastructure.aws]
 region = "eu-west-1"
 
-[s3]
+[infrastructure.s3]
 bucket_name = "bpkio-cs-demos"
 content_folder = "its-a-live/content"
 
@@ -21,7 +21,7 @@ increment_event_ids = false
 segment_duration   = 4.0
 dvr_window_seconds = 30.0
 
-[express]
+[infrastructure.express]
 port   = 8080
 cpu    = 256
 memory = 512

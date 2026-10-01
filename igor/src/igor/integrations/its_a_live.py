@@ -69,10 +69,10 @@ _TOML_TEMPLATE = """\
 name = "{name}"
 backend = "{backend}"
 
-[aws]
+[infrastructure.aws]
 region = "{region}"
 
-[s3]
+[infrastructure.s3]
 bucket_name = "{bucket_name}"
 content_folder = "{content_folder}"
 
@@ -89,7 +89,7 @@ cue_tags            = "{cue_tags}"
 increment_event_ids = {increment_event_ids}
 daterange_id_format = "{daterange_id_format}"
 dash_signal_format  = "{dash_signal_format}"
-dash_descriptor_mode = "{dash_descriptor_mode}"
+dash_descriptor_mode = "{dash_descriptor_mode}"{period_extra}
 """
 
 _TIMESHIFT_EXTRA = """
@@ -105,13 +105,13 @@ _ECS_EXPRESS_EXTRA = """
 segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
 hls_format = "{hls_format}"
-hls_ts_mux_audio = {hls_ts_mux_audio}{period_extra}
+hls_ts_mux_audio = {hls_ts_mux_audio}
 
 [timeline]
 epoch_utc = "{epoch_utc}"
 continuous = {continuous}
 
-[express]
+[infrastructure.express]
 port   = {port}
 cpu    = {cpu}
 memory = {memory}
@@ -122,13 +122,13 @@ _LOCAL_DOCKER_EXTRA = """
 segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
 hls_format = "{hls_format}"
-hls_ts_mux_audio = {hls_ts_mux_audio}{period_extra}
+hls_ts_mux_audio = {hls_ts_mux_audio}
 
 [timeline]
 epoch_utc = "{epoch_utc}"
 continuous = {continuous}
 
-[docker]
+[infrastructure.docker]
 port = {port}
 """
 
@@ -222,18 +222,19 @@ def generate_toml(
             daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
             dash_signal_format=dash_signal_format,
             dash_descriptor_mode=dash_descriptor_mode,
+            period_extra=period_extra,
         )
         content += _ECS_EXPRESS_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
-            continuous=str(continuous).lower(), period_extra=period_extra,
+            continuous=str(continuous).lower(),
             port=int(port), cpu=cpu, memory=memory,
         )
         content += _timeshift_section()
     elif backend == "local-docker":
-        # No [express] section -- local-docker has no Fargate CPU/memory
-        # concept, and [aws]/[s3] above are written but ignored by
+        # No [infrastructure.express] -- local-docker has no Fargate CPU/memory
+        # concept, and [infrastructure.aws]/[infrastructure.s3] above are written but ignored by
         # channel.py for this backend (kept for TOML-shape consistency).
         content += _MARKERS_EXTRA.format(
             daterange_mode=daterange_mode, cue_tags=cue_tags,
@@ -241,12 +242,13 @@ def generate_toml(
             daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
             dash_signal_format=dash_signal_format,
             dash_descriptor_mode=dash_descriptor_mode,
+            period_extra=period_extra,
         )
         content += _LOCAL_DOCKER_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
-            continuous=str(continuous).lower(), period_extra=period_extra,
+            continuous=str(continuous).lower(),
             port=_format_local_docker_port(port),
         )
         content += _timeshift_section()

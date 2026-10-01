@@ -43,7 +43,7 @@ const activePreset = computed(() => epochPresetFor(props.form.epoch_utc ?? ''))
         value; it does not follow the clock.
       </FieldHelp>
     </div>
-    <div class="flex flex-wrap align-items-center gap-2">
+    <div class="flex align-items-center gap-2">
       <input
         :id="`${idPrefix}-epoch`"
         v-model="inputValue"
@@ -53,18 +53,22 @@ const activePreset = computed(() => epochPresetFor(props.form.epoch_utc ?? ''))
         :class="{ 'p-invalid': !valid }"
       />
       <span class="text-xs text-color-secondary">UTC</span>
-      <Button
-        v-for="preset in EPOCH_PRESETS"
-        :key="preset.id"
-        type="button"
-        size="small"
-        :label="preset.label"
-        :severity="activePreset === preset.id ? undefined : 'secondary'"
-        :outlined="activePreset !== preset.id"
-        @click="form.epoch_utc = preset.value()"
-      />
     </div>
-    <small v-if="valid" class="text-color-secondary">{{ form.epoch_utc }}</small>
-    <small v-else class="p-error">Pick a date and time (UTC).</small>
+    <div class="flex flex-wrap align-items-center gap-2">
+      <span class="text-xs text-color-secondary">Set to:</span>
+      <div class="flex flex-nowrap align-items-center gap-2">
+        <Button
+          v-for="preset in EPOCH_PRESETS"
+          :key="preset.id"
+          type="button"
+          size="small"
+          :label="preset.label"
+          :severity="activePreset === preset.id ? undefined : 'secondary'"
+          :outlined="activePreset !== preset.id"
+          @click="form.epoch_utc = preset.value()"
+        />
+      </div>
+    </div>
+    <small v-if="!valid" class="p-error">Pick a date and time (UTC).</small>
   </div>
 </template>

@@ -85,6 +85,8 @@ import time
 import tomllib
 import boto3
 
+from _infra_cfg import infra_table, reject_legacy_tables
+
 _DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "config.toml")
 
 _BACKENDS = ("aws-media", "ecs-express", "local-docker")
@@ -118,6 +120,7 @@ def _config(config_path):
     backend = cfg.get("deploy", {}).get("backend")
     if backend not in _BACKENDS:
         sys.exit(f"[deploy].backend must be one of {_BACKENDS!r} in {config_path}, got {backend!r}")
+    reject_legacy_tables(cfg, config_path)
     return cfg
 
 
@@ -139,7 +142,7 @@ def _shared_stack_name(cfg):
 
 
 def _session(cfg):
-    region = cfg.get("aws", {}).get("region")
+    region = infra_table(cfg, "aws").get("region")
     return boto3.session.Session(region_name=region)
 
 

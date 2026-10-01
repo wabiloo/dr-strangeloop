@@ -9,6 +9,8 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from _infra_cfg import infra_table
+
 
 # SCTE-35 ad triggers to act on (mirrors the known-good reference channel).
 AD_TRIGGERS = [
@@ -36,8 +38,8 @@ class MediaStack(Stack):
 
         name        = config.get("deploy", {}).get("name", "default")
         ts_file     = config.get("input", {}).get("source_path", "")
-        bucket_name = config.get("s3", {}).get("bucket_name", "")
-        s3_folder   = config.get("s3", {}).get("content_folder", "").strip("/")
+        bucket_name = infra_table(config, "s3").get("bucket_name", "")
+        s3_folder   = infra_table(config, "s3").get("content_folder", "").strip("/")
 
         if not ts_file or not bucket_name:
             # During cdk bootstrap no config values are required — return empty stack.

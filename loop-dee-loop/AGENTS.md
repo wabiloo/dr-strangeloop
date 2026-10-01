@@ -67,7 +67,7 @@ match, fix the upstream franken-ts input instead.
 
 ## Forced Periods on SCTE-35 types
 
-`serve.py --period-on-segmentation 0x22,0x30,...` (its-a-live `[packaging]
+`serve.py --period-on-segmentation 0x22,0x30,...` (its-a-live `[markers]
 period_on_segmentation`) opens a new Period / `#EXT-X-DISCONTINUITY` at
 markers with those `segmentation_type_id`s, signal-only (timestamps stay
 continuous under `--continuous-timeline`). Design: `SCOPE.md` §14; tests:

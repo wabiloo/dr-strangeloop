@@ -238,9 +238,9 @@ async function prefillFromChannel(from: string) {
       hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? form.hls_ts_mux_audio),
       epoch_utc: String(timeline.epoch_utc ?? DEFAULT_EPOCH_UTC),
       continuous: Boolean(timeline.continuous ?? true),
-      period_on_segmentation: periodTypesFromConfig(packaging.period_on_segmentation),
+      period_on_segmentation: periodTypesFromConfig(markers.period_on_segmentation),
       period_on_segmentation_apply:
-        (packaging.period_on_segmentation_apply as ChannelCreatePayload['period_on_segmentation_apply']) ?? 'both',
+        (markers.period_on_segmentation_apply as ChannelCreatePayload['period_on_segmentation_apply']) ?? 'both',
       timeshift_enabled: ts.enabled,
       timeshift_start_param: ts.start_param,
       timeshift_end_param: ts.end_param,
@@ -287,10 +287,11 @@ watch(
   },
 )
 // Both ecs-express and local-docker bake+serve via loop-dee-loop and share
-// [packaging]/[markers]; `port` itself lands in [express] for ecs-express
-// or the local-docker-only [docker] section (generate_toml() picks the
-// section, this form just shows one `port` field either way). Only
-// ecs-express additionally needs Fargate cpu/memory (also in [express]).
+// [packaging]/[markers]; `port` itself lands in [infrastructure.express] for
+// ecs-express or the local-docker-only [infrastructure.docker] section
+// (generate_toml() picks the section, this form just shows one `port` field
+// either way). Only ecs-express additionally needs Fargate cpu/memory (also
+// in [infrastructure.express]).
 const usesChannelSection = computed(() => isEcsExpress.value || isLocalDocker.value)
 const hlsFormatOptions = [
   { label: 'CMAF (fragmented MP4)', value: 'cmaf' },
@@ -346,7 +347,7 @@ async function submit() {
       (local-docker), switched to ecs-express. Fill in the AWS region, bucket and content folder.
     </Message>
 
-    <h4 class="mb-0">{{ T.channel }}</h4>
+    <h4 class="mb-0">{{ T.deploy }}</h4>
     <div class="flex flex-column gap-1">
       <label for="name">{{ L.name }}</label>
       <InputText id="name" v-model="form.name" placeholder="my-channel" :invalid="Boolean(form.name) && Boolean(nameError)" />
@@ -358,6 +359,7 @@ async function submit() {
       <Select id="backend" v-model="form.backend" :options="backendOptions" option-label="label" option-value="value" />
     </div>
 
+    <h4 class="mb-0 mt-2">{{ T.input }}</h4>
     <div class="flex flex-column gap-1">
       <label>{{ L.source_kind }}</label>
       <SelectButton v-model="sourceKind" :options="sourceKindOptions" option-label="label" option-value="value" />
@@ -448,12 +450,13 @@ async function submit() {
     </div>
 
     <template v-if="!isLocalDocker">
-      <h4 class="mb-0 mt-2">{{ T.aws }}</h4>
+      <h4 class="mb-0 mt-2">{{ T['infrastructure.aws'] }}</h4>
       <div class="flex flex-column gap-1">
         <label for="region">{{ L.region }}</label>
         <InputText id="region" v-model="form.region" placeholder="eu-west-1" />
       </div>
 
+      <h4 class="mb-0 mt-2">{{ T['infrastructure.s3'] }}</h4>
       <div class="flex flex-column gap-1">
         <label for="bucket">{{ L.bucket_name }} (existing bucket)</label>
         <InputText id="bucket" v-model="form.bucket_name" placeholder="my-existing-bucket" />
@@ -466,7 +469,7 @@ async function submit() {
     </template>
 
     <template v-if="usesChannelSection">
-      <h4 class="mb-0 mt-2">{{ T.serving }}</h4>
+      <h4 class="mb-0 mt-2">{{ isLocalDocker ? T['infrastructure.docker'] : T['infrastructure.express'] }}</h4>
       <div class="flex flex-column gap-1">
         <label for="port">{{ L.port }}{{ isLocalDocker ? ' (also the host port -- http://localhost:<port>)' : '' }}</label>
         <div v-if="isLocalDocker" class="flex align-items-center gap-2">
@@ -517,12 +520,7 @@ async function submit() {
         </div>
       </div>
 
-      <PeriodSegmentationFields :form="form" id-prefix="new" />
-
-      <h4 class="mb-0 mt-2">{{ T.timeshift }}</h4>
-      <TimeshiftFields :form="form" id-prefix="new" />
-
-      <h4 class="mb-0 mt-2">{{ T.hls }}</h4>
+      <h4 class="mb-0 mt-2">{{ T.packaging }}</h4>
       <div class="grid">
         <div v-if="sourceKind === 'playlist'" class="col-6 flex flex-column gap-1">
           <label for="segdur">{{ L.segment_duration }}</label>
@@ -542,7 +540,10 @@ async function submit() {
         </div>
       </div>
 
-      <h4 class="mb-0 mt-2">{{ T.scte35 }}</h4>
+      <h4 class="mb-0 mt-2">{{ T.timeshift }}</h4>
+      <TimeshiftFields :form="form" id-prefix="new" />
+
+      <h4 class="mb-0 mt-2">{{ T.markers }}</h4>
       <div class="flex flex-column gap-1">
         <label for="daterange-mode">{{ L.daterange_mode }}</label>
         <Select id="daterange-mode" v-model="form.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" />
@@ -577,6 +578,7 @@ async function submit() {
         </div>
         <InputText id="daterange-id-format" v-model="form.daterange_id_format" />
       </div>
+      <PeriodSegmentationFields :form="form" id-prefix="new" />
     </template>
 
     <div>
