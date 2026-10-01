@@ -96,6 +96,10 @@ const hlsSeekValue = ref(0)
 const hlsSeekDragging = ref(false)
 const hlsSeekPending = ref(false)
 const hlsAtLiveEdge = ref(true)
+// Closed (VOD / ENDLIST) playlist, e.g. a catchup range in the past: no live
+// edge, so the seekbar shows elapsed/total and has no LIVE button.
+const hlsClosed = ref(false)
+const dashClosed = ref(false)
 let hlsDvrPollTimer: ReturnType<typeof setInterval> | null = null
 let hlsSeekCommitTimer: ReturnType<typeof setTimeout> | null = null
 let hlsOriginalMaxLatency: number | undefined
@@ -151,6 +155,7 @@ function updateHlsDvrRange() {
   // DVR slider to that playlist window, then intersect with media seekable
   // so slider targets remain positions the browser can actually seek to.
   const details = hlsInstance?.latestLevelDetails
+  hlsClosed.value = hlsInstance ? details?.live === false : Number.isFinite(video.duration)
   if (details?.live && Number.isFinite(details.fragmentStart) && Number.isFinite(details.edge)) {
     hlsSeekMin.value = Math.max(details.fragmentStart, seekableStart)
     hlsSeekMax.value = Math.min(details.edge, seekableEnd)
@@ -178,7 +183,18 @@ function updateHlsDvrRange() {
   hlsAtLiveEdge.value = hlsSeekMax.value - video.currentTime <= TARGET_LIVE_DELAY_SECONDS + 1
 }
 
+function formatClock(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = String(total % 60).padStart(2, '0')
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`
+}
+
 function hlsBehindLiveLabel(value: number): string {
+  if (hlsClosed.value) {
+    return `${formatClock(value - hlsSeekMin.value)} / ${formatClock(hlsSeekMax.value - hlsSeekMin.value)}`
+  }
   const behind = Math.max(0, hlsSeekMax.value - value)
   return behind < 1 ? 'LIVE' : `-${behind.toFixed(1)}s`
 }
@@ -376,6 +392,11 @@ function updateDashDvrRange() {
     )
   }
   dashAtLiveEdge.value = dashSeekMax.value - video.currentTime <= TARGET_LIVE_DELAY_SECONDS + 1
+  try {
+    dashClosed.value = dashInstance ? !dashInstance.isDynamic() : false
+  } catch {
+    dashClosed.value = false
+  }
 }
 
 /** Seconds behind the live edge for a given DVR-slider position -- 0 (or
@@ -383,6 +404,9 @@ function updateDashDvrRange() {
  * Shown instead of an absolute time: "how far back am I" is what matters
  * for DVR scrubbing, not the underlying epoch-anchored absolute number. */
 function dashBehindLiveLabel(value: number): string {
+  if (dashClosed.value) {
+    return `${formatClock(value - dashSeekMin.value)} / ${formatClock(dashSeekMax.value - dashSeekMin.value)}`
+  }
   const behind = Math.max(0, dashSeekMax.value - value)
   return behind < 1 ? 'LIVE' : `-${behind.toFixed(1)}s`
 }
@@ -835,6 +859,9 @@ async function playHls() {
               // seek/speed up towards the live edge.
               startPosition: 0,
               maxLiveSyncPlaybackRate: 1,
+              // hls.js refuses liveMaxLatencyDuration unless liveSyncDuration
+              // is also set (and strictly smaller).
+              liveSyncDuration: TARGET_LIVE_DELAY_SECONDS,
               liveMaxLatencyDuration: Infinity,
             }
           : {
@@ -1119,6 +1146,7 @@ function destroyHls() {
   hlsSeekDragging.value = false
   hlsSeekPending.value = false
   hlsAtLiveEdge.value = true
+  hlsClosed.value = false
 }
 
 function destroyDash() {
@@ -1166,6 +1194,7 @@ function destroyDash() {
   dashSeekDragging.value = false
   dashSeekPending.value = false
   dashAtLiveEdge.value = true
+  dashClosed.value = false
 }
 
 // If the channel gets redeployed/refreshed with new URLs, stop rather than
@@ -1322,7 +1351,10 @@ async function copyUrl(url?: string | null) {
               @input="onHlsVolumeInput(($event.target as HTMLInputElement).valueAsNumber)"
             />
             <div v-if="hlsSeekMax > hlsSeekMin" class="dvr-seekbar">
-              <span class="dvr-label" :class="{ 'dvr-label-live': hlsAtLiveEdge && !hlsSeekDragging }">
+              <span
+                class="dvr-label"
+                :class="{ 'dvr-label-live': !hlsClosed && hlsAtLiveEdge && !hlsSeekDragging, 'dvr-label-closed': hlsClosed }"
+              >
                 {{ hlsBehindLiveLabel(hlsSeekValue) }}
               </span>
               <input
@@ -1332,7 +1364,7 @@ async function copyUrl(url?: string | null) {
                 :max="hlsSeekSliderMax"
                 step="0.1"
                 :value="hlsSeekValue"
-                aria-label="DVR position, seconds behind live"
+                :aria-label="hlsClosed ? 'Playback position' : 'DVR position, seconds behind live'"
                 :aria-valuetext="hlsBehindLiveLabel(hlsSeekValue)"
                 title="Scrub within the DVR window"
                 @pointerdown="onHlsSeekStart"
@@ -1342,6 +1374,7 @@ async function copyUrl(url?: string | null) {
                 @change="onHlsSeekCommit(($event.target as HTMLInputElement).valueAsNumber)"
               />
               <button
+                v-if="!hlsClosed"
                 class="dvr-live-btn"
                 :class="{ 'dvr-live-btn-active': hlsAtLiveEdge && !hlsSeekDragging }"
                 title="Return to live"
@@ -1444,7 +1477,10 @@ async function copyUrl(url?: string | null) {
               @input="onDashVolumeInput(($event.target as HTMLInputElement).valueAsNumber)"
             />
             <div v-if="dashSeekMax > dashSeekMin" class="dvr-seekbar">
-              <span class="dvr-label" :class="{ 'dvr-label-live': dashAtLiveEdge && !dashSeekDragging }">
+              <span
+                class="dvr-label"
+                :class="{ 'dvr-label-live': !dashClosed && dashAtLiveEdge && !dashSeekDragging, 'dvr-label-closed': dashClosed }"
+              >
                 {{ dashBehindLiveLabel(dashSeekValue) }}
               </span>
               <input
@@ -1454,7 +1490,7 @@ async function copyUrl(url?: string | null) {
                 :max="dashSeekSliderMax"
                 step="0.1"
                 :value="dashSeekValue"
-                aria-label="DVR position, seconds behind live"
+                :aria-label="dashClosed ? 'Playback position' : 'DVR position, seconds behind live'"
                 :aria-valuetext="dashBehindLiveLabel(dashSeekValue)"
                 title="Scrub within the DVR window"
                 @pointerdown="onDashSeekStart"
@@ -1464,6 +1500,7 @@ async function copyUrl(url?: string | null) {
                 @change="onDashSeekCommit(($event.target as HTMLInputElement).valueAsNumber)"
               />
               <button
+                v-if="!dashClosed"
                 class="dvr-live-btn"
                 :class="{ 'dvr-live-btn-active': dashAtLiveEdge && !dashSeekDragging }"
                 title="Return to live"
@@ -1886,6 +1923,11 @@ async function copyUrl(url?: string | null) {
 
 .dvr-label-live {
   color: #4ade80;
+}
+
+.dvr-label-closed {
+  min-width: 6.5rem;
+  color: #e2e8f0;
 }
 
 /* Custom track/thumb (not the browser default) so this reads as a
