@@ -110,16 +110,16 @@ def _marker_type_code(marker: dict) -> str:
 def _describe_markers(entries: list[tuple[dict, dict[str, str], int | None, str]]) -> list[str]:
     """Comment lines summarizing markers: one line per distinct start time
     (ISO 8601, UTC) -- coincident markers share a line -- each listing the
-    markers' compact type codes and event ids (loop-remapped, with the
+    markers' compact type codes and decimal event ids (loop-remapped, with the
     original, if `increment_event_ids`). Entries are (marker, event-id map,
     loop number or None to omit it, start time)."""
     groups: dict[tuple[str, int | None], list[str]] = {}
     for marker, id_map, loop, start_iso in entries:
-        event_id = id_map.get(marker["event_id"], marker["event_id"])
+        event_id = int(id_map.get(marker["event_id"], marker["event_id"]), 16)
         detail = f"id {event_id}"
         # With increment_event_ids the map is non-empty: show the original id too.
         if id_map:
-            detail += f" (was {marker['event_id']})"
+            detail += f" (was {int(marker['event_id'], 16)})"
         groups.setdefault((start_iso, loop), []).append(f"{_marker_type_code(marker)} ({detail})")
     return [
         f"markers @ {start_iso}{'' if loop is None else f' (loop {loop})'}: {', '.join(parts)}"
