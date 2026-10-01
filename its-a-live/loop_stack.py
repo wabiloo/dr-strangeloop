@@ -194,6 +194,7 @@ class LoopStack(Stack):
                     "--port", str(port),
                     "--dvr-window-seconds", dvr_window_seconds,
                     "--epoch-utc", config_epoch_utc(config),
+                    "--channel-name", config.get("deploy", {}).get("name", "default"),
                     *(["--continuous-timeline"] if continuous else []),
                     *period_on_segmentation_serve_args(config),
                     *timeshift_serve_args(config),

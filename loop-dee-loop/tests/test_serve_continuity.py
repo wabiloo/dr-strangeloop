@@ -462,7 +462,9 @@ _SPLICE_INSERT_B64 = "/DAvAAAAAAAA///wFAVIAACPf+/+c2nALv4AUsz1AAAAAAAKAAhDVUVJAA
 
 def _manifests(tmp_path, *, continuous: bool):
     _write_continuous_package(tmp_path)
-    app = create_app(tmp_path, epoch_ticks=0, window_segments=6, continuous=continuous)
+    app = create_app(
+        tmp_path, epoch_ticks=0, window_segments=6, continuous=continuous, channel_name="my-channel"
+    )
     client = app.test_client()
     return {
         "master": client.get("/index.m3u8").get_data(as_text=True),
@@ -483,14 +485,15 @@ def test_manifests_are_stamped_with_generator_version(tmp_path, continuous):
     assert m["master"].splitlines()[1] == f"# {stamp}"
     assert m["hls"].splitlines()[1] == f"# {stamp}"
     assert m["dash"].splitlines()[1] == f"<!-- {stamp} -->"
-    # Mode + time anchors follow the stamp, in HLS media and DASH alike.
-    assert m["hls"].splitlines()[2] == "# mode: live"
+    # Channel + source names, then mode + time anchors, follow the stamp.
     state = "on" if continuous else "off"
-    assert m["hls"].splitlines()[3] == f"# continuous timeline: {state}"
-    assert m["hls"].splitlines()[4].startswith("# epoch: 1970-01-01T00:00:00")
-    assert m["dash"].splitlines()[2] == "<!-- mode: live -->"
-    assert m["dash"].splitlines()[3] == f"<!-- continuous timeline: {state} -->"
-    assert m["dash"].splitlines()[4].startswith("<!-- epoch: 1970-01-01T00:00:00")
+    for body, fmt in ((m["hls"], "# {}"), (m["dash"], "<!-- {} -->")):
+        lines = body.splitlines()
+        assert lines[2] == fmt.format("channel: my-channel")
+        assert lines[3] == fmt.format("source: a.mp4")
+        assert lines[4] == fmt.format("mode: live")
+        assert lines[5] == fmt.format(f"continuous timeline: {state}")
+        assert lines[6].startswith(fmt.format("epoch: 1970-01-01T00:00:00").removesuffix(" -->"))
     # HLS media: then the loop of the window's first segment, with its start.
     current = next(l for l in m["hls"].splitlines() if l.startswith("# current loop: "))
     first_loop = int(current.removeprefix("# current loop: ").split(" ")[0])
@@ -508,6 +511,7 @@ def test_hls_loop_number_comment_precedes_first_segment_of_each_loop(tmp_path, c
         if line.startswith("# loop: "):
             nxt = next(l for l in lines[i + 1 :] if not l.startswith("#EXT-X-DISCONTINUITY") and not l.startswith("#EXT-X-MAP"))
             assert nxt.startswith("#EXT-X-PROGRAM-DATE-TIME")
+            assert lines[i - 1] == ""
 
 
 def test_dash_continuous_has_loop_comment_before_first_segment_of_window_and_each_loop(tmp_path):

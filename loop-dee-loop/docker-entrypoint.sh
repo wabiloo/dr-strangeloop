@@ -69,6 +69,7 @@ case "$SUBCOMMAND" in
             CONTINUOUS_TIMELINE="false"
             PERIOD_ON_SEGMENTATION=""
             PERIOD_ON_SEGMENTATION_APPLY=""
+            CHANNEL_NAME=""
             TIMESHIFT="false"
             TIMESHIFT_START_PARAM=""
             TIMESHIFT_END_PARAM=""
@@ -78,6 +79,7 @@ case "$SUBCOMMAND" in
                     --host) HOST="$2"; shift 2 ;;
                     --port) PORT="$2"; shift 2 ;;
                     --epoch-utc) EPOCH_UTC="$2"; shift 2 ;;
+                    --channel-name) CHANNEL_NAME="$2"; shift 2 ;;
                     --dvr-window-seconds) DVR_WINDOW_SECONDS="$2"; shift 2 ;;
                     --window-segments) WINDOW_SEGMENTS="$2"; shift 2 ;;
                     --continuous-timeline) CONTINUOUS_TIMELINE="true"; shift ;;
@@ -100,7 +102,7 @@ case "$SUBCOMMAND" in
 
             export LOOP_PACKAGE_DIR="$LOOP_PACKAGE_LOCAL_DIR"
             export EPOCH_UTC DVR_WINDOW_SECONDS WINDOW_SEGMENTS CONTINUOUS_TIMELINE
-            export PERIOD_ON_SEGMENTATION PERIOD_ON_SEGMENTATION_APPLY
+            export PERIOD_ON_SEGMENTATION PERIOD_ON_SEGMENTATION_APPLY CHANNEL_NAME
             export TIMESHIFT TIMESHIFT_START_PARAM TIMESHIFT_END_PARAM
             export TIMESHIFT_MAX_SPAN_SECONDS
             WORKERS="${GUNICORN_WORKERS:-4}"

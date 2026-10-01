@@ -555,6 +555,12 @@ class LoopPackage:
             self.descriptor["segment_duration_seconds"]
         )
         self.markers: list[dict] = self.descriptor["markers"]
+        # Name of the baked source (franken-ts output name), when recorded.
+        source_input = self.descriptor.get("source_input")
+        self.source_name: str = ""
+        if source_input:
+            source_path = Path(source_input)
+            self.source_name = source_path.stem if source_path.suffix in (".ts", ".json") else source_path.name
 
         # [markers] settings (its-a-live/AGENTS.md) -- fixed shape of this
         # package's HLS/DASH SCTE-35 signaling, recorded once at bake time
@@ -765,6 +771,7 @@ class Channel:
         continuous: bool = False,
         period_on_segmentation: frozenset[int] = frozenset(),
         period_apply: str = "both",
+        channel_name: str = "",
     ):
         if not isinstance(epoch_ticks, int):
             raise ValueError("epoch_ticks must be int")
@@ -782,6 +789,7 @@ class Channel:
                 self.continuous_error = str(exc)
         self.package = package
         self.epoch_ticks = epoch_ticks
+        self.channel_name = channel_name
         # Channel-level: segmentation_type_ids whose markers force a new
         # Period / #EXT-X-DISCONTINUITY (signal only -- timestamps stay
         # continuous across it). Resolved once to local segment indices.
@@ -985,7 +993,13 @@ class Channel:
         """Comment text (no comment syntax) for the top of a manifest: live
         vs startover/catchup, and the time anchors loop start times derive
         from (the epoch, plus the clock offset if one is applied)."""
-        out = [
+        out = []
+        if self.channel_name:
+            out.append(f"channel: {self.channel_name}")
+        source_name = getattr(self.package, "source_name", "")
+        if source_name:
+            out.append(f"source: {source_name}")
+        out += [
             "mode: live" if window is None else "mode: startover/catchup",
             f"continuous timeline: {'on' if self.continuous else 'off'}",
             f"epoch: {self._iso_ticks(self.epoch_ticks)}",
@@ -1272,6 +1286,7 @@ class Channel:
             # loop iteration that starts here -- also in continuity mode,
             # where the wrap carries no #EXT-X-DISCONTINUITY.
             if local_index == 0:
+                lines.append("")
                 lines.append(f"# loop: {self._loop_label(local_loop_number)}")
 
             # This playlist's own segment start/end (for PDT/EXTINF).
@@ -2415,6 +2430,7 @@ def create_app(
     timeshift: TimeshiftConfig | None = None,
     period_on_segmentation: frozenset[int] = frozenset(),
     period_apply: str = "both",
+    channel_name: str = "",
 ) -> Flask:
     ts_cfg = timeshift or TimeshiftConfig()
     package = LoopPackage(package_dir)
@@ -2425,6 +2441,7 @@ def create_app(
         continuous=continuous,
         period_on_segmentation=period_on_segmentation,
         period_apply=period_apply,
+        channel_name=channel_name,
     )
     process_start_ticks = channel.now_ticks()
 
@@ -2744,6 +2761,11 @@ def main() -> int:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument(
+        "--channel-name",
+        default="",
+        help="Channel name, shown in the manifests' header comments.",
+    )
+    parser.add_argument(
         "--dvr-window-seconds",
         type=float,
         default=30.0,
@@ -2830,6 +2852,7 @@ def main() -> int:
         continuous=args.continuous_timeline,
         period_on_segmentation=parse_segmentation_type_ids(args.period_on_segmentation),
         period_apply=args.period_on_segmentation_apply,
+        channel_name=args.channel_name,
         timeshift=TimeshiftConfig(
             enabled=args.timeshift,
             start_param=args.timeshift_start_param,

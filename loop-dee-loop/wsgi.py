@@ -53,4 +53,5 @@ app = create_app(
     timeshift=timeshift,
     period_on_segmentation=period_on_segmentation,
     period_apply=parse_period_apply(os.environ.get("PERIOD_ON_SEGMENTATION_APPLY")),
+    channel_name=os.environ.get("CHANNEL_NAME", ""),
 )
