@@ -551,12 +551,17 @@ def test_marker_comments_list_type_codes_and_event_ids(tmp_path, continuous):
     marker_lines = [i for i, l in enumerate(hls) if l.startswith("# markers: ")]
     assert marker_lines, "no marker description in HLS"
     for i in marker_lines:
-        assert hls[i] == "# markers: 0x34 (id 0x00000001)"
+        assert re.fullmatch(
+            r"# markers: 0x34 \(id 0x00000001, \d{4}-\d\d-\d\dT[\d:.]+Z\)", hls[i]
+        ), hls[i]
+        # ISO start == the DATERANGE's own START-DATE
+        iso = re.search(r", (\S+)\)$", hls[i]).group(1)
+        assert f'START-DATE="{iso}"' in hls[i + 1]
         assert hls[i + 1].startswith("#EXT-X-DATERANGE")  # right before the marker tags
 
     dash = client.get("/stream.mpd").get_data(as_text=True)
     descriptions = re.findall(r"<!-- markers: ([^>]*) -->\n\s+<EventStream", dash)
     assert descriptions
-    assert all(d.startswith("0x34 (id 0x00000001") for d in descriptions)
+    assert all(re.match(r"0x34 \(id 0x00000001, \d{4}-[\d\-T:.]+Z", d) for d in descriptions)
     if continuous:  # one Period spans several loops, so each entry names its loop
-        assert re.search(r"0x34 \(id 0x00000001, loop \d+\)", descriptions[0])
+        assert re.search(r"0x34 \(id 0x00000001, \S+Z, loop \d+\)", descriptions[0])

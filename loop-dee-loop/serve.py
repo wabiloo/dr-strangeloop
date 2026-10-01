@@ -109,13 +109,14 @@ def _marker_type_code(marker: dict) -> str:
     return f"0x{value:02X}"
 
 
-def _describe_markers(entries: list[tuple[dict, dict[str, str], int | None]]) -> str:
+def _describe_markers(entries: list[tuple[dict, dict[str, str], int | None, str]]) -> str:
     """One-line summary for a manifest comment: each marker's segmentation
-    type code and (loop-remapped, if `increment_event_ids`) event id. Entries
-    are (marker, event-id map, loop number or None to omit it)."""
+    type code, (loop-remapped, if `increment_event_ids`) event id and ISO 8601
+    start time. Entries are (marker, event-id map, loop number or None to omit
+    it, start time)."""
     parts = []
-    for marker, id_map, loop in entries:
-        detail = f"id {id_map.get(marker['event_id'], marker['event_id'])}"
+    for marker, id_map, loop, start_iso in entries:
+        detail = f"id {id_map.get(marker['event_id'], marker['event_id'])}, {start_iso}"
         if loop is not None:
             detail += f", loop {loop}"
         parts.append(f"{_marker_type_code(marker)} ({detail})")
@@ -849,6 +850,23 @@ class Channel:
         )
         return f"{loop_number} (starts {self._iso_ticks(start)})"
 
+    def _marker_start_iso(self, marker: dict, loop_number: int) -> str:
+        """The marker's wall-clock start (ISO 8601, UTC) in the given loop,
+        including any declared asset-gap offset, as DATERANGE START-DATE and
+        the DASH Period start carry it."""
+        pkg = self.package
+        offset = pkg.declared_offset_ticks_by_local_index[
+            segment_index_for_position(marker["pts_time_ticks"], pkg.segment_boundary_ticks)
+        ]
+        return self._iso_ticks(
+            program_date_time_ticks(
+                loop_number,
+                marker["pts_time_ticks"] + offset,
+                pkg.total_loop_duration_ticks,
+                self.epoch_ticks,
+            )
+        )
+
     def _header_comments(self, window: "TimeWindow | None") -> list[str]:
         """Comment text (no comment syntax) for the top of a manifest: live
         vs startover/catchup, and the time anchors loop start times derive
@@ -1191,7 +1209,9 @@ class Channel:
                 segment_id_map = (
                     build_event_id_map(pkg.markers, local_loop_number) if pkg.increment_event_ids else {}
                 )
-                lines.append("# " + _describe_markers([(m, segment_id_map, None) for m in segment_markers]))
+                lines.append("# " + _describe_markers(
+                    [(m, segment_id_map, None, self._marker_start_iso(m, local_loop_number)) for m in segment_markers]
+                ))
 
             if pkg.cue_tags != "only":
                 matching_markers = [
@@ -1861,7 +1881,7 @@ class Channel:
             # can't fold events from two Periods of the same loop together.
             stream_value_attr = f' value="{loop_number}-{span_index}"' if spans_per_loop > 1 else ""
             event_streams_xml = (
-                f"    <!-- {_describe_markers([(m, event_id_map, None) for m in event_markers])} -->\n"
+                f"    <!-- {_describe_markers([(m, event_id_map, None, self._marker_start_iso(m, loop_number)) for m in event_markers])} -->\n"
                 f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}"{stream_value_attr}>\n'
                 + "\n".join(event_xml)
                 + "\n    </EventStream>"
@@ -2006,7 +2026,7 @@ class Channel:
             SCTE35_XML_NAMESPACE if pkg.dash_signal_format == "xml" else "urn:scte:scte35:2014:xml+bin"
         )
         event_xml: list[str] = []
-        event_markers: list[tuple[dict, dict[str, str], int | None]] = []
+        event_markers: list[tuple[dict, dict[str, str], int | None, str]] = []
         emitted: set[tuple[str, int]] = set()
         for global_index in global_indices:
             loop_number, local_index = divmod(global_index, pkg.segments_per_loop)
@@ -2022,7 +2042,7 @@ class Channel:
                 if key in emitted or not _marker_covers_segment(marker, ref_start, ref_end):
                     continue
                 emitted.add(key)
-                event_markers.append((marker, event_id_map, loop_number))
+                event_markers.append((marker, event_id_map, loop_number, self._marker_start_iso(marker, loop_number)))
                 duration_attr = (
                     f' duration="{marker["segmentation_duration_ticks"]}"'
                     if marker.get("segmentation_duration_ticks") is not None
