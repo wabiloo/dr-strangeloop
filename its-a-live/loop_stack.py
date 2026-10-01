@@ -13,6 +13,7 @@ from aws_cdk import (
 from constructs import Construct
 from loop_shared_stack import CLUSTER_NAME
 from _host_paths import to_host_path
+from _epoch_cfg import config_epoch_utc
 from _timeshift_cfg import timeshift_param_names, timeshift_serve_args
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
@@ -162,9 +163,10 @@ class LoopStack(Stack):
         # other channel.
 
         # ── Express service (long-running, auto-scaling `serve.py`) ──────────
-        # --epoch-utc defaults to 2026-01-01T00:00:00Z (recent enough to keep
-        # loop numbers small; the Unix epoch gave ~1.8e9-sized ones) and is
-        # then left alone -- this is looping content simulating live, not a real broadcast start
+        # --epoch-utc comes from [packaging] epoch_utc (default
+        # 2026-01-01T00:00:00Z -- recent enough to keep loop numbers small;
+        # the Unix epoch gave ~1.8e9-sized ones) and is then left alone --
+        # this is looping content simulating live, not a real broadcast start
         # time, so there's no need to reset loop position to 0 on every
         # (re)start; landing mid-ad-break on start/restart is acceptable.
         # This also means `channel.py start` never needs to touch
@@ -189,7 +191,7 @@ class LoopStack(Stack):
                     "--host", "0.0.0.0",
                     "--port", str(port),
                     "--dvr-window-seconds", dvr_window_seconds,
-                    "--epoch-utc", "2026-01-01T00:00:00Z",
+                    "--epoch-utc", config_epoch_utc(config),
                     *(["--continuous-timeline"] if continuous_timeline else []),
                     *timeshift_serve_args(config),
                 ],

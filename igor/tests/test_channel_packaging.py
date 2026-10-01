@@ -159,3 +159,34 @@ def test_invalid_timeshift_config_rejected(kwargs):
             bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
             **kwargs,
         )
+
+
+@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("epoch_utc", ["1970-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-10-01T09:15:30Z"])
+def test_channel_epoch_utc_roundtrip(backend, epoch_utc):
+    payload = ChannelCreatePayload(
+        name="test-channel", backend=backend, region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+        epoch_utc=epoch_utc,
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["packaging"]["epoch_utc"] == epoch_utc
+
+
+def test_channel_epoch_utc_defaults_to_2026():
+    payload = ChannelCreatePayload(
+        name="test-channel", backend="ecs-express", region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["packaging"]["epoch_utc"] == "2026-01-01T00:00:00Z"
+
+
+@pytest.mark.parametrize("bad", ["now", "2026-01-01", "2026-01-01T00:00:00", "2026-01-01 00:00:00Z", "2026-13-01T00:00:00Z", ""])
+def test_channel_epoch_utc_rejects_anything_but_the_exact_utc_form(bad):
+    with pytest.raises(ValueError, match="epoch_utc"):
+        ChannelCreatePayload(
+            name="test-channel", backend="ecs-express", region="eu-west-1",
+            bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+            epoch_utc=bad,
+        )

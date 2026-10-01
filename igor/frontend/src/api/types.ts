@@ -363,6 +363,9 @@ export interface ChannelCreatePayload {
   allow_missing_segments?: boolean
   segment_duration?: number
   dvr_window_seconds?: number
+  /** [packaging].epoch_utc -- loop 0's start / DASH availabilityStartTime,
+   * UTC `YYYY-MM-DDTHH:MM:SSZ` (ecs-express/local-docker). */
+  epoch_utc?: string
   hls_format?: 'cmaf' | 'ts'
   hls_ts_mux_audio?: boolean
   /** loop-dee-loop/SCOPE.md §12: default true -- no #EXT-X-DISCONTINUITY /

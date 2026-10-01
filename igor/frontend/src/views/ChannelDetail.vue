@@ -15,7 +15,9 @@ import BackendBadge from '../components/BackendBadge.vue'
 import ItsAliveBanner from '../components/ItsAliveBanner.vue'
 import JobPanel from '../components/JobPanel.vue'
 import PlaybackPanel from '../components/PlaybackPanel.vue'
+import EpochFields from '../components/EpochFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
+import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
 import TimeshiftPanel, { type TimeshiftPreview } from '../components/TimeshiftPanel.vue'
 import { timeshiftParamsFromConfig } from '../utils/timeshift'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
@@ -108,6 +110,7 @@ const editForm = reactive<ChannelCreatePayload>({
   allow_missing_segments: false,
   segment_duration: 4.0,
   dvr_window_seconds: 30,
+  epoch_utc: DEFAULT_EPOCH_UTC,
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
   continuous_timeline: false,
@@ -212,6 +215,7 @@ function startEdit() {
     allow_missing_segments: Boolean(input.allow_missing_segments ?? false),
     segment_duration: Number(packaging.segment_duration ?? 4.0),
     dvr_window_seconds: Number(packaging.dvr_window_seconds ?? 30),
+    epoch_utc: String(packaging.epoch_utc ?? DEFAULT_EPOCH_UTC),
     hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
     hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
     continuous_timeline: Boolean(packaging.continuous_timeline ?? true),
@@ -1089,6 +1093,9 @@ watch(() => props.name, reload)
             <section class="config-group">
               <h4 class="config-group-title">{{ T.packaging }}</h4>
               <div class="config-fields">
+                <div class="config-field-wide">
+                  <EpochFields :form="editForm" id-prefix="edit" />
+                </div>
                 <div class="flex align-items-center gap-2 config-field-wide">
                   <Checkbox v-model="editForm.continuous_timeline" binary input-id="edit-continuous-timeline" />
                   <label for="edit-continuous-timeline" class="text-xs text-color-secondary">

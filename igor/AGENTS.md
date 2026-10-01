@@ -62,6 +62,21 @@ settings are in the New/Edit forms' "Startover & catchup" group
 (`timeshift_*` fields → `[timeshift]`). The DASH playhead clock shown during
 a preview is approximate. Design: `loop-dee-loop/SCOPE.md` §13.
 
+## Channel epoch (New/Edit forms, "Packaging" group)
+
+`ecs-express` / `local-docker` channels have a **Channel epoch (UTC)**
+(`[packaging] epoch_utc`, API field `epoch_utc`): loop 0's start and the DASH
+`availabilityStartTime`. A UTC date-time picker with three presets -- **Unix
+epoch (1970)**, **1 Jan 2026** (the default) and **Now** (fills in the current
+UTC time as a fixed value, not a moving one) -- stored as
+`YYYY-MM-DDTHH:MM:SSZ`, the only form `serve.py --epoch-utc` accepts (the API
+rejects anything else). A recent epoch keeps loop numbers, media sequence
+numbers and Period ids small. It is applied on `redeploy` (local-docker:
+redeploy/refresh), not by a plain `start`; changing it on a running channel
+restarts the numbering. Helpers/tests: `frontend/src/utils/epoch.ts` (`node
+--test --experimental-strip-types src/utils/epoch.test.ts`), component
+`EpochFields.vue`.
+
 ## API surface (backend)
 
 | Prefix | Purpose |

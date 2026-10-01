@@ -2,6 +2,7 @@
 // read-only Configuration panel and the Configuration edit form on the
 // channel detail page: same sections, same order, same field labels.
 
+import { DEFAULT_EPOCH_UTC } from './epoch'
 import { timeshiftParamsFromConfig } from './timeshift'
 
 export type ConfigBackend = 'aws-media' | 'ecs-express' | 'local-docker'
@@ -37,6 +38,7 @@ export const CONFIG_FIELD_LABEL = {
   timeshift_max_span_seconds: 'Maximum range (s)',
   segment_duration: 'Segment duration (s)',
   dvr_window_seconds: 'DVR window (s)',
+  epoch_utc: 'Channel epoch (UTC)',
   hls_format: 'HLS segment format',
   hls_ts_mux_audio: 'Mux audio into each HLS TS video segment',
   port: 'Serve port',
@@ -134,7 +136,10 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
       ['cpu', isEcsExpress ? portTable.cpu : undefined],
       ['memory', isEcsExpress ? portTable.memory : undefined],
     ])
-    add('packaging', [['continuous_timeline', packaging.continuous_timeline]])
+    add('packaging', [
+      ['epoch_utc', packaging.epoch_utc ?? DEFAULT_EPOCH_UTC],
+      ['continuous_timeline', packaging.continuous_timeline],
+    ])
     // A channel written before [timeshift] existed gets its-a-live's
     // defaults (enabled) -- show those rather than hiding the section.
     const ts = timeshiftParamsFromConfig(table(config, 'timeshift'))

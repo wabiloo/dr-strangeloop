@@ -16,6 +16,7 @@ Two kinds of operations:
 
 from __future__ import annotations
 
+import datetime
 import json
 import subprocess
 import string
@@ -24,6 +25,9 @@ from igor import paths
 from igor.jobs.runner import Job, runner
 
 DEFAULT_DATERANGE_ID_FORMAT = "{segcode}-{eventid}-{loop}"
+# Mirrors its-a-live/_epoch_cfg.py (that venv is separate, so not imported).
+DEFAULT_EPOCH_UTC = "2026-01-01T00:00:00Z"
+_EPOCH_UTC_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 _DATERANGE_ID_FIELDS = {"loop", "eventid", "segid", "seghex", "segcode", "segname", "epoch", "pd"}
 
 
@@ -46,6 +50,17 @@ def validate_daterange_id_format(value: str) -> str:
         raise
     except Exception as exc:
         raise ValueError(f"invalid daterange_id_format: {exc}") from exc
+    return value
+
+
+def validate_epoch_utc(value: str) -> str:
+    """The exact `YYYY-MM-DDTHH:MM:SSZ` form serve.py's --epoch-utc accepts."""
+    try:
+        datetime.datetime.strptime(value, _EPOCH_UTC_FORMAT)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"epoch_utc must be an ISO8601 UTC timestamp like {DEFAULT_EPOCH_UTC}"
+        ) from None
     return value
 
 
@@ -89,6 +104,7 @@ _ECS_EXPRESS_EXTRA = """
 [packaging]
 segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
+epoch_utc = "{epoch_utc}"
 hls_format = "{hls_format}"
 hls_ts_mux_audio = {hls_ts_mux_audio}
 continuous_timeline = {continuous_timeline}
@@ -103,6 +119,7 @@ _LOCAL_DOCKER_EXTRA = """
 [packaging]
 segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
+epoch_utc = "{epoch_utc}"
 hls_format = "{hls_format}"
 hls_ts_mux_audio = {hls_ts_mux_audio}
 continuous_timeline = {continuous_timeline}
@@ -131,6 +148,7 @@ def generate_toml(
     allow_missing_segments: bool = False,
     segment_duration: float = 4.0,
     dvr_window_seconds: float = 30,
+    epoch_utc: str = DEFAULT_EPOCH_UTC,
     hls_format: str = "cmaf",
     hls_ts_mux_audio: bool = True,
     continuous_timeline: bool = False,
@@ -155,6 +173,7 @@ def generate_toml(
     if source_kind not in ("playlist", "archive", "manifest"):
         raise ValueError("source_kind must be 'playlist', 'archive' or 'manifest'")
     validate_daterange_id_format(daterange_id_format)
+    validate_epoch_utc(epoch_utc)
     if hls_format not in ("cmaf", "ts"):
         raise ValueError("hls_format must be 'cmaf' or 'ts'")
     if source_kind not in ("playlist", "archive", "manifest"):
@@ -188,6 +207,7 @@ def generate_toml(
         )
         content += _ECS_EXPRESS_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
+            epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
             continuous_timeline=str(continuous_timeline).lower(),
             port=int(port), cpu=cpu, memory=memory,
@@ -206,6 +226,7 @@ def generate_toml(
         )
         content += _LOCAL_DOCKER_EXTRA.format(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
+            epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
             continuous_timeline=str(continuous_timeline).lower(),
             port=_format_local_docker_port(port),
