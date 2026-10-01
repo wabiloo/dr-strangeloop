@@ -78,5 +78,5 @@ def scte_verify_python() -> list[str]:
     igor shells out to it via `uv run` exactly like it does for the other
     workspace-adjacent tools, rather than importing it."""
     if shutil.which("uv"):
-        return ["uv", "run", "--project", str(REPO_ROOT), "krogh"]
+        return ["uv", "run", "--project", str(REPO_ROOT), "--package", "inspector-krogh", "krogh"]
     return ["krogh"]
