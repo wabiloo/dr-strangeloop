@@ -348,7 +348,6 @@ const formatOptions = [
         and the channel epoch, so it stays correct only while the epoch and the baked content are unchanged.
       </FieldHelp>
       <span v-if="previewing" class="ts-active text-sm">
-        <i class="pi pi-play-circle" aria-hidden="true" />
         Previewing{{ activeSummary ? ': ' + activeSummary : '' }}
       </span>
       <span v-else-if="!open" class="text-sm text-color-secondary">Play past ranges or “as if it were another time”</span>
