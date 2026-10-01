@@ -15,6 +15,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
@@ -455,6 +456,10 @@ def test_continuous_sparse_segment_route_shifts_tfdt_by_loop_number(tmp_path):
     assert resp2.data[4:8] == b"ftyp"
 
 
+# Known-valid splice_insert (tests/test_scte35_signaling.py), re-encodable by threefive.
+_SPLICE_INSERT_B64 = "/DAvAAAAAAAA///wFAVIAACPf+/+c2nALv4AUsz1AAAAAAAKAAhDVUVJAAABNWLbowo="
+
+
 def _manifests(tmp_path, *, continuous: bool):
     _write_continuous_package(tmp_path)
     app = create_app(tmp_path, epoch_ticks=0, window_segments=6, continuous=continuous)
@@ -480,9 +485,12 @@ def test_manifests_are_stamped_with_generator_version(tmp_path, continuous):
     assert m["dash"].splitlines()[1] == f"<!-- {stamp} -->"
     # Mode + time anchors follow the stamp, in HLS media and DASH alike.
     assert m["hls"].splitlines()[2] == "# mode: live"
-    assert m["hls"].splitlines()[3].startswith("# epoch: 1970-01-01T00:00:00")
+    state = "on" if continuous else "off"
+    assert m["hls"].splitlines()[3] == f"# continuous timeline: {state}"
+    assert m["hls"].splitlines()[4].startswith("# epoch: 1970-01-01T00:00:00")
     assert m["dash"].splitlines()[2] == "<!-- mode: live -->"
-    assert m["dash"].splitlines()[3].startswith("<!-- epoch: 1970-01-01T00:00:00")
+    assert m["dash"].splitlines()[3] == f"<!-- continuous timeline: {state} -->"
+    assert m["dash"].splitlines()[4].startswith("<!-- epoch: 1970-01-01T00:00:00")
     # HLS media: then the loop of the window's first segment, with its start.
     current = next(l for l in m["hls"].splitlines() if l.startswith("# current loop: "))
     first_loop = int(current.removeprefix("# current loop: ").split(" ")[0])
@@ -565,3 +573,34 @@ def test_marker_comments_list_type_codes_and_event_ids(tmp_path, continuous):
     assert all(re.match(r"0x34 \(id 0x00000001, \d{4}-[\d\-T:.]+Z", d) for d in descriptions)
     if continuous:  # one Period spans several loops, so each entry names its loop
         assert re.search(r"0x34 \(id 0x00000001, \S+Z, loop \d+\)", descriptions[0])
+
+
+def test_marker_comments_show_original_event_id_when_incrementing(tmp_path):
+    import re
+
+    _write_continuous_package(tmp_path)
+    path = tmp_path / "loop_descriptor.json"
+    descriptor = json.loads(path.read_text())
+    descriptor["increment_event_ids"] = True
+    descriptor["markers"] = [
+        {
+            "event_id": "0x00000064",
+            "pts_time_ticks": 0,
+            "segmentation_type_id": "0x34",
+            "segmentation_duration_ticks": 45_000,
+            "is_out": True,
+            "splice_command_b64": _SPLICE_INSERT_B64,
+            "splice_command_b64_narrowed": _SPLICE_INSERT_B64,
+        }
+    ]
+    path.write_text(json.dumps(descriptor))
+    client = create_app(
+        tmp_path, epoch_ticks=round(time.time() * 90_000) - 5 * 90_000, window_segments=6, continuous=False
+    ).test_client()
+
+    for body in (
+        client.get("/video.m3u8").get_data(as_text=True),
+        client.get("/stream.mpd").get_data(as_text=True),
+    ):
+        m = re.search(r"markers: 0x34 \(id (0x[0-9A-F]+) \(was 0x00000064\), ", body)
+        assert m and m.group(1) != "0x00000064"  # remapped past loop 0, original alongside

@@ -111,12 +111,17 @@ def _marker_type_code(marker: dict) -> str:
 
 def _describe_markers(entries: list[tuple[dict, dict[str, str], int | None, str]]) -> str:
     """One-line summary for a manifest comment: each marker's segmentation
-    type code, (loop-remapped, if `increment_event_ids`) event id and ISO 8601
+    type code, event id (loop-remapped, with the original, if `increment_event_ids`) and ISO 8601
     start time. Entries are (marker, event-id map, loop number or None to omit
     it, start time)."""
     parts = []
     for marker, id_map, loop, start_iso in entries:
-        detail = f"id {id_map.get(marker['event_id'], marker['event_id'])}, {start_iso}"
+        # With increment_event_ids the map is non-empty: show the original id too.
+        event_id = id_map.get(marker["event_id"], marker["event_id"])
+        detail = f"id {event_id}"
+        if id_map:
+            detail += f" (was {marker['event_id']})"
+        detail += f", {start_iso}"
         if loop is not None:
             detail += f", loop {loop}"
         parts.append(f"{_marker_type_code(marker)} ({detail})")
@@ -873,6 +878,7 @@ class Channel:
         from (the epoch, plus the clock offset if one is applied)."""
         out = [
             "mode: live" if window is None else "mode: startover/catchup",
+            f"continuous timeline: {'on' if self.continuous else 'off'}",
             f"epoch: {self._iso_ticks(self.epoch_ticks)}",
         ]
         if self.offset_ticks:
