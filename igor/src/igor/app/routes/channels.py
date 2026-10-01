@@ -9,7 +9,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator, model_validator
 
 from igor.integrations import archives, franken_ts, its_a_live, manifests
-from igor.integrations.its_a_live import DEFAULT_DATERANGE_ID_FORMAT, validate_daterange_id_format
+from igor.integrations.its_a_live import (
+    DEFAULT_DATERANGE_ID_FORMAT,
+    DEFAULT_EPOCH_UTC,
+    validate_daterange_id_format,
+    validate_epoch_utc,
+)
 from igor.store import channels as channel_store
 
 router = APIRouter()
@@ -44,6 +49,9 @@ class ChannelCreatePayload(BaseModel):
     allow_missing_segments: bool = False
     segment_duration: float = 4.0
     dvr_window_seconds: float = 30
+    # [timeline].epoch_utc -- loop 0's start / DASH availabilityStartTime
+    # (ecs-express/local-docker). UTC, exactly YYYY-MM-DDTHH:MM:SSZ.
+    epoch_utc: str = DEFAULT_EPOCH_UTC
     hls_format: str = "cmaf"
     hls_ts_mux_audio: bool = True
     # loop-dee-loop/SCOPE.md §12: default on -- serve.py rewrites each
@@ -51,7 +59,7 @@ class ChannelCreatePayload(BaseModel):
     # so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the
     # loop wrap. ecs-express/local-docker only, same as hls_format/
     # hls_ts_mux_audio above.
-    continuous_timeline: bool = False
+    continuous: bool = False
     # loop-dee-loop/SCOPE.md §13: startover/catchup via query parameters on
     # the normal manifest URLs. Names are configurable per channel and
     # also drive CloudFront's manifest cache key (its-a-live/loop_stack.py).
@@ -92,6 +100,11 @@ class ChannelCreatePayload(BaseModel):
                 raise ValueError("port must be an integer, or the string 'auto' (local-docker only)")
             return v
         return v
+
+    @field_validator("epoch_utc")
+    @classmethod
+    def _validate_epoch_utc(cls, v: str) -> str:
+        return validate_epoch_utc(v)
 
     @field_validator("daterange_mode")
     @classmethod

@@ -60,7 +60,10 @@ daterange_id_format = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template; 
 [packaging]
 segment_duration   = 4.0   # nominal bake segment duration, seconds
 dvr_window_seconds = 30    # serve.py sliding-window size, seconds
-continuous_timeline = true # default -- no discontinuity/Period restart at the loop wrap (loop-dee-loop/SCOPE.md §12); false reverts to the signaled-discontinuity default
+
+[timeline]                 # ecs-express/local-docker only
+epoch_utc = "2026-01-01T00:00:00Z"  # optional, this is the default -- loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
+continuous = true # default -- no discontinuity/Period restart at the loop wrap (loop-dee-loop/SCOPE.md §12); false reverts to the signaled-discontinuity default
 
 [express]
 # ecs-express only -- local-docker gets [docker] instead (just `port`).

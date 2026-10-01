@@ -139,7 +139,10 @@ source_path = "../outputs/mychannel"   # franken-ts output
 [packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30
-continuous_timeline = true  # default -- see loop-dee-loop/SCOPE.md §12; false reverts to signaled discontinuities/Period restarts at the loop wrap
+
+[timeline]                  # ecs-express/local-docker only
+epoch_utc          = "2026-01-01T00:00:00Z"  # optional, this is the default; loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
+continuous = true  # default -- see loop-dee-loop/SCOPE.md §12; false reverts to signaled discontinuities/Period restarts at the loop wrap
 
 [timeshift]                  # optional; startover/catchup (loop-dee-loop/SCOPE.md §13), on by default
 enabled = true
@@ -234,7 +237,7 @@ groups: **Infrastructure** (does the stack/container exist at all) and
 | Command | `ecs-express` | `aws-media` | `local-docker` |
 |---|---|---|---|
 | `spark` | Bake locally (GPAC via `bake.py`), push loop package to S3 | Upload the raw `.ts` to S3 as-is | Bake locally (GPAC via `bake.py`), no upload — package stays on disk |
-| `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Start the MediaLive channel, wait for `RUNNING` | `docker run` a container bind-mounting the baked package (building the image on first use); epoch defaults to the Unix epoch, `--epoch-utc` works the same as `ecs-express` |
+| `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Start the MediaLive channel, wait for `RUNNING` | `docker run` a container bind-mounting the baked package (building the image on first use); epoch is `[packaging] epoch_utc` (default 2026-01-01T00:00:00Z), `--epoch-utc` works the same as `ecs-express` |
 | `stop` | Scale ECS to 0 tasks (shared ALB keeps running for other channels) | Stop the MediaLive channel, wait for `IDLE` | `docker rm -f` the container |
 | `refresh` | Force a new ECS task launch to re-sync S3 content | Full stop→start cycle (no hot-reload exists) | Recreate the container (seconds, no canary) |
 | `update` | `spark` then `refresh` in one step — the routine "ship new content to a running channel" combo | (same) | (same) |
@@ -248,15 +251,20 @@ always `http://localhost:<channel.port>/...`.
 
 ## Notes / gotchas
 
-- **Epoch (ecs-express only) defaults to the Unix epoch**
-  (`1970-01-01T00:00:00Z`, set in `loop_stack.py`) and is left untouched
-  by a plain `channel.py start` — this is looping content simulating
-  live, not a real broadcast, so there's no need to force loop position 0
-  on every start; landing mid-ad-break on start/restart is an accepted
-  tradeoff, and it keeps `start`/`stop` fast (pure scaling, no new task
-  revision). Pass `channel.py start --epoch-utc now` or `--epoch-utc
-  <ISO8601 UTC timestamp>` to explicitly (re)set it when you want a clean
-  restart from position 0.
+- **Epoch (`ecs-express` / `local-docker`)** is `[timeline] epoch_utc`,
+  default `2026-01-01T00:00:00Z` (set it in igor's channel form, which offers
+  1970, 2026 and "now" presets, or in the TOML). It is loop 0's start and the
+  DASH `availabilityStartTime`, so a recent one keeps loop numbers, media
+  sequence numbers and Period ids small. It is applied when the channel is
+  deployed (`create`/`redeploy`; local-docker: `redeploy`/`refresh` recreate
+  the container) and is left untouched by a plain `channel.py start` — this is
+  looping content simulating live, not a real broadcast, so there's no need to
+  force loop position 0 on every start; landing mid-ad-break on start/restart
+  is an accepted tradeoff, and it keeps `start`/`stop` fast (pure scaling, no
+  new task revision). **Changing it on a running channel restarts the loop
+  numbering** (media sequence, Period ids and event ids jump; startover can't
+  reach back before the new epoch). Pass `channel.py start --epoch-utc now` or
+  `--epoch-utc <ISO8601 UTC timestamp>` for a one-off reset.
 - **Cost (`ecs-express`)**: Fargate compute (0.25 vCPU/0.5GB by default) +
   a *shared* ALB + CloudWatch logs/metrics + data transfer — no separate
   "Express Mode" charge. `stop` genuinely stops the Fargate compute line;

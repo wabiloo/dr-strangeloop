@@ -64,7 +64,10 @@ segment_duration = 4.0
 dvr_window_seconds = 30
 hls_format = "cmaf"          # "cmaf" (default) | "ts"; HLS only, DASH remains CMAF
 hls_ts_mux_audio = true      # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
-continuous_timeline = true   # default true -- serve.py rewrites each segment's own timestamps per request (header patch, never a re-mux -- loop-dee-loop/SCOPE.md §12) so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the loop wrap. false falls back to the honestly-signaled discontinuity/Period-restart default (e.g. if a package's CMAF fragments have a 32-bit tfdt, which continuity mode's startup check refuses). ecs-express/local-docker only -- aws-media (MediaLive/MediaPackage) doesn't run loop-dee-loop at all.
+
+[timeline]                  # ecs-express/local-docker only
+epoch_utc = "2026-01-01T00:00:00Z"   # optional (this is the default) -- loop 0's start and the DASH availabilityStartTime; UTC, exactly this form. A recent epoch keeps loop numbers small. ecs-express/local-docker only; applied on create/redeploy (local-docker: redeploy/refresh), not by a plain `start`. Changing it on a running channel restarts loop numbering.
+continuous = true   # default true -- serve.py rewrites each segment's own timestamps per request (header patch, never a re-mux -- loop-dee-loop/SCOPE.md §12) so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the loop wrap. false falls back to the honestly-signaled discontinuity/Period-restart default (e.g. if a package's CMAF fragments have a 32-bit tfdt, which continuity mode's startup check refuses). ecs-express/local-docker only -- aws-media (MediaLive/MediaPackage) doesn't run loop-dee-loop at all.
 
 # Startover/catchup (loop-dee-loop/SCOPE.md §13) -- ecs-express/local-docker only. The
 # channel's normal HLS/DASH URLs accept start/end/full-loops/timeline query
@@ -74,7 +77,7 @@ enabled = true
 start_param = "start"                     # names are configurable; ALSO the CloudFront manifest cache-key allow-list (redeploy after changing)
 end_param = "end"
 # Three more query params have FIXED names: `full-loops=true` (widen the range to whole loops),
-# `timeline=default|continuous|periodic` (overrides [packaging].continuous_timeline per request, live or ranged) and
+# `timeline=default|continuous|periodic` (overrides [timeline].continuous per request, live or ranged) and
 # `offset=-PT1H` / `offset=-3600` (pretend "now" is earlier/later; negative or positive)
 max_span_seconds = 21600                  # longest range (also caps an open-ended startover)
 

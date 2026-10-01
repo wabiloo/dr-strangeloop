@@ -13,6 +13,7 @@ from aws_cdk import (
 from constructs import Construct
 from loop_shared_stack import CLUSTER_NAME
 from _host_paths import to_host_path
+from _epoch_cfg import config_epoch_utc
 from _timeshift_cfg import timeshift_param_names, timeshift_serve_args
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
@@ -77,7 +78,7 @@ class LoopStack(Stack):
         # the loop wrap. `false` falls back to the honestly-signaled
         # default serve.py behavior (e.g. if a package was baked with a
         # 32-bit tfdt and continuity mode's startup check would refuse it).
-        continuous_timeline = bool(packaging_cfg.get("continuous_timeline", True))
+        continuous = bool(config.get("timeline", {}).get("continuous", True))
 
         express_cfg = config.get("express", {})
         port = int(express_cfg.get("port", 8080))
@@ -162,7 +163,9 @@ class LoopStack(Stack):
         # other channel.
 
         # ── Express service (long-running, auto-scaling `serve.py`) ──────────
-        # --epoch-utc is fixed at the Unix epoch (1970-01-01), permanently --
+        # --epoch-utc comes from [timeline] epoch_utc (default
+        # 2026-01-01T00:00:00Z -- recent enough to keep loop numbers small;
+        # the Unix epoch gave ~1.8e9-sized ones) and is then left alone --
         # this is looping content simulating live, not a real broadcast start
         # time, so there's no need to reset loop position to 0 on every
         # (re)start; landing mid-ad-break on start/restart is acceptable.
@@ -188,8 +191,8 @@ class LoopStack(Stack):
                     "--host", "0.0.0.0",
                     "--port", str(port),
                     "--dvr-window-seconds", dvr_window_seconds,
-                    "--epoch-utc", "1970-01-01T00:00:00Z",
-                    *(["--continuous-timeline"] if continuous_timeline else []),
+                    "--epoch-utc", config_epoch_utc(config),
+                    *(["--continuous-timeline"] if continuous else []),
                     *timeshift_serve_args(config),
                 ],
                 environment=[

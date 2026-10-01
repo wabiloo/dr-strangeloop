@@ -12,7 +12,9 @@ import { buildPlaylist, defineChannel, listArchives, listManifests, listPlaylist
 import JobPanel from '../components/JobPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import FieldHelp from '../components/FieldHelp.vue'
+import EpochFields from '../components/EpochFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
+import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
 import { CONFIG_FIELD_LABEL as L, CONFIG_SECTION_TITLE as T } from '../utils/channelConfigLayout'
 import type { ArchiveListItem, ChannelCreatePayload, Job, ManifestListItem, PlaylistListItem } from '../api/types'
 
@@ -137,9 +139,10 @@ const form = reactive<ChannelCreatePayload>({
   allow_missing_segments: false,
   segment_duration: 4.0,
   dvr_window_seconds: 30,
+  epoch_utc: DEFAULT_EPOCH_UTC,
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
-  continuous_timeline: false,
+  continuous: false,
   timeshift_enabled: true,
   timeshift_start_param: 'start',
   timeshift_end_param: 'end',
@@ -429,11 +432,14 @@ async function submit() {
     </template>
 
     <template v-if="usesChannelSection">
-      <h4 class="mb-0 mt-2">{{ T.packaging }}</h4>
+      <h4 class="mb-0 mt-2">{{ T.timeline }}</h4>
       <div class="grid">
+        <div class="col-12">
+          <EpochFields :form="form" id-prefix="new" />
+        </div>
         <div class="col-12 flex align-items-center gap-2">
-          <Checkbox v-model="form.continuous_timeline" binary input-id="continuous-timeline" />
-          <label for="continuous-timeline">{{ L.continuous_timeline }}</label>
+          <Checkbox v-model="form.continuous" binary input-id="continuous-timeline" />
+          <label for="continuous-timeline">{{ L.continuous }}</label>
           <FieldHelp label="Continuous timeline">
             Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
             the channel has no discontinuity/Period restart at the loop wrap. Off by default: the loop wrap

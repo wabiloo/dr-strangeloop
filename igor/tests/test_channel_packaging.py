@@ -22,24 +22,24 @@ def test_channel_hls_packaging_roundtrip(backend, hls_format, mux_audio):
 
 
 @pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
-@pytest.mark.parametrize("continuous_timeline", [True, False])
-def test_channel_continuous_timeline_roundtrip(backend, continuous_timeline):
+@pytest.mark.parametrize("continuous", [True, False])
+def test_channel_continuous_roundtrip(backend, continuous):
     payload = ChannelCreatePayload(
         name="test-channel", backend=backend, region="eu-west-1",
         bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
-        continuous_timeline=continuous_timeline,
+        continuous=continuous,
     )
     config = tomllib.loads(generate_toml(**payload.model_dump()))
-    assert config["packaging"]["continuous_timeline"] is continuous_timeline
+    assert config["timeline"]["continuous"] is continuous
 
 
-def test_channel_continuous_timeline_defaults_false():
+def test_channel_continuous_defaults_false():
     payload = ChannelCreatePayload(
         name="test-channel", backend="ecs-express", region="eu-west-1",
         bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
     )
     config = tomllib.loads(generate_toml(**payload.model_dump()))
-    assert config["packaging"]["continuous_timeline"] is False
+    assert config["timeline"]["continuous"] is False
 
 
 @pytest.mark.parametrize("source_kind", ["playlist", "archive"])
@@ -158,4 +158,35 @@ def test_invalid_timeshift_config_rejected(kwargs):
             name="test-channel", backend="ecs-express", region="eu-west-1",
             bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
             **kwargs,
+        )
+
+
+@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("epoch_utc", ["1970-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-10-01T09:15:30Z"])
+def test_channel_epoch_utc_roundtrip(backend, epoch_utc):
+    payload = ChannelCreatePayload(
+        name="test-channel", backend=backend, region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+        epoch_utc=epoch_utc,
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["timeline"]["epoch_utc"] == epoch_utc
+
+
+def test_channel_epoch_utc_defaults_to_2026():
+    payload = ChannelCreatePayload(
+        name="test-channel", backend="ecs-express", region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["timeline"]["epoch_utc"] == "2026-01-01T00:00:00Z"
+
+
+@pytest.mark.parametrize("bad", ["now", "2026-01-01", "2026-01-01T00:00:00", "2026-01-01 00:00:00Z", "2026-13-01T00:00:00Z", ""])
+def test_channel_epoch_utc_rejects_anything_but_the_exact_utc_form(bad):
+    with pytest.raises(ValueError, match="epoch_utc"):
+        ChannelCreatePayload(
+            name="test-channel", backend="ecs-express", region="eu-west-1",
+            bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+            epoch_utc=bad,
         )

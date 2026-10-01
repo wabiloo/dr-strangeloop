@@ -24,12 +24,12 @@ import sys
 
 from _host_paths import to_host_path
 from _reachability import check_manifest_reachable
+from _epoch_cfg import config_epoch_utc
 from _timeshift_cfg import timeshift_serve_args
 
 _LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 _IMAGE_TAG = "loop-dee-loop:local"
 _CONTAINER_PREFIX = "its-a-live-"
-_DEFAULT_EPOCH = "1970-01-01T00:00:00Z"
 
 
 def _container_name(channel_name):
@@ -130,10 +130,10 @@ def _dvr_window_seconds(cfg):
 
 
 def _continuous_timeline_args(cfg):
-    """loop-dee-loop/SCOPE.md §12: default on -- `[packaging]
-    continuous_timeline = false` opts back out to the honestly-signaled
+    """loop-dee-loop/SCOPE.md §12: default on -- `[timeline]
+    continuous = false` opts back out to the honestly-signaled
     #EXT-X-DISCONTINUITY/Period-restart default."""
-    if cfg.get("packaging", {}).get("continuous_timeline", True):
+    if cfg.get("timeline", {}).get("continuous", True):
         return ["--continuous-timeline"]
     return []
 
@@ -232,7 +232,7 @@ def _running_epoch(name):
     """The --epoch-utc value a running container was actually launched
     with, read back from its own launch command -- used to preserve
     playback timing continuity across a rebuild-triggered recreate (see
-    `start`), rather than silently resetting to _DEFAULT_EPOCH."""
+    `start`), rather than silently resetting to the configured one."""
     result = subprocess.run(
         ["docker", "inspect", "-f", "{{json .Config.Cmd}}", name],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
@@ -289,7 +289,7 @@ def start(cfg, session, outputs, extra_args=None):
     behavior). Otherwise it's recreated -- if that recreate is happening
     ONLY because the image changed underneath it (not because of an
     explicit --epoch-utc), the container's own currently-running epoch is
-    preserved rather than reset to _DEFAULT_EPOCH, so a rebuild-triggered
+    preserved rather than reset to the configured `[timeline] epoch_utc`, so a rebuild-triggered
     restart never visibly jumps the stream's playback position. Pass
     `--epoch-utc now|<ISO8601>` to reset it explicitly."""
     _require_docker()
@@ -324,7 +324,7 @@ def start(cfg, session, outputs, extra_args=None):
         subprocess.run(["docker", "rm", "-f", name],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    epoch = epoch_arg or preserved_epoch or _DEFAULT_EPOCH
+    epoch = epoch_arg or preserved_epoch or config_epoch_utc(cfg)
     run_args = [
         "docker", "run", "-d", "--name", name,
         "-p", f"{port}:{port}",
@@ -361,10 +361,11 @@ def stop(cfg, session, outputs):
 
 def refresh(cfg, session, outputs):
     """Recreate the container so it picks up whatever was last `spark`ed
-    into the bind-mounted loop package directory. Epoch is left as-is
-    (whatever the container was last started with is not tracked here --
-    pass `channel.py start --epoch-utc ...` directly if you need to reset
-    it)."""
+    into the bind-mounted loop package directory. The container is
+    recreated with the configured `[timeline] epoch_utc` (default
+    2026-01-01T00:00:00Z) -- this is also how a changed epoch is applied
+    (`redeploy` runs this). Pass `channel.py start --epoch-utc ...`
+    directly for a one-off epoch."""
     _require_docker()
     channel_name = cfg.get("deploy", {}).get("name", "default")
     name = _container_name(channel_name)
@@ -387,7 +388,7 @@ def refresh(cfg, session, outputs):
         "-v", f"{to_host_path(local_output_dir)}:/var/loop-package:ro",
         _IMAGE_TAG,
         "serve.py", "/var/loop-package",
-        "--epoch-utc", _DEFAULT_EPOCH,
+        "--epoch-utc", config_epoch_utc(cfg),
         "--port", str(port),
         "--dvr-window-seconds", _dvr_window_seconds(cfg),
         *_continuous_timeline_args(cfg),

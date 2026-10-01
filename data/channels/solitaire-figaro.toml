@@ -27,7 +27,9 @@ segment_duration   = 4.0
 dvr_window_seconds = 30.0
 hls_format = "cmaf"
 hls_ts_mux_audio = true
-continuous_timeline = true
+
+[timeline]
+continuous = true
 
 [express]
 port   = 8080
