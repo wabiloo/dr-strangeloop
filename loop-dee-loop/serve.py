@@ -116,10 +116,10 @@ def _describe_markers(entries: list[tuple[dict, dict[str, str], int | None, str]
     groups: dict[tuple[str, int | None], list[str]] = {}
     for marker, id_map, loop, start_iso in entries:
         event_id = int(id_map.get(marker["event_id"], marker["event_id"]), 16)
-        detail = f"id {event_id}"
+        detail = str(event_id)
         # With increment_event_ids the map is non-empty: show the original id too.
         if id_map:
-            detail += f" (was {int(marker['event_id'], 16)})"
+            detail += f", orig {int(marker['event_id'], 16)}"
         groups.setdefault((start_iso, loop), []).append(f"{_marker_type_code(marker)} ({detail})")
     return [
         f"markers @ {start_iso}{'' if loop is None else f' (loop {loop})'}: {', '.join(parts)}"

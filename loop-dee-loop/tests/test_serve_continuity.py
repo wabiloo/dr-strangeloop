@@ -566,14 +566,14 @@ def test_marker_comments_use_compact_codes_and_event_ids(tmp_path, continuous):
     marker_lines = [i for i, l in enumerate(hls) if l.startswith("# markers @ ")]
     assert marker_lines, "no marker description in HLS"
     for i in marker_lines:
-        assert re.fullmatch(r"# markers @ \S+Z: PPOs \(id 1\)", hls[i]), hls[i]
+        assert re.fullmatch(r"# markers @ \S+Z: PPOs \(1\)", hls[i]), hls[i]
         iso = hls[i].split(" ")[3].rstrip(":")
         assert f'START-DATE="{iso}"' in hls[i + 1]  # right before the marker tags
 
     dash = client.get("/stream.mpd").get_data(as_text=True)
     descriptions = re.findall(r"<!-- markers @ ([^>]*) -->\n\s+<EventStream", dash)
     assert descriptions
-    assert all(re.match(r"\S+Z( \(loop \d+\))?: PPOs \(id 1\)$", d) for d in descriptions)
+    assert all(re.match(r"\S+Z( \(loop \d+\))?: PPOs \(1\)$", d) for d in descriptions)
     if continuous:  # one Period spans several loops, so each group names its loop
         assert "(loop " in descriptions[0]
 
@@ -594,7 +594,7 @@ def test_coincident_markers_share_one_timestamp_and_others_get_their_own(tmp_pat
     client = create_app(tmp_path, epoch_ticks=0, window_segments=6, continuous=False).test_client()
 
     hls = client.get("/video.m3u8").get_data(as_text=True)
-    assert re.search(r"# markers @ (\S+Z): PPOs \(id 1\), DPOs \(id 2\)\n", hls)
+    assert re.search(r"# markers @ (\S+Z): PPOs \(1\), DPOs \(2\)\n", hls)
     # the later marker sits in the next segment, with its own (different) time
     times = re.findall(r"# markers @ (\S+Z): ", hls)
     assert len(set(times)) == 2
@@ -602,8 +602,8 @@ def test_coincident_markers_share_one_timestamp_and_others_get_their_own(tmp_pat
     dash = client.get("/stream.mpd").get_data(as_text=True)
     # each Period lists its coincident pair on one line, the later PPOe on its own
     assert re.search(
-        r"<!-- markers @ (\S+Z): PPOs \(id 1\), DPOs \(id 2\) -->\n"
-        r"\s+<!-- markers @ (?!\1)\S+Z: PPOe \(id 1\) -->\n\s+<EventStream",
+        r"<!-- markers @ (\S+Z): PPOs \(1\), DPOs \(2\) -->\n"
+        r"\s+<!-- markers @ (?!\1)\S+Z: PPOe \(1\) -->\n\s+<EventStream",
         dash,
     )
 
@@ -621,5 +621,5 @@ def test_marker_comments_show_original_event_id_when_incrementing(tmp_path):
         client.get("/video.m3u8").get_data(as_text=True),
         client.get("/stream.mpd").get_data(as_text=True),
     ):
-        m = re.search(r"PPOs \(id (\d+) \(was 100\)\)", body)
+        m = re.search(r"PPOs \((\d+), orig 100\)", body)
         assert m and m.group(1) != "100"  # remapped past loop 0, original alongside
