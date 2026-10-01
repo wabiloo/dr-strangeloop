@@ -122,6 +122,7 @@ dvr_window_seconds = 30
 port   = 8080
 cpu    = 256   # 0.25 vCPU
 memory = 512   # 0.5 GB
+cdn    = true
 """
 
 _TOML_TEMPLATES = {
@@ -249,6 +250,7 @@ def main() -> None:
         shared_cmd = [
             "cdk", "deploy",
             "--require-approval", "never",
+            "--output", "cdk.out-_shared",
             "-c", f"config={toml_path}",
             "ItsALiveSharedStack-ecs-express",
         ]
@@ -269,6 +271,7 @@ def main() -> None:
     cdk_cmd = [
         "cdk", "deploy",
         "--require-approval", "never",
+        "--output", f"cdk.out-{basename}",
         "-c", f"config={toml_path}",
         stack_name,
     ]
@@ -353,7 +356,7 @@ def main() -> None:
     print(f"\n{BOLD}To destroy the stack (stops billing):{RESET}")
     print(f"  {channel_display} stop           # stop the channel first if running")
     print(f"  cd {_push_dir_rel}")
-    print(f"  cdk destroy {stack_name} -c config={_toml_rel_from_push_dir}")
+    print(f"  cdk destroy {stack_name} --output cdk.out-{basename} -c config={_toml_rel_from_push_dir}")
     if backend == "ecs-express":
         print(f"  # Note: ItsALiveSharedStack-ecs-express is shared across every")
         print(f"  # ecs-express channel -- leave it deployed if you have others.")

@@ -96,6 +96,9 @@ max_span_seconds = 21600                  # longest range (also caps an open-end
 port = 8080    # ecs-express only
 cpu = 256      # 0.25 vCPU units, Fargate convention -- ecs-express only, ignored by local-docker
 memory = 512   # MB
+cdn = true     # ecs-express only: CloudFront in front of the service (default true). false skips it
+               # (~3 min faster deploy) but loses edge caching, and the playback URLs then point at the
+               # service endpoint -- changing it on a deployed channel changes those URLs
 # local-docker instead gets, in place of [infrastructure.express]:
 # [infrastructure.docker]
 # port = "auto"  # default -- auto-picks a free host port (8080-8179, skipping
@@ -153,7 +156,7 @@ Infrastructure:
 uv sync                                        # once, its-a-live has its own venv
 cdk bootstrap                                  # once per account/region -- N/A for local-docker
 cdk deploy ItsALiveSharedStack-ecs-express      # once per account/region, ecs-express only
-cdk deploy ItsALiveSharedStack-scheduler        # once per account/region -- only needed if you'll
+cdk deploy ItsALiveSharedStack-scheduler -c scheduler=true        # once per account/region -- only needed if you'll
                                                  # use `channel.py schedule` (aws-media/ecs-express only)
 
 uv run python channel.py -c <config.toml> create      # first-time bootstrap: spark + deploy + start (spark + start only for local-docker)

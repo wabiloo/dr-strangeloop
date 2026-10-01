@@ -389,6 +389,7 @@ export interface ChannelCreatePayload {
   port?: number | 'auto'
   cpu?: number
   memory?: number
+  cdn?: boolean
   daterange_mode?: 'grouped' | 'shared' | 'narrowed'
   cue_tags?: 'none' | 'alongside' | 'only'
   increment_event_ids?: boolean

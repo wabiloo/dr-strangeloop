@@ -76,7 +76,7 @@ cdk deploy ItsALiveSharedStack-ecs-express   # once per account/region --
                                        # ecs-express backend (creates the
                                        # shared ECS cluster every
                                        # ecs-express channel lives in)
-cdk deploy ItsALiveSharedStack-scheduler     # once per account/region --
+cdk deploy ItsALiveSharedStack-scheduler -c scheduler=true     # once per account/region --
                                        # only needed if you'll use
                                        # `channel.py schedule` (see
                                        # "Scheduling" below)
@@ -160,6 +160,7 @@ max_span_seconds = 21600
 port   = 8080
 cpu    = 256
 memory = 512
+cdn    = true   # false: no CloudFront (faster deploy, no edge caching, URLs use the service endpoint)
 ```
 
 See `AGENTS.md`'s config reference for the full schema, including the

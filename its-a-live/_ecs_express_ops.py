@@ -184,11 +184,19 @@ def start(cfg, session, outputs, extra_args=None):
     ecs_client = session.client("ecs")
 
     if epoch_arg is None:
-        print("Scaling service to 1 task (if stopped); epoch left as-is ...")
-        ecs_client.update_express_gateway_service(
-            serviceArn=service_arn,
-            scalingTarget={"minTaskCount": 1, "maxTaskCount": 1},
-        )
+        # A new stack's service is already created at 1/1, and even an
+        # identical scalingTarget update starts a second rollout (a new task,
+        # ~90s) -- so only update when it is actually stopped.
+        current = ecs_client.describe_express_gateway_service(serviceArn=service_arn)["service"]
+        scaling = current["activeConfigurations"][0].get("scalingTarget", {})
+        if scaling.get("minTaskCount") == 1 and scaling.get("maxTaskCount") == 1:
+            print("Service is already scaled to 1 task -- not updating it ...")
+        else:
+            print("Scaling service to 1 task; epoch left as-is ...")
+            ecs_client.update_express_gateway_service(
+                serviceArn=service_arn,
+                scalingTarget={"minTaskCount": 1, "maxTaskCount": 1},
+            )
     else:
         service = ecs_client.describe_express_gateway_service(serviceArn=service_arn)["service"]
         primary_container = dict(service["activeConfigurations"][0]["primaryContainer"])

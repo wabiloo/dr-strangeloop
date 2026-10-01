@@ -112,7 +112,7 @@ def _scheduler_function(session):
     except cf.exceptions.ClientError:
         sys.exit(
             f"{_SCHEDULER_STACK_NAME} is not deployed in this region -- "
-            f"run `cdk deploy {_SCHEDULER_STACK_NAME}` first (see its-a-live/AGENTS.md)."
+            f"run `cdk deploy {_SCHEDULER_STACK_NAME} -c scheduler=true` first (see its-a-live/AGENTS.md)."
         )
     outputs = {o["OutputKey"]: o["OutputValue"] for o in resp["Stacks"][0].get("Outputs", [])}
     function_arn = outputs.get("SchedulerFunctionArn")

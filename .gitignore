@@ -23,6 +23,7 @@ outputs/**/markers.json
 
 # CDK
 cdk.out/
+cdk.out-*/
 
 # its-a-live: locally-baked (sparked) packages before they're pushed to S3
 its-a-live/.local-loop-package/

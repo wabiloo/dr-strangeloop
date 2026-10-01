@@ -115,6 +115,7 @@ continuous = {continuous}
 port   = {port}
 cpu    = {cpu}
 memory = {memory}
+cdn    = {cdn}
 """
 
 _LOCAL_DOCKER_EXTRA = """
@@ -165,6 +166,7 @@ def generate_toml(
     port: int | str = 8080,
     cpu: int = 256,
     memory: int = 512,
+    cdn: bool = True,
     daterange_mode: str = "shared",
     cue_tags: str = "none",
     increment_event_ids: bool = False,
@@ -230,6 +232,7 @@ def generate_toml(
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
             continuous=str(continuous).lower(),
             port=int(port), cpu=cpu, memory=memory,
+            cdn=str(cdn).lower(),
         )
         content += _timeshift_section()
     elif backend == "local-docker":

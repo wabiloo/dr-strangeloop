@@ -127,6 +127,7 @@ const editForm = reactive<ChannelCreatePayload>({
   port: 8080,
   cpu: 256,
   memory: 512,
+  cdn: true,
   daterange_mode: 'shared',
   cue_tags: 'none',
   increment_event_ids: false,
@@ -238,6 +239,7 @@ function startEdit() {
     port: portSection.port === 'auto' ? 'auto' : Number(portSection.port ?? 8080),
     cpu: Number(express.cpu ?? 256),
     memory: Number(express.memory ?? 512),
+    cdn: Boolean(express.cdn ?? true),
     daterange_mode: (markers.daterange_mode as ChannelCreatePayload['daterange_mode']) ?? 'shared',
     cue_tags: (markers.cue_tags as ChannelCreatePayload['cue_tags']) ?? 'none',
     increment_event_ids: Boolean(markers.increment_event_ids ?? false),
@@ -376,7 +378,7 @@ const firstDeployAction = computed<ActionDef>(() => ({
   ),
   eta: byBackend(
     '~10-60s for the bake, plus a one-time Docker image build the first time (a few minutes).',
-    '~5-10 min -- Docker image build + push, ECS task startup, and a brand-new CloudFront distribution, which alone typically takes several minutes to propagate. This is normal, not a hang.',
+    '~4-11 min -- Docker image build + push (only when the image is new; a cold build takes a few minutes), ECS task startup, and, if CloudFront is on, a brand-new distribution that adds about 3 min. This is normal, not a hang.',
     '~5-10 min -- MediaLive channel provisioning and startup. This is normal, not a hang.',
   ),
   fn: () => createChannel(props.name),
@@ -1109,6 +1111,15 @@ watch(() => props.name, reload)
                   <div class="flex flex-column gap-1">
                     <label class="text-xs text-color-secondary">{{ L.memory }}</label>
                     <InputNumber v-model="editForm.memory" :use-grouping="false" fluid />
+                  </div>
+                  <div class="flex align-items-center gap-2 config-field-wide">
+                    <Checkbox v-model="editForm.cdn" binary input-id="edit-cdn" />
+                    <label for="edit-cdn" class="text-xs text-color-secondary">{{ L.cdn }}</label>
+                    <FieldHelp label="CloudFront CDN">
+                      Changing this on a deployed channel redeploys the stack and changes the playback URLs
+                      (CloudFront domain vs the service endpoint). Having CloudFront adds about 2.5-3
+                      minutes to a deploy and about 2.5 minutes to a teardown.
+                    </FieldHelp>
                   </div>
                 </template>
               </div>

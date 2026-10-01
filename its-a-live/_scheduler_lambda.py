@@ -1,6 +1,6 @@
 """EventBridge Scheduler target for scheduled channel start/stop.
 
-Deployed as the Lambda function in scheduler_stack.py (`cdk deploy
+Deployed as the Lambda function in scheduler_stack.py (`cdk deploy -c scheduler=true
 ItsALiveSharedStack-scheduler`, once per account/region). One shared
 function, reused by every channel's one-time EventBridge Scheduler
 schedules created via `channel.py schedule add` (see _scheduler_ops.py).

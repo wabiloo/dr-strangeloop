@@ -1,0 +1,16 @@
+# Keep the build context to what the Dockerfile COPYs. This directory is also
+# hashed and staged by CDK for the ecs-express image asset (its-a-live/
+# loop_stack.py), so a local multi-hundred-MB baked package here would be
+# re-copied on every `cdk` command and change the image tag on every re-bake.
+# If a new file is COPY'd in the Dockerfile, don't add it here.
+
+loop-package*/
+tests/
+__pycache__/
+*.pyc
+.venv/
+.git/
+*.md
+load_test.py
+validate_long_running.py
+run.sh

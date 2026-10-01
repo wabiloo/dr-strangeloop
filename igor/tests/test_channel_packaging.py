@@ -242,3 +242,23 @@ def test_generated_toml_groups_infrastructure_tables(backend, table):
     assert "port" in infra[table]
     for legacy in ("aws", "s3", "express", "docker"):
         assert legacy not in config
+
+
+@pytest.mark.parametrize("cdn", [True, False])
+def test_channel_cdn_roundtrip(cdn):
+    payload = ChannelCreatePayload(
+        name="test-channel", backend="ecs-express", region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+        cdn=cdn,
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["infrastructure"]["express"]["cdn"] is cdn
+
+
+def test_channel_cdn_defaults_true():
+    payload = ChannelCreatePayload(
+        name="test-channel", backend="ecs-express", region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["infrastructure"]["express"]["cdn"] is True

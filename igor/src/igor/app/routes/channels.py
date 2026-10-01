@@ -80,6 +80,7 @@ class ChannelCreatePayload(BaseModel):
     port: int | str = 8080
     cpu: int = 256
     memory: int = 512
+    cdn: bool = True
     # [markers] -- shape of the HLS/DASH SCTE-35 signaling loop-dee-loop's
     # bake.py renders from this channel (see its-a-live/AGENTS.md).
     daterange_mode: str = "shared"

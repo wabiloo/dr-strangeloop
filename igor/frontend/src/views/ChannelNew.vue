@@ -154,6 +154,7 @@ const form = reactive<ChannelCreatePayload>({
   port: 'auto',
   cpu: 256,
   memory: 512,
+  cdn: true,
   daterange_mode: 'shared',
   cue_tags: 'none',
   increment_event_ids: false,
@@ -497,6 +498,17 @@ async function submit() {
         <div class="col-6 flex flex-column gap-1">
           <label for="memory">{{ L.memory }}</label>
           <InputNumber id="memory" v-model="form.memory" :use-grouping="false" />
+        </div>
+        <div class="col-12 flex align-items-center gap-2">
+          <Checkbox v-model="form.cdn" binary input-id="cdn" />
+          <label for="cdn">{{ L.cdn }}</label>
+          <FieldHelp label="CloudFront CDN">
+            On (default) puts a CloudFront distribution in front of the service: segments are cached at
+            the edge and each startover/catchup range gets its own cache key. Off skips it: every request
+            then hits the container directly and the playback URLs point at the service endpoint. The
+            CloudFront distribution adds about 2.5-3 minutes to a deploy and about 2.5 minutes to a
+            teardown.
+          </FieldHelp>
         </div>
       </div>
     </template>

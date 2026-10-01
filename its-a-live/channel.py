@@ -54,7 +54,7 @@ config file selects "aws-media" (MediaLive + MediaPackage v1) or
             (omitted = runs until a manual `stop`). Windows may not
             overlap. Backed by one-time EventBridge Scheduler schedules
             targeting a shared Lambda -- see AGENTS.md and
-            _scheduler_ops.py. Requires `cdk deploy
+            _scheduler_ops.py. Requires `cdk deploy -c scheduler=true
             ItsALiveSharedStack-scheduler` once per account/region.
               schedule add [--start ISO8601] [--end ISO8601]
               schedule remove <window-id>
@@ -134,6 +134,14 @@ def _channel_name(cfg):
 
 def _stack_name(cfg):
     return f"ItsALiveStack-{_channel_name(cfg)}-{_backend(cfg)}"
+
+
+def _cdk_output(name):
+    """`--output` args giving each channel (and the shared stack) its own
+    cloud assembly directory. CDK write-locks its output dir for the whole of
+    a `deploy`/`destroy`, so with the default shared `cdk.out`, two channels
+    could never be deployed or torn down at the same time."""
+    return ["--output", f"cdk.out-{name}"]
 
 
 def _shared_stack_name(cfg):
@@ -377,14 +385,23 @@ def cmd_list(config_path, extra_args, as_json=False):
 
 
 def _ensure_shared_stack_if_needed(cfg, config_path):
+    """Deploy the shared ECS cluster stack (ecs-express only) unless it already
+    exists and is healthy. It is channel-independent and rarely changes, and a
+    no-op `cdk deploy` still pays a full synth + asset publish. To roll out a
+    change to loop_shared_stack.py, run `cdk deploy ItsALiveSharedStack-ecs-express`
+    by hand."""
     import subprocess
 
     if _backend(cfg) != "ecs-express":
         return
     shared_stack_name = _shared_stack_name(cfg)
+    status = _stack_status(_session(cfg).client("cloudformation"), shared_stack_name)
+    if status in ("CREATE_COMPLETE", "UPDATE_COMPLETE"):
+        print(f"{shared_stack_name} already deployed ({status}) -- skipping.")
+        return
     print(f"Ensuring {shared_stack_name} is deployed ...")
     result = subprocess.run(
-        ["cdk", "deploy", "--require-approval", "never",
+        ["cdk", "deploy", "--require-approval", "never", *_cdk_output("_shared"),
          "-c", f"config={config_path}", shared_stack_name],
         check=False,
     )
@@ -430,7 +447,7 @@ def cmd_create(cfg, config_path, extra_args):
     stack_name = _stack_name(cfg)
     print(f"Deploying {stack_name} ...")
     result = subprocess.run(
-        ["cdk", "deploy", "--require-approval", "never",
+        ["cdk", "deploy", "--require-approval", "never", *_cdk_output(_channel_name(cfg)),
          "-c", f"config={config_path}", stack_name],
         check=False,
     )
@@ -458,19 +475,7 @@ def cmd_redeploy(cfg, config_path, extra_args):
     stack_name = _stack_name(cfg)
     cf = _session(cfg).client("cloudformation")
 
-    if _backend(cfg) == "ecs-express":
-        # The shared ECS cluster stack rarely breaks and isn't config-name
-        # dependent -- just make sure it's deployed (idempotent no-op if
-        # already up to date) before handling the channel stack itself.
-        shared_stack_name = _shared_stack_name(cfg)
-        print(f"Ensuring {shared_stack_name} is deployed ...")
-        result = subprocess.run(
-            ["cdk", "deploy", "--require-approval", "never",
-             "-c", f"config={config_path}", shared_stack_name],
-            check=False,
-        )
-        if result.returncode != 0:
-            sys.exit(result.returncode)
+    _ensure_shared_stack_if_needed(cfg, config_path)
 
     WAIT_STATES = {
         "DELETE_IN_PROGRESS",
@@ -514,7 +519,7 @@ def cmd_redeploy(cfg, config_path, extra_args):
     # Explicit stack name: for ecs-express the app also contains
     # ItsALiveSharedStack-ecs-express, so a bare `cdk deploy` with no stack
     # argument would be ambiguous and CDK would refuse it.
-    cdk_cmd = ["cdk", "deploy", "--require-approval", "never",
+    cdk_cmd = ["cdk", "deploy", "--require-approval", "never", *_cdk_output(_channel_name(cfg)),
                "-c", f"config={config_path}", stack_name]
     print(f"Running: {' '.join(cdk_cmd)}")
     result = subprocess.run(cdk_cmd, check=False)
@@ -604,7 +609,7 @@ def cmd_terminate(cfg, config_path, extra_args):
     _scheduler_ops.delete_all(_session(cfg), _channel_name(cfg), config_path)
 
     stack_name = _stack_name(cfg)
-    cdk_cmd = ["cdk", "destroy", "--force",
+    cdk_cmd = ["cdk", "destroy", "--force", *_cdk_output(_channel_name(cfg)),
                "-c", f"config={config_path}", stack_name]
     print(f"Running: {' '.join(cdk_cmd)}")
     result = subprocess.run(cdk_cmd, check=False)

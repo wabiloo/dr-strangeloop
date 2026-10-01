@@ -10,6 +10,16 @@ from constructs import Construct
 
 ITS_A_LIVE_DIR = os.path.dirname(__file__)
 
+# The only files the Lambda imports at runtime (_scheduler_lambda.py and its
+# transitive imports). Anything the handler starts importing must be added here.
+LAMBDA_MODULES = (
+    "_scheduler_lambda.py",
+    "_aws_media_ops.py",
+    "_ecs_express_ops.py",
+    "_infra_cfg.py",
+    "_reachability.py",
+)
+
 
 class SchedulerStack(Stack):
     """
@@ -19,7 +29,12 @@ class SchedulerStack(Stack):
     IAM role EventBridge Scheduler assumes to invoke it. Deploy once per
     account/region, independent of any channel:
 
-        cdk deploy ItsALiveSharedStack-scheduler
+        cdk deploy ItsALiveSharedStack-scheduler -c scheduler=true
+
+    app.py only instantiates this stack with `-c scheduler=true`: its
+    Lambda asset is Docker-bundled (a pip install), and CDK stages every
+    asset of every stack in the app on every `cdk` command, so including it
+    unconditionally added minutes to unrelated channel deploys.
 
     Not backend-specific -- covers both aws-media and ecs-express
     channels (local-docker has no AWS presence to schedule against, so
@@ -32,14 +47,11 @@ class SchedulerStack(Stack):
     -- NOT by this stack. This stack only provisions the reusable
     target Lambda + invocation role.
 
-    The Lambda's code asset is this whole its-a-live/ directory (see
+    The Lambda's code asset is just LAMBDA_MODULES from this directory (see
     _scheduler_lambda.py): it imports _aws_media_ops.start/stop and
     _ecs_express_ops.start/stop directly -- the exact same functions
     channel.py itself calls -- rather than reimplementing the MediaLive/
-    ECS API calls a second time. The CDK/CLI-only files that come along
-    for the ride (app.py, *_stack.py, channel.py, ...) are simply never
-    imported at runtime; excluded below only to keep the deployed asset
-    smaller, not because importing them would break anything.
+    ECS API calls a second time.
     """
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -94,21 +106,25 @@ class SchedulerStack(Stack):
             timeout=Duration.seconds(120),
             code=_lambda.Code.from_asset(
                 ITS_A_LIVE_DIR,
-                exclude=[
-                    ".venv", "cdk.out", "__pycache__", "*.pyc", "node_modules",
-                    "configs", "data", ".git", "tests",
-                ],
+                # `exclude` limits what is fingerprinted (the bundling
+                # container still mounts the whole directory, hence the
+                # explicit file list in the command below).
+                exclude=["*", *(f"!{m}" for m in LAMBDA_MODULES)],
                 # `ecs:UpdateExpressGatewayService`/`DescribeExpressGatewayService`
                 # are recent enough that the Lambda runtime's own bundled
                 # boto3 isn't guaranteed to know them -- pip-install a fresh
                 # boto3 alongside the source rather than relying on the
                 # runtime's version. Needs Docker at `cdk deploy` time, same
                 # prerequisite LoopStack's image_asset already has.
+                # The version spec MUST stay quoted: unquoted, bash reads
+                # `>=1.28.0` as a redirect into a file written back into
+                # the (bind-mounted) source dir.
                 bundling=cdk.BundlingOptions(
                     image=runtime.bundling_image,
                     command=[
                         "bash", "-c",
-                        "pip install boto3>=1.28.0 -t /asset-output && cp -au . /asset-output",
+                        "pip install 'boto3>=1.28.0' -t /asset-output && cp "
+                        + " ".join(LAMBDA_MODULES) + " /asset-output",
                     ],
                 ),
             ),

@@ -52,12 +52,15 @@ stack_name = f"ItsALiveStack-{name}-{backend}"
 
 
 # Shared prerequisite for `channel.py schedule add/remove/list` -- not
-# backend-specific (covers both aws-media and ecs-express), so always
-# present in the synthesized app regardless of which backend the given
-# config file selects; deploy it explicitly with
-# `cdk deploy ItsALiveSharedStack-scheduler` before scheduling any
-# channel's start/stop.
-SchedulerStack(app, "ItsALiveSharedStack-scheduler", env=env)
+# backend-specific (covers both aws-media and ecs-express). Only included
+# with `-c scheduler=true`: its Lambda asset is Docker-bundled, and CDK
+# stages every asset of every stack in the app on every command, so
+# including it always made every channel deploy/destroy pay for the bundling.
+# Deploy it explicitly, once per account/region, before scheduling any
+# channel's start/stop:
+#   cdk deploy ItsALiveSharedStack-scheduler -c scheduler=true
+if str(app.node.try_get_context("scheduler")).lower() in ("true", "1", "yes"):
+    SchedulerStack(app, "ItsALiveSharedStack-scheduler", env=env)
 
 if backend == "ecs-express":
     # Shared prerequisite -- one ECS cluster reused by every ecs-express

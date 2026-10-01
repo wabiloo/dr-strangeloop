@@ -58,6 +58,7 @@ export const CONFIG_FIELD_LABEL = {
   port: 'Serve port',
   cpu: 'Express CPU units',
   memory: 'Express memory (MB)',
+  cdn: 'CloudFront CDN',
   daterange_mode: 'HLS DATERANGE mode',
   cue_tags: 'HLS CUE-OUT/CUE-IN tags',
   dash_signal_format: 'DASH SCTE-35 signal format',
@@ -167,6 +168,7 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
       ['port', portTable.port],
       ['cpu', isEcsExpress ? portTable.cpu : undefined],
       ['memory', isEcsExpress ? portTable.memory : undefined],
+      ['cdn', isEcsExpress ? (portTable.cdn ?? true) : undefined],
     ])
     const periodTypes = periodTypesFromConfig(markers.period_on_segmentation)
     add('timeline', [

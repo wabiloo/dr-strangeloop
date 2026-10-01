@@ -87,6 +87,11 @@ class LoopStack(Stack):
         # Same numeric codes as Fargate (256=0.25 vCPU, 512 MiB, etc.).
         serve_cpu = str(express_cfg.get("cpu", 256))
         serve_memory = str(express_cfg.get("memory", 512))
+        # CloudFront is ~190s of a ~7 minute create (it can only start once
+        # the service endpoint exists), so it's optional. Off = playback URLs
+        # are the Express HTTPS endpoint itself: no segment caching and no
+        # per-range manifest cache keys, but equally playable.
+        use_cdn = bool(express_cfg.get("cdn", True))
 
         loop_package_s3_uri = f"s3://{bucket_name}/{loop_package_folder}/{name}"
 
@@ -128,7 +133,8 @@ class LoopStack(Stack):
             ],
         )
 
-        # Execution role: standard ECS task execution role (ECR pull, logs).
+        # Execution role: standard ECS task execution role. The managed policy
+        # already allows ECR pulls (and log writes), so no extra grant is needed.
         execution_role = iam.Role(
             self,
             "ExpressExecutionRole",
@@ -139,20 +145,26 @@ class LoopStack(Stack):
                 ),
             ],
         )
-        image_asset.repository.grant_pull(execution_role)
 
         # Task role: what the container itself assumes -- read-only S3 access
-        # scoped to this channel's loop-package prefix.
+        # scoped to this channel's loop-package prefix. The policy is inlined
+        # (inline_policies) rather than added via add_to_policy(), which would
+        # create a separate AWS::IAM::Policy resource that CloudFormation can
+        # only create after the role: ~17s more on the create's critical path.
         task_role = iam.Role(
             self,
             "ExpressTaskRole",
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
-        )
-        task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["s3:GetObject", "s3:ListBucket"],
-                resources=[bucket.bucket_arn, f"{bucket.bucket_arn}/{loop_package_folder}/{name}/*"],
-            )
+            inline_policies={
+                "LoopPackageRead": iam.PolicyDocument(
+                    statements=[
+                        iam.PolicyStatement(
+                            actions=["s3:GetObject", "s3:ListBucket"],
+                            resources=[bucket.bucket_arn, f"{bucket.bucket_arn}/{loop_package_folder}/{name}/*"],
+                        )
+                    ]
+                )
+            },
         )
 
         # ── ECS cluster ────────────────────────────────────────────────────────
@@ -185,6 +197,13 @@ class LoopStack(Stack):
             cpu=serve_cpu,
             memory=serve_memory,
             health_check_path="/stream.mpd",
+            # Pinned to one task up front (the Express default is a 1..N
+            # range): `channel.py start` would otherwise have to apply it
+            # right after `create`, and that update alone rolls out a second
+            # task (~90s).
+            scaling_target=ecs.CfnExpressGatewayService.ExpressGatewayScalingTargetProperty(
+                min_task_count=1, max_task_count=1,
+            ),
             primary_container=ecs.CfnExpressGatewayService.ExpressGatewayContainerProperty(
                 image=image_asset.image_uri,
                 container_port=port,
@@ -207,75 +226,79 @@ class LoopStack(Stack):
             ),
         )
 
-        # ── CloudFront: public entrypoint, caches /seg/* aggressively ────────
-        # Manifests are dynamic (sliding window) -- never cached. Segments are
-        # immutable within a loop package version -- cache them (SCOPE.md §8).
-        # Startover/catchup (loop-dee-loop/SCOPE.md §13) selects the range via
-        # query parameters on the manifest URLs, so manifests MUST be cached
-        # per value of exactly those parameters -- CloudFront's default is to
-        # drop the query string entirely, which would serve one viewer's range
-        # to everyone. Nothing else in the query string is keyed or forwarded.
-        timeshift_params = timeshift_param_names(config)
-        manifest_query_strings = (
-            cloudfront.CacheQueryStringBehavior.allow_list(*timeshift_params)
-            if timeshift_params
-            else cloudfront.CacheQueryStringBehavior.none()
-        )
-        manifest_cache_policy = cloudfront.CachePolicy(
-            self,
-            "ManifestCachePolicy",
-            query_string_behavior=manifest_query_strings,
-            cache_policy_name=f"loop-dee-loop-{name}-manifests",
-            default_ttl=Duration.seconds(0),
-            min_ttl=Duration.seconds(0),
-            max_ttl=Duration.seconds(1),
-            enable_accept_encoding_gzip=True,
-            enable_accept_encoding_brotli=True,
-        )
-        segment_cache_policy = cloudfront.CachePolicy(
-            self,
-            "SegmentCachePolicy",
-            cache_policy_name=f"loop-dee-loop-{name}-segments",
-            default_ttl=Duration.minutes(5),
-            min_ttl=Duration.seconds(0),
-            max_ttl=Duration.hours(1),
-            enable_accept_encoding_gzip=True,
-            enable_accept_encoding_brotli=True,
-        )
+        playback_host = service.attr_endpoint
+        if use_cdn:
+            # ── CloudFront: public entrypoint, caches /seg/* aggressively ────────
+            # Manifests are dynamic (sliding window) -- never cached. Segments are
+            # immutable within a loop package version -- cache them (SCOPE.md §8).
+            # Startover/catchup (loop-dee-loop/SCOPE.md §13) selects the range via
+            # query parameters on the manifest URLs, so manifests MUST be cached
+            # per value of exactly those parameters -- CloudFront's default is to
+            # drop the query string entirely, which would serve one viewer's range
+            # to everyone. Nothing else in the query string is keyed or forwarded.
+            timeshift_params = timeshift_param_names(config)
+            manifest_query_strings = (
+                cloudfront.CacheQueryStringBehavior.allow_list(*timeshift_params)
+                if timeshift_params
+                else cloudfront.CacheQueryStringBehavior.none()
+            )
+            manifest_cache_policy = cloudfront.CachePolicy(
+                self,
+                "ManifestCachePolicy",
+                query_string_behavior=manifest_query_strings,
+                cache_policy_name=f"loop-dee-loop-{name}-manifests",
+                default_ttl=Duration.seconds(0),
+                min_ttl=Duration.seconds(0),
+                max_ttl=Duration.seconds(1),
+                enable_accept_encoding_gzip=True,
+                enable_accept_encoding_brotli=True,
+            )
+            segment_cache_policy = cloudfront.CachePolicy(
+                self,
+                "SegmentCachePolicy",
+                cache_policy_name=f"loop-dee-loop-{name}-segments",
+                default_ttl=Duration.minutes(5),
+                min_ttl=Duration.seconds(0),
+                max_ttl=Duration.hours(1),
+                enable_accept_encoding_gzip=True,
+                enable_accept_encoding_brotli=True,
+            )
 
-        origin = origins.HttpOrigin(
-            service.attr_endpoint,
-            protocol_policy=cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
-        )
+            origin = origins.HttpOrigin(
+                service.attr_endpoint,
+                protocol_policy=cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+            )
 
-        distribution = cloudfront.Distribution(
-            self,
-            "Distribution",
-            comment=f"loop-dee-loop channel: {name}",
-            default_behavior=cloudfront.BehaviorOptions(
-                origin=origin,
-                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-                cache_policy=manifest_cache_policy,
-                allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
-            ),
-            # seg = loop-local, cseg = continuous (global index), rseg =
-            # range-relative TS (SCOPE.md §13.5): all immutable per URL.
-            additional_behaviors={
-                pattern: cloudfront.BehaviorOptions(
+            distribution = cloudfront.Distribution(
+                self,
+                "Distribution",
+                comment=f"loop-dee-loop channel: {name}",
+                default_behavior=cloudfront.BehaviorOptions(
                     origin=origin,
                     viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-                    cache_policy=segment_cache_policy,
+                    cache_policy=manifest_cache_policy,
                     allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
-                )
-                for pattern in ("*/seg/*", "*/cseg/*", "*/rseg/*")
-            },
-        )
+                ),
+                # seg = loop-local, cseg = continuous (global index), rseg =
+                # range-relative TS (SCOPE.md §13.5): all immutable per URL.
+                additional_behaviors={
+                    pattern: cloudfront.BehaviorOptions(
+                        origin=origin,
+                        viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                        cache_policy=segment_cache_policy,
+                        allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+                    )
+                    for pattern in ("*/seg/*", "*/cseg/*", "*/rseg/*")
+                },
+            )
+            playback_host = distribution.distribution_domain_name
 
         # ── CloudFormation outputs ─────────────────────────────────────────────
         cdk.CfnOutput(self, "S3BucketName", value=bucket_name)
         cdk.CfnOutput(self, "LoopPackageS3Uri", value=loop_package_s3_uri)
         cdk.CfnOutput(self, "ExpressServiceArn", value=service.attr_service_arn)
         cdk.CfnOutput(self, "ExpressServiceEndpoint", value=f"https://{service.attr_endpoint}")
-        cdk.CfnOutput(self, "CloudFrontDomainName", value=distribution.distribution_domain_name)
-        cdk.CfnOutput(self, "HlsPlaybackUrl", value=f"https://{distribution.distribution_domain_name}/index.m3u8")
-        cdk.CfnOutput(self, "DashPlaybackUrl", value=f"https://{distribution.distribution_domain_name}/stream.mpd")
+        if use_cdn:
+            cdk.CfnOutput(self, "CloudFrontDomainName", value=distribution.distribution_domain_name)
+        cdk.CfnOutput(self, "HlsPlaybackUrl", value=f"https://{playback_host}/index.m3u8")
+        cdk.CfnOutput(self, "DashPlaybackUrl", value=f"https://{playback_host}/stream.mpd")
