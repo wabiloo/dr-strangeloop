@@ -336,10 +336,10 @@ def test_dash_loop_comment_only_on_first_period_of_a_loop():
     mpd = channel.build_dash_manifest()
 
     assert mpd.count("<Period ") == 2
-    assert mpd.count("<!-- loop 0 -->") == 1
+    assert mpd.count("<!-- loop 0 (starts ") == 1
     # inside the first Period, after its opening tag, before its first segment
-    assert mpd.index('id="loop0-0"') < mpd.index("<!-- loop 0 -->") < mpd.index("<S ")
-    assert mpd.index("<!-- loop 0 -->") < mpd.index('id="loop0-2"')
+    assert mpd.index('id="loop0-0"') < mpd.index("<!-- loop 0 (starts ") < mpd.index("<S ")
+    assert mpd.index("<!-- loop 0 (starts ") < mpd.index('id="loop0-2"')
 
 
 # ── §11.3: segment byte-serving 404 guard, real on-disk sparse package ──

@@ -566,9 +566,14 @@ def test_offset_judges_ranges_against_the_pretend_now(tmp_path):
 def test_offset_range_segments_and_timestamps_are_unchanged_for_a_past_range(tmp_path):
     client, epoch = _app(tmp_path)
     q = f"start={epoch + 5}&end={epoch + 8}"
-    assert client.get(f"/video.m3u8?{q}").get_data(as_text=True) == client.get(
-        f"/video.m3u8?{q}&offset=-30"
-    ).get_data(as_text=True)
+
+    def _without_comments(body: str) -> list[str]:
+        # The header's `# clock offset:` comment is the one intended difference.
+        return [l for l in body.splitlines() if not l.startswith("# ")]
+
+    assert _without_comments(client.get(f"/video.m3u8?{q}").get_data(as_text=True)) == _without_comments(
+        client.get(f"/video.m3u8?{q}&offset=-30").get_data(as_text=True)
+    )
 
 
 @ffmpeg
@@ -607,3 +612,15 @@ def test_master_playlist_propagates_offset(tmp_path):
     master = client.get("/index.m3u8?offset=-30&junk=1").get_data(as_text=True)
     variant = next(l for l in master.splitlines() if "m3u8?" in l)
     assert "offset=-30" in variant and "junk" not in variant
+
+
+@ffmpeg
+def test_mode_comment_says_live_or_startover_catchup(tmp_path):
+    client, epoch = _app(tmp_path)
+    q = f"start={epoch + 5}&end={epoch + 8}"
+    assert "# mode: startover/catchup" in client.get(f"/video.m3u8?{q}").get_data(as_text=True)
+    assert "<!-- mode: startover/catchup -->" in client.get(f"/stream.mpd?{q}").get_data(as_text=True)
+    assert "# mode: live" in client.get("/video.m3u8").get_data(as_text=True)
+    assert "<!-- mode: live -->" in client.get("/stream.mpd").get_data(as_text=True)
+    # a clock offset is surfaced as a time anchor
+    assert "# clock offset: -30" in client.get("/video.m3u8?offset=-30").get_data(as_text=True)

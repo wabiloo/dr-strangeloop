@@ -468,6 +468,8 @@ def _manifests(tmp_path, *, continuous: bool):
 
 @pytest.mark.parametrize("continuous", [True, False])
 def test_manifests_are_stamped_with_generator_version(tmp_path, continuous):
+    import re
+
     import serve
 
     m = _manifests(tmp_path, continuous=continuous)
@@ -476,16 +478,23 @@ def test_manifests_are_stamped_with_generator_version(tmp_path, continuous):
     assert m["master"].splitlines()[1] == f"# {stamp}"
     assert m["hls"].splitlines()[1] == f"# {stamp}"
     assert m["dash"].splitlines()[1] == f"<!-- {stamp} -->"
-    # HLS media: second comment is the loop of the window's first segment.
-    first_loop = int(m["hls"].splitlines()[2].removeprefix("# current loop: "))
+    # Mode + time anchors follow the stamp, in HLS media and DASH alike.
+    assert m["hls"].splitlines()[2] == "# mode: live"
+    assert m["hls"].splitlines()[3].startswith("# epoch: 1970-01-01T00:00:00")
+    assert m["dash"].splitlines()[2] == "<!-- mode: live -->"
+    assert m["dash"].splitlines()[3].startswith("<!-- epoch: 1970-01-01T00:00:00")
+    # HLS media: then the loop of the window's first segment, with its start.
+    current = next(l for l in m["hls"].splitlines() if l.startswith("# current loop: "))
+    first_loop = int(current.removeprefix("# current loop: ").split(" ")[0])
     media_seq = int(next(l for l in m["hls"].splitlines() if l.startswith("#EXT-X-MEDIA-SEQUENCE:")).split(":")[1])
     assert first_loop == media_seq // 2  # 2 segments per loop in this package
+    assert re.search(r"\(starts \d{4}-\d\d-\d\dT[\d:.]+Z\)$", current)
 
 
 @pytest.mark.parametrize("continuous", [True, False])
 def test_hls_loop_number_comment_precedes_first_segment_of_each_loop(tmp_path, continuous):
     lines = _manifests(tmp_path, continuous=continuous)["hls"].splitlines()
-    loops = [int(l.split(": ")[1]) for l in lines if l.startswith("# loop: ")]
+    loops = [int(l.split(": ")[1].split(" ")[0]) for l in lines if l.startswith("# loop: ")]
     assert len(loops) >= 2 and loops == sorted(set(loops))
     for i, line in enumerate(lines):
         if line.startswith("# loop: "):
@@ -498,10 +507,10 @@ def test_dash_continuous_has_loop_comment_before_first_segment_of_window_and_eac
 
     body = _manifests(tmp_path, continuous=True)["dash"]
     assert body.count("<Period ") == 1
-    loops = [int(n) for n in re.findall(r"<!-- loop (\d+) -->", body)]
+    loops = [int(n) for n in re.findall(r"<!-- loop (\d+) \(starts [^)]+\) -->", body)]
     assert loops and loops == sorted(loops)
     # Comment sits immediately before an <S> of the loop's first segment.
-    assert re.search(r"<!-- loop \d+ -->\n\s+<S t=", body)
+    assert re.search(r"<!-- loop \d+ \(starts [^)]+\) -->\n\s+<S t=", body)
 
 
 def test_dash_default_mode_has_loop_comment_inside_each_period_before_first_segment(tmp_path):
@@ -510,7 +519,44 @@ def test_dash_default_mode_has_loop_comment_inside_each_period_before_first_segm
     body = _manifests(tmp_path, continuous=False)["dash"]
     assert "<!-- loop" not in body.split("<Period ")[0]  # nothing before the first Period
     periods = re.findall(
-        r'<Period id="loop(\d+)".*?<SegmentTimeline>\n\s+<!-- loop (\d+) -->\n\s+<S t=', body, re.S
+        r'<Period id="loop(\d+)".*?<SegmentTimeline>\n\s+<!-- loop (\d+) \(starts [^)]+\) -->\n\s+<S t=', body, re.S
     )
     assert len(periods) >= 1
     assert all(a == b for a, b in periods)
+
+
+
+@pytest.mark.parametrize("continuous", [True, False])
+def test_marker_comments_list_type_codes_and_event_ids(tmp_path, continuous):
+    import re
+
+    _write_continuous_package(tmp_path)
+    descriptor_path = tmp_path / "loop_descriptor.json"
+    descriptor = json.loads(descriptor_path.read_text())
+    descriptor["markers"] = [
+        {
+            "event_id": "0x00000001",
+            "pts_time_ticks": 0,
+            "segmentation_type_id": "0x34",
+            "segmentation_duration_ticks": 45_000,
+            "is_out": True,
+            "splice_command_b64": "AAAA",
+            "splice_command_b64_narrowed": "AAAA",
+        }
+    ]
+    descriptor_path.write_text(json.dumps(descriptor))
+    client = create_app(tmp_path, epoch_ticks=0, window_segments=6, continuous=continuous).test_client()
+
+    hls = client.get("/video.m3u8").get_data(as_text=True).splitlines()
+    marker_lines = [i for i, l in enumerate(hls) if l.startswith("# markers: ")]
+    assert marker_lines, "no marker description in HLS"
+    for i in marker_lines:
+        assert hls[i] == "# markers: 0x34 (id 0x00000001)"
+        assert hls[i + 1].startswith("#EXT-X-DATERANGE")  # right before the marker tags
+
+    dash = client.get("/stream.mpd").get_data(as_text=True)
+    descriptions = re.findall(r"<!-- markers: ([^>]*) -->\n\s+<EventStream", dash)
+    assert descriptions
+    assert all(d.startswith("0x34 (id 0x00000001") for d in descriptions)
+    if continuous:  # one Period spans several loops, so each entry names its loop
+        assert re.search(r"0x34 \(id 0x00000001, loop \d+\)", descriptions[0])
