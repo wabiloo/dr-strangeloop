@@ -9,9 +9,10 @@ import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { deleteChannel, getJob, listChannels, startChannel, stopChannel } from '../api/client'
+import { deleteChannel, getChannelSummary, getJob, listChannelsQuick, startChannel, stopChannel } from '../api/client'
 import type { ChannelListItem, Job } from '../api/types'
 import { PHASE_LABEL, isUpButMaybeUnreachable, listItemPhase, phaseSeverity } from '../utils/channelPhase'
+import type { Phase } from '../utils/channelPhase'
 import BackendBadge from '../components/BackendBadge.vue'
 import { alignConfirmPopup } from '../utils/confirmPopup'
 import { usePersistedSort } from '../utils/persistedSort'
@@ -22,7 +23,53 @@ const toast = useToast()
 const channels = ref<ChannelListItem[]>([])
 const { sortField, sortOrder } = usePersistedSort('channels')
 const loading = ref(true)
+const refreshing = ref(false)
 const error = ref('')
+
+// The list is built in two steps so rows appear immediately: the names,
+// backends and sources come from the local configs at once, then each
+// channel's live state (CloudFormation / Docker / ECS / MediaLive plus the
+// manifest reachability check -- the slow part) is fetched in parallel and
+// fills its row in as it arrives. A row that has never resolved is
+// 'pending' (spinner) or 'error', and is treated as an unknown phase: no
+// Start/Stop, and above all not deletable, since "no stack info yet" must
+// never be mistaken for "not deployed".
+type LiveState = { status: 'pending' | 'ready' | 'error'; error?: string }
+const liveState = reactive<Record<string, LiveState>>({})
+const LIVE_CONCURRENCY = 6
+let runId = 0
+
+function applyQuick(quick: ChannelListItem[]) {
+  const existing = new Map(channels.value.map((c) => [c.name, c]))
+  channels.value = quick.map((q) => ({ ...existing.get(q.name), ...q }))
+  const names = new Set(quick.map((q) => q.name))
+  for (const name of Object.keys(liveState)) if (!names.has(name)) delete liveState[name]
+  for (const name of names) if (!liveState[name]) liveState[name] = { status: 'pending' }
+}
+
+async function fetchLive(name: string, run = runId) {
+  try {
+    const row = await getChannelSummary(name)
+    if (run !== runId) return
+    channels.value = channels.value.map((c) => (c.name === name ? { ...c, ...row } : c))
+    liveState[name] = { status: 'ready' }
+  } catch (e) {
+    if (run !== runId) return
+    // Keep the last good values on a failed re-check; only a row that never
+    // resolved shows the error.
+    if (liveState[name]?.status !== 'ready') {
+      liveState[name] = { status: 'error', error: e instanceof Error ? e.message : String(e) }
+    }
+  }
+}
+
+async function fetchAllLive(names: string[], run: number) {
+  const queue = [...names]
+  const worker = async () => {
+    for (let name = queue.shift(); name !== undefined; name = queue.shift()) await fetchLive(name, run)
+  }
+  await Promise.all(Array.from({ length: Math.min(LIVE_CONCURRENCY, names.length) }, worker))
+}
 
 // Channel names with a start/stop job currently in flight -- disables both
 // buttons on that row (never both backends' worth of jobs at once for the
@@ -40,41 +87,57 @@ const jobTimers = new Map<string, ReturnType<typeof setInterval>>()
 const LIST_POLL_MS = 10000
 let listTimer: ReturnType<typeof setInterval> | null = null
 
-async function load() {
-  loading.value = true
-  error.value = ''
+// `silent` (the background poll) skips a tick while a refresh is still
+// running, and only surfaces an error if there are no rows to show at all.
+// A newer refresh supersedes an older one: its late results are dropped.
+async function refresh(silent: boolean) {
+  if (silent && refreshing.value) return
+  const run = ++runId
+  refreshing.value = true
+  if (!silent) {
+    loading.value = channels.value.length === 0
+    error.value = ''
+  }
   try {
-    channels.value = await listChannels()
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  } finally {
+    const quick = await listChannelsQuick()
+    if (run !== runId) return
+    applyQuick(quick)
+    error.value = ''
     loading.value = false
+    await fetchAllLive(quick.map((q) => q.name), run)
+  } catch (e) {
+    if (run !== runId) return
+    if (!silent || channels.value.length === 0) error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    if (run === runId) {
+      refreshing.value = false
+      loading.value = false
+    }
   }
 }
 
-// Background poll -- same data as `load()`, but never toggles `loading`
-// (no spinner/overlay flicker every 10s) and doesn't clobber the table
-// with an error on a single missed tick; only surfaces an error if we
-// don't have any rows to show at all.
-async function silentLoad() {
-  try {
-    channels.value = await listChannels()
-    error.value = ''
-  } catch (e) {
-    if (channels.value.length === 0) error.value = e instanceof Error ? e.message : String(e)
-  }
+const load = () => refresh(false)
+const silentLoad = () => refresh(true)
+
+// A row whose live state hasn't resolved has no trustworthy phase.
+function phaseOf(channel: ChannelListItem): Phase {
+  return liveState[channel.name]?.status === 'ready' ? listItemPhase(channel) : 'unknown'
+}
+
+function isLiveReady(channel: ChannelListItem) {
+  return liveState[channel.name]?.status === 'ready'
 }
 
 // Badge color reflects the same running/stopped/failed/... phase across
 // backends (see utils/channelPhase.ts).
 function statusSeverity(channel: ChannelListItem) {
-  return phaseSeverity(listItemPhase(channel))
+  return phaseSeverity(phaseOf(channel))
 }
 
 // Running-status tag: the resolved phase (what you actually came here to
 // know -- is it serving or not), independent of backend.
 function runningStatusLabel(channel: ChannelListItem) {
-  return PHASE_LABEL[listItemPhase(channel)]
+  return PHASE_LABEL[phaseOf(channel)]
 }
 
 // aws-media/ecs-express: the CloudFormation stack name. local-docker has
@@ -90,7 +153,7 @@ function stackOrContainerName(channel: ChannelListItem) {
 // column already does (via listItemPhase) rather than the CFN-specific
 // substring matching below, which wouldn't recognize those strings.
 function stackSeverity(channel: ChannelListItem) {
-  if (channel.backend === 'local-docker') return phaseSeverity(listItemPhase(channel))
+  if (channel.backend === 'local-docker') return phaseSeverity(phaseOf(channel))
   if (!channel.stack_status) return 'secondary'
   if (channel.stack_status.includes('ROLLBACK') || channel.stack_status.includes('FAILED')) return 'danger'
   if (channel.stack_status.includes('IN_PROGRESS')) return 'info'
@@ -107,7 +170,13 @@ function actionsSortKey(channel: ChannelListItem) {
 }
 
 const rows = computed(() =>
-  channels.value.map((c) => ({ ...c, _state_sort: runningStatusLabel(c), _actions_sort: actionsSortKey(c) })),
+  channels.value.map((c) => ({
+    ...c,
+    _live: liveState[c.name]?.status ?? 'pending',
+    _live_error: liveState[c.name]?.error,
+    _state_sort: isLiveReady(c) ? runningStatusLabel(c) : '~',
+    _actions_sort: actionsSortKey(c),
+  })),
 )
 
 // Deleting only removes igor's local TOML config, never touches AWS/Docker
@@ -116,7 +185,7 @@ const rows = computed(() =>
 // orphan a running or stopped-but-still-deployed resource. "not deployed"
 // is the one Phase where there's nothing left to tear down.
 function isDeletable(channel: ChannelListItem) {
-  return listItemPhase(channel) === 'not-deployed'
+  return phaseOf(channel) === 'not-deployed'
 }
 
 function deleteDisabledReason(channel: ChannelListItem) {
@@ -156,6 +225,7 @@ async function confirmDelete(event: MouseEvent, channel: ChannelListItem) {
 // based -- a job in flight (pendingActions) never hides a button, it only
 // disables it, so mid-action the row doesn't visually shift.
 function isStartRelevant(channel: ChannelListItem) {
+  if (!isLiveReady(channel)) return false
   const phase = listItemPhase(channel)
   return channel.backend === 'local-docker' ? !isUpButMaybeUnreachable(phase) : phase === 'stopped'
 }
@@ -165,7 +235,7 @@ function isStartDisabled(channel: ChannelListItem) {
 }
 
 function isStopRelevant(channel: ChannelListItem) {
-  return isUpButMaybeUnreachable(listItemPhase(channel))
+  return isLiveReady(channel) && isUpButMaybeUnreachable(listItemPhase(channel))
 }
 
 function isStopDisabled(channel: ChannelListItem) {
@@ -214,7 +284,7 @@ function pollJob(channelName: string, action: 'start' | 'stop', jobId: string) {
     } else {
       toast.add({ severity: 'success', summary: `${label} succeeded`, detail: channelName, life: 4000 })
     }
-    await load()
+    await fetchLive(channelName)
   }
   const tick = async () => {
     try {
@@ -258,7 +328,7 @@ onBeforeUnmount(() => {
     <div class="flex justify-content-between align-items-center">
       <h2 class="m-0">Channels</h2>
       <div class="flex gap-2">
-        <Button label="Refresh" icon="pi pi-refresh" severity="secondary" outlined @click="load" :loading="loading" />
+        <Button label="Refresh" icon="pi pi-refresh" severity="secondary" outlined @click="load" :loading="loading || refreshing" />
         <Button label="New channel" icon="pi pi-plus" @click="router.push('/channels/new')" />
       </div>
     </div>
@@ -311,18 +381,21 @@ onBeforeUnmount(() => {
       </Column>
       <Column header="State"  sort-field="_state_sort" sortable>
         <template #body="{ data }">
-          <Tag :value="runningStatusLabel(data)" :severity="statusSeverity(data)" />
+          <i v-if="data._live === 'pending'" class="pi pi-spin pi-spinner text-color-secondary" title="Checking..." />
+          <Tag v-else :value="runningStatusLabel(data)" :severity="statusSeverity(data)" :title="data._live_error" />
         </template>
       </Column>
       <Column header="Stack">
         <template #body="{ data }">
-          <span v-if="stackOrContainerName(data)">{{ stackOrContainerName(data) }}</span>
+          <i v-if="data._live === 'pending'" class="pi pi-spin pi-spinner text-color-secondary" title="Checking..." />
+          <span v-else-if="stackOrContainerName(data)">{{ stackOrContainerName(data) }}</span>
           <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>
       <Column header="Stack status">
         <template #body="{ data }">
-          <Tag v-if="data.stack_status" :value="data.stack_status" :severity="stackSeverity(data)" />
+          <i v-if="data._live === 'pending'" class="pi pi-spin pi-spinner text-color-secondary" title="Checking..." />
+          <Tag v-else-if="data.stack_status" :value="data.stack_status" :severity="stackSeverity(data)" />
           <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import tomllib
+from pathlib import Path
 from typing import Literal
 
 import httpx
@@ -214,41 +216,86 @@ class ChannelCreatePayload(BaseModel):
         return self
 
 
-@router.get("/")
-def list_channels() -> list[dict]:
+def _enrich_with_source(channel: dict) -> None:
+    """Adds source identity to a channel row. Playlist configs store only the
+    resolved output path, so those use a best-effort reverse lookup; archive
+    imports have a stable outputs/archives/<name> path."""
+    source_path = ""
+    source_kind = "playlist"
     try:
-        channels = its_a_live.list_channels(str(channel_store.paths.ITS_A_LIVE_CONFIGS_DIR))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        cfg = channel_store.read_channel_config(channel["name"])
+        source = cfg.get("input", {})
+        source_path = source.get("source_path", "")
+        source_kind = source.get("source_kind", "playlist")
+    except FileNotFoundError:
+        pass
+    channel["source_path"] = source_path
+    channel["playlist_name"] = franken_ts.find_playlist_for_source(source_path)
+    channel["archive_name"] = archives.find_archive_for_source(source_path)
+    channel["manifest_name"] = manifests.find_manifest_for_source(source_path)
+    channel["manifest_display_name"] = (
+        manifests.get_manifest(channel["manifest_name"])["display_name"] if channel["manifest_name"] else None
+    )
+    channel["source_kind"] = (
+        "archive" if channel["archive_name"] else "manifest" if channel["manifest_name"] else source_kind
+    )
+    channel["archive_display_name"] = (
+        archives.get_display_name(channel["archive_name"]) if channel["archive_name"] else None
+    )
 
-    # Enrich each channel with its source identity. Playlist configs store
-    # only the resolved output path, so those use a best-effort reverse
-    # lookup; archive imports have a stable outputs/archives/<name> path.
-    for channel in channels:
-        source_path = ""
-        source_kind = "playlist"
+
+@router.get("/")
+def list_channels(live: bool = True) -> list[dict]:
+    """All channels. With `live=false` this reads only the local TOML store
+    (instant: name, backend, source) and leaves stack/live state out -- fetch
+    that per channel from `GET /{name}/summary`, in parallel, so a UI can fill
+    its table in as each one resolves instead of waiting on the slowest."""
+    if not live:
+        channels = []
+        for path in channel_store.list_channel_paths():
+            try:
+                cfg = tomllib.loads(Path(path).read_text())
+            except (OSError, tomllib.TOMLDecodeError):
+                continue
+            deploy = cfg.get("deploy", {})
+            if deploy.get("backend") not in ("aws-media", "ecs-express", "local-docker"):
+                continue
+            channels.append({
+                "config_path": path,
+                "name": deploy.get("name", "default"),
+                "backend": deploy["backend"],
+            })
+    else:
         try:
-            cfg = channel_store.read_channel_config(channel["name"])
-            source = cfg.get("input", {})
-            source_path = source.get("source_path", "")
-            source_kind = source.get("source_kind", "playlist")
-        except FileNotFoundError:
-            pass
-        channel["source_path"] = source_path
-        channel["playlist_name"] = franken_ts.find_playlist_for_source(source_path)
-        channel["archive_name"] = archives.find_archive_for_source(source_path)
-        channel["manifest_name"] = manifests.find_manifest_for_source(source_path)
-        channel["manifest_display_name"] = (
-            manifests.get_manifest(channel["manifest_name"])["display_name"] if channel["manifest_name"] else None
-        )
-        channel["source_kind"] = (
-            "archive" if channel["archive_name"] else "manifest" if channel["manifest_name"] else source_kind
-        )
-        channel["archive_display_name"] = (
-            archives.get_display_name(channel["archive_name"]) if channel["archive_name"] else None
-        )
+            channels = its_a_live.list_channels(str(channel_store.paths.ITS_A_LIVE_CONFIGS_DIR))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    for channel in channels:
+        _enrich_with_source(channel)
 
     return channels
+
+
+@router.get("/{name}/summary")
+def channel_summary(name: str) -> dict:
+    """One channel's list row (stack/live state plus source). Same shape as an
+    item of `GET /`; this is the slow part, one channel at a time."""
+    try:
+        config_path = channel_store.config_path_for(name)
+        if not Path(config_path).exists():
+            raise FileNotFoundError(config_path)
+        rows = its_a_live.list_channels(config_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Channel {name!r} has no valid config")
+    _enrich_with_source(rows[0])
+    return rows[0]
 
 
 @router.post("/")

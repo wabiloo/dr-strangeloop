@@ -287,6 +287,16 @@ export function listChannels(): Promise<ChannelListItem[]> {
   return getJson(`${CHANNELS_BASE}/`)
 }
 
+/** Instant: names/backends/sources from the local configs only, no stack or
+ * live state (that comes from `getChannelSummary`, one channel at a time). */
+export function listChannelsQuick(): Promise<ChannelListItem[]> {
+  return getJson(`${CHANNELS_BASE}/?live=false`)
+}
+
+export function getChannelSummary(name: string): Promise<ChannelListItem> {
+  return getJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/summary`)
+}
+
 export function defineChannel(payload: ChannelCreatePayload): Promise<{ path: string }> {
   return postJson(`${CHANNELS_BASE}/`, payload)
 }

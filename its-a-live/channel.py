@@ -288,6 +288,65 @@ def _stack_status_is_settled(status):
     return not any(bad in status for bad in ("IN_PROGRESS", "FAILED", "ROLLBACK")) and status != "DELETE_COMPLETE"
 
 
+def _list_entry(path):
+    """One channel's row for `list` (None if the config is invalid). Does the
+    real work -- CloudFormation/Docker/ECS/MediaLive calls plus the manifest
+    reachability check -- so it is the slow part of `list`."""
+    try:
+        cfg = _config(path)
+    except SystemExit:
+        return None
+    name = _channel_name(cfg)
+    backend = _backend(cfg)
+    if backend in _NO_STACK_BACKENDS:
+        result = _ops(cfg).status(cfg, _session(cfg), None)
+        return {
+            "config_path": path,
+            "name": name,
+            "backend": backend,
+            "stack_name": None,
+            # No CloudFormation stack for this backend -- the nearest
+            # equivalent identifier is the deterministic local Docker
+            # container name (see _local_docker_ops.status()).
+            "container_name": result.get("container_name"),
+            "stack_status": result.get("status"),
+            "reachable": result.get("reachable"),
+        }
+    stack_name = _stack_name(cfg)
+    cf = _session(cfg).client("cloudformation")
+    status_value = _stack_status(cf, stack_name)
+    entry = {
+        "config_path": path,
+        "name": name,
+        "backend": backend,
+        "stack_name": stack_name,
+        "container_name": None,
+        "stack_status": status_value,
+    }
+    # A healthy stack_status only means the stack is deployed -- it says
+    # nothing about whether the service behind it is actually serving
+    # (ecs-express scaled to 0, aws-media IDLE) or not, unlike
+    # local-docker above (whose Docker status already IS the live
+    # signal). Fetch the live status too (including the manifest
+    # reachability check above), so the list -- like local-docker's --
+    # reflects the real running/stopped/unreachable state, not just
+    # "stack exists". Best-effort: swallow failures (e.g. a missing
+    # output on a freshly-created stack) and fall back to stack_status
+    # alone.
+    if status_value and _stack_status_is_settled(status_value):
+        try:
+            outputs = _cf_outputs(cfg, stack_name)
+            live = _ops(cfg).status(cfg, _session(cfg), outputs)
+            entry["live_status"] = live.get("status")
+            entry["reachable"] = live.get("reachable")
+            if backend == "ecs-express":
+                entry["min_tasks"] = live.get("min_tasks")
+                entry["max_tasks"] = live.get("max_tasks")
+        except Exception:
+            pass
+    return entry
+
+
 def cmd_list(config_path, extra_args, as_json=False):
     """List channels found from TOML configs in the same directory as
     --config (or the directory given as the sole extra arg), each paired
@@ -306,65 +365,16 @@ def cmd_list(config_path, extra_args, as_json=False):
     top of the one CloudFormation/ECS/MediaLive API call already made for
     each one."""
     if len(extra_args) > 1:
-        sys.exit("Usage: channel.py list [directory]")
-    directory = extra_args[0] if extra_args else os.path.dirname(os.path.abspath(config_path))
+        sys.exit("Usage: channel.py list [directory | channel.toml]")
+    target = extra_args[0] if extra_args else os.path.dirname(os.path.abspath(config_path))
+    # A single .toml file lists just that channel (igor fetches rows one at a
+    # time so its table can fill in as each channel's live state resolves).
+    if os.path.isfile(target):
+        directory, paths = os.path.dirname(target), [target]
+    else:
+        directory, paths = target, sorted(glob.glob(os.path.join(target, "*.toml")))
 
-    channels = []
-    for path in sorted(glob.glob(os.path.join(directory, "*.toml"))):
-        try:
-            cfg = _config(path)
-        except SystemExit:
-            continue
-        name = _channel_name(cfg)
-        backend = _backend(cfg)
-        if backend in _NO_STACK_BACKENDS:
-            result = _ops(cfg).status(cfg, _session(cfg), None)
-            channels.append({
-                "config_path": path,
-                "name": name,
-                "backend": backend,
-                "stack_name": None,
-                # No CloudFormation stack for this backend -- the nearest
-                # equivalent identifier is the deterministic local Docker
-                # container name (see _local_docker_ops.status()).
-                "container_name": result.get("container_name"),
-                "stack_status": result.get("status"),
-                "reachable": result.get("reachable"),
-            })
-            continue
-        stack_name = _stack_name(cfg)
-        cf = _session(cfg).client("cloudformation")
-        status_value = _stack_status(cf, stack_name)
-        entry = {
-            "config_path": path,
-            "name": name,
-            "backend": backend,
-            "stack_name": stack_name,
-            "container_name": None,
-            "stack_status": status_value,
-        }
-        # A healthy stack_status only means the stack is deployed -- it says
-        # nothing about whether the service behind it is actually serving
-        # (ecs-express scaled to 0, aws-media IDLE) or not, unlike
-        # local-docker above (whose Docker status already IS the live
-        # signal). Fetch the live status too (including the manifest
-        # reachability check above), so the list -- like local-docker's --
-        # reflects the real running/stopped/unreachable state, not just
-        # "stack exists". Best-effort: swallow failures (e.g. a missing
-        # output on a freshly-created stack) and fall back to stack_status
-        # alone.
-        if status_value and _stack_status_is_settled(status_value):
-            try:
-                outputs = _cf_outputs(cfg, stack_name)
-                live = _ops(cfg).status(cfg, _session(cfg), outputs)
-                entry["live_status"] = live.get("status")
-                entry["reachable"] = live.get("reachable")
-                if backend == "ecs-express":
-                    entry["min_tasks"] = live.get("min_tasks")
-                    entry["max_tasks"] = live.get("max_tasks")
-            except Exception:
-                pass
-        channels.append(entry)
+    channels = [entry for entry in (_list_entry(p) for p in paths) if entry is not None]
 
     if as_json:
         print(json.dumps(channels))

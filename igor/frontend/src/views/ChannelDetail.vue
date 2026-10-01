@@ -40,7 +40,7 @@ import {
   getChannelHealth,
   getChannelOutputs,
   getChannelStatus,
-  listChannels,
+  getChannelSummary,
   listJobs,
   listScheduleWindows,
   redeployChannel,
@@ -596,17 +596,13 @@ async function loadStatus() {
   }
 }
 
-// There's no single-channel equivalent of `channel.py list`'s enriched
-// row (stack_status/live_status/min_tasks/reachable) -- only the full
-// list endpoint computes those. Best-effort: pull the whole list and
-// pick out this channel's row purely so listPhase can reuse
-// listItemPhase() unchanged. Silently keeps the previous value on
-// failure (e.g. a transient error) rather than blinking the State tag
-// back to "unknown".
+// The list row (stack_status/live_status/min_tasks/reachable) lets
+// listPhase reuse listItemPhase() unchanged. Silently keeps the previous
+// value on failure (e.g. a transient error) rather than blinking the State
+// tag back to "unknown".
 async function loadListPhase() {
   try {
-    const rows = await listChannels()
-    listItem.value = rows.find((c) => c.name === props.name) ?? null
+    listItem.value = await getChannelSummary(props.name)
   } catch {
     // ignore -- listPhase falls back to the live-only `phase` computed
   }

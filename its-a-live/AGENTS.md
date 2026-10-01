@@ -167,7 +167,7 @@ uv run python channel.py -c <config.toml> start    # go live, prints playback UR
 
 uv run python channel.py -c <config.toml> redeploy    # apply a config change, or recover a broken stack -- N/A for local-docker (aliases refresh)
 uv run python channel.py -c <config.toml> outputs     # print stack outputs -- N/A for local-docker
-uv run python channel.py -c <config.toml> list        # list channels + stack status under a config directory
+uv run python channel.py -c <config.toml> list        # list channels + stack status under a config directory (or `list <channel.toml>` for just one)
 
 uv run python channel.py -c <config.toml> stop     # stop paying for compute (or stop the local container)
 uv run python channel.py -c <config.toml> terminate   # tear the stack down for good -- N/A for local-docker

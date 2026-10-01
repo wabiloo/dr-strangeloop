@@ -176,3 +176,50 @@ def test_validate_markers_rejects_invalid_hierarchy():
     )
     resp = client.post("/api/v1/playlists/validate-markers", json={"data": payload})
     assert resp.status_code == 422
+
+
+def _write_channel(configs_dir: Path, name: str, backend: str = "local-docker") -> None:
+    (configs_dir / f"{name}.toml").write_text(f'[deploy]\nname = "{name}"\nbackend = "{backend}"\n')
+
+
+def test_quick_channel_list_reads_configs_without_shelling_out(tmp_path, monkeypatch):
+    from igor.integrations import its_a_live
+    from igor.store import channels as channel_store
+
+    monkeypatch.setattr(channel_store.paths, "ITS_A_LIVE_CONFIGS_DIR", tmp_path)
+    _write_channel(tmp_path, "alpha")
+    _write_channel(tmp_path, "beta", "ecs-express")
+    (tmp_path / "broken.toml").write_text("not = [valid")
+    (tmp_path / "nobackend.toml").write_text('[deploy]\nname = "x"\n')
+
+    def boom(*a, **k):
+        raise AssertionError("quick list must not call channel.py")
+
+    monkeypatch.setattr(its_a_live, "list_channels", boom)
+    resp = client.get("/api/v1/channels/?live=false")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert [(r["name"], r["backend"]) for r in rows] == [("alpha", "local-docker"), ("beta", "ecs-express")]
+    assert all("stack_status" not in r and "source_path" in r for r in rows)
+
+
+def test_channel_summary_runs_channel_py_for_one_config(tmp_path, monkeypatch):
+    from igor.integrations import its_a_live
+    from igor.store import channels as channel_store
+
+    monkeypatch.setattr(channel_store.paths, "ITS_A_LIVE_CONFIGS_DIR", tmp_path)
+    _write_channel(tmp_path, "alpha")
+    seen = []
+
+    def fake_list(configs_dir=None):
+        seen.append(configs_dir)
+        return [{"config_path": configs_dir, "name": "alpha", "backend": "local-docker", "stack_status": "running"}]
+
+    monkeypatch.setattr(its_a_live, "list_channels", fake_list)
+    resp = client.get("/api/v1/channels/alpha/summary")
+    assert resp.status_code == 200
+    assert resp.json()["stack_status"] == "running"
+    assert seen == [str(tmp_path / "alpha.toml")]
+
+    assert client.get("/api/v1/channels/missing/summary").status_code == 404
+    assert client.get("/api/v1/channels/..%2Fx/summary").status_code in (400, 404)
