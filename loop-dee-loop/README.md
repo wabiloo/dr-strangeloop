@@ -267,6 +267,17 @@ small fixed one, aging old entries out via ordinary LRU as they leave the
 live/DVR window rather than reusing the same handful of keys forever (see
 SCOPE.md §12 for the full design and known limitations).
 
+### Forced Periods on chosen SCTE-35 segmentations (SCOPE.md §14)
+
+`--period-on-segmentation 0x22,0x30` (a Start implies its End; its-a-live: `[packaging]
+period_on_segmentation = [0x22, 0x30]`) forces a new DASH Period /
+`#EXT-X-DISCONTINUITY` at every marker with one of those
+`segmentation_type_id`s, in either timeline mode. It is signal only: with
+`--continuous-timeline` the timestamps stay continuous across the new Period.
+`--period-on-segmentation-apply dash|hls|both` (its-a-live:
+`period_on_segmentation_apply`) restricts it to DASH Periods, HLS
+discontinuities, or both (default).
+
 ### Startover & catchup (SCOPE.md §13)
 
 The normal manifest URLs also serve a **past range**, selected by query

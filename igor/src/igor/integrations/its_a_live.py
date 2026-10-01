@@ -105,7 +105,7 @@ _ECS_EXPRESS_EXTRA = """
 segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
 hls_format = "{hls_format}"
-hls_ts_mux_audio = {hls_ts_mux_audio}
+hls_ts_mux_audio = {hls_ts_mux_audio}{period_extra}
 
 [timeline]
 epoch_utc = "{epoch_utc}"
@@ -122,7 +122,7 @@ _LOCAL_DOCKER_EXTRA = """
 segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
 hls_format = "{hls_format}"
-hls_ts_mux_audio = {hls_ts_mux_audio}
+hls_ts_mux_audio = {hls_ts_mux_audio}{period_extra}
 
 [timeline]
 epoch_utc = "{epoch_utc}"
@@ -156,6 +156,8 @@ def generate_toml(
     hls_format: str = "cmaf",
     hls_ts_mux_audio: bool = True,
     continuous: bool = False,
+    period_on_segmentation: list[str] | None = None,
+    period_on_segmentation_apply: str = "both",
     timeshift_enabled: bool = True,
     timeshift_start_param: str = "start",
     timeshift_end_param: str = "end",
@@ -186,6 +188,18 @@ def generate_toml(
         raise ValueError("dash_signal_format must be 'binary' or 'xml'")
     if dash_descriptor_mode not in ("shared", "narrowed"):
         raise ValueError("dash_descriptor_mode must be 'shared' or 'narrowed'")
+    if period_on_segmentation_apply not in ("both", "dash", "hls"):
+        raise ValueError("period_on_segmentation_apply must be 'both', 'dash' or 'hls'")
+    period_ids = [int(str(i), 0) for i in (period_on_segmentation or [])]
+    if any(not 0 <= i <= 0xFF for i in period_ids):
+        raise ValueError("period_on_segmentation entries must be segmentation_type_ids (0..255)")
+    # loop-dee-loop/SCOPE.md §14 -- only written when something is selected.
+    period_extra = (
+        "\nperiod_on_segmentation = [" + ", ".join(f"0x{i:02X}" for i in period_ids) + "]"
+        f'\nperiod_on_segmentation_apply = "{period_on_segmentation_apply}"'
+        if period_ids else ""
+    )
+
     def _timeshift_section() -> str:
         return _TIMESHIFT_EXTRA.format(
             enabled=str(timeshift_enabled).lower(),
@@ -213,7 +227,7 @@ def generate_toml(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
-            continuous=str(continuous).lower(),
+            continuous=str(continuous).lower(), period_extra=period_extra,
             port=int(port), cpu=cpu, memory=memory,
         )
         content += _timeshift_section()
@@ -232,7 +246,7 @@ def generate_toml(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
-            continuous=str(continuous).lower(),
+            continuous=str(continuous).lower(), period_extra=period_extra,
             port=_format_local_docker_port(port),
         )
         content += _timeshift_section()

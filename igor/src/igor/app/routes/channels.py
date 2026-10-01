@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -60,6 +61,12 @@ class ChannelCreatePayload(BaseModel):
     # loop wrap. ecs-express/local-docker only, same as hls_format/
     # hls_ts_mux_audio above.
     continuous: bool = False
+    # loop-dee-loop/SCOPE.md §14: SCTE-35 segmentation_type_ids (hex strings,
+    # e.g. "0x22") whose markers force a new DASH Period / HLS discontinuity,
+    # signal-only (timestamps stay continuous). A Start implies its End.
+    # `period_on_segmentation_apply` picks the formats: both | dash | hls.
+    period_on_segmentation: list[str] = []
+    period_on_segmentation_apply: Literal["both", "dash", "hls"] = "both"
     # loop-dee-loop/SCOPE.md §13: startover/catchup via query parameters on
     # the normal manifest URLs. Names are configurable per channel and
     # also drive CloudFront's manifest cache key (its-a-live/loop_stack.py).
@@ -81,6 +88,22 @@ class ChannelCreatePayload(BaseModel):
     daterange_id_format: str = DEFAULT_DATERANGE_ID_FORMAT
     dash_signal_format: str = "binary"
     dash_descriptor_mode: str = "shared"
+
+    @field_validator("period_on_segmentation")
+    @classmethod
+    def _validate_period_on_segmentation(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for item in v:
+            try:
+                value = int(str(item), 0)
+            except ValueError:
+                raise ValueError(f"invalid segmentation_type_id {item!r} (expected e.g. 0x22)") from None
+            if not 0 <= value <= 0xFF:
+                raise ValueError(f"segmentation_type_id {item!r} out of range 0..255")
+            hexed = f"0x{value:02X}"
+            if hexed not in out:
+                out.append(hexed)
+        return out
 
     @field_validator("name")
     @classmethod

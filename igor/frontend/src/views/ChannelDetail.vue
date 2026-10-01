@@ -16,6 +16,7 @@ import ItsAliveBanner from '../components/ItsAliveBanner.vue'
 import JobPanel from '../components/JobPanel.vue'
 import PlaybackPanel from '../components/PlaybackPanel.vue'
 import EpochFields from '../components/EpochFields.vue'
+import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
 import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
 import TimeshiftPanel, { type TimeshiftPreview } from '../components/TimeshiftPanel.vue'
@@ -27,6 +28,7 @@ import {
   CONFIG_SECTION_TITLE as T,
   buildConfigSections,
   deriveSourceKind,
+  periodTypesFromConfig,
   usesChannelSection,
 } from '../utils/channelConfigLayout'
 import { alignConfirmPopup } from '../utils/confirmPopup'
@@ -114,6 +116,8 @@ const editForm = reactive<ChannelCreatePayload>({
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
   continuous: false,
+  period_on_segmentation: [],
+  period_on_segmentation_apply: 'both',
   timeshift_enabled: true,
   timeshift_start_param: 'start',
   timeshift_end_param: 'end',
@@ -220,6 +224,9 @@ function startEdit() {
     hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
     hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
     continuous: Boolean(timeline.continuous ?? true),
+    period_on_segmentation: periodTypesFromConfig(packaging.period_on_segmentation),
+    period_on_segmentation_apply:
+      (packaging.period_on_segmentation_apply as ChannelCreatePayload['period_on_segmentation_apply']) ?? 'both',
     timeshift_enabled: editTimeshift.enabled,
     timeshift_start_param: editTimeshift.start_param,
     timeshift_end_param: editTimeshift.end_param,
@@ -1109,6 +1116,9 @@ watch(() => props.name, reload)
                     seamless wrap -- serve.py refuses to start in this mode against a source baked with a 32-bit
                     tfdt (loop-dee-loop/SCOPE.md &sect;12).
                   </FieldHelp>
+                </div>
+                <div class="config-field-wide">
+                  <PeriodSegmentationFields :form="editForm" id-prefix="edit" />
                 </div>
               </div>
             </section>

@@ -64,6 +64,8 @@ segment_duration = 4.0
 dvr_window_seconds = 30
 hls_format = "cmaf"          # "cmaf" (default) | "ts"; HLS only, DASH remains CMAF
 hls_ts_mux_audio = true      # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
+period_on_segmentation_apply = "both"  # which formats get it: "both" (default) | "dash" (Periods only) | "hls" (discontinuities only)
+period_on_segmentation = []   # optional list of SCTE-35 segmentation_type_ids (e.g. [0x22, 0x30]; a Start implies its End) that force a new DASH Period / #EXT-X-DISCONTINUITY at matching markers; signal only, so timestamps stay continuous when [timeline] continuous = true (loop-dee-loop/SCOPE.md §14)
 
 [timeline]                  # ecs-express/local-docker only
 epoch_utc = "2026-01-01T00:00:00Z"   # optional (this is the default) -- loop 0's start and the DASH availabilityStartTime; UTC, exactly this form. A recent epoch keeps loop numbers small. ecs-express/local-docker only; applied on create/redeploy (local-docker: redeploy/refresh), not by a plain `start`. Changing it on a running channel restarts loop numbering.

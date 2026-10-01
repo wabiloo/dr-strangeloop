@@ -139,6 +139,7 @@ source_path = "../outputs/mychannel"   # franken-ts output
 [packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30
+# period_on_segmentation = [0x22, 0x30]  # optional: force a Period/discontinuity at these SCTE-35 segmentation_type_ids, even with [timeline] continuous (loop-dee-loop/SCOPE.md §14)
 
 [timeline]                  # ecs-express/local-docker only
 epoch_utc          = "2026-01-01T00:00:00Z"  # optional, this is the default; loop 0's start / DASH availabilityStartTime (UTC, exactly this form)

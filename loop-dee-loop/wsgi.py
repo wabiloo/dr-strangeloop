@@ -12,7 +12,15 @@ same flags serve.py's CLI accepts, since gunicorn imports this module
 import os
 from pathlib import Path
 
-from serve import TimeshiftConfig, create_app, read_package_descriptor, resolve_epoch_ticks, resolve_window_segments
+from serve import (
+    TimeshiftConfig,
+    create_app,
+    parse_period_apply,
+    parse_segmentation_type_ids,
+    read_package_descriptor,
+    resolve_epoch_ticks,
+    resolve_window_segments,
+)
 
 package_dir = Path(os.environ["LOOP_PACKAGE_DIR"])
 descriptor = read_package_descriptor(package_dir)
@@ -35,6 +43,14 @@ timeshift = TimeshiftConfig(
     max_span_seconds=int(os.environ.get("TIMESHIFT_MAX_SPAN_SECONDS") or 21600),
 )
 
+period_on_segmentation = parse_segmentation_type_ids(os.environ.get("PERIOD_ON_SEGMENTATION"))
+
 app = create_app(
-    package_dir, epoch_ticks, window_segments=window_segments, continuous=continuous, timeshift=timeshift
+    package_dir,
+    epoch_ticks,
+    window_segments=window_segments,
+    continuous=continuous,
+    timeshift=timeshift,
+    period_on_segmentation=period_on_segmentation,
+    period_apply=parse_period_apply(os.environ.get("PERIOD_ON_SEGMENTATION_APPLY")),
 )

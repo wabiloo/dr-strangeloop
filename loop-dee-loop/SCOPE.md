@@ -927,3 +927,44 @@ When true, the range is widened to whole loop iterations
 - [ ] Child playlist URIs carry the timeshift params; CloudFront cache key
       includes them (verify in `loop_stack.py` synth output).
 - [ ] `tests/test_loop_math.py` still passes; no float tick state introduced.
+
+## 14. Extension: forced Periods on chosen SCTE-35 segmentations (`--period-on-segmentation`)
+
+**DECIDED.** A channel-level list of `segmentation_type_id` values
+(`0x22,0x23,0x30,0x31`, ...). Every marker in the package whose type id is
+listed opens a new DASH `<Period>` / emits `#EXT-X-DISCONTINUITY` at the
+segment containing its `pts_time_ticks` (bakes cut segments at marker ticks,
+so that is normally exactly the segment starting at the marker). A Start implies its End (and an unambiguous End its Start, per Table 23 --
+`0x22` also matches `0x23`), so only one of the pair needs listing. Plain
+`splice_insert` markers carry no type id and never match. The set is
+resolved once at startup to local segment indices (`Channel.signal_breaks`);
+no re-bake, no new query parameter (nothing for a CDN to key on).
+
+**Signal only.** Unlike an asset boundary (grave-robber §6.1) nothing about
+the media changes: timestamps stay continuous across a forced break.
+
+- **Default mode:** forced breaks join the real boundaries (the loop wrap is
+  always one). A forced Period reuses its real span's init segment and media
+  timeline: `<S t>` keeps counting from the real span start and
+  `presentationTimeOffset` maps the Period's first segment to `@start`.
+- **`--continuous-timeline`:** the loop wrap stays seamless (`boundaries ==
+  {0}` is still required); forced breaks split the single `continuous`
+  Period into one per break (`id="break<global index>"`, named after the
+  break so it is stable while the window slides). `t` stays the absolute
+  media position (== the rewritten `tfdt`), `@start` is the break's absolute
+  position and `presentationTimeOffset` equals it, so presentation time
+  never restarts. HLS gets `#EXT-X-DISCONTINUITY` at those segments and a
+  matching `#EXT-X-DISCONTINUITY-SEQUENCE`. A type matching a marker at
+  local index 0 also breaks at the wrap. Events go in the Period of the
+  first segment that covers them (marker starts land in the Period they open).
+- Startover/catchup ranges honour it in both modes (first Period rebased to 0
+  as before).
+
+**Per-format control.** `--period-on-segmentation-apply dash|hls|both`
+(default `both`) picks which manifest format gets the forced break: `dash`
+= Periods only, `hls` = discontinuities only. The type-id selection is shared;
+real loop-wrap / asset-boundary signalling is unaffected by it.
+
+Channel config: `[packaging] period_on_segmentation = [0x22, 0x30]` (+
+`period_on_segmentation_apply = "dash"|"hls"|"both"`) in its-a-live; env `PERIOD_ON_SEGMENTATION` for gunicorn.
+Tests: `tests/test_serve_signal_periods.py`.

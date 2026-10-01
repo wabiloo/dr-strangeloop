@@ -32,6 +32,8 @@ export const CONFIG_FIELD_LABEL = {
   bucket_name: 'S3 bucket name',
   content_folder: 'S3 content folder',
   continuous: 'Continuous timeline across the loop wrap',
+  period_on_segmentation: 'New Period on SCTE-35 segmentations',
+  period_on_segmentation_apply: 'Apply to',
   timeshift_enabled: 'Enable startover & catchup',
   timeshift_start_param: 'Start parameter',
   timeshift_end_param: 'End parameter',
@@ -89,7 +91,19 @@ function table(config: TomlConfig, name: string): Record<string, unknown> {
   return t && typeof t === 'object' ? (t as Record<string, unknown>) : {}
 }
 
+/** TOML `period_on_segmentation` (ints or strings) -> hex strings ("0x22"),
+ * the form the channel form and API use. */
+export function periodTypesFromConfig(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((item) => (typeof item === 'number' ? item : Number(item)))
+    .filter((n) => Number.isInteger(n) && n >= 0 && n <= 0xff)
+    .map((n) => `0x${n.toString(16).toUpperCase().padStart(2, '0')}`)
+}
+
 function display(value: unknown): string {
+  if (Array.isArray(value)) return value.length ? value.join(', ') : 'none'
+
   if (typeof value === 'boolean') return value ? 'yes' : 'no'
   return String(value)
 }
@@ -137,9 +151,12 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
       ['cpu', isEcsExpress ? portTable.cpu : undefined],
       ['memory', isEcsExpress ? portTable.memory : undefined],
     ])
+    const periodTypes = periodTypesFromConfig(packaging.period_on_segmentation)
     add('timeline', [
       ['epoch_utc', timeline.epoch_utc ?? DEFAULT_EPOCH_UTC],
       ['continuous', timeline.continuous],
+      ['period_on_segmentation',periodTypes.length ? periodTypes : undefined],
+      ['period_on_segmentation_apply', periodTypes.length ? (packaging.period_on_segmentation_apply ?? 'both') : undefined],
     ])
     // A channel written before [timeshift] existed gets its-a-live's
     // defaults (enabled) -- show those rather than hiding the section.

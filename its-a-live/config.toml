@@ -60,6 +60,8 @@ daterange_id_format = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template; 
 [packaging]
 segment_duration   = 4.0   # nominal bake segment duration, seconds
 dvr_window_seconds = 30    # serve.py sliding-window size, seconds
+# period_on_segmentation_apply = "both"  # "both" (default) | "dash" (Periods only) | "hls" (discontinuities only)
+# period_on_segmentation = [0x22, 0x30]  # optional (a Start implies its End): force a new DASH Period / #EXT-X-DISCONTINUITY at markers with these SCTE-35 segmentation_type_ids (signal only -- timestamps stay continuous when [timeline] continuous = true; loop-dee-loop/SCOPE.md §14)
 
 [timeline]                 # ecs-express/local-docker only
 epoch_utc = "2026-01-01T00:00:00Z"  # optional, this is the default -- loop 0's start / DASH availabilityStartTime (UTC, exactly this form)

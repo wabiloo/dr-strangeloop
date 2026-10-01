@@ -190,3 +190,40 @@ def test_channel_epoch_utc_rejects_anything_but_the_exact_utc_form(bad):
             bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
             epoch_utc=bad,
         )
+
+
+@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+def test_channel_period_on_segmentation_roundtrip(backend):
+    payload = ChannelCreatePayload(
+        name="test-channel", backend=backend, region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+        continuous=True,
+        period_on_segmentation=["0x22", "0x30", "0x22"], period_on_segmentation_apply="dash",
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["packaging"]["period_on_segmentation"] == [0x22, 0x30]
+    assert config["packaging"]["period_on_segmentation_apply"] == "dash"
+    assert config["timeline"]["continuous"] is True
+
+
+def test_channel_period_on_segmentation_omitted_by_default():
+    payload = ChannelCreatePayload(
+        name="test-channel", backend="local-docker", region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert "period_on_segmentation" not in config["packaging"]
+    assert "period_on_segmentation_apply" not in config["packaging"]
+
+
+def test_channel_period_on_segmentation_rejects_bad_values():
+    base = dict(
+        name="test-channel", backend="local-docker", region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+    )
+    with pytest.raises(ValueError):
+        ChannelCreatePayload(**base, period_on_segmentation=["nope"])
+    with pytest.raises(ValueError):
+        ChannelCreatePayload(**base, period_on_segmentation=["0x100"])
+    with pytest.raises(ValueError):
+        ChannelCreatePayload(**base, period_on_segmentation_apply="xml")
