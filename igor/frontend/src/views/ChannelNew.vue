@@ -6,9 +6,9 @@ import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Select from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
-import { buildPlaylist, defineChannel, listArchives, listManifests, listPlaylists } from '../api/client'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { buildPlaylist, defineChannel, getChannel, listArchives, listManifests, listPlaylists } from '../api/client'
 import JobPanel from '../components/JobPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import FieldHelp from '../components/FieldHelp.vue'
@@ -16,7 +16,8 @@ import EpochFields from '../components/EpochFields.vue'
 import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
 import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
-import { CONFIG_FIELD_LABEL as L, CONFIG_SECTION_TITLE as T } from '../utils/channelConfigLayout'
+import { CONFIG_FIELD_LABEL as L, CONFIG_SECTION_TITLE as T, deriveSourceKind, periodTypesFromConfig } from '../utils/channelConfigLayout'
+import { timeshiftParamsFromConfig } from '../utils/timeshift'
 import type { ArchiveListItem, ChannelCreatePayload, Job, ManifestListItem, PlaylistListItem } from '../api/types'
 
 const router = useRouter()
@@ -207,7 +208,66 @@ function onBuildFinished(job: Job) {
   if (job.status !== 'succeeded') error.value = 'Build failed -- see log above.'
 }
 
-onMounted(loadPlaylists)
+// ── "Duplicate to ecs-express" (from a local-docker channel's detail page):
+// /channels/new?from=<name> pre-fills this form from that channel's config,
+// switched to ecs-express. AWS fields (region/bucket/folder) don't exist on
+// a local-docker config, so they keep their form defaults for the user to fill.
+const route = useRoute()
+const duplicatedFrom = ref('')
+
+async function prefillFromChannel(from: string) {
+  try {
+    const cfg = await getChannel(from)
+    const sec = (key: string) => (cfg[key] as Record<string, unknown>) ?? {}
+    const input = sec('input')
+    const packaging = sec('packaging')
+    const timeline = sec('timeline')
+    const markers = sec('markers')
+    const kind = deriveSourceKind(input)
+    const ts = timeshiftParamsFromConfig(sec('timeshift'))
+    sourceKind.value = kind
+    autoPort.value = false
+    Object.assign(form, {
+      name: `${from}-ecs`,
+      backend: 'ecs-express',
+      source_path: String(input.source_path ?? ''),
+      source_kind: kind,
+      segment_duration: Number(packaging.segment_duration ?? form.segment_duration),
+      dvr_window_seconds: Number(packaging.dvr_window_seconds ?? form.dvr_window_seconds),
+      hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? form.hls_format,
+      hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? form.hls_ts_mux_audio),
+      epoch_utc: String(timeline.epoch_utc ?? DEFAULT_EPOCH_UTC),
+      continuous: Boolean(timeline.continuous ?? true),
+      period_on_segmentation: periodTypesFromConfig(packaging.period_on_segmentation),
+      period_on_segmentation_apply:
+        (packaging.period_on_segmentation_apply as ChannelCreatePayload['period_on_segmentation_apply']) ?? 'both',
+      timeshift_enabled: ts.enabled,
+      timeshift_start_param: ts.start_param,
+      timeshift_end_param: ts.end_param,
+      timeshift_max_span_seconds: ts.max_span_seconds,
+      port: 8080,
+      daterange_mode: (markers.daterange_mode as ChannelCreatePayload['daterange_mode']) ?? form.daterange_mode,
+      cue_tags: (markers.cue_tags as ChannelCreatePayload['cue_tags']) ?? form.cue_tags,
+      increment_event_ids: Boolean(markers.increment_event_ids ?? form.increment_event_ids),
+      daterange_id_format: String(markers.daterange_id_format ?? form.daterange_id_format),
+      dash_signal_format: (markers.dash_signal_format as ChannelCreatePayload['dash_signal_format']) ?? form.dash_signal_format,
+      dash_descriptor_mode: (markers.dash_descriptor_mode as ChannelCreatePayload['dash_descriptor_mode']) ?? form.dash_descriptor_mode,
+    })
+    // The sourceKind watcher resets allow_missing_segments; apply the
+    // channel's own value once it has run.
+    await nextTick()
+    form.allow_missing_segments = Boolean(input.allow_missing_segments ?? false)
+    duplicatedFrom.value = from
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+onMounted(() => {
+  loadPlaylists()
+  const from = route.query.from
+  if (typeof from === 'string' && from) prefillFromChannel(from)
+})
 
 const backendOptions = [
   { label: 'ecs-express (loop-dee-loop, self-hosted, cheap)', value: 'ecs-express' },
@@ -281,6 +341,10 @@ async function submit() {
     </p>
 
     <Message v-if="error" severity="error">{{ error }}</Message>
+    <Message v-if="duplicatedFrom" severity="info">
+      Pre-filled from <RouterLink :to="`/channels/${duplicatedFrom}`">{{ duplicatedFrom }}</RouterLink>
+      (local-docker), switched to ecs-express. Fill in the AWS region, bucket and content folder.
+    </Message>
 
     <h4 class="mb-0">{{ T.channel }}</h4>
     <div class="flex flex-column gap-1">
