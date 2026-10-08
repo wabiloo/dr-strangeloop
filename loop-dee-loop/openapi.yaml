@@ -1,32 +1,31 @@
 openapi: 3.1.0
+# Hand-written. tests/test_serve_window_json.py validates real responses against
+# the schemas below, so a field added to the code but not here fails CI.
 info:
-  title: loop-dee-loop serve.py
-  version: "1"
+  title: Channel API
+  version: "1.0"
   description: |
-    HTTP API of a running loop-dee-loop channel (`ecs-express` and `local-docker`
-    backends). `/timeline.json` is a JSON view of the window of content a player
-    sees right now; the HLS/DASH manifests remain the viewer-facing contract.
+    Every running channel serves its HLS and DASH streams and, alongside them,
+    a JSON description of what those streams currently contain: the loops, the
+    ad breaks and other SCTE-35 markers, the assets, and where the manifests
+    place period boundaries and discontinuities, all with timing.
 
-    Hand-written; `tests/test_serve_window_json.py` validates real responses
-    against the schemas below, so a field added to the code but not here fails CI.
+    Use `/timeline.json` to see what is on air now, or, with the startover and
+    catchup parameters, what was or will be on air at another time.
 
-    **Window.** The window is the last N segments (`window_segments`) up to the
-    live edge (HLS trailing-window convention), or, with `start`/`end`, the
-    requested startover/catchup range.
+    **Window.** The part of the stream a player sees right now: the last few
+    segments up to the live edge. With `start`/`end` it is the requested
+    startover/catchup range instead.
 
-    **Segment numbers.** The loop is cut into fixed-length segments numbered by a
-    counter that keeps increasing across loop repeats. It is the
-    `#EXT-X-MEDIA-SEQUENCE` numbering of the HLS media playlists
-    (`loop * segments + index_in_loop`). `segments` (`first`, `last`, `count`) is the
-    range of segments an item overlaps, inclusive and clipped to the `range`; the
-    `starts_before_range`/`ends_after_range` flags say whether it was clipped.
-    (`range` equals the window unless `scope=loops`.)
-    `start_utc`/`end_utc` are never clipped. Everything is also locatable by UTC
-    time alone; the numbers exist to correlate with the manifests.
+    **Segment numbers.** Segments are numbered by a counter that keeps
+    increasing across loop repeats; it is the `#EXT-X-MEDIA-SEQUENCE` numbering
+    of the HLS playlists. `segments` (`first`, `last`, `count`) gives the
+    segments an item overlaps, so you can match it to the manifests.
+    `starts_before_range` / `ends_after_range` say that an item extends past
+    the `range` shown. Its `start_utc` / `end_utc` are never cut off.
 
-    **Times.** ISO 8601 UTC with millisecond precision (`...Z`) and seconds as
-    numbers rounded to milliseconds. Internally all timing is integer ticks
-    (`timescale` per second).
+    **Times.** ISO 8601 UTC with millisecond precision (`...Z`); durations are
+    in seconds.
 servers:
   - url: /
 tags:
