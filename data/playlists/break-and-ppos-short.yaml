@@ -29,9 +29,9 @@ break_numbering_supported: false
 normalize: true
 osd:
   enabled: true
-  countdown:
-    enabled: true
-    height_pct: 2
+  progress_bar:
+    mode: loop
+    height_pct: 3
   text_size_pct: 3
   text_color: '#FFFFFF'
   ad_break_label: ad break

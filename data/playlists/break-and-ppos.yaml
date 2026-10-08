@@ -9,11 +9,11 @@ output:
 assets:
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
   id: content1
-  duration: 2 min
+  duration: 1 min
 - file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/slates/test_cards/grid_h264_1080p_7000k_eng_aac_192k.mp4
   id: jingle1
-  duration: 5s
   role: jingle
+  duration: 5s
 - file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-1-10s/ad-1-10s_h264_1080p_5000k_eng_aac_128k.mp4
   id: ad1a
   duration: 10.00s
@@ -25,11 +25,11 @@ assets:
   duration: 20.00s
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
   id: content2
-  duration: 2.5 min
+  duration: 2 min
 - file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/slates/test_cards/grid_h264_1080p_7000k_eng_aac_192k.mp4
   id: jingle2
-  duration: 5s
   role: jingle
+  duration: 5s
 - file: https://bpkcscreatives.s3-eu-west-1.amazonaws.com/ad_placeholders/numbered/ad-4-30s/ad-4-30s_h264_1080p_5000k_eng_aac_128k.mp4
   id: ad2a
   duration: 30.00s
@@ -47,9 +47,27 @@ assets:
   duration: 10.00s
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset3.mp4
   id: content3
-  duration: 3 min
-normalize: true
+  duration: 1 min
+enforce_scte35_marker_semantics: true
 scte35_numbering_scheme: AF2M_SNPTV
+break_numbering_supported: false
+normalize: true
+osd:
+  enabled: true
+  progress_bar:
+    mode: asset
+    height_pct: 3
+  text_size_pct: 3
+  text_color: '#FFFFFF'
+  ad_break_label: ad break
+  corner_box:
+    enabled: true
+    color: '#FCD64B'
+  corners:
+    top_left: null
+    top_right: is_adbreak
+    bottom_left: asset_id
+    bottom_right: next_asset_id
 markers:
 - event_id: 100
   splice_type: time_signal

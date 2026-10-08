@@ -26,8 +26,8 @@ assets:
 normalize: true
 osd:
   enabled: true
-  countdown:
-    enabled: true
+  progress_bar:
+    mode: asset
     height_pct: 5
   text_size_pct: 4
   text_color: '#FFFFFF'

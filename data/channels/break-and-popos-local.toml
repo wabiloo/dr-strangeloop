@@ -1,5 +1,5 @@
 [deploy]
-name = "break-and-ppos-short-local"
+name = "break-and-popos-local"
 backend = "local-docker"
 
 [infrastructure.aws]
@@ -10,14 +10,14 @@ bucket_name = ""
 content_folder = "its-a-live/content"
 
 [input]
-source_path = "../outputs/break-and-ppos-short.ts"
+source_path = "/Users/fabrelambeau/Broadpeak/Code/dr-strangeloop/outputs/break-and-popos.ts"
 source_kind = "playlist"
 allow_missing_segments = false
 
 [markers]
 daterange_mode      = "shared"
 cue_tags            = "none"
-increment_event_ids = true
+increment_event_ids = false
 daterange_id_format = "{segcode}-{eventid}-{loop}"
 dash_signal_format  = "binary"
 dash_descriptor_mode = "shared"
@@ -36,7 +36,7 @@ continuous = false
 port = "auto"
 
 [timeshift]
-enabled          = true
+enabled          = false
 start_param      = "start"
 end_param        = "end"
 max_span_seconds = 21600

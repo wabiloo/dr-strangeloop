@@ -54,8 +54,8 @@ break_numbering_supported: false
 normalize: true
 osd:
   enabled: true
-  countdown:
-    enabled: true
+  progress_bar:
+    mode: asset
     height_pct: 3
   text_size_pct: 3
   text_color: '#FFFFFF'

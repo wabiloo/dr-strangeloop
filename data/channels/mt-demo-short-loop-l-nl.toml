@@ -1,16 +1,16 @@
 [deploy]
-name = "break-and-ppos-short-local"
-backend = "local-docker"
+name = "mt-demo-short-loop-l-nl"
+backend = "ecs-express"
 
 [infrastructure.aws]
 region = "eu-west-1"
 
 [infrastructure.s3]
-bucket_name = ""
+bucket_name = "bpkio-cs-demos"
 content_folder = "its-a-live/content"
 
 [input]
-source_path = "../outputs/break-and-ppos-short.ts"
+source_path = "/Users/fabrelambeau/Broadpeak/Code/dr-strangeloop/outputs/break-and-popos.ts"
 source_kind = "playlist"
 allow_missing_segments = false
 
@@ -21,6 +21,8 @@ increment_event_ids = true
 daterange_id_format = "{segcode}-{eventid}-{loop}"
 dash_signal_format  = "binary"
 dash_descriptor_mode = "shared"
+period_on_segmentation = [0x22]
+period_on_segmentation_apply = "both"
 
 [packaging]
 segment_duration   = 4.0
@@ -30,13 +32,16 @@ hls_ts_mux_audio = true
 
 [timeline]
 epoch_utc = "2026-01-01T00:00:00Z"
-continuous = false
+continuous = true
 
-[infrastructure.docker]
-port = "auto"
+[infrastructure.express]
+port   = 8080
+cpu    = 256
+memory = 512
+cdn    = false
 
 [timeshift]
-enabled          = true
+enabled          = false
 start_param      = "start"
 end_param        = "end"
 max_span_seconds = 21600

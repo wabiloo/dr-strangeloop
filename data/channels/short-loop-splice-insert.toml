@@ -11,15 +11,32 @@ content_folder = "its-a-live/content"
 
 [input]
 source_path = "/Users/fabrelambeau/Broadpeak/Code/dr-strangeloop/outputs/short-loop-splice-insert.ts"
+source_kind = "playlist"
+allow_missing_segments = false
 
 [markers]
 daterange_mode      = "shared"
 cue_tags            = "only"
 increment_event_ids = false
+daterange_id_format = "{segcode}-{eventid}-{loop}"
+dash_signal_format  = "binary"
+dash_descriptor_mode = "shared"
 
 [packaging]
 segment_duration   = 4.0
 dvr_window_seconds = 30.0
+hls_format = "cmaf"
+hls_ts_mux_audio = true
+
+[timeline]
+epoch_utc = "2026-01-01T00:00:00Z"
+continuous = true
 
 [infrastructure.docker]
-port = 8080
+port = "auto"
+
+[timeshift]
+enabled          = true
+start_param      = "start"
+end_param        = "end"
+max_span_seconds = 21600
