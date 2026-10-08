@@ -256,5 +256,11 @@ def test_channel_timeline_proxies_serve_json_and_forwards_query(tmp_path, monkey
     assert "start=2026-01-01T00%3A00%3A00Z" in seen[0] and "end=" in seen[0]
 
     assert client.get("/api/v1/channels/alpha/timeline?start=bad").status_code == 400
+
+    docs = client.get("/api/v1/channels/alpha/docs")
+    assert docs.status_code == 200 and seen[-1] == "http://localhost:8123/docs"
+    assert client.get("/api/v1/channels/alpha/openapi.yaml").status_code == 200
+    assert seen[-1] == "http://localhost:8123/openapi.yaml"
+    assert client.get("/api/v1/channels/gamma/docs").status_code == 404
     assert client.get("/api/v1/channels/gamma/timeline").status_code == 404
     assert client.get("/api/v1/channels/missing/timeline").status_code == 404

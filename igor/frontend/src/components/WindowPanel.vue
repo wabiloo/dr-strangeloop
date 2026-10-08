@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { getChannelTimeline } from '../api/client'
+import { channelDocsUrl, getChannelTimeline } from '../api/client'
 import type { ChannelTimeline } from '../api/types'
 import FieldHelp from './FieldHelp.vue'
 import { colorForLaneKey, laneKeyForMarker, laneLabelForMarker } from '../segmentationPresets'
@@ -31,6 +31,10 @@ function toggle() {
   } catch {
     // per-browser convenience only
   }
+}
+
+function openDocs() {
+  window.open(channelDocsUrl(props.name), '_blank', 'noopener')
 }
 
 function toggleRaw() {
@@ -449,6 +453,16 @@ function isSelected(data: unknown): boolean {
       <span v-else-if="!open" class="text-sm text-color-secondary">Loops, breaks and markers with the live edge and manifest window</span>
       <Button
         class="ml-auto flex-shrink-0"
+        label="API docs"
+        icon="pi pi-external-link"
+        size="small"
+        severity="secondary"
+        text
+        title="Open the /timeline.json API documentation (OpenAPI) in a new tab"
+        @click="openDocs"
+      />
+      <Button
+        class="flex-shrink-0"
         :label="open && showRaw ? 'Hide raw JSON' : 'Raw JSON'"
         :title="doc ? `${doc.renditions.length} rendition(s) · ${doc.assets.length} asset(s) · ${doc.markers.length} marker(s) · ${doc.discontinuities.length} discontinuit${doc.discontinuities.length === 1 ? 'y' : 'ies'}` : 'Show the raw /timeline.json'"
         size="small"

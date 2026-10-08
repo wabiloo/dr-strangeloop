@@ -434,3 +434,7 @@ export async function uploadAsset(file: File): Promise<{ path: string; name: str
   )
   return res.json()
 }
+
+export function channelDocsUrl(name: string): string {
+  return `${CHANNELS_BASE}/${encodeURIComponent(name)}/docs`
+}

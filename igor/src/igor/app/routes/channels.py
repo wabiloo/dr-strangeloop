@@ -9,6 +9,7 @@ from typing import Literal
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, field_validator, model_validator
 
 from igor.integrations import archives, franken_ts, its_a_live, manifests
@@ -466,6 +467,30 @@ async def channel_timeline(name: str, request: Request) -> dict:
     return await _proxy_serve_json(
         _serve_url(name, "/timeline.json"), params=dict(request.query_params)
     )
+
+
+async def _proxy_serve_text(name: str, path: str) -> Response:
+    url = _serve_url(name, path)
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(url)
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail=f"GET {url} failed: {exc}") from exc
+    return Response(resp.content, media_type=resp.headers.get("content-type", "text/plain"))
+
+
+@router.get("/{name}/docs")
+async def channel_api_docs(name: str) -> Response:
+    """Proxies serve.py's `/docs` (HTML rendering of its OpenAPI spec). Its
+    spec-url is relative, so it resolves to `.../{name}/openapi.yaml` below."""
+    return await _proxy_serve_text(name, "/docs")
+
+
+@router.get("/{name}/openapi.yaml")
+async def channel_openapi_spec(name: str) -> Response:
+    """Proxies serve.py's `/openapi.yaml`."""
+    return await _proxy_serve_text(name, "/openapi.yaml")
 
 
 def _spawn(job_type: str, name: str, extra_args: list[str] | None = None) -> dict:
