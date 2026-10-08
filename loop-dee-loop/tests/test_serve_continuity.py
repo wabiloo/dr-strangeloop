@@ -600,8 +600,9 @@ def test_coincident_markers_share_one_timestamp_and_others_get_their_own(tmp_pat
     hls = client.get("/video.m3u8").get_data(as_text=True)
     assert re.search(r"# markers @ (\S+Z): PPOs \(1\), DPOs \(2\)\n", hls)
     # the later marker sits in the next segment, with its own (different) time
+    # (each loop repetition in the window is described once, at its own times)
     times = re.findall(r"# markers @ (\S+Z): ", hls)
-    assert len(set(times)) == 2
+    assert len(set(times)) == 2 * hls.count("# loop:")
 
     dash = client.get("/stream.mpd").get_data(as_text=True)
     # each Period lists its coincident pair on one line, the later PPOe on its own

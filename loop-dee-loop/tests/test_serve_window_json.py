@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import jsonschema
@@ -324,3 +326,87 @@ def test_schema_rejects_undocumented_and_missing_fields():
     assert not validator.is_valid(missing)
     marker_extra = {**doc, "markers": [{**doc["markers"][0], "surprise": 1}]}
     assert not validator.is_valid(marker_extra)
+
+
+# ── consistency with the manifests ──────────────────────────────────────────
+# The JSON builder mirrors (not shares) the manifest builders' maths, so these
+# tests pin the two views together: same periods, same marker ids and times.
+
+REAL_B64 = "/DAvAAAAAAAA///wFAVIAACPf+/+c2nALv4AUsz1AAAAAAAKAAhDVUVJAAABNWLbowo="  # valid SCTE-35
+DIRECTION_CODE = {"out": 0, "in": 1, "instant": 2}
+
+
+def _epoch_s(iso: str) -> float:
+    return dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+
+
+def _consistency_channel(increment: bool):
+    markers = [{**m, "splice_command_b64": REAL_B64, "splice_command_b64_narrowed": REAL_B64} for m in MARKERS]
+    channel = _channel(boundaries=[2], markers=markers, now_ticks=NOW_LOOP4)
+    channel.package.increment_event_ids = increment
+    return channel
+
+
+def _direction(m: dict) -> str:
+    return "instant" if m["is_instant"] else "out" if m["is_out"] else "in"
+
+
+@pytest.mark.parametrize("increment", [False, True])
+def test_hls_dateranges_match_markers(increment):
+    channel = _consistency_channel(increment)
+    doc = channel.build_window_json(scope="loops")
+    lines = channel.build_hls_manifest("archive").splitlines()
+    first_pdt = _epoch_s(next(ln.split(":", 1)[1] for ln in lines if ln.startswith("#EXT-X-PROGRAM-DATE-TIME:")))
+    last_end = _epoch_s(doc["window"]["end_utc"])
+
+    # default ID format "...-{event id, decimal}-{loop}"
+    got = set()
+    for ln in lines:
+        if not ln.startswith("#EXT-X-DATERANGE:"):
+            continue
+        attrs = dict(re.findall(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)', ln.split(":", 1)[1]))
+        event, loop = re.search(r"-(\d+)-(\d+)$", attrs["ID"].strip('"')).groups()
+        direction = "out" if "SCTE35-OUT" in attrs else "in" if "SCTE35-IN" in attrs else "instant"
+        got.add((attrs["START-DATE"].strip('"'), int(event), int(loop), direction))
+
+    expected = {
+        (m["start_utc"], int(m["event_id"], 16), m["loop"], _direction(m))
+        for m in doc["markers"]
+        if first_pdt <= _epoch_s(m["start_utc"]) < last_end
+    }
+    assert got and got == expected
+    if increment:  # ids really are remapped per loop, so the check above is not vacuous
+        assert len({(e, lp) for _, e, lp, _ in got}) > len({e for _, e, _, _ in got}) - 1
+        assert any(e > 10 for _, e, _, _ in got)
+
+
+@pytest.mark.parametrize("increment", [False, True])
+def test_dash_periods_and_events_match_json(increment):
+    channel = _consistency_channel(increment)
+    doc = channel.build_window_json(scope="loops")
+    root = ET.fromstring(channel.build_dash_manifest().split("?>", 1)[1])
+    ns = {"m": "urn:mpeg:dash:schema:mpd:2011"}
+    availability = _epoch_s(root.attrib["availabilityStartTime"])
+    json_periods = {p["id"]: p for p in doc["periods"]}
+    markers = [m for m in doc["markers"]]
+
+    periods = root.findall("m:Period", ns)
+    assert periods
+    for period in periods:
+        pid = period.attrib["id"]
+        start_s = float(period.attrib["start"].removeprefix("PT").removesuffix("S"))
+        assert pid in json_periods, f"MPD period {pid} missing from JSON"
+        jp = json_periods[pid]
+        assert _epoch_s(jp["start_utc"]) == availability + start_s
+        assert int(period.find(".//m:SegmentTemplate", ns).attrib["startNumber"]) == jp["segments"]["first"]
+
+        for event in period.findall(".//{*}Event"):
+            event_id = int(event.attrib["id"])
+            at = availability + start_s + int(event.attrib["presentationTime"]) / 90_000
+            match = [
+                m for m in markers
+                if int(m["event_id"], 16) == event_id // 4
+                and DIRECTION_CODE[_direction(m)] == event_id % 4
+                and _epoch_s(m["start_utc"]) == at
+            ]
+            assert len(match) == 1, (pid, event.attrib)

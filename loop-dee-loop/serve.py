@@ -1566,7 +1566,7 @@ class Channel:
         # in increasing window order (oldest/earliest first), so a simple
         # "already emitted in this response" set is sufficient to enforce
         # the single-occurrence rule without a separate pre-pass.
-        already_emitted_markers: set[tuple[str, object, int]] = set()
+        already_emitted_markers: set[tuple[int, str, object, int]] = set()
 
         # [markers].cue_tags: which cue_breaks (see LoopPackage.__init__)
         # have already had their opening #EXT-X-CUE-OUT/-CONT emitted in
@@ -1577,7 +1577,7 @@ class Channel:
         # Markers already summarized in a `# markers:` comment in this
         # response (same once-per-response dedupe as already_emitted_markers,
         # but also covering cue_tags="only", which emits no DATERANGE).
-        described_marker_keys: set[tuple[str, object, int]] = set()
+        described_marker_keys: set[tuple[int, str, object, int]] = set()
 
         # Never emit past `media_sequence` (the live edge) -- when
         # first_global_index was clamped to 0 above (only possible in the
@@ -1652,13 +1652,13 @@ class Channel:
             # in that mode, #EXT-X-CUE-OUT/-IN below is the only signaling.
             segment_markers = [
                 m for m in pkg.markers
-                if (m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
+                if (local_loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
                 not in described_marker_keys
                 and _marker_covers_segment(m, ref_seg_start_ticks, ref_seg_end_ticks)
             ]
             if segment_markers:
                 described_marker_keys.update(
-                    (m["event_id"], m.get("marker_identity"), m["pts_time_ticks"]) for m in segment_markers
+                    (local_loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"]) for m in segment_markers
                 )
                 segment_id_map = (
                     build_event_id_map(pkg.markers, local_loop_number) if pkg.increment_event_ids else {}
@@ -1674,13 +1674,13 @@ class Channel:
                 matching_markers = [
                     m for m in pkg.markers
                     if (
-                        m["event_id"], m.get("marker_identity"), m["pts_time_ticks"]
+                        local_loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"]
                     ) not in already_emitted_markers
                     and _marker_covers_segment(m, ref_seg_start_ticks, ref_seg_end_ticks)
                 ]
                 for m in matching_markers:
                     already_emitted_markers.add(
-                        (m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
+                        (local_loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
                     )
                 if matching_markers:
                     loop_start_ticks = program_date_time_ticks(
