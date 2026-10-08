@@ -115,7 +115,9 @@ def probe_media(path_or_url: str) -> dict:
     video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
     audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
 
-    duration = fmt.get("duration") or (video_stream or {}).get("duration")
+    # Video-stream duration first, like franken-ts validation: the container
+    # duration follows the longest stream (often audio) and would exceed it.
+    duration = (video_stream or {}).get("duration") or fmt.get("duration")
 
     frame_rate = None
     if video_stream and video_stream.get("r_frame_rate"):

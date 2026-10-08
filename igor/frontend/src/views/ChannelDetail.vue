@@ -347,13 +347,20 @@ function effectiveOutlined(a: ActionDef) {
 // sense as a contrast with a DIFFERENT backend) so it reads as a
 // self-contained description of THIS channel, not a reference sheet for
 // every backend its-a-live supports.
-const backend = computed(() => status.value?.backend)
+// /status throws while there is no stack (never deployed / dismantled), so
+// fall back to the backend from the channel's own TOML config -- otherwise
+// byBackend() below would show the aws-media (MediaLive) wording for it.
+const backend = computed(
+  () => status.value?.backend ?? (section('deploy').backend as ChannelStatus['backend'] | undefined),
+)
 
 // Fires once backend first becomes known (right after loadStatus
 // resolves) and again if it ever changes -- not on every status poll,
-// since `backend` itself doesn't change between polls.
+// since `backend` itself doesn't change between polls. Keyed on the live
+// status (not the config fallback): schedules need a deployed channel.
+const liveBackend = computed(() => status.value?.backend)
 watch(
-  backend,
+  liveBackend,
   (b) => {
     if (b && b !== 'local-docker') loadSchedule()
     else scheduleWindows.value = []
@@ -943,7 +950,7 @@ watch(() => props.name, reload)
           </details>
         </div>
 
-        <div v-if="backend && backend !== 'local-docker'" class="flex flex-column gap-2">
+        <div v-if="liveBackend && liveBackend !== 'local-docker'" class="flex flex-column gap-2">
           <h3 class="m-0 text-sm text-color-secondary uppercase">Schedule</h3>
           <div class="flex flex-column gap-2 p-3 border-round surface-card" style="border: 1px solid var(--surface-border)">
             <Message v-if="scheduleError" severity="warn" :closable="false">{{ scheduleError }}</Message>

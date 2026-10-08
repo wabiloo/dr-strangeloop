@@ -1226,17 +1226,6 @@ function reloadPlayers() {
 
 defineExpose({ reloadPlayers })
 
-// Rough estimate of how many wrapped lines a URL needs so the readonly
-// textarea below can sit tall enough to show it in full without
-// scrolling/cropping, without needing to measure actual rendered text
-// width (which varies with the panel's responsive column width). Errs on
-// the generous side -- an extra blank-ish line is far less annoying than
-// a cropped URL.
-function urlRows(url?: string | null): number {
-  if (!url) return 1
-  return Math.max(1, Math.ceil(url.length / 40))
-}
-
 /** Fixed-width HH:MM:SS -- unlike a bare seconds count, its length never
  * changes as uptime ticks up, so the uptime pill doesn't visibly resize. */
 function formatUptime(totalSeconds: number): string {
@@ -1407,13 +1396,7 @@ async function copyUrl(url?: string | null) {
           </div>
           </div>
           <div class="url-row stacked-player-panel url-panel">
-          <textarea
-            class="url-input"
-            readonly
-            :rows="urlRows(hlsUrl)"
-            :value="hlsUrl"
-            @focus="($event.target as HTMLTextAreaElement).select()"
-          />
+          <div class="url-input">{{ hlsUrl }}</div>
           <Button icon="pi pi-copy" text size="small" title="Copy URL" @click="copyUrl(hlsUrl)" />
           </div>
         </div>
@@ -1533,13 +1516,7 @@ async function copyUrl(url?: string | null) {
           </div>
           </div>
           <div class="url-row stacked-player-panel url-panel">
-          <textarea
-            class="url-input"
-            readonly
-            :rows="urlRows(dashUrl)"
-            :value="dashUrl"
-            @focus="($event.target as HTMLTextAreaElement).select()"
-          />
+          <div class="url-input">{{ dashUrl }}</div>
           <Button icon="pi pi-copy" text size="small" title="Copy URL" @click="copyUrl(dashUrl)" />
           </div>
         </div>
@@ -2119,8 +2096,7 @@ async function copyUrl(url?: string | null) {
   background: transparent;
   border: none;
   outline: none;
-  resize: none;
-  overflow: hidden;
+  user-select: all;
   white-space: pre-wrap;
   word-break: break-all;
   line-height: 1.3;

@@ -1447,7 +1447,7 @@ async function previewMarkerResolution() {
       if (asset.duration.trim()) continue
       const seconds = result.asset_durations[asset.id]
       if (seconds === undefined) continue
-      asset.duration = `${seconds.toFixed(2)}s`
+      asset.duration = `${(Math.floor(seconds * 1000) / 1000).toFixed(3)}s`
       filledCount++
     }
 
