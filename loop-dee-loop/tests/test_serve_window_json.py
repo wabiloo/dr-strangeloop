@@ -97,13 +97,13 @@ def test_live_window_periodic_with_asset_boundary():
     assert doc["mode"] == "live" and doc["timeline"] == "periodic"
     assert doc["loop"] == {"number": 4, "position_s": 1.111, "duration_s": 4.0, "segments": 4, "segment_duration_s": 1.0}
     win = doc["window"]
-    assert (win["first_segment"], win["last_segment"], win["ended"]) == (12, 17, False)
+    assert (win["segments"]["first"], win["segments"]["last"], win["ended"]) == (12, 17, False)
     assert win["start_utc"] == "1970-01-01T00:00:12.000Z"
     assert win["end_utc"] == "1970-01-01T00:00:18.000Z"
     assert win["live_edge_utc"] == "1970-01-01T00:00:17.000Z"
     assert win["duration_s"] == 6.0
 
-    assert [(p["id"], p["first_segment"], p["last_segment"]) for p in doc["periods"]] == [
+    assert [(p["id"], p["segments"]["first"], p["segments"]["last"]) for p in doc["periods"]] == [
         ("loop3-0", 12, 13),
         ("loop3-2", 14, 15),
         ("loop4-0", 16, 17),
@@ -114,23 +114,23 @@ def test_live_window_periodic_with_asset_boundary():
     ]
 
     # asset b of loop 4 starts at segment 18, after the window
-    assets = [(a["asset_id"], a["loop"], a["first_segment"], a["last_segment"]) for a in doc["assets"]]
+    assets = [(a["asset_id"], a["loop"], a["segments"]["first"], a["segments"]["last"]) for a in doc["assets"]]
     assert assets == [("a", 3, 12, 13), ("b", 3, 14, 15), ("a", 4, 16, 17)]
     first_a = doc["assets"][0]
     assert first_a["start_utc"] == "1970-01-01T00:00:12.000Z" and first_a["duration_s"] == 2.0
-    assert not first_a["starts_before_window"] and not first_a["ends_after_window"]
+    assert not first_a["starts_before_range"] and not first_a["ends_after_range"]
 
 
 def test_window_clamps_to_zero_right_after_start():
     doc = _channel(now_ticks=100_000).build_window_json()
-    assert (doc["window"]["first_segment"], doc["window"]["last_segment"]) == (0, 1)
+    assert (doc["window"]["segments"]["first"], doc["window"]["segments"]["last"]) == (0, 1)
     _assert_valid(doc)
 
 
 def test_marker_instances_clipped_to_window():
     doc = _channel(now_ticks=NOW_LOOP4).build_window_json()
     _assert_valid(doc)
-    got = [(m["event_id"], m["loop"], m["is_out"], m["first_segment"], m["last_segment"]) for m in doc["markers"]]
+    got = [(m["event_id"], m["loop"], m["is_out"], m["segments"]["first"], m["segments"]["last"]) for m in doc["markers"]]
     assert got == [
         ("0x00000001", 3, True, 13, 14),
         ("0x00000002", 3, True, 14, 14),
@@ -141,7 +141,7 @@ def test_marker_instances_clipped_to_window():
     assert out_loop4["start_utc"] == "1970-01-01T00:00:17.000Z"
     assert out_loop4["end_utc"] == "1970-01-01T00:00:19.000Z"  # 2 s until the matching in
     assert out_loop4["duration_s"] == 2.0
-    assert out_loop4["ends_after_window"] is True and out_loop4["starts_before_window"] is False
+    assert out_loop4["ends_after_range"] is True and out_loop4["starts_before_range"] is False
     cue_in = doc["markers"][2]
     assert cue_in["end_utc"] is None and cue_in["duration_s"] is None
     assert cue_in["splice_command_b64"] == "AA==" and cue_in["assets"] == ["ad1"]
@@ -153,7 +153,7 @@ def test_marker_started_before_window_is_flagged():
     _assert_valid(doc)
     first = doc["markers"][0]
     assert (first["event_id"], first["loop"]) == ("0x00000001", 3)
-    assert first["starts_before_window"] is True and first["first_segment"] == 14
+    assert first["starts_before_range"] is True and first["segments"]["first"] == 14
 
 
 def test_continuous_timeline_periods_and_signal_break():
@@ -163,7 +163,7 @@ def test_continuous_timeline_periods_and_signal_break():
     _assert_valid(doc)
 
     assert doc["timeline"] == "continuous"
-    assert [(p["id"], p["first_segment"], p["last_segment"], p["end_utc"]) for p in doc["periods"]] == [
+    assert [(p["id"], p["segments"]["first"], p["segments"]["last"], p["end_utc"]) for p in doc["periods"]] == [
         ("continuous", 0, 1, "1970-01-01T00:00:02.000Z"),
         ("break2", 2, 5, "1970-01-01T00:00:06.000Z"),
     ]
@@ -183,7 +183,7 @@ def test_timeshift_range_is_reported_as_ended():
     _assert_valid(doc)
     assert doc["mode"] == "timeshift"
     assert doc["window"]["ended"] is True and doc["window"]["live_edge_utc"] is None
-    assert (doc["window"]["first_segment"], doc["window"]["last_segment"]) == (2, 5)
+    assert (doc["window"]["segments"]["first"], doc["window"]["segments"]["last"]) == (2, 5)
     assert doc["window"]["start_utc"] == "1970-01-01T00:00:02.000Z"
 
 
@@ -194,7 +194,7 @@ def test_consistent_with_hls_media_playlist(boundaries):
     body = channel.build_hls_manifest("archive")
     lines = body.splitlines()
 
-    assert f"#EXT-X-MEDIA-SEQUENCE:{doc['window']['first_segment']}" in lines
+    assert f"#EXT-X-MEDIA-SEQUENCE:{doc['window']['segments']['first']}" in lines
     assert sum(1 for line in lines if line == "#EXT-X-DISCONTINUITY") == len(doc["discontinuities"])
     pdts = [line.split(":", 1)[1] for line in lines if line.startswith("#EXT-X-PROGRAM-DATE-TIME:")]
     assert pdts[0] == doc["window"]["start_utc"]
@@ -246,12 +246,56 @@ def test_timeline_route_timeshift_range_and_errors(tmp_path):
     doc = resp.get_json()
     _assert_valid(doc)
     assert doc["mode"] == "timeshift" and doc["window"]["ended"] is True
-    assert (doc["window"]["first_segment"], doc["window"]["last_segment"]) == (0, 1)
+    assert (doc["window"]["segments"]["first"], doc["window"]["segments"]["last"]) == (0, 1)
     assert "immutable" in resp.headers["Cache-Control"]
 
     assert client.get("/timeline.json?end=2").status_code == 400
     assert client.get("/timeline.json?start=2&end=1").status_code == 400
     assert client.get("/timeline.json?start=99999999999999").status_code == 400
+
+
+def test_scope_loops_widens_content_to_whole_loops():
+    ch = _channel(boundaries=[2], now_ticks=NOW_LOOP4)
+    narrow = ch.build_window_json()
+    assert narrow["range"] == {
+        "scope": "window", "start_utc": narrow["window"]["start_utc"], "end_utc": narrow["window"]["end_utc"],
+        "duration_s": 6.0, "segments": {"first": 12, "last": 17, "count": 6},
+    }
+
+    doc = ch.build_window_json(scope="loops")
+    _assert_valid(doc)
+    assert doc["window"] == narrow["window"]  # manifest window is unchanged
+    # live edge 17 is in loop 4 -> previous, current, next = loops 3, 4, 5 = segments 12..23
+    rng = doc["range"]
+    assert (rng["scope"], rng["segments"]["first"], rng["segments"]["last"], rng["duration_s"]) == ("loops", 12, 23, 12.0)
+    assert rng["start_utc"] == "1970-01-01T00:00:12.000Z" and rng["end_utc"] == "1970-01-01T00:00:24.000Z"
+    assert [(l["number"], l["segments"]["first"], l["segments"]["last"], l["current"]) for l in doc["loops"]] == [
+        (3, 12, 15, False), (4, 16, 19, True), (5, 20, 23, False),
+    ]
+    assert doc["loops"][1]["start_utc"] == "1970-01-01T00:00:16.000Z"
+    assert [(p["id"], p["segments"]["first"], p["segments"]["last"]) for p in doc["periods"]][-1] == ("loop5-2", 22, 23)
+    assert {(a["loop"], a["asset_id"]) for a in doc["assets"]} == {(n, x) for n in (3, 4, 5) for x in "ab"}
+    assert not any(a["starts_before_range"] or a["ends_after_range"] for a in doc["assets"])
+
+
+def test_scope_loops_at_first_loop_has_no_previous():
+    doc = _channel(now_ticks=100_000).build_window_json(scope="loops")  # loop 0, live edge segment 1
+    _assert_valid(doc)
+    assert [(l["number"], l["current"]) for l in doc["loops"]] == [(0, True), (1, False)]
+    assert doc["range"]["segments"]["first"] == 0 and doc["range"]["segments"]["last"] == 7
+
+
+def test_scope_loops_ignored_for_timeshift_and_validated_on_route(tmp_path):
+    ch = _channel(now_ticks=NOW_LOOP4)
+    doc = ch.build_window_json(TimeWindow(first_global=12, last_global=13, ended=True, origin_loop=3), "loops")
+    assert doc["range"]["scope"] == "window" and doc["range"]["segments"]["last"] == 13
+
+    client = _client(tmp_path)
+    resp = client.get("/timeline.json?scope=loops")
+    assert resp.status_code == 200
+    _assert_valid(resp.get_json())
+    assert resp.get_json()["range"]["scope"] == "loops"
+    assert client.get("/timeline.json?scope=bogus").status_code == 400
 
 
 # ── OpenAPI document ────────────────────────────────────────────────────────

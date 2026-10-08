@@ -17,9 +17,10 @@ info:
     **Segment numbers.** The loop is cut into fixed-length segments numbered by a
     counter that keeps increasing across loop repeats. It is the
     `#EXT-X-MEDIA-SEQUENCE` numbering of the HLS media playlists
-    (`loop * segments + index_in_loop`). `first_segment`/`last_segment` are the
-    segments an item overlaps, inclusive and clipped to the window; the
-    `starts_before_window`/`ends_after_window` flags say whether it was clipped.
+    (`loop * segments + index_in_loop`). `segments` (`first`, `last`, `count`) is the
+    range of segments an item overlaps, inclusive and clipped to the `range`; the
+    `starts_before_range`/`ends_after_range` flags say whether it was clipped.
+    (`range` equals the window unless `scope=loops`.)
     `start_utc`/`end_utc` are never clipped. Everything is also locatable by UTC
     time alone; the numbers exist to correlate with the manifests.
 
@@ -39,6 +40,7 @@ paths:
         - $ref: "#/components/parameters/FullLoops"
         - $ref: "#/components/parameters/Timeline"
         - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Scope"
       responses:
         "200":
           description: The window.
@@ -64,6 +66,7 @@ paths:
         - $ref: "#/components/parameters/FullLoops"
         - $ref: "#/components/parameters/Timeline"
         - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Scope"
       responses:
         "200":
           description: The window.
@@ -105,6 +108,7 @@ paths:
         - $ref: "#/components/parameters/FullLoops"
         - $ref: "#/components/parameters/Timeline"
         - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Scope"
       responses:
         "200":
           description: Multivariant playlist; the media playlists are linked from it.
@@ -121,6 +125,7 @@ paths:
         - $ref: "#/components/parameters/FullLoops"
         - $ref: "#/components/parameters/Timeline"
         - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Scope"
       responses:
         "200":
           description: MPD.
@@ -160,6 +165,20 @@ components:
         type: string
         enum: [default, continuous, periodic]
         default: default
+    Scope:
+      name: scope
+      in: query
+      required: false
+      description: |
+        `window` (default): content is limited to the manifest window.
+        `loops`: periods, discontinuities, assets and markers cover the previous,
+        current and next loop (see `range` and `loops`); `window` is unchanged. Ignored
+        for timeshift ranges. Not forwarded by CloudFront -- use the service
+        endpoint directly.
+      schema:
+        type: string
+        enum: [window, loops]
+        default: window
     Offset:
       name: offset
       in: query
@@ -169,6 +188,15 @@ components:
         (`-3600`) or an ISO 8601 duration (`-PT1H`).
       schema: { type: string }
   schemas:
+    SegmentRange:
+      type: object
+      additionalProperties: false
+      required: [first, last, count]
+      description: Inclusive range of global segment numbers.
+      properties:
+        first: { type: integer, minimum: 0, description: Lowest segment number. }
+        last: { type: integer, minimum: 0, description: Highest segment number. }
+        count: { type: integer, minimum: 0, description: "Number of segments (`last - first + 1`)." }
     UtcTime:
       type: string
       format: date-time
@@ -191,6 +219,8 @@ components:
         - epoch_utc
         - loop
         - window
+        - range
+        - loops
         - renditions
         - periods
         - discontinuities
@@ -231,6 +261,14 @@ components:
           $ref: "#/components/schemas/Loop"
         window:
           $ref: "#/components/schemas/Window"
+        range:
+          $ref: "#/components/schemas/Range"
+        loops:
+          type: array
+          description: |
+            The loop repetitions covered by `range`, in order, each with its full
+            (unclipped) extent. With `scope=loops`: previous, current and next loop.
+          items: { $ref: "#/components/schemas/LoopSpan" }
         renditions:
           type: array
           items: { $ref: "#/components/schemas/Rendition" }
@@ -280,11 +318,44 @@ components:
         segment_duration_s:
           type: number
           description: Nominal segment length.
+    LoopSpan:
+      type: object
+      additionalProperties: false
+      required: [number, start_utc, end_utc, segments, current]
+      properties:
+        number:
+          type: integer
+          minimum: 0
+          description: Loop repetition (same numbering as `loop.number`).
+        start_utc: { $ref: "#/components/schemas/UtcTime" }
+        end_utc: { $ref: "#/components/schemas/UtcTime" }
+        segments: { $ref: "#/components/schemas/SegmentRange" }
+        current:
+          type: boolean
+          description: True for the loop holding the live edge (always false for a timeshift range).
+    Range:
+      type: object
+      additionalProperties: false
+      required: [scope, start_utc, end_utc, duration_s, segments]
+      description: |
+        Extent of the content in `periods`/`discontinuities`/`assets`/`markers`.
+        Equals `window` unless `scope=loops`, when it is the previous, current and next
+        loop (so it extends past the live edge into upcoming content). The
+        `starts_before_range`/`ends_after_range` flags and segment clipping are
+        relative to it.
+      properties:
+        scope:
+          type: string
+          enum: [window, loops]
+        start_utc: { $ref: "#/components/schemas/UtcTime" }
+        end_utc: { $ref: "#/components/schemas/UtcTime" }
+        duration_s: { type: number }
+        segments: { $ref: "#/components/schemas/SegmentRange" }
     Window:
       type: object
       additionalProperties: false
       required:
-        [convention, ended, start_utc, end_utc, live_edge_utc, duration_s, first_segment, last_segment]
+        [convention, ended, start_utc, end_utc, live_edge_utc, duration_s, segments]
       properties:
         convention:
           type: string
@@ -295,10 +366,10 @@ components:
           description: True when a timeshift range is entirely in the past (a finished VOD).
         start_utc:
           $ref: "#/components/schemas/UtcTime"
-          description: Start of `first_segment`.
+          description: Start of `segments.first`.
         end_utc:
           $ref: "#/components/schemas/UtcTime"
-          description: End of `last_segment`.
+          description: End of `segments.last`.
         live_edge_utc:
           $ref: "#/components/schemas/NullableUtcTime"
           description: |
@@ -306,14 +377,9 @@ components:
             Null for an ended range.
         duration_s:
           type: number
-        first_segment:
-          type: integer
-          minimum: 0
-          description: Global segment number of the oldest segment (= `#EXT-X-MEDIA-SEQUENCE`).
-        last_segment:
-          type: integer
-          minimum: 0
-          description: Global segment number of the newest segment.
+        segments:
+          $ref: "#/components/schemas/SegmentRange"
+          description: Oldest (`first`, = `#EXT-X-MEDIA-SEQUENCE`) to newest (`last`) segment in the window.
     Rendition:
       type: object
       additionalProperties: false
@@ -343,7 +409,7 @@ components:
     Period:
       type: object
       additionalProperties: false
-      required: [id, start_utc, end_utc, first_segment, last_segment]
+      required: [id, start_utc, end_utc, segments]
       properties:
         id: { type: string }
         start_utc:
@@ -352,8 +418,7 @@ components:
         end_utc:
           $ref: "#/components/schemas/NullableUtcTime"
           description: End of the Period (not clipped). Null when it has no scheduled end (continuous timeline without breaks).
-        first_segment: { type: integer, minimum: 0 }
-        last_segment: { type: integer, minimum: 0 }
+        segments: { $ref: "#/components/schemas/SegmentRange" }
     Discontinuity:
       type: object
       additionalProperties: false
@@ -388,10 +453,9 @@ components:
         - duration_s
         - loop_start_s
         - loop_end_s
-        - first_segment
-        - last_segment
-        - starts_before_window
-        - ends_after_window
+        - segments
+        - starts_before_range
+        - ends_after_range
       properties:
         asset_id: { type: string }
         loop:
@@ -407,10 +471,9 @@ components:
           type: number
           description: Start within the loop.
         loop_end_s: { type: number }
-        first_segment: { type: integer, minimum: 0 }
-        last_segment: { type: integer, minimum: 0 }
-        starts_before_window: { type: boolean }
-        ends_after_window: { type: boolean }
+        segments: { $ref: "#/components/schemas/SegmentRange" }
+        starts_before_range: { type: boolean }
+        ends_after_range: { type: boolean }
     Marker:
       type: object
       additionalProperties: false
@@ -428,10 +491,9 @@ components:
         - upid_type
         - upid_hex
         - assets
-        - first_segment
-        - last_segment
-        - starts_before_window
-        - ends_after_window
+        - segments
+        - starts_before_range
+        - ends_after_range
         - splice_command_b64
       properties:
         event_id:
@@ -481,10 +543,9 @@ components:
           type: array
           description: Asset ids the marker refers to, as authored.
           items: { type: string }
-        first_segment: { type: integer, minimum: 0 }
-        last_segment: { type: integer, minimum: 0 }
-        starts_before_window: { type: boolean }
-        ends_after_window: { type: boolean }
+        segments: { $ref: "#/components/schemas/SegmentRange" }
+        starts_before_range: { type: boolean }
+        ends_after_range: { type: boolean }
         splice_command_b64:
           type: [string, "null"]
           description: Raw SCTE-35 message, base64, as signalled in the manifests.

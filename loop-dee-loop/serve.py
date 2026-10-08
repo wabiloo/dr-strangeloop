@@ -146,6 +146,10 @@ def _dash_marker_comments(entries: list[tuple[dict, dict[str, str], int | None, 
     return "".join(f"    <!-- {line} -->\n" for line in _describe_markers(entries))
 
 
+def _segment_range(first: int, last: int) -> dict:
+    return {"first": first, "last": last, "count": max(0, last - first + 1)}
+
+
 def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: int) -> bool:
     """Whether `marker` should be signaled (EXT-X-DATERANGE / DASH <Event>)
     on a segment spanning [seg_start_ticks, seg_end_ticks).
@@ -1049,11 +1053,17 @@ class Channel:
             )
         return out
 
-    def build_window_json(self, window: "TimeWindow | None" = None) -> dict:
+    def build_window_json(self, window: "TimeWindow | None" = None, scope: str = "window") -> dict:
         """JSON view of the current window (openapi.yaml `WindowDocument`):
         periods, discontinuities, assets and markers overlapping the same
         segments the HLS media playlist advertises (trailing window ending
         at the live edge, or the resolved startover/catchup range).
+
+        `scope="loops"` (live only) widens the returned *content* -- periods,
+        discontinuities, assets, markers -- to whole loops: the previous, the
+        current (holding the live edge) and the next one, extended further back
+        if the window reaches before the previous loop. `window` still describes
+        the manifest window and `range` the extent of the content.
 
         Mirrors the window math of `_build_hls_media_playlist` rather than
         sharing it, so the manifests stay untouched. All timing is integer
@@ -1075,6 +1085,13 @@ class Channel:
             ended = False
         else:
             first, last, ended = window.first_global, window.last_global, window.ended
+        w_first, w_last = first, last
+        if scope == "loops" and window is None:
+            cur = live_edge // spl
+            first = min(max(cur - 1, 0), w_first // spl) * spl
+            last = (cur + 2) * spl - 1
+        else:
+            scope = "window"
 
         def secs(t: int) -> float:
             return round(ticks_to_wall_clock_seconds(t, ts), 3)
@@ -1159,8 +1176,7 @@ class Channel:
                         "id": "continuous" if brk is None else f"break{brk}",
                         "start_utc": self._iso_ticks(seg_start(0 if brk is None else brk)),
                         "end_utc": None if nxt is None else self._iso_ticks(seg_start(nxt)),
-                        "first_segment": g_first,
-                        "last_segment": g_last,
+                        "segments": _segment_range(g_first, g_last),
                     }
                 )
         else:
@@ -1176,8 +1192,7 @@ class Channel:
                             "id": f"loop{loop}" if len(starts) == 1 else f"loop{loop}-{s}",
                             "start_utc": self._iso_ticks(seg_start(g_first)),
                             "end_utc": self._iso_ticks(seg_end(g_last)),
-                            "first_segment": max(g_first, first),
-                            "last_segment": min(g_last, last),
+                            "segments": _segment_range(max(g_first, first), min(g_last, last)),
                         }
                     )
 
@@ -1203,10 +1218,9 @@ class Channel:
                         "duration_s": secs(a_end - a_start),
                         "loop_start_s": secs(a_start),
                         "loop_end_s": secs(a_end),
-                        "first_segment": max(g_first, first),
-                        "last_segment": min(g_last, last),
-                        "starts_before_window": g_first < first,
-                        "ends_after_window": g_last > last,
+                        "segments": _segment_range(max(g_first, first), min(g_last, last)),
+                        "starts_before_range": g_first < first,
+                        "ends_after_range": g_last > last,
                     }
                 )
 
@@ -1241,10 +1255,9 @@ class Channel:
                     "upid_type": m.get("upid_type"),
                     "upid_hex": m.get("upid_hex"),
                     "assets": list(m.get("assets") or []),
-                    "first_segment": max(g_first, first),
-                    "last_segment": min(g_last, last),
-                    "starts_before_window": g_first < first,
-                    "ends_after_window": g_last > last,
+                    "segments": _segment_range(max(g_first, first), min(g_last, last)),
+                    "starts_before_range": g_first < first,
+                    "ends_after_range": g_last > last,
                     "splice_command_b64": b64,
                 }
                 if event_id != m["event_id"]:
@@ -1290,13 +1303,29 @@ class Channel:
             "window": {
                 "convention": "hls-trailing",
                 "ended": ended,
+                "start_utc": self._iso_ticks(seg_start(w_first)),
+                "end_utc": self._iso_ticks(seg_end(w_last)),
+                "live_edge_utc": None if ended else self._iso_ticks(seg_start(w_last)),
+                "duration_s": secs(seg_end(w_last) - seg_start(w_first)),
+                "segments": _segment_range(w_first, w_last),
+            },
+            "range": {
+                "scope": scope,
                 "start_utc": self._iso_ticks(seg_start(first)),
                 "end_utc": self._iso_ticks(seg_end(last)),
-                "live_edge_utc": None if ended else self._iso_ticks(seg_start(last)),
                 "duration_s": secs(seg_end(last) - seg_start(first)),
-                "first_segment": first,
-                "last_segment": last,
+                "segments": _segment_range(first, last),
             },
+            "loops": [
+                {
+                    "number": n,
+                    "start_utc": self._iso_ticks(seg_start(n * spl)),
+                    "end_utc": self._iso_ticks(seg_end(n * spl + spl - 1)),
+                    "segments": _segment_range(n * spl, n * spl + spl - 1),
+                    "current": window is None and n == live_edge // spl,
+                }
+                for n in loops
+            ],
             "renditions": renditions,
             "periods": periods,
             "discontinuities": discontinuities,
@@ -2884,7 +2913,10 @@ def create_app(
         markers); schema in openapi.yaml. Honours the same timeshift query
         params as the manifests."""
         ch, window, _query = _request_view()
-        resp = jsonify(ch.build_window_json(window))
+        scope = request.args.get("scope", "window")
+        if scope not in ("window", "loops"):
+            abort(Response("'scope' must be 'window' or 'loops'\n", status=400, mimetype="text/plain"))
+        resp = jsonify(ch.build_window_json(window, scope))
         resp.headers["Cache-Control"] = (
             "public, max-age=31536000, immutable" if window is not None and window.ended else "public, max-age=1"
         )
