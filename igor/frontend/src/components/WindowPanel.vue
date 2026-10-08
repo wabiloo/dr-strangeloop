@@ -501,7 +501,6 @@ function isSelected(data: unknown): boolean {
               v-for="r in loopRows"
               :key="r.l.number"
               class="wp-loop-bar"
-              :class="{ 'wp-alt': r.alt, 'wp-current': r.l.current }"
               :style="r.style"
             />
             <div v-if="windowBand" class="wp-window" :style="windowBand" title="Window advertised in the HLS manifest">
@@ -530,7 +529,7 @@ function isSelected(data: unknown): boolean {
               :title="`loop ${r.l.number}${r.l.current ? ' (current)' : ''}\n${hms(r.l.start_utc)} → ${hms(r.l.end_utc)}\nsegments ${r.l.segments.first}–${r.l.segments.last} (${r.l.segments.count})`"
               @click="select('Loop', `#${r.l.number}`, r.l)"
             >
-              <span class="wp-text">loop #{{ r.l.number }}</span>
+              <span class="wp-text">loop #{{ r.l.number }}<template v-if="r.l.current"> (current)</template></span>
             </div>
           </div>
 
@@ -671,6 +670,7 @@ function isSelected(data: unknown): boolean {
   grid-template-columns: 9rem 1fr;
   row-gap: 4px;
   align-items: stretch;
+  padding-bottom: 20px;
 }
 .wp-overlay {
   position: absolute;
@@ -686,13 +686,6 @@ function isSelected(data: unknown): boolean {
   top: 22px;
   bottom: 0;
   border-left: 2px solid rgba(100, 116, 139, 0.75);
-  background: rgba(100, 116, 139, 0.07);
-}
-.wp-loop-bar.wp-alt {
-  background: transparent;
-}
-.wp-loop-bar.wp-current {
-  background: rgba(100, 116, 139, 0.14);
 }
 .wp-loop {
   background: transparent;
@@ -749,7 +742,7 @@ function isSelected(data: unknown): boolean {
 }
 .wp-live-label {
   position: absolute;
-  top: 2px;
+  bottom: 2px;
   left: 5px;
   font-size: 0.65rem;
   font-weight: 600;
