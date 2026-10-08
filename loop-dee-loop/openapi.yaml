@@ -29,10 +29,20 @@ info:
     (`timescale` per second).
 servers:
   - url: /
+tags:
+  - name: Manifests
+    description: The viewer-facing HLS/DASH contract (players use these, not the JSON).
+  - name: Timeline
+    description: Machine-readable view of the window of content the manifests describe right now.
+  - name: Monitoring
+    description: Service status.
+  - name: Documentation
+    description: This API's own description.
 paths:
   /timeline.json:
     get:
-      summary: Current window as JSON
+      summary: "/timeline.json — current window as JSON"
+      tags: [Timeline]
       operationId: getWindow
       parameters:
         - $ref: "#/components/parameters/Start"
@@ -56,31 +66,21 @@ paths:
           content:
             text/plain:
               schema: { type: string }
-  /api/window:
+  /docs:
     get:
-      summary: Alias of /timeline.json
-      operationId: getWindowAlias
-      parameters:
-        - $ref: "#/components/parameters/Start"
-        - $ref: "#/components/parameters/End"
-        - $ref: "#/components/parameters/FullLoops"
-        - $ref: "#/components/parameters/Timeline"
-        - $ref: "#/components/parameters/Offset"
-        - $ref: "#/components/parameters/Scope"
+      summary: "/docs — this documentation (HTML)"
+      tags: [Documentation]
+      operationId: getDocs
       responses:
         "200":
-          description: The window.
+          description: HTML page rendering `openapi.yaml`.
           content:
-            application/json:
-              schema: { $ref: "#/components/schemas/WindowDocument" }
-        "400":
-          description: Bad timeshift parameters (plain-text message).
-          content:
-            text/plain:
+            text/html:
               schema: { type: string }
   /openapi.yaml:
     get:
-      summary: This document
+      summary: "/openapi.yaml — this OpenAPI document"
+      tags: [Documentation]
       operationId: getOpenApi
       responses:
         "200":
@@ -90,7 +90,8 @@ paths:
               schema: { type: string }
   /health:
     get:
-      summary: Status for external monitoring
+      summary: "/health — status for external monitoring"
+      tags: [Monitoring]
       operationId: getHealth
       responses:
         "200":
@@ -100,7 +101,8 @@ paths:
               schema: { $ref: "#/components/schemas/Health" }
   /index.m3u8:
     get:
-      summary: HLS multivariant playlist
+      summary: "/index.m3u8 — HLS multivariant playlist"
+      tags: [Manifests]
       operationId: getHlsMaster
       parameters:
         - $ref: "#/components/parameters/Start"
@@ -117,7 +119,8 @@ paths:
               schema: { type: string }
   /stream.mpd:
     get:
-      summary: DASH manifest
+      summary: "/stream.mpd — DASH manifest"
+      tags: [Manifests]
       operationId: getDashManifest
       parameters:
         - $ref: "#/components/parameters/Start"

@@ -146,6 +146,14 @@ def _dash_marker_comments(entries: list[tuple[dict, dict[str, str], int | None, 
     return "".join(f"    <!-- {line} -->\n" for line in _describe_markers(entries))
 
 
+_DOCS_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>loop-dee-loop API</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body><redoc spec-url="openapi.yaml"></redoc>
+<script src="https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js"></script></body></html>
+"""
+
+
 def _segment_range(first: int, last: int) -> dict:
     return {"first": first, "last": last, "count": max(0, last - first + 1)}
 
@@ -2907,7 +2915,6 @@ def create_app(
         }
 
     @app.get("/timeline.json")
-    @app.get("/api/window")
     def window_json():
         """JSON view of the current window (periods, discontinuities, assets,
         markers); schema in openapi.yaml. Honours the same timeshift query
@@ -2925,6 +2932,11 @@ def create_app(
     @app.get("/openapi.yaml")
     def openapi_spec():
         return send_file(Path(__file__).with_name("openapi.yaml"), mimetype="application/yaml")
+
+    @app.get("/docs")
+    def api_docs():
+        # Relative spec-url so it also resolves behind a path-prefixing proxy (igor).
+        return Response(_DOCS_HTML, mimetype="text/html")
 
     @app.get(f"/{LoopPackage.INDEX_PLAYLIST}")
     def hls_master_playlist():

@@ -226,9 +226,9 @@ def _client(tmp_path, **kwargs):
     return create_app(tmp_path, epoch_ticks=0, window_segments=2, channel_name="demo", **kwargs).test_client()
 
 
-def test_timeline_route_and_alias_match_schema(tmp_path):
+def test_timeline_route_matches_schema(tmp_path):
     client = _client(tmp_path)
-    for path in ("/timeline.json", "/api/window"):
+    for path in ("/timeline.json",):
         resp = client.get(path)
         assert resp.status_code == 200
         assert resp.headers["Cache-Control"] == "public, max-age=1"
@@ -308,11 +308,17 @@ def test_openapi_document_is_served_and_valid(tmp_path):
     assert resp.status_code == 200
     spec = yaml.safe_load(resp.get_data(as_text=True))
     assert spec["openapi"].startswith("3.1")
-    for path in ("/timeline.json", "/api/window", "/health", "/index.m3u8", "/stream.mpd", "/openapi.yaml"):
+    for path in ("/timeline.json", "/health", "/index.m3u8", "/stream.mpd", "/openapi.yaml", "/docs"):
         assert path in spec["paths"]
     jsonschema.Draft202012Validator.check_schema(
         {"$ref": "#/components/schemas/WindowDocument", "components": spec["components"]}
     )
+
+
+def test_docs_page_renders_the_spec(tmp_path):
+    resp = _client(tmp_path).get("/docs")
+    assert resp.status_code == 200 and resp.mimetype == "text/html"
+    assert 'spec-url="openapi.yaml"' in resp.get_data(as_text=True)
 
 
 def test_schema_rejects_undocumented_and_missing_fields():

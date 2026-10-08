@@ -229,6 +229,9 @@ python3 bake.py path/to/output.ts --output /var/loop-packages/2026-01-01 \
 | `/<rendition>/seg/<n>.m4s` | CMAF media segments for one rendition. |
 | `/audio/init.mp4` | CMAF init segment (audio track). |
 | `/audio/seg/<n>.m4s` | CMAF media segments (audio track). |
+| `/timeline.json` | JSON view of the window players see now: loop, window/range, periods, HLS discontinuities, assets, markers (with raw SCTE-35), all with UTC times and global segment numbers. Honours the timeshift query params; `?scope=loops` (live only) widens it to the previous/current/next loop. Not available on `aws-media`. |
+| `/openapi.yaml` | OpenAPI 3.1 spec of the above (hand-written; `tests/test_serve_window_json.py` validates real responses against it). |
+| `/docs` | The spec rendered as HTML (Redoc, loaded from a CDN). Igor's Timeline panel has an **API docs** button that opens it via `/api/v1/channels/<name>/docs`. |
 
 `#EXT-X-STREAM-INF`'s `BANDWIDTH`/`CODECS`/`RESOLUTION`/`FRAME-RATE`
 attributes in `/index.m3u8` come from the exact values GPAC itself

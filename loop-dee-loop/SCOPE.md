@@ -968,3 +968,36 @@ real loop-wrap / asset-boundary signalling is unaffected by it.
 Channel config: `[markers] period_on_segmentation = [0x22, 0x30]` (+
 `period_on_segmentation_apply = "dash"|"hls"|"both"`) in its-a-live; env `PERIOD_ON_SEGMENTATION` for gunicorn.
 Tests: `tests/test_serve_signal_periods.py`.
+
+---
+
+## 15. Extension: window JSON (`/timeline.json`)
+
+A machine-readable view of what the manifests currently describe, for tooling
+(Igor's Timeline panel) instead of parsing HLS/DASH text. Served by
+`serve.py` for `ecs-express` and `local-docker` (`aws-media` runs no
+`serve.py`). Schema: `openapi.yaml` (the source of truth for fields; also at
+`/openapi.yaml`, rendered at `/docs`).
+
+**Glossary.**
+- `window`: what a player sees now -- the last `window_segments` segments up
+  to the live edge (HLS trailing-window convention); with `start`/`end`
+  (timeshift) the requested range instead.
+- `range`: the span the content arrays are clipped to. Equals the window,
+  except with `?scope=loops` (live only) where it covers the previous,
+  current and next loop (`loops` lists them).
+- `segments {first,last,count}`: global segment numbers an item overlaps
+  (inclusive, clipped to `range`; `starts_before_range` / `ends_after_range`
+  say it was). The counter is `loop * segments_per_loop + index` = the HLS
+  `#EXT-X-MEDIA-SEQUENCE` numbering. `start_utc`/`end_utc` are never clipped.
+- `periods` are the DASH view (ids as in the MPD), `discontinuities` the HLS
+  view of the same boundaries and forced breaks.
+- Marker `event_id` is a hex string (the DASH `<Event id>` is
+  `event_id_dec*4 + direction`, DATERANGE ids embed the decimal id and loop).
+  `assets` carry ids and start/end only (bake keeps no filenames/in-out points).
+
+**Drift.** The math is mirrored, not shared, with the manifest builders;
+`tests/test_serve_window_json.py` checks the JSON against the HLS DATERANGEs
+and DASH Periods/Events. Known differences: DASH uses its own live span, not
+the HLS trailing window. A CDN strips unknown query params, so `scope` only
+works against the service directly (Igor proxies it).
