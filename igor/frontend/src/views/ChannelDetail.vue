@@ -393,7 +393,7 @@ const firstDeployAction = computed<ActionDef>(() => ({
   disabledReason: () =>
     backend.value === 'local-docker'
       ? 'Already running -- use the actions on the right to manage it.'
-      : 'Already deployed -- use the actions on the right to manage it, or Redeploy for stack/config changes.',
+      : 'Already deployed -- use the actions on the right to manage it. After editing the channel config, run Redeploy to apply it.',
 }))
 
 // The "ship content" action: while the channel is running, staging new
@@ -508,13 +508,13 @@ const infrastructureActions = computed<ActionDef[]>(() => {
       outlined: true,
       description: byBackend(
         'Recreates the local container from whatever was last Sparked (same as the content-update action above).',
-        'Deletes a broken/rolled-back stack if needed, then cdk deploys the current config again. Use this after editing the channel config, or to recover from a failed Galvanise.',
-        'Deletes a broken/rolled-back stack if needed, then cdk deploys the current config again. Use this after editing the channel config, or to recover from a failed Galvanise.',
+        'Applies your edited channel config to the already-deployed stack (runs cdk deploy; the service restarts briefly). Run this after changing any setting in the Configuration panel -- a running channel keeps using the old settings until you do. For new content, use Update content instead. If the stack is in a failed state it is deleted and recreated first.',
+        'Applies your edited channel config to the already-deployed stack (runs cdk deploy). Run this after changing any setting in the Configuration panel -- a running channel keeps using the old settings until you do. For new content, use Update content instead. If the stack is in a failed state it is deleted and recreated first.',
       ),
       eta: byBackend(
         '~10-30s.',
-        '~1-2 min for a small config change; ~5-10 min if the stack has to be deleted and recreated (e.g. after a failed Galvanise) -- CloudFront/ECS propagation, not a hang.',
-        '~1-2 min for a small config change; ~5-10 min if the stack has to be deleted and recreated (e.g. after a failed Galvanise).',
+        '~5-10 min (ECS Express rolls the new task out with a canary, and the old task keeps serving for ~3+ min); longer only if a failed stack has to be deleted and recreated -- not a hang.',
+        '~1-2 min for a config change; ~5-10 min only if a failed stack has to be deleted and recreated.',
       ),
       fn: () => redeployChannel(props.name),
       disabled: () => phase.value === 'unknown' && !statusError.value,
