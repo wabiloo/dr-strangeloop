@@ -875,7 +875,8 @@ watch(() => props.name, reload)
     <WindowPanel v-if="windowAvailable" :name="name" :query="windowQuery" />
 
     <div class="channel-detail-layout">
-      <div class="flex flex-column gap-4 channel-actions">
+      <div class="flex flex-column gap-4 p-3 border-round surface-card channel-actions" style="border: 1px solid var(--surface-border)">
+        <h3 class="m-0">Actions</h3>
         <div class="flex flex-column gap-2">
           <h3 class="m-0 text-sm text-color-secondary uppercase">First deploy</h3>
           <div

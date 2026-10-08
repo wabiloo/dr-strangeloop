@@ -33,6 +33,15 @@ function toggle() {
   }
 }
 
+function toggleRaw() {
+  if (!open.value) {
+    toggle()
+    showRaw.value = true
+  } else {
+    showRaw.value = !showRaw.value
+  }
+}
+
 const doc = ref<ChannelTimeline | null>(null)
 const error = ref('')
 const showRaw = ref(false)
@@ -49,6 +58,9 @@ let tween: { from: View; to: View; start: number } | null = null
 let fetchedAt = 0
 let raf = 0
 const altCache = new Map<string, boolean>()
+// User zoom/pan: an absolute sub-range of the (animated) full range; null = whole range.
+const vp = ref<View | null>(null)
+const overlayEl = ref<HTMLElement | null>(null)
 
 let timer: ReturnType<typeof setInterval> | null = null
 let requestSeq = 0
@@ -79,6 +91,7 @@ watch([open, () => props.name, () => props.query], () => {
   view.value = null
   ghost.value = null
   tween = null
+  vp.value = null
   altCache.clear()
   selected.value = null
   restartPolling()
@@ -87,6 +100,8 @@ onBeforeUnmount(() => {
   requestSeq++
   cancelAnimationFrame(raf)
   if (timer) clearInterval(timer)
+  window.removeEventListener('pointermove', onMove)
+  window.removeEventListener('pointerup', onUp)
 })
 
 // ── geometry ────────────────────────────────────────────────────────────────
@@ -136,9 +151,101 @@ onMounted(() => {
   raf = requestAnimationFrame(frame)
 })
 
-const t0 = computed(() => view.value?.t0 ?? (doc.value ? rangeOf(doc.value).t0 : 0))
-const t1 = computed(() => view.value?.t1 ?? (doc.value ? rangeOf(doc.value).t1 : 1))
+const fullT0 = computed(() => view.value?.t0 ?? (doc.value ? rangeOf(doc.value).t0 : 0))
+const fullT1 = computed(() => view.value?.t1 ?? (doc.value ? rangeOf(doc.value).t1 : 1))
+// What is actually drawn: the whole range, or the zoomed sub-range kept inside it.
+const viewport = computed<View>(() => {
+  const a = fullT0.value
+  const b = fullT1.value
+  const v = vp.value
+  if (!v) return { t0: a, t1: b }
+  const s = Math.min(v.t1 - v.t0, b - a)
+  const s0 = Math.min(Math.max(v.t0, a), b - s)
+  return { t0: s0, t1: s0 + s }
+})
+const t0 = computed(() => viewport.value.t0)
+const t1 = computed(() => viewport.value.t1)
 const span = computed(() => Math.max(1, t1.value - t0.value))
+
+// ── zoom / pan ──────────────────────────────────────────────────────────────
+const MIN_SPAN_MS = 2000
+const zoomed = computed(() => vp.value !== null)
+const zoomFactor = computed(() => (fullT1.value - fullT0.value) / Math.max(1, t1.value - t0.value))
+
+function setViewport(a: number, b: number) {
+  const fa = fullT0.value
+  const fb = fullT1.value
+  const s = Math.min(Math.max(b - a, MIN_SPAN_MS), fb - fa)
+  const s0 = Math.min(Math.max(a, fa), fb - s)
+  vp.value = s >= fb - fa - 1 ? null : { t0: s0, t1: s0 + s }
+}
+function zoomAt(factor: number, frac = 0.5) {
+  const { t0: a, t1: b } = viewport.value
+  const s = b - a
+  const anchor = a + s * frac
+  const ns = s * factor
+  setViewport(anchor - ns * frac, anchor + ns * (1 - frac))
+}
+function panBy(frac: number) {
+  const { t0: a, t1: b } = viewport.value
+  const d = (b - a) * frac
+  setViewport(a + d, b + d)
+}
+function fracOf(clientX: number): { frac: number; width: number } {
+  const r = overlayEl.value?.getBoundingClientRect()
+  if (!r || !r.width) return { frac: 0.5, width: 1 }
+  return { frac: Math.min(1, Math.max(0, (clientX - r.left) / r.width)), width: r.width }
+}
+function onWheel(e: WheelEvent) {
+  const { frac, width } = fracOf(e.clientX)
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault()
+    zoomAt(Math.exp(Math.max(-100, Math.min(100, e.deltaY)) * 0.005), frac)
+  } else if (zoomed.value && (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY))) {
+    e.preventDefault()
+    panBy((e.deltaX || e.deltaY) / width)
+  }
+}
+let drag: { x: number; a: number; b: number; width: number; moved: boolean } | null = null
+let suppressClick = false
+function onDown(e: PointerEvent) {
+  if (!zoomed.value || e.button !== 0) return
+  drag = { x: e.clientX, a: viewport.value.t0, b: viewport.value.t1, width: fracOf(e.clientX).width, moved: false }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+}
+function onMove(e: PointerEvent) {
+  if (!drag) return
+  const dx = e.clientX - drag.x
+  if (Math.abs(dx) > 3) drag.moved = true
+  if (drag.moved) {
+    const d = -(dx / drag.width) * (drag.b - drag.a)
+    setViewport(drag.a + d, drag.b + d)
+  }
+}
+function onUp() {
+  suppressClick = drag?.moved ?? false
+  drag = null
+  window.removeEventListener('pointermove', onMove)
+  window.removeEventListener('pointerup', onUp)
+  setTimeout(() => (suppressClick = false), 0)
+}
+function onClickCapture(e: MouseEvent) {
+  if (suppressClick) {
+    e.stopPropagation()
+    e.preventDefault()
+  }
+}
+// Scrollbar position (0..1000) of the viewport inside the full range.
+const scrollPos = computed(() => {
+  const room = fullT1.value - fullT0.value - (t1.value - t0.value)
+  return room > 0 ? Math.round(((t0.value - fullT0.value) / room) * 1000) : 0
+})
+function onScroll(e: Event) {
+  const room = fullT1.value - fullT0.value - (t1.value - t0.value)
+  const a = fullT0.value + (Number((e.target as HTMLInputElement).value) / 1000) * room
+  setViewport(a, a + (t1.value - t0.value))
+}
 
 function pctMs(ms: number): number {
   return ((ms - t0.value) / span.value) * 100
@@ -222,6 +329,8 @@ const discontinuityRows = computed(() =>
     .map((d) => ({ d, style: at(d.utc), flip: pct(d.utc) > 85 })),
 )
 
+const crowdedDiscontinuities = computed(() => discontinuityRows.value.length > 12)
+
 const eventIdDec = (hex: string) => {
   const n = parseInt(hex, 16)
   return Number.isNaN(n) ? hex : String(n)
@@ -234,7 +343,11 @@ const loopRows = computed(() =>
 )
 
 // The manifest window (what players see) as a band, and "now" (the live edge) as a line.
-const windowBand = computed(() => (doc.value ? box(doc.value.window.start_utc, doc.value.window.end_utc) : null))
+const windowBand = computed(() =>
+  doc.value && inView(doc.value.window.start_utc, doc.value.window.end_utc)
+    ? box(doc.value.window.start_utc, doc.value.window.end_utc)
+    : null,
+)
 // Both labels share one line: "manifest window" sits inside the band's left edge and
 // "live edge" just right of the line; when the line is near the right edge its label goes
 // left of it instead, and a narrow band then pushes its label outside, left of the band.
@@ -247,7 +360,9 @@ const liveEdge = computed(() => {
   if (!d || d.window.ended) return null
   // The only wall-clock element: everything else is drawn straight from the JSON.
   const ms = d.mode === 'live' && liveNow.value ? liveNow.value : Date.parse(d.generated_at)
-  return { style: { left: `${Math.min(100, Math.max(0, pctMs(ms)))}%` }, flip: pctMs(ms) > 85 }
+  const p = pctMs(ms)
+  if (zoomed.value && (p < 0 || p > 100)) return null
+  return { style: { left: `${Math.min(100, Math.max(0, p))}%` }, flip: p > 85 }
 })
 
 type Marker = ChannelTimeline['markers'][number]
@@ -314,7 +429,7 @@ function isSelected(data: unknown): boolean {
 
 <template>
   <div class="window-panel surface-card border-round p-3 flex flex-column gap-3">
-    <div class="flex align-items-center gap-2 flex-wrap">
+    <div class="flex align-items-center gap-2 wp-header">
       <button
         type="button"
         class="wp-toggle flex align-items-center gap-2"
@@ -332,6 +447,15 @@ function isSelected(data: unknown): boolean {
       </FieldHelp>
       <span v-if="open && doc" class="text-sm text-color-secondary window-summary">{{ summary }}</span>
       <span v-else-if="!open" class="text-sm text-color-secondary">Loops, breaks and markers with the live edge and manifest window</span>
+      <Button
+        class="ml-auto flex-shrink-0"
+        :label="open && showRaw ? 'Hide raw JSON' : 'Raw JSON'"
+        :title="doc ? `${doc.renditions.length} rendition(s) · ${doc.assets.length} asset(s) · ${doc.markers.length} marker(s) · ${doc.discontinuities.length} discontinuit${doc.discontinuities.length === 1 ? 'y' : 'ies'}` : 'Show the raw /timeline.json'"
+        size="small"
+        severity="secondary"
+        text
+        @click="toggleRaw"
+      />
     </div>
 
     <template v-if="open">
@@ -341,8 +465,24 @@ function isSelected(data: unknown): boolean {
       <template v-else>
         <div v-if="error" class="text-xs text-yellow-600">Last refresh failed: {{ error }}</div>
 
-        <div class="wp-grid">
-          <div class="wp-overlay">
+        <div class="flex align-items-center justify-content-end gap-1 flex-wrap wp-toolbar">
+          <span class="text-xs text-color-secondary text-right">
+            <template v-if="zoomed">×{{ zoomFactor < 10 ? zoomFactor.toFixed(1) : Math.round(zoomFactor) }} · showing {{ secs(span / 1000) }} of {{ secs((fullT1 - fullT0) / 1000) }} · </template>
+            Ctrl/⌘ + scroll or pinch to zoom, drag or Shift + scroll to pan
+          </span>
+          <Button label="Fit" size="small" severity="secondary" text :disabled="!zoomed" @click="vp = null" />
+          <Button icon="pi pi-search-minus" size="small" severity="secondary" text rounded aria-label="Zoom out" :disabled="!zoomed" @click="zoomAt(2)" />
+          <Button icon="pi pi-search-plus" size="small" severity="secondary" text rounded aria-label="Zoom in" @click="zoomAt(0.5)" />
+        </div>
+
+        <div
+          class="wp-grid"
+          :class="{ 'wp-zoomed': zoomed }"
+          @wheel="onWheel"
+          @pointerdown="onDown"
+          @click.capture="onClickCapture"
+        >
+          <div ref="overlayEl" class="wp-overlay">
             <div
               v-for="r in loopRows"
               :key="r.l.number"
@@ -413,7 +553,7 @@ function isSelected(data: unknown): boolean {
               :title="`${r.d.reason}\nsegment ${r.d.segment}, sequence ${r.d.sequence}\n${hms(r.d.utc)}`"
               @click="select('Discontinuity', r.d.reason, r.d)"
             >
-              <span class="wp-disc-label" :class="{ 'wp-flip': r.flip }">{{ r.d.reason.replace('_', ' ') }}</span>
+              <span v-if="!crowdedDiscontinuities" class="wp-disc-label" :class="{ 'wp-flip': r.flip }">{{ r.d.reason.replace('_', ' ') }}</span>
             </div>
           </div>
 
@@ -461,25 +601,16 @@ function isSelected(data: unknown): boolean {
           </template>
         </div>
 
+        <div v-if="zoomed" class="wp-scroll">
+          <input type="range" min="0" max="1000" :value="scrollPos" aria-label="Scroll the timeline" @input="onScroll" />
+        </div>
+
         <div v-if="selected" class="wp-detail surface-100 border-round p-2">
           <div class="text-xs text-color-secondary mb-1">{{ selected.kind }} · {{ selected.label }}</div>
           <pre class="m-0 text-xs wp-pre">{{ JSON.stringify(selected.data, null, 2) }}</pre>
         </div>
-        <div v-else class="text-xs text-color-secondary">Click an item for its details.</div>
+        <div v-else class="text-xs text-color-secondary text-right">Click an item for its details.</div>
 
-        <div class="flex align-items-center gap-2">
-          <Button
-            :label="showRaw ? 'Hide raw JSON' : 'Raw JSON'"
-            size="small"
-            severity="secondary"
-            text
-            @click="showRaw = !showRaw"
-          />
-          <span class="text-xs text-color-secondary">
-            {{ doc.renditions.length }} rendition(s) · {{ doc.assets.length }} asset(s) · {{ doc.markers.length }} marker(s) ·
-            {{ doc.discontinuities.length }} discontinuit{{ doc.discontinuities.length === 1 ? 'y' : 'ies' }}
-          </span>
-        </div>
         <pre v-if="showRaw" class="wp-detail surface-100 border-round p-2 m-0 text-xs wp-pre">{{ JSON.stringify(doc, null, 2) }}</pre>
       </template>
     </template>
@@ -494,10 +625,30 @@ function isSelected(data: unknown): boolean {
   cursor: pointer;
   color: inherit;
 }
+.wp-header > * {
+  flex-shrink: 0;
+}
+.wp-header > .window-summary {
+  flex-shrink: 1;
+}
 .window-summary {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.wp-toolbar {
+  margin-bottom: -0.5rem;
+}
+.wp-zoomed {
+  cursor: grab;
+  user-select: none;
+}
+.wp-scroll {
+  margin-left: 9rem;
+}
+.wp-scroll input {
+  width: 100%;
 }
 .wp-grid {
   position: relative;
