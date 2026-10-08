@@ -12,6 +12,9 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.4.0",
+    # tests/test_serve_window_json.py: validate responses against openapi.yaml.
+    "pyyaml>=6",
+    "jsonschema>=4.18",
     # Not a runtime dependency (see scte35_table23_data.py's header) --
     # only used by test_scte35_tables_sync.py (via
     # scripts/generate_scte35_tables.py) to check the generated local

@@ -1,0 +1,526 @@
+openapi: 3.1.0
+info:
+  title: loop-dee-loop serve.py
+  version: "1"
+  description: |
+    HTTP API of a running loop-dee-loop channel (`ecs-express` and `local-docker`
+    backends). `/timeline.json` is a JSON view of the window of content a player
+    sees right now; the HLS/DASH manifests remain the viewer-facing contract.
+
+    Hand-written; `tests/test_serve_window_json.py` validates real responses
+    against the schemas below, so a field added to the code but not here fails CI.
+
+    **Window.** The window is the last N segments (`window_segments`) up to the
+    live edge (HLS trailing-window convention), or, with `start`/`end`, the
+    requested startover/catchup range.
+
+    **Segment numbers.** The loop is cut into fixed-length segments numbered by a
+    counter that keeps increasing across loop repeats. It is the
+    `#EXT-X-MEDIA-SEQUENCE` numbering of the HLS media playlists
+    (`loop * segments + index_in_loop`). `first_segment`/`last_segment` are the
+    segments an item overlaps, inclusive and clipped to the window; the
+    `starts_before_window`/`ends_after_window` flags say whether it was clipped.
+    `start_utc`/`end_utc` are never clipped. Everything is also locatable by UTC
+    time alone; the numbers exist to correlate with the manifests.
+
+    **Times.** ISO 8601 UTC with millisecond precision (`...Z`) and seconds as
+    numbers rounded to milliseconds. Internally all timing is integer ticks
+    (`timescale` per second).
+servers:
+  - url: /
+paths:
+  /timeline.json:
+    get:
+      summary: Current window as JSON
+      operationId: getWindow
+      parameters:
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+        - $ref: "#/components/parameters/FullLoops"
+        - $ref: "#/components/parameters/Timeline"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: The window.
+          headers:
+            Cache-Control:
+              description: "`max-age=1` for live and growing ranges, `immutable` for an ended range."
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WindowDocument" }
+        "400":
+          description: Bad timeshift parameters (plain-text message).
+          content:
+            text/plain:
+              schema: { type: string }
+  /api/window:
+    get:
+      summary: Alias of /timeline.json
+      operationId: getWindowAlias
+      parameters:
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+        - $ref: "#/components/parameters/FullLoops"
+        - $ref: "#/components/parameters/Timeline"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: The window.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WindowDocument" }
+        "400":
+          description: Bad timeshift parameters (plain-text message).
+          content:
+            text/plain:
+              schema: { type: string }
+  /openapi.yaml:
+    get:
+      summary: This document
+      operationId: getOpenApi
+      responses:
+        "200":
+          description: OpenAPI 3.1 document.
+          content:
+            application/yaml:
+              schema: { type: string }
+  /health:
+    get:
+      summary: Status for external monitoring
+      operationId: getHealth
+      responses:
+        "200":
+          description: Cheap to poll; no file I/O.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+  /index.m3u8:
+    get:
+      summary: HLS multivariant playlist
+      operationId: getHlsMaster
+      parameters:
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+        - $ref: "#/components/parameters/FullLoops"
+        - $ref: "#/components/parameters/Timeline"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Multivariant playlist; the media playlists are linked from it.
+          content:
+            application/vnd.apple.mpegurl:
+              schema: { type: string }
+  /stream.mpd:
+    get:
+      summary: DASH manifest
+      operationId: getDashManifest
+      parameters:
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+        - $ref: "#/components/parameters/FullLoops"
+        - $ref: "#/components/parameters/Timeline"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: MPD.
+          content:
+            application/dash+xml:
+              schema: { type: string }
+components:
+  parameters:
+    Start:
+      name: start
+      in: query
+      required: false
+      description: |
+        Startover/catchup range start: epoch seconds, epoch milliseconds
+        (value >= 1e11) or ISO 8601 (naive = UTC). Only when timeshift is
+        enabled (`/health` -> `timeshift`). The parameter name is configurable
+        (`[timeshift]` in the channel TOML); `/health` reports the actual names.
+      schema: { type: string }
+    End:
+      name: end
+      in: query
+      required: false
+      description: Range end, same formats as `start`. Requires `start`. Default `start` + max span.
+      schema: { type: string }
+    FullLoops:
+      name: full-loops
+      in: query
+      required: false
+      description: Widen the range to whole loops.
+      schema: { type: boolean, default: false }
+    Timeline:
+      name: timeline
+      in: query
+      required: false
+      description: Per-request override of the timeline mode.
+      schema:
+        type: string
+        enum: [default, continuous, periodic]
+        default: default
+    Offset:
+      name: offset
+      in: query
+      required: false
+      description: |
+        Pretend "now" is earlier (negative) or later (positive): signed seconds
+        (`-3600`) or an ISO 8601 duration (`-PT1H`).
+      schema: { type: string }
+  schemas:
+    UtcTime:
+      type: string
+      format: date-time
+      description: ISO 8601 UTC, millisecond precision, e.g. `2026-10-08T14:03:12.400Z`.
+    NullableUtcTime:
+      type: [string, "null"]
+      format: date-time
+      description: Like UtcTime, or null.
+    WindowDocument:
+      type: object
+      additionalProperties: false
+      required:
+        - version
+        - channel
+        - generated_at
+        - mode
+        - timeline
+        - clock_offset_s
+        - timescale
+        - epoch_utc
+        - loop
+        - window
+        - renditions
+        - periods
+        - discontinuities
+        - assets
+        - markers
+      properties:
+        version:
+          type: integer
+          const: 1
+          description: Schema version of this document.
+        channel:
+          type: string
+          description: Channel name; empty when the server was started without one.
+        generated_at:
+          $ref: "#/components/schemas/UtcTime"
+          description: The server's "now" for this response (includes `offset`).
+        mode:
+          type: string
+          enum: [live, timeshift]
+          description: "`timeshift` when `start` was given."
+        timeline:
+          type: string
+          enum: [periodic, continuous]
+          description: |
+            Timeline mode in effect. `periodic`: timestamps restart every loop, one DASH
+            Period per span. `continuous`: timestamps keep increasing across loops;
+            only forced signal breaks start a new Period.
+        clock_offset_s:
+          type: number
+          description: The `offset` applied to "now", in seconds (0 when none).
+        timescale:
+          type: integer
+          description: Ticks per second used internally.
+        epoch_utc:
+          $ref: "#/components/schemas/UtcTime"
+          description: Start of loop 0.
+        loop:
+          $ref: "#/components/schemas/Loop"
+        window:
+          $ref: "#/components/schemas/Window"
+        renditions:
+          type: array
+          items: { $ref: "#/components/schemas/Rendition" }
+        periods:
+          type: array
+          description: |
+            DASH Period view of the window, in time order. Ids match the `Period@id`
+            of `stream.mpd`: `loop{N}` or `loop{N}-{first local segment}` (periodic),
+            `continuous` or `break{global segment}` (continuous).
+          items: { $ref: "#/components/schemas/Period" }
+        discontinuities:
+          type: array
+          description: |
+            HLS view: segments preceded by `#EXT-X-DISCONTINUITY`, in time order.
+            The first segment of the window is never listed (as in the playlist, where
+            the header's `#EXT-X-DISCONTINUITY-SEQUENCE` covers it). Empty on a
+            continuous timeline without signal breaks.
+          items: { $ref: "#/components/schemas/Discontinuity" }
+        assets:
+          type: array
+          description: |
+            Assets overlapping the window, per loop repetition, in time order. Only
+            the asset id and its position are known to the server (not file names).
+          items: { $ref: "#/components/schemas/Asset" }
+        markers:
+          type: array
+          description: SCTE-35 markers overlapping the window, per loop repetition, in time order.
+          items: { $ref: "#/components/schemas/Marker" }
+    Loop:
+      type: object
+      additionalProperties: false
+      required: [number, position_s, duration_s, segments, segment_duration_s]
+      properties:
+        number:
+          type: integer
+          minimum: 0
+          description: Loop repetition containing "now" (0 = first, starting at `epoch_utc`).
+        position_s:
+          type: number
+          description: Seconds into the current loop.
+        duration_s:
+          type: number
+          description: Length of one loop.
+        segments:
+          type: integer
+          description: Segments per loop.
+        segment_duration_s:
+          type: number
+          description: Nominal segment length.
+    Window:
+      type: object
+      additionalProperties: false
+      required:
+        [convention, ended, start_utc, end_utc, live_edge_utc, duration_s, first_segment, last_segment]
+      properties:
+        convention:
+          type: string
+          const: hls-trailing
+          description: The window is the last N segments up to the live edge (or the requested range).
+        ended:
+          type: boolean
+          description: True when a timeshift range is entirely in the past (a finished VOD).
+        start_utc:
+          $ref: "#/components/schemas/UtcTime"
+          description: Start of `first_segment`.
+        end_utc:
+          $ref: "#/components/schemas/UtcTime"
+          description: End of `last_segment`.
+        live_edge_utc:
+          $ref: "#/components/schemas/NullableUtcTime"
+          description: |
+            Start of the newest segment, i.e. "now" snapped to a segment boundary.
+            Null for an ended range.
+        duration_s:
+          type: number
+        first_segment:
+          type: integer
+          minimum: 0
+          description: Global segment number of the oldest segment (= `#EXT-X-MEDIA-SEQUENCE`).
+        last_segment:
+          type: integer
+          minimum: 0
+          description: Global segment number of the newest segment.
+    Rendition:
+      type: object
+      additionalProperties: false
+      required: [name, reference, bandwidth, codecs, width, height, frame_rate, has_audio, playlist]
+      properties:
+        name:
+          type: string
+        reference:
+          type: boolean
+          description: |
+            True for the highest-bandwidth rendition, whose segment boundaries all
+            times in this document use.
+        bandwidth:
+          type: integer
+          description: bits/s, video plus the shared audio track (as in `index.m3u8`).
+        codecs:
+          type: string
+        width: { type: integer }
+        height: { type: integer }
+        frame_rate: { type: number }
+        has_audio:
+          type: boolean
+          description: The package has an audio track (shared by all renditions).
+        playlist:
+          type: string
+          description: HLS media playlist file name.
+    Period:
+      type: object
+      additionalProperties: false
+      required: [id, start_utc, end_utc, first_segment, last_segment]
+      properties:
+        id: { type: string }
+        start_utc:
+          $ref: "#/components/schemas/UtcTime"
+          description: Start of the Period (not clipped to the window).
+        end_utc:
+          $ref: "#/components/schemas/NullableUtcTime"
+          description: End of the Period (not clipped). Null when it has no scheduled end (continuous timeline without breaks).
+        first_segment: { type: integer, minimum: 0 }
+        last_segment: { type: integer, minimum: 0 }
+    Discontinuity:
+      type: object
+      additionalProperties: false
+      required: [segment, utc, reason, sequence]
+      properties:
+        segment:
+          type: integer
+          minimum: 0
+          description: Global number of the first segment after the discontinuity.
+        utc:
+          $ref: "#/components/schemas/UtcTime"
+          description: Start of that segment.
+        reason:
+          type: string
+          enum: [loop_wrap, asset_boundary, signal_break]
+          description: |
+            `loop_wrap`: the loop restarts. `asset_boundary`: a join between source
+            assets inside the loop (archive/sparse packages). `signal_break`: forced
+            by a marker (`--period-on-segmentation`); timestamps stay continuous.
+        sequence:
+          type: integer
+          minimum: 0
+          description: The discontinuity sequence number this segment carries.
+    Asset:
+      type: object
+      additionalProperties: false
+      required:
+        - asset_id
+        - loop
+        - start_utc
+        - end_utc
+        - duration_s
+        - loop_start_s
+        - loop_end_s
+        - first_segment
+        - last_segment
+        - starts_before_window
+        - ends_after_window
+      properties:
+        asset_id: { type: string }
+        loop:
+          type: integer
+          minimum: 0
+          description: Loop repetition this instance belongs to.
+        start_utc: { $ref: "#/components/schemas/UtcTime" }
+        end_utc:
+          $ref: "#/components/schemas/UtcTime"
+          description: Derived from the next asset's start, or the end of the loop.
+        duration_s: { type: number }
+        loop_start_s:
+          type: number
+          description: Start within the loop.
+        loop_end_s: { type: number }
+        first_segment: { type: integer, minimum: 0 }
+        last_segment: { type: integer, minimum: 0 }
+        starts_before_window: { type: boolean }
+        ends_after_window: { type: boolean }
+    Marker:
+      type: object
+      additionalProperties: false
+      required:
+        - event_id
+        - type
+        - splice_type
+        - is_out
+        - is_instant
+        - loop
+        - start_utc
+        - end_utc
+        - duration_s
+        - segmentation_type_id
+        - upid_type
+        - upid_hex
+        - assets
+        - first_segment
+        - last_segment
+        - starts_before_window
+        - ends_after_window
+        - splice_command_b64
+      properties:
+        event_id:
+          type: string
+          pattern: "^0x[0-9A-Fa-f]+$"
+          description: |
+            SCTE-35 event id, hex string. With `increment_event_ids` it is the id for
+            this loop repetition (see `original_event_id`).
+        original_event_id:
+          type: string
+          description: Present only when `event_id` was remapped for this loop repetition.
+        type:
+          type: [string, "null"]
+          description: Marker kind as authored in franken-ts (e.g. `ad_break`, `ppo`).
+        splice_type:
+          type: [string, "null"]
+          enum: [splice_insert, time_signal, null]
+        is_out:
+          type: boolean
+          description: True for a start (cue-out), false for an end (cue-in).
+        is_instant:
+          type: boolean
+          description: Standalone signal with no matching end (e.g. segmentation type 0x02).
+        loop:
+          type: integer
+          minimum: 0
+          description: Loop repetition this instance belongs to.
+        start_utc: { $ref: "#/components/schemas/UtcTime" }
+        end_utc:
+          $ref: "#/components/schemas/NullableUtcTime"
+          description: |
+            `start_utc` + `duration_s`; null for point-in-time markers (cue-ins,
+            instant signals, or a start with no known duration).
+        duration_s:
+          type: [number, "null"]
+          description: |
+            The marker's segmentation duration, or the distance to its matching
+            cue-in when it has none of its own.
+        segmentation_type_id:
+          type: [string, "null"]
+          description: Hex string such as `0x34`; null for a plain splice_insert.
+        upid_type:
+          type: [integer, "null"]
+        upid_hex:
+          type: [string, "null"]
+        assets:
+          type: array
+          description: Asset ids the marker refers to, as authored.
+          items: { type: string }
+        first_segment: { type: integer, minimum: 0 }
+        last_segment: { type: integer, minimum: 0 }
+        starts_before_window: { type: boolean }
+        ends_after_window: { type: boolean }
+        splice_command_b64:
+          type: [string, "null"]
+          description: Raw SCTE-35 message, base64, as signalled in the manifests.
+    Health:
+      type: object
+      description: Status for monitoring. Not versioned; fields may be added.
+      required: [status, timescale, epoch_ticks, total_loop_duration_ticks, loop_number]
+      properties:
+        status: { type: string, const: ok }
+        package_dir: { type: string }
+        timescale: { type: integer }
+        epoch_ticks: { type: integer }
+        total_loop_duration_ticks: { type: integer }
+        total_loop_duration_seconds: { type: number }
+        loop_number: { type: integer }
+        position_in_loop_ticks: { type: integer }
+        position_in_loop_seconds: { type: number }
+        uptime_seconds: { type: number }
+        renditions:
+          type: array
+          items: { type: string }
+        has_audio: { type: boolean }
+        hls_format: { type: string, enum: [cmaf, ts] }
+        hls_ts_mux_audio: { type: boolean }
+        window_segments: { type: integer }
+        continuous_timeline: { type: boolean }
+        epoch_utc: { $ref: "#/components/schemas/UtcTime" }
+        timeshift:
+          type: object
+          required: [enabled]
+          properties:
+            enabled: { type: boolean }
+            start_param: { type: string }
+            end_param: { type: string }
+            timeline_param: { type: string }
+            offset_param: { type: string }
+            full_loops_param: { type: string }
+            max_span_seconds: { type: integer }
+            continuous_supported: { type: boolean }
