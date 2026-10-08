@@ -45,6 +45,7 @@ import {
   listJobs,
   listScheduleWindows,
   redeployChannel,
+  refreshChannel,
   removeScheduleWindow,
   sparkChannel,
   startChannel,
@@ -445,6 +446,22 @@ const contentAction = computed<ActionDef>(() => {
 // backend -- these buttons never need to be hidden.
 const streamActions = computed<ActionDef[]>(() => [
   contentAction.value,
+  ...(backend.value === 'local-docker'
+    ? [
+        {
+          key: 'restart',
+          label: 'Restart',
+          icon: 'pi pi-sync',
+          severity: 'secondary' as const,
+          description:
+            'Rebuilds the loop-dee-loop image and recreates the container from the content already baked (no re-bake), applying the current channel config such as the epoch. Use it after changing settings or loop-dee-loop itself.',
+          eta: '~10-30s.',
+          fn: () => refreshChannel(props.name),
+          disabled: () => !isUpButMaybeUnreachable(phase.value),
+          disabledReason: () => 'Channel is not running -- use Start.',
+        },
+      ]
+    : []),
   {
     key: 'start',
     label: 'Start',
