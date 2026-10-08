@@ -11,6 +11,12 @@ See the repo-root [`AGENTS.md`](../AGENTS.md) for how this fits into the
 overall pipeline, and [`AGENT_BRIEF.md`](./AGENT_BRIEF.md) *(TODO)* for
 this project's own architecture rationale.
 
+## Documentation
+
+The **Docs** entry in the header serves all of the repository's documentation
+(guides, per-tool references, CLI cheatsheet) plus interactive API docs for
+Igor (`/api/docs`) and for the channel API. See `AGENTS.md` for how to add a page.
+
 ## Layout
 
 ```

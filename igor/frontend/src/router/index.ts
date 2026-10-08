@@ -8,6 +8,7 @@ import ArchiveImportList from '../views/ArchiveImportList.vue'
 import ArchiveImportEditor from '../views/ArchiveImportEditor.vue'
 import ManifestImportList from '../views/ManifestImportList.vue'
 import ManifestImportEditor from '../views/ManifestImportEditor.vue'
+import DocsView from '../views/DocsView.vue'
 
 export default createRouter({
   history: createWebHashHistory(),
@@ -23,5 +24,6 @@ export default createRouter({
     { path: '/archives/:name', name: 'archive-import', component: ArchiveImportEditor, props: true },
     { path: '/manifests', name: 'manifests', component: ManifestImportList },
     { path: '/manifests/:name', name: 'manifest-import', component: ManifestImportEditor, props: true },
+    { path: '/docs/:slug?', name: 'docs', component: DocsView, props: true },
   ],
 })

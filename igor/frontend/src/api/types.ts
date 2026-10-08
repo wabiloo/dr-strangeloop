@@ -542,3 +542,24 @@ export interface Job {
   started_at: number | null
   finished_at: number | null
 }
+
+export interface DocEntry {
+  slug: string
+  title: string
+  summary: string
+  /** Repo-relative path of the Markdown file. */
+  path: string
+}
+
+export interface DocSection {
+  id: string
+  title: string
+  entries: DocEntry[]
+}
+
+export interface DocPage {
+  slug: string
+  title: string
+  path: string
+  markdown: string
+}

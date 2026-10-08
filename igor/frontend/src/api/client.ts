@@ -10,6 +10,8 @@ import type {
   ChannelListItem,
   ChannelOutputs,
   ChannelStatus,
+  DocPage,
+  DocSection,
   ManifestImportStatus,
   ManifestInspection,
   ManifestListItem,
@@ -437,4 +439,14 @@ export async function uploadAsset(file: File): Promise<{ path: string; name: str
 
 export function channelDocsUrl(name: string): string {
   return `${CHANNELS_BASE}/${encodeURIComponent(name)}/docs`
+}
+
+const DOCS_BASE = '/api/v1/docs'
+
+export async function listDocs(): Promise<DocSection[]> {
+  return (await getJson<{ sections: DocSection[] }>(`${DOCS_BASE}/`)).sections
+}
+
+export async function getDocPage(slug: string): Promise<DocPage> {
+  return getJson(`${DOCS_BASE}/pages/${encodeURIComponent(slug)}`)
 }
