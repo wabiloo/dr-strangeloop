@@ -20,6 +20,7 @@ import EpochFields from '../components/EpochFields.vue'
 import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
 import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
+import WindowPanel from '../components/WindowPanel.vue'
 import TimeshiftPanel, { type TimeshiftPreview } from '../components/TimeshiftPanel.vue'
 import { timeshiftParamsFromConfig } from '../utils/timeshift'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
@@ -583,6 +584,21 @@ const showPlayback = computed(
   () => (playbackHlsUrl.value || playbackDashUrl.value) && phase.value !== 'stopped' && phase.value !== 'not-deployed',
 )
 
+// loop-dee-loop's /timeline.json describes the live window, or -- while a
+// startover/catchup preview is active -- the previewed range (same query).
+const windowAvailable = computed(
+  () => !!showPlayback.value && usesChannelSection(String(section('deploy').backend ?? '')),
+)
+const windowQuery = computed(() => {
+  const url = timeshiftPreview.value?.hlsUrl ?? timeshiftPreview.value?.dashUrl
+  if (!url) return ''
+  try {
+    return new URL(url, window.location.href).search.replace(/^\?/, '')
+  } catch {
+    return ''
+  }
+})
+
 async function loadConfig() {
   try {
     config.value = await getChannel(props.name)
@@ -855,6 +871,8 @@ watch(() => props.name, reload)
       :previewing="timeshiftPreview !== null"
       @preview="timeshiftPreview = $event"
     />
+
+    <WindowPanel v-if="windowAvailable" :name="name" :query="windowQuery" />
 
     <div class="channel-detail-layout">
       <div class="flex flex-column gap-4 channel-actions">

@@ -6,6 +6,7 @@ import type {
   BrowseResult,
   ChannelCreatePayload,
   ChannelHealth,
+  ChannelTimeline,
   ChannelListItem,
   ChannelOutputs,
   ChannelStatus,
@@ -330,6 +331,12 @@ export function getChannelOutputs(name: string): Promise<ChannelOutputs> {
 
 export function getChannelHealth(name: string): Promise<ChannelHealth> {
   return getJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/health`)
+}
+
+/** `query` is a raw timeshift query string (e.g. "start=...&end=..."), or empty for the live window. */
+export function getChannelTimeline(name: string, query = ''): Promise<ChannelTimeline> {
+  const qs = query ? `?${query.replace(/^\?/, '')}` : ''
+  return getJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/timeline${qs}`)
 }
 
 export function createChannel(name: string): Promise<Job> {
