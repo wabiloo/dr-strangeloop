@@ -323,6 +323,12 @@ export type ChannelOutputs = Record<string, string>
 
 /** loop-dee-loop `GET /timeline.json` -- schema: loop-dee-loop/openapi.yaml
  * (WindowDocument). Times are ISO-8601 UTC strings; durations are seconds. */
+export interface SegmentRange {
+  first: number
+  last: number
+  count: number
+}
+
 export interface TimelineWindow {
   convention: string
   ended: boolean
@@ -330,8 +336,24 @@ export interface TimelineWindow {
   end_utc: string
   live_edge_utc: string | null
   duration_s: number
-  first_segment: number
-  last_segment: number
+  segments: SegmentRange
+}
+
+/** Extent of periods/assets/markers/discontinuities (== window unless scope=loops). */
+export interface TimelineRange {
+  scope: 'window' | 'loops'
+  start_utc: string
+  end_utc: string
+  duration_s: number
+  segments: SegmentRange
+}
+
+export interface TimelineLoop {
+  number: number
+  start_utc: string
+  end_utc: string
+  segments: SegmentRange
+  current: boolean
 }
 
 export interface TimelineRendition {
@@ -350,8 +372,7 @@ export interface TimelinePeriod {
   id: string
   start_utc: string
   end_utc: string | null
-  first_segment: number
-  last_segment: number
+  segments: SegmentRange
 }
 
 export interface TimelineDiscontinuity {
@@ -369,10 +390,9 @@ export interface TimelineAsset {
   duration_s: number
   loop_start_s: number
   loop_end_s: number
-  first_segment: number
-  last_segment: number
-  starts_before_window: boolean
-  ends_after_window: boolean
+  segments: SegmentRange
+  starts_before_range: boolean
+  ends_after_range: boolean
 }
 
 export interface TimelineMarker {
@@ -390,10 +410,9 @@ export interface TimelineMarker {
   upid_type: number | null
   upid_hex: string | null
   assets: string[]
-  first_segment: number
-  last_segment: number
-  starts_before_window: boolean
-  ends_after_window: boolean
+  segments: SegmentRange
+  starts_before_range: boolean
+  ends_after_range: boolean
   splice_command_b64: string | null
 }
 
@@ -408,6 +427,8 @@ export interface ChannelTimeline {
   epoch_utc: string
   loop: { number: number; position_s: number; duration_s: number; segments: number; segment_duration_s: number }
   window: TimelineWindow
+  range: TimelineRange
+  loops: TimelineLoop[]
   renditions: TimelineRendition[]
   periods: TimelinePeriod[]
   discontinuities: TimelineDiscontinuity[]

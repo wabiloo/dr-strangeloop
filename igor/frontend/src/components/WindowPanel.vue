@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getChannelTimeline } from '../api/client'
 import type { ChannelTimeline } from '../api/types'
+import FieldHelp from './FieldHelp.vue'
 import { colorForLaneKey, laneKeyForMarker, laneLabelForMarker } from '../segmentationPresets'
 
 const props = defineProps<{
@@ -38,6 +39,17 @@ const showRaw = ref(false)
 type Selection = { kind: string; label: string; data: unknown }
 const selected = ref<Selection | null>(null)
 
+// Animated view state (see "geometry" below); declared before the immediate watch uses it.
+type View = { t0: number; t1: number }
+const TWEEN_MS = 450
+const view = ref<View | null>(null)
+const ghost = ref<ChannelTimeline | null>(null)
+const liveNow = ref(0)
+let tween: { from: View; to: View; start: number } | null = null
+let fetchedAt = 0
+let raf = 0
+const altCache = new Map<string, boolean>()
+
 let timer: ReturnType<typeof setInterval> | null = null
 let requestSeq = 0
 
@@ -46,7 +58,7 @@ async function load() {
   try {
     const next = await getChannelTimeline(props.name, props.query ?? '')
     if (seq !== requestSeq) return // a newer request (e.g. query changed) superseded this one
-    doc.value = next
+    applyDoc(next)
     error.value = ''
   } catch (e) {
     if (seq !== requestSeq) return
@@ -64,21 +76,75 @@ function restartPolling() {
 }
 watch([open, () => props.name, () => props.query], () => {
   doc.value = null
+  view.value = null
+  ghost.value = null
+  tween = null
+  altCache.clear()
   selected.value = null
   restartPolling()
 }, { immediate: true })
 onBeforeUnmount(() => {
   requestSeq++
+  cancelAnimationFrame(raf)
   if (timer) clearInterval(timer)
 })
 
 // ── geometry ────────────────────────────────────────────────────────────────
-const t0 = computed(() => (doc.value ? Date.parse(doc.value.window.start_utc) : 0))
-const t1 = computed(() => (doc.value ? Date.parse(doc.value.window.end_utc) : 1))
+// Positions are percentages of an animated `view`. When the range moves (a loop
+// boundary was crossed), the view slides from the old range to the new one while
+// the previous document's content stays rendered (`ghost`), so nothing pops in
+// or out mid-slide.
+
+const rangeOf = (d: ChannelTimeline): View => ({ t0: Date.parse(d.range.start_utc), t1: Date.parse(d.range.end_utc) })
+
+function applyDoc(next: ChannelTimeline) {
+  const prev = doc.value
+  const to = rangeOf(next)
+  doc.value = next
+  fetchedAt = performance.now()
+  if (!prev || !view.value) {
+    view.value = to
+    ghost.value = null
+    tween = null
+  } else if (prev.range.start_utc !== next.range.start_utc || prev.range.end_utc !== next.range.end_utc) {
+    ghost.value = prev
+    tween = { from: { ...view.value }, to, start: performance.now() }
+  } else if (!tween) {
+    view.value = to
+  }
+}
+
+function frame() {
+  raf = requestAnimationFrame(frame)
+  const now = performance.now()
+  if (tween) {
+    const p = Math.min(1, (now - tween.start) / TWEEN_MS)
+    const e = 1 - (1 - p) ** 3
+    view.value = {
+      t0: tween.from.t0 + (tween.to.t0 - tween.from.t0) * e,
+      t1: tween.from.t1 + (tween.to.t1 - tween.from.t1) * e,
+    }
+    if (p >= 1) {
+      tween = null
+      ghost.value = null
+    }
+  }
+  const d = doc.value
+  if (d && d.mode === 'live') liveNow.value = Date.parse(d.generated_at) + (now - fetchedAt)
+}
+onMounted(() => {
+  raf = requestAnimationFrame(frame)
+})
+
+const t0 = computed(() => view.value?.t0 ?? (doc.value ? rangeOf(doc.value).t0 : 0))
+const t1 = computed(() => view.value?.t1 ?? (doc.value ? rangeOf(doc.value).t1 : 1))
 const span = computed(() => Math.max(1, t1.value - t0.value))
 
+function pctMs(ms: number): number {
+  return ((ms - t0.value) / span.value) * 100
+}
 function pct(iso: string): number {
-  return ((Date.parse(iso) - t0.value) / span.value) * 100
+  return pctMs(Date.parse(iso))
 }
 function box(startIso: string, endIso: string | null): { left: string; width: string } {
   const a = Math.min(100, Math.max(0, pct(startIso)))
@@ -87,6 +153,42 @@ function box(startIso: string, endIso: string | null): { left: string; width: st
 }
 function at(iso: string): { left: string } {
   return { left: `${Math.min(100, Math.max(0, pct(iso)))}%` }
+}
+// Whether any part of [startIso, endIso] (or the instant startIso) is in view.
+function inView(startIso: string, endIso: string | null): boolean {
+  const a = pct(startIso)
+  if (!endIso) return a >= 0 && a <= 100
+  return pct(endIso) > 0 && a < 100
+}
+
+// Current document plus (during a slide) the previous one, de-duplicated by key;
+// the newer document wins.
+function merged<T>(pick: (d: ChannelTimeline) => T[], key: (x: T) => string, startOf: (x: T) => string): T[] {
+  const m = new Map<string, T>()
+  for (const d of [ghost.value, doc.value]) {
+    if (d) for (const x of pick(d)) m.set(key(x), x)
+  }
+  return [...m.values()].sort((x, y) => startOf(x).localeCompare(startOf(y)))
+}
+
+// Alternating shades are fixed the first time an item is seen, so they do not
+// flip when items leave the list and shift the indices.
+function withAlt<T>(ns: string, items: T[], key: (x: T) => string): { item: T; alt: boolean }[] {
+  const live = new Set<string>()
+  let prev = true
+  const out = items.map((item) => {
+    const k = `${ns}:${key(item)}`
+    live.add(k)
+    let alt = altCache.get(k)
+    if (alt === undefined) {
+      alt = !prev
+      altCache.set(k, alt)
+    }
+    prev = alt
+    return { item, alt }
+  })
+  for (const k of [...altCache.keys()]) if (k.startsWith(`${ns}:`) && !live.has(k)) altCache.delete(k)
+  return out
 }
 
 const NICE_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 21600, 43200, 86400]
@@ -105,16 +207,61 @@ const ticks = computed(() => {
 })
 
 const periodRows = computed(() =>
-  (doc.value?.periods ?? []).map((p, i) => ({ p, style: box(p.start_utc, p.end_utc ?? doc.value!.window.end_utc), alt: i % 2 === 1 })),
+  withAlt('p', merged((d) => d.periods, (p) => p.id + p.start_utc, (p) => p.start_utc), (p) => p.id + p.start_utc)
+    .filter(({ item: p }) => inView(p.start_utc, p.end_utc ?? new Date(t1.value).toISOString()))
+    .map(({ item: p, alt }) => ({ p, style: box(p.start_utc, p.end_utc ?? new Date(t1.value).toISOString()), alt })),
 )
 const assetRows = computed(() =>
-  (doc.value?.assets ?? []).map((a, i) => ({ a, style: box(a.start_utc, a.end_utc), alt: i % 2 === 1 })),
+  withAlt('a', merged((d) => d.assets, (a) => a.asset_id + a.start_utc, (a) => a.start_utc), (a) => a.asset_id + a.start_utc)
+    .filter(({ item: a }) => inView(a.start_utc, a.end_utc))
+    .map(({ item: a, alt }) => ({ a, style: box(a.start_utc, a.end_utc), alt })),
 )
-const discontinuityRows = computed(() => (doc.value?.discontinuities ?? []).map((d) => ({ d, style: at(d.utc) })))
+const discontinuityRows = computed(() =>
+  merged((d) => d.discontinuities, (x) => String(x.segment), (x) => x.utc)
+    .filter((x) => inView(x.utc, null))
+    .map((d) => ({ d, style: at(d.utc), flip: pct(d.utc) > 85 })),
+)
+
+const eventIdDec = (hex: string) => {
+  const n = parseInt(hex, 16)
+  return Number.isNaN(n) ? hex : String(n)
+}
+
+const loopRows = computed(() =>
+  merged((d) => d.loops, (l) => String(l.number), (l) => l.start_utc)
+    .filter((l) => inView(l.start_utc, l.end_utc))
+    .map((l) => ({ l, style: box(l.start_utc, l.end_utc), alt: l.number % 2 === 1 })),
+)
+
+// The manifest window (what players see) as a band, and "now" (the live edge) as a line.
+const windowBand = computed(() => (doc.value ? box(doc.value.window.start_utc, doc.value.window.end_utc) : null))
+// Both labels share one line: "manifest window" sits inside the band's left edge and
+// "live edge" just right of the line; when the line is near the right edge its label goes
+// left of it instead, and a narrow band then pushes its label outside, left of the band.
+const windowLabelOutside = computed(() => {
+  const w = doc.value?.window
+  return !!w && !!liveEdge.value?.flip && ((Date.parse(w.end_utc) - Date.parse(w.start_utc)) / span.value) * 100 < 30
+})
+const liveEdge = computed(() => {
+  const d = doc.value
+  if (!d || d.window.ended) return null
+  // The only wall-clock element: everything else is drawn straight from the JSON.
+  const ms = d.mode === 'live' && liveNow.value ? liveNow.value : Date.parse(d.generated_at)
+  return { style: { left: `${Math.min(100, Math.max(0, pctMs(ms)))}%` }, flip: pctMs(ms) > 85 }
+})
+
+type Marker = ChannelTimeline['markers'][number]
+const markerKey = (m: Marker) => m.event_id + m.start_utc + m.is_out
+const markerVisible = (m: Marker) => inView(m.start_utc, m.is_out && !m.is_instant ? m.end_utc : null)
 
 const lanes = computed(() => {
   const byKey = new Map<string, { key: string; label: string; color: string; markers: ChannelTimeline['markers'] }>()
-  for (const m of doc.value?.markers ?? []) {
+  const all = merged((d) => d.markers, markerKey, (m) => m.start_utc)
+  // A cue-out's span already ends at its cue-in; only draw a cue-in on its own
+  // when its cue-out is not part of the document.
+  const outIds = new Set(all.filter((m) => m.is_out && !m.is_instant).map((m) => m.event_id))
+  for (const m of all) {
+    if (!m.is_out && !m.is_instant && outIds.has(m.event_id)) continue
     const key = laneKeyForMarker({
       splice_type: m.splice_type ?? undefined,
       segmentation: m.segmentation_type_id ? { type_id: m.segmentation_type_id } : undefined,
@@ -149,9 +296,11 @@ const summary = computed(() => {
   const d = doc.value
   if (!d) return ''
   const w = d.window
+  const r = d.range
   return (
-    `${d.mode === 'live' ? 'Live window' : 'Timeshift range'} · ${hms(w.start_utc)} → ${hms(w.end_utc)} UTC · ${secs(w.duration_s)} · ` +
-    `segments ${w.first_segment}–${w.last_segment} · ${d.timeline} timeline · loop #${d.loop.number}, ${secs(d.loop.position_s)} of ${secs(d.loop.duration_s)}`
+    `${d.mode === 'live' ? 'Live' : 'Timeshift'} · ${r.scope === 'loops' ? 'previous/current/next loop' : 'range'} ${hms(r.start_utc)} → ${hms(r.end_utc)} UTC · ` +
+    `manifest window ${hms(w.start_utc)} → ${hms(w.end_utc)} (${secs(w.duration_s)}) · ` +
+    `segments ${w.segments.first}–${w.segments.last} (${w.segments.count}) · ${d.timeline} timeline · loop #${d.loop.number}, ${secs(d.loop.position_s)} of ${secs(d.loop.duration_s)}`
   )
 })
 
@@ -165,13 +314,24 @@ function isSelected(data: unknown): boolean {
 
 <template>
   <div class="window-panel surface-card border-round p-3 flex flex-column gap-3">
-    <div class="flex align-items-center gap-2 cursor-pointer" @click="toggle">
-      <span :class="open ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" class="text-sm" />
-      <h3 class="m-0 text-sm text-color-secondary uppercase">Window</h3>
-      <span v-if="open && doc" class="text-xs text-color-secondary ml-2 window-summary">{{ summary }}</span>
-      <span v-if="!open" class="text-xs text-color-secondary ml-2">
-        Markers, periods, assets and discontinuities in the current window (from /timeline.json)
-      </span>
+    <div class="flex align-items-center gap-2 flex-wrap">
+      <button
+        type="button"
+        class="wp-toggle flex align-items-center gap-2"
+        :aria-expanded="open"
+        @click="toggle"
+      >
+        <i :class="['pi', open ? 'pi-chevron-down' : 'pi-chevron-right']" aria-hidden="true" />
+        <h3 class="m-0 text-base">Timeline</h3>
+      </button>
+      <FieldHelp label="Timeline">
+        The content of the loop around now, from the channel's /timeline.json: the previous, current and next loop, the
+        window advertised in the manifests, and the live edge. HLS discontinuities and DASH periods are the two
+        manifest views of the same loop boundaries and breaks; assets and markers (ad breaks, PPOs, ...) are placed on
+        the same time axis. Click an item for its details.
+      </FieldHelp>
+      <span v-if="open && doc" class="text-sm text-color-secondary window-summary">{{ summary }}</span>
+      <span v-else-if="!open" class="text-sm text-color-secondary">Loops, breaks and markers with the live edge and manifest window</span>
     </div>
 
     <template v-if="open">
@@ -182,23 +342,41 @@ function isSelected(data: unknown): boolean {
         <div v-if="error" class="text-xs text-yellow-600">Last refresh failed: {{ error }}</div>
 
         <div class="wp-grid">
+          <div class="wp-overlay">
+            <div
+              v-for="r in loopRows"
+              :key="r.l.number"
+              class="wp-loop-bar"
+              :class="{ 'wp-alt': r.alt, 'wp-current': r.l.current }"
+              :style="r.style"
+            />
+            <div v-if="windowBand" class="wp-window" :style="windowBand" title="Window advertised in the HLS manifest">
+              <span class="wp-window-label" :class="{ 'wp-window-outside': windowLabelOutside }">manifest window</span>
+            </div>
+            <div v-if="liveEdge" class="wp-live" :style="liveEdge.style" title="Live edge (now)">
+              <span class="wp-live-label" :class="{ 'wp-live-flip': liveEdge.flip }">live edge</span>
+            </div>
+          </div>
           <div class="wp-label" />
           <div class="wp-track wp-ruler">
             <span v-for="t in ticks" :key="t.left" class="wp-tick" :style="{ left: t.left }">{{ t.label }}</span>
           </div>
 
-          <div class="wp-label">Periods</div>
+          <div class="wp-label" />
+          <div class="wp-flags" />
+
+          <div class="wp-label">Loops</div>
           <div class="wp-track">
             <div
-              v-for="r in periodRows"
-              :key="r.p.id + r.p.start_utc"
-              class="wp-block wp-period"
-              :class="{ 'wp-alt': r.alt, 'wp-selected': isSelected(r.p) }"
+              v-for="r in loopRows"
+              :key="r.l.number"
+              class="wp-block wp-loop"
+              :class="{ 'wp-current': r.l.current, 'wp-selected': isSelected(r.l) }"
               :style="r.style"
-              :title="`${r.p.id}\n${hms(r.p.start_utc)} → ${r.p.end_utc ? hms(r.p.end_utc) : 'open'}\nsegments ${r.p.first_segment}–${r.p.last_segment}`"
-              @click="select('Period', r.p.id, r.p)"
+              :title="`loop ${r.l.number}${r.l.current ? ' (current)' : ''}\n${hms(r.l.start_utc)} → ${hms(r.l.end_utc)}\nsegments ${r.l.segments.first}–${r.l.segments.last} (${r.l.segments.count})`"
+              @click="select('Loop', `#${r.l.number}`, r.l)"
             >
-              <span class="wp-text">{{ r.p.id }}</span>
+              <span class="wp-text">loop #{{ r.l.number }}</span>
             </div>
           </div>
 
@@ -210,45 +388,21 @@ function isSelected(data: unknown): boolean {
               class="wp-block wp-asset"
               :class="{
                 'wp-alt': r.alt,
-                'wp-open-left': r.a.starts_before_window,
-                'wp-open-right': r.a.ends_after_window,
+                'wp-open-left': r.a.starts_before_range,
+                'wp-open-right': r.a.ends_after_range,
                 'wp-selected': isSelected(r.a),
               }"
               :style="r.style"
-              :title="`${r.a.asset_id}\n${hms(r.a.start_utc)} → ${hms(r.a.end_utc)} (${secs(r.a.duration_s)})\nsegments ${r.a.first_segment}–${r.a.last_segment}`"
+              :title="`${r.a.asset_id}\n${hms(r.a.start_utc)} → ${hms(r.a.end_utc)} (${secs(r.a.duration_s)})\nsegments ${r.a.segments.first}–${r.a.segments.last} (${r.a.segments.count})`"
               @click="select('Asset', r.a.asset_id, r.a)"
             >
               <span class="wp-text">{{ r.a.asset_id }}</span>
             </div>
           </div>
 
-          <template v-for="lane in lanes" :key="lane.key">
-            <div class="wp-label" :title="lane.label">{{ lane.label }}</div>
-            <div class="wp-track">
-              <div
-                v-for="m in lane.markers"
-                :key="m.event_id + m.start_utc + m.is_out"
-                class="wp-block wp-marker"
-                :class="{
-                  'wp-point': m.is_instant || !m.is_out || !m.end_utc,
-                  'wp-in': !m.is_out && !m.is_instant,
-                  'wp-open-left': m.starts_before_window,
-                  'wp-open-right': m.ends_after_window,
-                  'wp-selected': isSelected(m),
-                }"
-                :style="{
-                  ...box(m.start_utc, m.is_out && !m.is_instant ? m.end_utc : null),
-                  '--lane': lane.color,
-                }"
-                :title="`event ${m.event_id} — ${m.is_instant ? 'instant' : m.is_out ? 'out' : 'in'}${m.duration_s != null ? ' ' + secs(m.duration_s) : ''}\n${hms(m.start_utc)}${m.end_utc ? ' → ' + hms(m.end_utc) : ''}\nsegments ${m.first_segment}–${m.last_segment}`"
-                @click="select('Marker', `event ${m.event_id}`, m)"
-              >
-                <span v-if="m.is_out && !m.is_instant && m.end_utc" class="wp-text">{{ m.event_id }}</span>
-              </div>
-            </div>
-          </template>
+          <div class="wp-sep" />
 
-          <div class="wp-label">Discont.</div>
+          <div class="wp-label" title="Discontinuities in the HLS media playlists">HLS discontinuities</div>
           <div class="wp-track">
             <div
               v-for="r in discontinuityRows"
@@ -259,9 +413,52 @@ function isSelected(data: unknown): boolean {
               :title="`${r.d.reason}\nsegment ${r.d.segment}, sequence ${r.d.sequence}\n${hms(r.d.utc)}`"
               @click="select('Discontinuity', r.d.reason, r.d)"
             >
-              <span class="wp-disc-label">{{ r.d.reason.replace('_', ' ') }}</span>
+              <span class="wp-disc-label" :class="{ 'wp-flip': r.flip }">{{ r.d.reason.replace('_', ' ') }}</span>
             </div>
           </div>
+
+          <div class="wp-label" title="Periods in the DASH manifest">DASH periods</div>
+          <div class="wp-track">
+            <div
+              v-for="r in periodRows"
+              :key="r.p.id + r.p.start_utc"
+              class="wp-block wp-period"
+              :class="{ 'wp-alt': r.alt, 'wp-selected': isSelected(r.p) }"
+              :style="r.style"
+              :title="`${r.p.id}\n${hms(r.p.start_utc)} → ${r.p.end_utc ? hms(r.p.end_utc) : 'open'}\nsegments ${r.p.segments.first}–${r.p.segments.last} (${r.p.segments.count})`"
+              @click="select('Period', r.p.id, r.p)"
+            >
+              <span class="wp-text">{{ r.p.id }}</span>
+            </div>
+          </div>
+
+          <div class="wp-sep" />
+
+          <template v-for="lane in lanes" :key="lane.key">
+            <div class="wp-label" :title="lane.label">{{ lane.label }}</div>
+            <div class="wp-track">
+              <div
+                v-for="m in lane.markers.filter(markerVisible)"
+                :key="markerKey(m)"
+                class="wp-block wp-marker"
+                :class="{
+                  'wp-point': m.is_instant || !m.is_out || !m.end_utc,
+                  'wp-in': !m.is_out && !m.is_instant,
+                  'wp-open-left': m.starts_before_range,
+                  'wp-open-right': m.ends_after_range,
+                  'wp-selected': isSelected(m),
+                }"
+                :style="{
+                  ...box(m.start_utc, m.is_out && !m.is_instant ? m.end_utc : null),
+                  '--lane': lane.color,
+                }"
+                :title="`event ${eventIdDec(m.event_id)} — ${m.is_instant ? 'instant' : m.is_out ? 'out' : 'in'}${m.duration_s != null ? ' ' + secs(m.duration_s) : ''}\n${hms(m.start_utc)}${m.end_utc ? ' → ' + hms(m.end_utc) : ''}\nsegments ${m.segments.first}–${m.segments.last} (${m.segments.count})`"
+                @click="select('Marker', `event ${eventIdDec(m.event_id)}`, m)"
+              >
+                <span v-if="m.is_out && !m.is_instant && m.end_utc" class="wp-text">{{ eventIdDec(m.event_id) }}</span>
+              </div>
+            </div>
+          </template>
         </div>
 
         <div v-if="selected" class="wp-detail surface-100 border-round p-2">
@@ -290,16 +487,112 @@ function isSelected(data: unknown): boolean {
 </template>
 
 <style scoped>
+.wp-toggle {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+}
 .window-summary {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .wp-grid {
+  position: relative;
+  isolation: isolate;
   display: grid;
   grid-template-columns: 9rem 1fr;
   row-gap: 4px;
   align-items: stretch;
+}
+.wp-overlay {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 9rem;
+  right: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+.wp-loop-bar {
+  position: absolute;
+  top: 22px;
+  bottom: 0;
+  border-left: 2px solid rgba(100, 116, 139, 0.75);
+  background: rgba(100, 116, 139, 0.07);
+}
+.wp-loop-bar.wp-alt {
+  background: transparent;
+}
+.wp-loop-bar.wp-current {
+  background: rgba(100, 116, 139, 0.14);
+}
+.wp-loop {
+  background: transparent;
+  border-radius: 0;
+}
+.wp-loop .wp-text {
+  color: var(--text-color-secondary);
+  padding-left: 0.4rem;
+}
+.wp-loop.wp-current .wp-text {
+  color: var(--text-color);
+  font-weight: 700;
+}
+.wp-sep {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--p-surface-400, #94a3b8);
+  margin: 2px 0;
+}
+.wp-flags {
+  height: 18px;
+}
+.wp-window {
+  position: absolute;
+  top: 22px;
+  bottom: 0;
+  background: rgba(99, 102, 241, 0.14);
+  border-left: 1px solid rgba(99, 102, 241, 0.7);
+  border-right: 1px solid rgba(99, 102, 241, 0.7);
+}
+.wp-window-label {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  font-size: 0.65rem;
+  white-space: nowrap;
+  color: var(--text-color-secondary);
+}
+.wp-live {
+  position: absolute;
+  top: 22px;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #ef4444;
+}
+.wp-live-flip {
+  left: auto !important;
+  right: 5px;
+}
+.wp-window-outside {
+  left: auto !important;
+  right: 100%;
+  margin-right: 4px;
+}
+.wp-live-label {
+  position: absolute;
+  top: 2px;
+  left: 5px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #ef4444;
+  background: var(--surface-card);
+  padding: 0 3px;
+  border-radius: 2px;
 }
 .wp-label {
   font-size: 0.75rem;
@@ -310,17 +603,29 @@ function isSelected(data: unknown): boolean {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Layers inside the grid: track backdrop (0) < overlay lines/bands (1) < track content (2). */
 .wp-track {
   position: relative;
   height: 26px;
-  background: var(--surface-100);
   border-radius: 4px;
   overflow: hidden;
 }
+.wp-track::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--surface-100);
+  z-index: 0;
+}
+.wp-track > * {
+  z-index: 2;
+}
 .wp-ruler {
   height: 18px;
-  background: transparent;
   overflow: visible;
+}
+.wp-ruler::before {
+  display: none;
 }
 .wp-tick {
   position: absolute;
@@ -351,8 +656,7 @@ function isSelected(data: unknown): boolean {
   color: #fff;
 }
 .wp-period {
-  background: var(--primary-color);
-  opacity: 0.85;
+  background: #3b82f6;
 }
 .wp-asset {
   background: var(--teal-600, #0d9488);
@@ -390,7 +694,7 @@ function isSelected(data: unknown): boolean {
   top: 0;
   bottom: 0;
   width: 2px;
-  background: var(--red-500, #ef4444);
+  background: #d97706;
   cursor: pointer;
   overflow: visible;
 }
@@ -400,7 +704,11 @@ function isSelected(data: unknown): boolean {
   left: 4px;
   font-size: 0.65rem;
   white-space: nowrap;
-  color: var(--red-500, #ef4444);
+  color: #d97706;
+}
+.wp-flip {
+  left: auto;
+  right: 4px;
 }
 .wp-detail {
   max-height: 16rem;

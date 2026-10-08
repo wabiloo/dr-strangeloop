@@ -333,9 +333,11 @@ export function getChannelHealth(name: string): Promise<ChannelHealth> {
   return getJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/health`)
 }
 
-/** `query` is a raw timeshift query string (e.g. "start=...&end=..."), or empty for the live window. */
+/** `query` is a raw timeshift query string (e.g. "start=...&end=..."), or empty for the live
+ * view -- which then asks for whole loops (`scope=loops`) around the manifest window. */
 export function getChannelTimeline(name: string, query = ''): Promise<ChannelTimeline> {
-  const qs = query ? `?${query.replace(/^\?/, '')}` : ''
+  const q = query.replace(/^\?/, '')
+  const qs = `?${q || 'scope=loops'}`
   return getJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/timeline${qs}`)
 }
 
