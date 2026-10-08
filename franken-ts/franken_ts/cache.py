@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Bump this whenever the extraction recipe changes in a way that makes old
 # cache artifacts incompatible (filters, codec params, stream layout, …) so
 # stale entries are not silently reused.
-_RECIPE_VERSION = "extract_v19_vonly+aonly+osd+loop-time+transition+fade+slate+image"
+_RECIPE_VERSION = "extract_v20_vonly+aonly+osd+loop-time+transition+fade+slate+image+loopbar-zebra"
 
 
 @dataclass(frozen=True)

@@ -779,9 +779,12 @@ def test_loop_progress_graph_assets_row_is_bottom_solid_with_dividers():
     assets_y = 1000 - row_h
     spans_y = assets_y - row_h
     assert not any(f"y={spans_y}:w=1000" in p for p in parts)  # no backing strip behind the span row
-    asset_boxes = [p for p in parts if f"y={assets_y}:w=200:h={row_h}:color=0x475569" in p]
+    asset_boxes = [p for p in parts if f"y={assets_y}:w=200:h={row_h}:color=0x" in p and "0x000000" not in p]
     assert len(asset_boxes) == 5
-    dividers = [p for p in parts if f"y={assets_y}:w=2:" in p and "0x000000@0.7" in p]
+    # Consecutive assets alternate shades so boundaries stay visible when downscaled.
+    colors = [p.split("color=")[1].split(":")[0] for p in asset_boxes]
+    assert colors[0] != colors[1] and colors[0] == colors[2] == colors[4] and colors[1] == colors[3]
+    dividers = [p for p in parts if f"y={assets_y}:w=2:" in p and "0x000000@0.85" in p]
     assert len(dividers) == 4  # 4 inner boundaries, none at the loop edges
     assert "x=199:" in dividers[0]
     assert f"y={spans_y}" in lines[2] and "t+10.000000" in lines[2] and "/50.000000" in lines[2]
@@ -800,7 +803,7 @@ def test_loop_progress_graph_spans_single_row_above_assets_with_dividers_and_no_
     assert span_boxes[0].startswith(f"drawbox=x=200:y={spans_y}:w=600:h={row_h}:color=0x{lane_color('time_signal:0x22')}")
     # Dividers at every distinct span edge (200, 400, 600, 800), none at the loop edges.
     dividers = sorted(int(p.split(":")[0].split("=")[-1]) for p in parts
-                      if f"y={spans_y}:w=2:" in p and "0x000000@0.7" in p)
+                      if f"y={spans_y}:w=2:" in p and "0x000000@0.85" in p)
     assert dividers == [199, 399, 599, 799]
     assert not any(p.startswith("drawtext") for p in parts)
 

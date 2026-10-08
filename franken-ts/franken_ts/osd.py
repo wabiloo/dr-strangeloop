@@ -76,9 +76,11 @@ _ACCENT_STRIPE_OVERLAP_PX = 2
 # the same palette and hash igor's timeline lanes use (generated into igor).
 # Assets are a neutral slate (not igor's teal) so they never blend into a
 # teal lane (e.g. Break) in the row above.
-_LOOP_BAR_ASSET_COLOR = "0x475569@0.6"
-_LOOP_BAR_DIVIDER = "0x000000@0.7"
-_LOOP_BAR_DIVIDER_PX = 2
+# Consecutive assets alternate between two slate shades so boundaries stay
+# visible when the player downscales the frame (thin dividers alone vanish).
+_LOOP_BAR_ASSET_COLORS = ("0x334155@0.75", "0x94a3b8@0.75")
+_LOOP_BAR_DIVIDER = "0x000000@0.85"
+_LOOP_BAR_DIVIDER_WIDTH_FRACTION = 1 / 480
 _LOOP_BAR_SPAN_ALPHA = 0.6
 _LOOP_BAR_PLAYHEAD_WIDTH_FRACTION = 1 / 640
 
@@ -176,7 +178,7 @@ def build_loop_progress_graph(
     SCTE-35 spans (not individual markers) in a single row, each in its lane
     color, outermost first so nested spans paint over their parents. Both
     rows have dark vertical dividers (between assets; at every span start
-    and end). No labels.
+    and end), and asset blocks alternate between two shades. No labels.
 
     The map is identical for every clip, so it's plain `drawbox` with
     constant coordinates; only the playhead overlay is time-aware. Block
@@ -196,21 +198,22 @@ def build_loop_progress_graph(
         return max(0, min(width, round(seconds / entry.loop_duration * width)))
 
     filters: list[str] = []
-    for start, end in layout.assets:
+    for i, (start, end) in enumerate(layout.assets):
         x0, x1 = px(start), px(end)
         if x1 > x0:
-            filters.append(
-                f"drawbox=x={x0}:y={assets_y}:w={x1 - x0}:h={row_h}:color={_LOOP_BAR_ASSET_COLOR}:t=fill"
-            )
+            color = _LOOP_BAR_ASSET_COLORS[i % 2]
+            filters.append(f"drawbox=x={x0}:y={assets_y}:w={x1 - x0}:h={row_h}:color={color}:t=fill")
     for span in layout.spans:
         x0, x1 = px(span.start), px(span.end)
         if x1 > x0:
             color = f"0x{lane_color(span.lane_key)}@{_LOOP_BAR_SPAN_ALPHA}"
             filters.append(f"drawbox=x={x0}:y={spans_y}:w={x1 - x0}:h={row_h}:color={color}:t=fill")
 
+    divider_px = max(2, round(width * _LOOP_BAR_DIVIDER_WIDTH_FRACTION))
+
     def divider(x: int, y: int) -> str:
         return (
-            f"drawbox=x={x - _LOOP_BAR_DIVIDER_PX // 2}:y={y}:w={_LOOP_BAR_DIVIDER_PX}:"
+            f"drawbox=x={x - divider_px // 2}:y={y}:w={divider_px}:"
             f"h={row_h}:color={_LOOP_BAR_DIVIDER}:t=fill"
         )
 

@@ -324,7 +324,7 @@ osd:
   the start of each asset). `height_pct` is its height.
 - `loop`: a static two-row map of the whole loop with a playhead, each row
   `height_pct` high. Bottom row: the assets as one solid slate row, with dark
-  vertical dividers between assets. Row above it: the non-instant SCTE-35
+  vertical dividers between assets (consecutive assets also alternate between two shades). Row above it: the non-instant SCTE-35
   spans (not individual markers) in a single row, each in its segmentation-type
   color (the same palette Igor uses for its lanes), with a divider at every
   span start and end. Nested spans are painted outermost first, so an inner
