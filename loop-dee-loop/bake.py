@@ -34,6 +34,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 import cmaf
@@ -783,7 +784,7 @@ def read_variant_metadata(gpac_mpd_path: Path) -> dict:
                 "codecs": representation.get("codecs"),
                 "width": int(representation.get("width")),
                 "height": int(representation.get("height")),
-                "frame_rate": float(representation.get("frameRate")),
+                "frame_rate": float(Fraction(representation.get("frameRate"))),
                 "bandwidth": int(representation.get("bandwidth")),
             }
         elif mime.startswith("audio/"):

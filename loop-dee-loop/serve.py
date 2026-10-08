@@ -32,6 +32,7 @@ import logging
 import math
 import time
 from collections.abc import Callable
+from fractions import Fraction
 from pathlib import Path
 
 from urllib.parse import urlencode
@@ -79,6 +80,18 @@ from scte35_signaling import (
     markers_to_signaling,
     reencode_event_ids,
 )
+
+
+def _dash_frame_rate(frame_rate: float) -> str:
+    """DASH ``@frameRate`` is ``N`` or ``N/D`` -- decimals like ``25.000`` are schema-invalid."""
+    frac = Fraction(frame_rate).limit_denominator(1001)
+    return str(frac.numerator) if frac.denominator == 1 else f"{frac.numerator}/{frac.denominator}"
+
+
+def _join_events(events: list[tuple[int, str]]) -> str:
+    """ISO 23009-1 / MediaTailor ("first Event in each Period") both assume an
+    EventStream's Events are in presentationTime order."""
+    return "\n".join(xml for _, xml in sorted(events, key=lambda e: e[0]))
 
 
 def _read_generator_version() -> str:
@@ -1896,7 +1909,7 @@ class Channel:
                 else "urn:scte:scte35:2014:xml+bin"
             )
 
-            event_xml: list[str] = []
+            event_xml: list[tuple[int, str]] = []
             event_markers: list[dict] = []
             for marker in pkg.markers:
                 # A single <Event> element describes the whole
@@ -1970,12 +1983,12 @@ class Channel:
                 event_presentation_time = (
                     marker["pts_time_ticks"] - pkg.segment_boundary_ticks[span_start_local] - pto_ticks
                 )
-                event_xml.append(
+                event_xml.append((event_presentation_time,
                     f'    <Event presentationTime="{event_presentation_time}"'
                     f'{duration_attr} id="{synthetic_id}">\n'
                     f"{signal_xml}\n"
                     f"    </Event>"
-                )
+                ))
 
             video_representations = []
             for idx, rendition in enumerate(pkg.video_renditions):
@@ -1996,7 +2009,7 @@ class Channel:
                 else:
                     init_attr = f' initialization="{rendition.name}/init.mp4"'
 
-                video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
+                video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{_dash_frame_rate(v["frame_rate"])}">
         <SegmentTemplate media="{rendition.name}/seg/$Number$.m4s"{init_attr}
                          timescale="{pkg.timescale}" startNumber="{first_number}"{pto_attr}>
           <SegmentTimeline>
@@ -2039,7 +2052,7 @@ class Channel:
                     [(m, event_id_map, None, self._marker_start_iso(m, loop_number)) for m in event_markers]
                 )
                 + f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}"{stream_value_attr}>\n'
-                + "\n".join(event_xml)
+                + _join_events(event_xml)
                 + "\n    </EventStream>"
                 if event_xml else ""
             )
@@ -2225,7 +2238,7 @@ class Channel:
         scheme_id_uri = (
             SCTE35_XML_NAMESPACE if pkg.dash_signal_format == "xml" else "urn:scte:scte35:2014:xml+bin"
         )
-        event_xml_by_group: list[list[str]] = [[] for _ in groups]
+        event_xml_by_group: list[list[tuple[int, str]]] = [[] for _ in groups]
         event_markers_by_group: list[list[tuple[dict, dict[str, str], int | None, str]]] = [
             [] for _ in groups
         ]
@@ -2303,12 +2316,12 @@ class Channel:
                     loop_number * pkg.total_loop_duration_ticks + marker["pts_time_ticks"]
                     - origin_abs - _group_start_rel(group_number, groups[group_number][0])
                 )
-                event_xml_by_group[group_number].append(
+                event_xml_by_group[group_number].append((event_presentation_time,
                     f'    <Event presentationTime="{event_presentation_time}"'
                     f'{duration_attr} id="{synthetic_id}">\n'
                     f"{signal_xml}\n"
                     f"    </Event>"
-                )
+                ))
 
         period_xml_parts = []
         for group_number, (brk, indices) in enumerate(groups):
@@ -2316,7 +2329,7 @@ class Channel:
             event_streams_xml = (
                 _dash_marker_comments(event_markers_by_group[group_number])
                 + f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}">\n'
-                + "\n".join(event_xml)
+                + _join_events(event_xml)
                 + "\n    </EventStream>"
                 if event_xml else ""
             )
@@ -2340,7 +2353,7 @@ class Channel:
                     init_attr = f' initialization="{rendition.name}/init_0.mp4"'
                 else:
                     init_attr = f' initialization="{rendition.name}/init.mp4"'
-                video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{v["frame_rate"]:.3f}">
+                video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{_dash_frame_rate(v["frame_rate"])}">
         <SegmentTemplate media="{rendition.name}/cseg/$Number$.m4s"{init_attr}
                          timescale="{pkg.timescale}" startNumber="{first_global}"{pto_attr}>
           <SegmentTimeline>
