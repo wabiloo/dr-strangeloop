@@ -46,3 +46,34 @@ export const TABLE23: Table23Entry[] = [
   { value: '0x46', name: 'Distributor Ad Block', code: 'DAB', instant: false, endValue: '0x47' },
   { value: '0x50', name: 'Network', code: 'NET', instant: false, endValue: '0x51' },
 ]
+
+/** Timeline lane colors -- port of scte35_table23.lane_key/lane_color. */
+export const LANE_PALETTE = [
+  '#dc2626',
+  '#7c3aed',
+  '#0891b2',
+  '#d97706',
+  '#059669',
+  '#db2777',
+  '#4f46e5',
+  '#65a30d',
+  '#0d9488',
+  '#ea580c',
+]
+
+/** Lane key for a marker: `time_signal:0xNN` per segmentation type_id (any
+ * case/`0X` spelling), or `splice_insert` for everything without one. */
+export function laneKey(spliceType: string | undefined, typeId: string | undefined): string {
+  if (spliceType === 'time_signal' && typeId) {
+    return `time_signal:${typeId.toUpperCase().replace('X', 'x')}`
+  }
+  return 'splice_insert'
+}
+
+/** Deterministic color per lane key: `h = h*31 + ord(c)` as an unsigned 32-bit
+ * hash into LANE_PALETTE. */
+export function colorForLaneKey(key: string): string {
+  let hash = 0
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0
+  return LANE_PALETTE[hash % LANE_PALETTE.length]
+}

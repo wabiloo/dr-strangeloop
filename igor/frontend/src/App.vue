@@ -8,6 +8,7 @@ const isPlaylistsActive = computed(() => route.path.startsWith('/playlists'))
 const isArchivesActive = computed(() => route.path.startsWith('/archives'))
 const isManifestsActive = computed(() => route.path.startsWith('/manifests'))
 const isChannelsActive = computed(() => route.path.startsWith('/channels'))
+const isDocsActive = computed(() => route.path.startsWith('/docs'))
 </script>
 
 <template>
@@ -62,6 +63,10 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
           <RouterLink to="/channels" class="app-nav-link" :class="{ 'app-nav-link-active': isChannelsActive }">
             <i class="pi pi-play-circle" aria-hidden="true" />
             Channels
+          </RouterLink>
+          <RouterLink to="/docs" class="app-nav-link app-nav-link-end" :class="{ 'app-nav-link-active': isDocsActive }">
+            <i class="pi pi-book" aria-hidden="true" />
+            Docs
           </RouterLink>
         </nav>
       </div>
@@ -224,6 +229,11 @@ const isChannelsActive = computed(() => route.path.startsWith('/channels'))
   font-size: 1.05rem;
   padding: 0 0.9rem;
   transition: color 0.12s ease;
+}
+
+/* Docs sits apart from the working areas, at the far right. */
+.app-nav-link-end {
+  margin-left: auto;
 }
 
 .app-nav-link > i {

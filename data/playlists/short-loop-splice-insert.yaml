@@ -20,12 +20,15 @@ assets:
   id: asset-2
   start: 10s
   duration: 10s
+enforce_scte35_marker_semantics: true
+scte35_numbering_scheme: SCTE35_2023R1
+break_numbering_supported: false
 normalize: true
 osd:
   enabled: true
-  countdown:
-    enabled: false
-    height_pct: 5
+  progress_bar:
+    mode: loop
+    height_pct: 3
   text_size_pct: 2
   text_color: '#FFFFFF'
   ad_break_label: ad break

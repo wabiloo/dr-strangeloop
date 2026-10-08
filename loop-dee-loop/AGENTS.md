@@ -65,6 +65,18 @@ match, fix the upstream franken-ts input instead.
 | `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig`, and integer-tick `resolve_window` (segment snapping, `full-loops` widening, max-span cap). Pure ints, no Flask. |
 | `load_test.py` | Concurrent-viewer load generator (see `PERFS.md`). |
 
+## Window JSON (`/timeline.json`)
+
+`serve.py` exposes `/timeline.json`, documented in
+[`openapi.yaml`](./openapi.yaml) (served at `/openapi.yaml`, rendered at
+`/docs`). It is a *mirror* of the HLS/DASH window maths in
+`Channel.build_window_json`, not shared code: when you change how manifests
+place markers, periods, discontinuities or the window, update the builder and
+`openapi.yaml` too. `tests/test_serve_window_json.py` (schema drift +
+HLS DATERANGE / DASH Period+Event consistency, with and without
+`increment_event_ids`) fails if they diverge. Igor's Timeline panel draws it.
+Design/glossary: `SCOPE.md` §15.
+
 ## Forced Periods on SCTE-35 types
 
 `serve.py --period-on-segmentation 0x22,0x30,...` (its-a-live `[markers]

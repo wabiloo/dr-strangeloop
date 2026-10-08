@@ -1,0 +1,68 @@
+output:
+  framerate: 25
+  bitrate_kbps: 5000
+  service_provider: ''
+  service_name: ''
+  dir: football-with-1-simple-break-of-4-ads
+  renditions:
+  - name: video_1
+    resolution: 1920x1080
+    bitrate_kbps: 4500
+  - name: video_2
+    resolution: 1280x720
+    bitrate_kbps: 3000
+  - name: video_3
+    resolution: 640x360
+    bitrate_kbps: 1500
+assets:
+- file: http://bpkioassets.s3-eu-west-1.amazonaws.com/UptalkTvFootball/UptalkTVFootball.mov
+  id: asset-5
+  duration: 60
+- file: https://bpkcscreatives.s3.amazonaws.com/by_lang/it/AcquaPanna-P-M51E4g7JI.mp4_30_s.mp4
+  id: ad-1
+  duration: 30
+  osd_label: AcquaPanna-P-M51E4g7JI.mp4_30_s.mp4
+- file: https://bpkcscreatives.s3.amazonaws.com/CBTL/Kogan.com-15s.mp4
+  id: ad-2
+  duration: 15.07
+  osd_label: Kogan.com-15s.mp4
+- file: https://bpkcscreatives.s3.amazonaws.com/by_lang/it/Casa_di_Mama_TV-YBO4LefFJ5s.mp4_10_s.mp4
+  id: ad-3
+  duration: 10
+  osd_label: Casa_di_Mama_TV-YBO4LefFJ5s.mp4_10_s.mp4
+- file: https://bpkcscreatives.s3.amazonaws.com/by_lang/it/FlyFlot-X2-JbTDJ5C4.mp4_05_s.mp4
+  id: ad-4
+  duration: 5.015
+  osd_label: FlyFlot-X2-JbTDJ5C4.mp4_05_s.mp4
+- file: http://bpkioassets.s3-eu-west-1.amazonaws.com/UptalkTvFootball/UptalkTVFootball.mov
+  id: asset-6
+  start: 1min
+  duration: 30s
+enforce_scte35_marker_semantics: true
+scte35_numbering_scheme: SCTE35_2023R1
+break_numbering_supported: false
+normalize: true
+osd:
+  enabled: true
+  progress_bar:
+    mode: asset
+    height_pct: 3
+  text_size_pct: 3
+  text_color: '#FFFFFF'
+  ad_break_label: ad break
+  corner_box:
+    enabled: true
+    color: '#F0E871'
+  corners:
+    top_left: null
+    top_right: is_adbreak
+    bottom_left: asset_id
+    bottom_right: next_asset_id
+markers:
+- event_id: 1
+  splice_type: splice_insert
+  assets:
+  - ad-1
+  - ad-2
+  - ad-3
+  - ad-4

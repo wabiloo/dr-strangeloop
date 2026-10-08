@@ -223,3 +223,44 @@ def test_channel_summary_runs_channel_py_for_one_config(tmp_path, monkeypatch):
 
     assert client.get("/api/v1/channels/missing/summary").status_code == 404
     assert client.get("/api/v1/channels/..%2Fx/summary").status_code in (400, 404)
+
+
+def test_channel_timeline_proxies_serve_json_and_forwards_query(tmp_path, monkeypatch):
+    import httpx
+
+    from igor.integrations import its_a_live
+    from igor.store import channels as channel_store
+
+    monkeypatch.setattr(channel_store.paths, "ITS_A_LIVE_CONFIGS_DIR", tmp_path)
+    _write_channel(tmp_path, "alpha")
+    _write_channel(tmp_path, "gamma", "aws-media")
+    monkeypatch.setattr(its_a_live, "get_status", lambda _p: {"port": 8123})
+
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.params.get("start") == "bad":
+            return httpx.Response(400, text="bad range")
+        return httpx.Response(200, json={"version": 1})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "igor.app.routes.channels.httpx.AsyncClient",
+        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+    )
+
+    resp = client.get("/api/v1/channels/alpha/timeline?start=2026-01-01T00:00:00Z&end=2026-01-01T00:01:00Z")
+    assert resp.status_code == 200 and resp.json() == {"version": 1}
+    assert seen[0].startswith("http://localhost:8123/timeline.json?")
+    assert "start=2026-01-01T00%3A00%3A00Z" in seen[0] and "end=" in seen[0]
+
+    assert client.get("/api/v1/channels/alpha/timeline?start=bad").status_code == 400
+
+    docs = client.get("/api/v1/channels/alpha/docs")
+    assert docs.status_code == 200 and seen[-1] == "http://localhost:8123/docs"
+    assert client.get("/api/v1/channels/alpha/openapi.yaml").status_code == 200
+    assert seen[-1] == "http://localhost:8123/openapi.yaml"
+    assert client.get("/api/v1/channels/gamma/docs").status_code == 404
+    assert client.get("/api/v1/channels/gamma/timeline").status_code == 404
+    assert client.get("/api/v1/channels/missing/timeline").status_code == 404

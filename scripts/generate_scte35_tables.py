@@ -39,6 +39,7 @@ from pathlib import Path
 
 from scte35_table23 import (
     INSTANT_SEGMENTATION_TYPE_IDS,
+    LANE_PALETTE,
     SEGMENTATION_END_TYPE_ID,
     SEGMENTATION_TYPE_CODE,
     SEGMENTATION_TYPE_NAME,
@@ -118,6 +119,7 @@ def render_igor_frontend_ts() -> str:
             f"instant: {'true' if instant else 'false'}, endValue: {end_value} }},"
         )
     rows_block = "\n".join(rows)
+    palette_block = "\n".join(f"  '#{c}'," for c in LANE_PALETTE)
     return f"""/**
  * {GENERATED_NOTICE}
  * {SOURCE_NOTICE}
@@ -138,6 +140,28 @@ export interface Table23Entry {{
 export const TABLE23: Table23Entry[] = [
 {rows_block}
 ]
+
+/** Timeline lane colors -- port of scte35_table23.lane_key/lane_color. */
+export const LANE_PALETTE = [
+{palette_block}
+]
+
+/** Lane key for a marker: `time_signal:0xNN` per segmentation type_id (any
+ * case/`0X` spelling), or `splice_insert` for everything without one. */
+export function laneKey(spliceType: string | undefined, typeId: string | undefined): string {{
+  if (spliceType === 'time_signal' && typeId) {{
+    return `time_signal:${{typeId.toUpperCase().replace('X', 'x')}}`
+  }}
+  return 'splice_insert'
+}}
+
+/** Deterministic color per lane key: `h = h*31 + ord(c)` as an unsigned 32-bit
+ * hash into LANE_PALETTE. */
+export function colorForLaneKey(key: string): string {{
+  let hash = 0
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0
+  return LANE_PALETTE[hash % LANE_PALETTE.length]
+}}
 """
 
 

@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Literal
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, field_validator, model_validator
 
 from igor.integrations import archives, franken_ts, its_a_live, manifests
@@ -388,17 +389,16 @@ def channel_outputs(name: str) -> dict:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@router.get("/{name}/health")
-async def channel_health(name: str) -> dict:
-    """Proxies loop-dee-loop's `serve.py` `/health` endpoint (ecs-express
-    and local-docker channels only, both of which actually run serve.py --
-    aws-media has no equivalent).
+def _serve_url(name: str, path: str) -> str:
+    """URL of a loop-dee-loop `serve.py` path for a running channel
+    (ecs-express and local-docker only, both of which actually run
+    serve.py -- aws-media has no equivalent).
 
-    - ecs-express: hits the direct ECS Express service endpoint (not the
+    - ecs-express: the direct ECS Express service endpoint (not the
       CloudFront domain) to bypass manifest/segment cache policies that
-      weren't written with this path in mind.
-    - local-docker: hits the container directly on localhost -- there's
-      no stack/outputs to look up, just the configured port.
+      weren't written with these paths in mind.
+    - local-docker: the container directly on localhost -- there's no
+      stack/outputs to look up, just the configured port.
     """
     try:
         cfg = channel_store.read_channel_config(name)
@@ -417,8 +417,8 @@ async def channel_health(name: str) -> dict:
                 status_code=404,
                 detail="No local-docker container running yet for this channel.",
             )
-        url = f"http://localhost:{port}/health"
-    elif backend == "ecs-express":
+        return f"http://localhost:{port}{path}"
+    if backend == "ecs-express":
         outputs = its_a_live.get_outputs(channel_store.config_path_for(name))
         endpoint = outputs.get("ExpressServiceEndpoint")
         if not endpoint:
@@ -426,16 +426,21 @@ async def channel_health(name: str) -> dict:
                 status_code=404,
                 detail="No ExpressServiceEndpoint output -- not deployed yet.",
             )
-        url = endpoint.rstrip("/") + "/health"
-    else:
-        raise HTTPException(
-            status_code=404,
-            detail=f"backend {backend!r} has no /health endpoint (only ecs-express and local-docker run serve.py).",
-        )
+        return endpoint.rstrip("/") + path
+    raise HTTPException(
+        status_code=404,
+        detail=f"backend {backend!r} has no {path} endpoint (only ecs-express and local-docker run serve.py).",
+    )
 
+
+async def _proxy_serve_json(url: str, params: dict[str, str] | None = None) -> dict:
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(url)
+            resp = await client.get(url, params=params)
+        if resp.status_code == 400:
+            # serve.py rejects bad timeshift ranges with a plain 400 -- a caller
+            # mistake, not an outage, so don't flatten it to 503.
+            raise HTTPException(status_code=400, detail=resp.text.strip() or "Bad request")
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPError as exc:
@@ -445,6 +450,47 @@ async def channel_health(name: str) -> dict:
         # than 502 (bad gateway) -- and doesn't read like a proxy-layer bug in
         # server logs when polled every few seconds from the UI.
         raise HTTPException(status_code=503, detail=f"GET {url} failed: {exc}") from exc
+
+
+@router.get("/{name}/health")
+async def channel_health(name: str) -> dict:
+    """Proxies loop-dee-loop's `serve.py` `/health` endpoint."""
+    return await _proxy_serve_json(_serve_url(name, "/health"))
+
+
+@router.get("/{name}/timeline")
+async def channel_timeline(name: str, request: Request) -> dict:
+    """Proxies loop-dee-loop's `serve.py` `/timeline.json` (current HLS
+    window: periods, discontinuities, assets, markers). Query parameters
+    (`start`/`end`/`offset`/... timeshift selectors) are forwarded as-is so
+    the same endpoint describes a startover/catchup range."""
+    return await _proxy_serve_json(
+        _serve_url(name, "/timeline.json"), params=dict(request.query_params)
+    )
+
+
+async def _proxy_serve_text(name: str, path: str) -> Response:
+    url = _serve_url(name, path)
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(url)
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail=f"GET {url} failed: {exc}") from exc
+    return Response(resp.content, media_type=resp.headers.get("content-type", "text/plain"))
+
+
+@router.get("/{name}/docs")
+async def channel_api_docs(name: str) -> Response:
+    """Proxies serve.py's `/docs` (HTML rendering of its OpenAPI spec). Its
+    spec-url is relative, so it resolves to `.../{name}/openapi.yaml` below."""
+    return await _proxy_serve_text(name, "/docs")
+
+
+@router.get("/{name}/openapi.yaml")
+async def channel_openapi_spec(name: str) -> Response:
+    """Proxies serve.py's `/openapi.yaml`."""
+    return await _proxy_serve_text(name, "/openapi.yaml")
 
 
 def _spawn(job_type: str, name: str, extra_args: list[str] | None = None) -> dict:

@@ -20,6 +20,7 @@ import EpochFields from '../components/EpochFields.vue'
 import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
 import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
+import WindowPanel from '../components/WindowPanel.vue'
 import TimeshiftPanel, { type TimeshiftPreview } from '../components/TimeshiftPanel.vue'
 import { timeshiftParamsFromConfig } from '../utils/timeshift'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
@@ -44,6 +45,7 @@ import {
   listJobs,
   listScheduleWindows,
   redeployChannel,
+  refreshChannel,
   removeScheduleWindow,
   sparkChannel,
   startChannel,
@@ -444,6 +446,22 @@ const contentAction = computed<ActionDef>(() => {
 // backend -- these buttons never need to be hidden.
 const streamActions = computed<ActionDef[]>(() => [
   contentAction.value,
+  ...(backend.value === 'local-docker'
+    ? [
+        {
+          key: 'restart',
+          label: 'Restart',
+          icon: 'pi pi-sync',
+          severity: 'secondary' as const,
+          description:
+            'Rebuilds the loop-dee-loop image and recreates the container from the content already baked (no re-bake), applying the current channel config such as the epoch. Use it after changing settings or loop-dee-loop itself.',
+          eta: '~10-30s.',
+          fn: () => refreshChannel(props.name),
+          disabled: () => !isUpButMaybeUnreachable(phase.value),
+          disabledReason: () => 'Channel is not running -- use Start.',
+        },
+      ]
+    : []),
   {
     key: 'start',
     label: 'Start',
@@ -582,6 +600,21 @@ const effectiveDashUrl = computed(() => timeshiftPreview.value?.dashUrl ?? playb
 const showPlayback = computed(
   () => (playbackHlsUrl.value || playbackDashUrl.value) && phase.value !== 'stopped' && phase.value !== 'not-deployed',
 )
+
+// loop-dee-loop's /timeline.json describes the live window, or -- while a
+// startover/catchup preview is active -- the previewed range (same query).
+const windowAvailable = computed(
+  () => !!showPlayback.value && usesChannelSection(String(section('deploy').backend ?? '')),
+)
+const windowQuery = computed(() => {
+  const url = timeshiftPreview.value?.hlsUrl ?? timeshiftPreview.value?.dashUrl
+  if (!url) return ''
+  try {
+    return new URL(url, window.location.href).search.replace(/^\?/, '')
+  } catch {
+    return ''
+  }
+})
 
 async function loadConfig() {
   try {
@@ -856,8 +889,11 @@ watch(() => props.name, reload)
       @preview="timeshiftPreview = $event"
     />
 
+    <WindowPanel v-if="windowAvailable" :name="name" :query="windowQuery" />
+
     <div class="channel-detail-layout">
-      <div class="flex flex-column gap-4 channel-actions">
+      <div class="flex flex-column gap-4 p-3 border-round surface-card channel-actions" style="border: 1px solid var(--surface-border)">
+        <h3 class="m-0">Actions</h3>
         <div class="flex flex-column gap-2">
           <h3 class="m-0 text-sm text-color-secondary uppercase">First deploy</h3>
           <div

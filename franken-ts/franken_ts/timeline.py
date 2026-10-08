@@ -6,9 +6,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from scte35_table23 import lane_key
+
 from .config import (
     AssetConfig,
     MarkerConfig,
+    abbreviation_for_marker,
     is_instant_segmentation,
     segmentation_end_type_id,
 )
@@ -16,6 +19,29 @@ from .utils import is_image
 from .validate import VideoInfo
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LoopSpanBlock:
+    """One non-instant SCTE-35 span on the whole-loop OSD progress bar.
+    Listed outermost first, so inner spans paint over the ones containing them."""
+    start: float
+    end: float
+    lane_key: str  # mirrors igor's laneKeyForMarker, so colors match its timeline
+
+
+@dataclass(frozen=True)
+class LoopLayout:
+    """Whole-loop geometry shared by every entry, for the OSD loop timeline."""
+    assets: tuple[tuple[float, float], ...]  # (output_start, output_end) per entry
+    spans: tuple[LoopSpanBlock, ...]
+
+
+def lane_key_for_marker(marker: MarkerConfig) -> str:
+    type_id = marker.segmentation.type_id if marker.segmentation is not None else None
+    if isinstance(type_id, str):
+        type_id = int(type_id, 16)
+    return lane_key(marker.splice_type, type_id)
 
 
 @dataclass
@@ -39,6 +65,7 @@ class TimelineEntry:
     is_adbreak: bool = field(default=False)  # any covering span with a non-"custom" lane
     no_osd: bool = field(default=False)      # copied from AssetConfig.no_osd
     osd_label: Optional[str] = field(default=None)  # copied from AssetConfig.osd_label
+    loop_layout: Optional[LoopLayout] = field(default=None)  # same object on every entry
     # Fade fields — resolved and clamped in build_timeline().
     fade_in: Optional[float] = field(default=None)    # seconds, or None
     fade_out: Optional[float] = field(default=None)   # seconds, or None
@@ -212,6 +239,22 @@ def build_timeline(
         covering = spans_covering(i, spans)
         entry.covering_spans = [s.marker for s in covering]
         entry.is_adbreak = any(m.type != "custom" for m in entry.covering_spans)
+
+    visible = [s for s in spans if not is_instant_segmentation(s.marker.segmentation)]
+
+    layout = LoopLayout(
+        assets=tuple((e.output_start, e.output_end) for e in entries),
+        spans=tuple(
+            LoopSpanBlock(
+                start=entries[s.lo].output_start,
+                end=entries[s.hi].output_end,
+                lane_key=lane_key_for_marker(s.marker),
+            )
+            for s in sorted(visible, key=lambda s: s.depth)
+        ),
+    )
+    for entry in entries:
+        entry.loop_layout = layout
 
     boundaries.extend(resolve_markers(markers or [], entries, spans=spans))
 

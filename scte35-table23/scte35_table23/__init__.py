@@ -154,9 +154,40 @@ INSTANT_SEGMENTATION_TYPE_IDS: frozenset[str] = frozenset({
     "0x1A",  # Program Immediate Resumption
 })
 
+# Timeline lane colors. A "lane" groups markers by (splice_type, type_id);
+# its color is a deterministic hash of the lane key into this palette, so
+# every renderer (igor's timeline, franken-ts's loop progress bar OSD) shows
+# the same lane in the same color. igor's TS copy of `lane_key`/`lane_color`
+# is generated from these -- see scripts/generate_scte35_tables.py.
+LANE_PALETTE: tuple[str, ...] = (
+    "dc2626", "7c3aed", "0891b2", "d97706", "059669",
+    "db2777", "4f46e5", "65a30d", "0d9488", "ea580c",
+)
+
+
+def lane_key(splice_type: str, type_id: int | None) -> str:
+    """Lane key for a marker: `time_signal:0xNN` per segmentation type_id, or
+    `splice_insert` for everything without one."""
+    if splice_type == "time_signal" and type_id is not None:
+        return f"time_signal:0x{type_id:02X}"
+    return "splice_insert"
+
+
+def lane_color(key: str) -> str:
+    """Palette color (hex, no `#`) for a lane key: `h = h*31 + ord(c)` over the
+    key as an unsigned 32-bit hash, modulo the palette size."""
+    h = 0
+    for ch in key:
+        h = (h * 31 + ord(ch)) & 0xFFFFFFFF
+    return LANE_PALETTE[h % len(LANE_PALETTE)]
+
+
 __all__ = [
     "SEGMENTATION_TYPE_NAME",
     "SEGMENTATION_TYPE_CODE",
     "SEGMENTATION_END_TYPE_ID",
     "INSTANT_SEGMENTATION_TYPE_IDS",
+    "LANE_PALETTE",
+    "lane_key",
+    "lane_color",
 ]

@@ -19,6 +19,8 @@
 #     serve.py's own argparse remains the source of truth for flag names,
 #     this translates the serving options into environment variables for
 #     gunicorn/wsgi.py. GUNICORN_WORKERS overrides the default worker count.
+#     Access logs (client, request line, status, bytes, user agent) go to
+#     stdout, i.e. CloudWatch on ECS.
 #
 #   bake.py:
 #     FRANKEN_TS_S3_URI     s3://bucket/prefix/<channel>-input  (required)
@@ -107,7 +109,10 @@ case "$SUBCOMMAND" in
             export TIMESHIFT_MAX_SPAN_SECONDS
             WORKERS="${GUNICORN_WORKERS:-4}"
             log "starting gunicorn (${WORKERS} workers) on ${HOST}:${PORT}"
-            exec gunicorn --bind "${HOST}:${PORT}" --workers "$WORKERS" wsgi:app
+            exec gunicorn --bind "${HOST}:${PORT}" --workers "$WORKERS" \
+                --access-logfile - \
+                --access-logformat '%(h)s "%(r)s" %(s)s %(b)s "%(a)s"' \
+                wsgi:app
         else
             log "LOOP_PACKAGE_S3_URI not set — running serve.py as given (local/dev mode)"
             exec python3 serve.py "$@"

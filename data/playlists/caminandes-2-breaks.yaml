@@ -1,0 +1,84 @@
+output:
+  framerate: 25
+  bitrate_kbps: 10000
+  service_provider: ''
+  service_name: ''
+  file: ../outputs/output.ts
+  resolution: 1920x1080
+assets:
+- file: https://bpkioassets.s3-eu-west-1.amazonaws.com/Caminandes_1_Llama_Drama.mp4
+  id: asset-1
+  duration: 90.0
+- file: https://bpkcscreatives.s3.amazonaws.com/by_lang/it/AcquaPanna-P-M51E4g7JI.mp4_30_s.mp4
+  id: ad-1
+  duration: 30
+  osd_label: AcquaPanna-P-M51E4g7JI.mp4_30_s.mp4
+- file: https://bpkcscreatives.s3.amazonaws.com/CBTL/Kogan.com-15s.mp4
+  id: ad-2
+  duration: 15.0
+  osd_label: Kogan.com-15s.mp4
+- file: https://bpkcscreatives.s3.amazonaws.com/by_lang/it/Casa_di_Mama_TV-YBO4LefFJ5s.mp4_10_s.mp4
+  id: ad-3
+  duration: 10
+  osd_label: Casa_di_Mama_TV-YBO4LefFJ5s.mp4_10_s.mp4
+- file: https://bpkcscreatives.s3.amazonaws.com/by_lang/it/FlyFlot-X2-JbTDJ5C4.mp4_05_s.mp4
+  id: ad-4
+  duration: 5.0
+  osd_label: FlyFlot-X2-JbTDJ5C4.mp4_05_s.mp4
+- file: https://bpkioassets.s3-eu-west-1.amazonaws.com/Caminandes_2_Gran_Dillama.mp4
+  id: asset-2
+  duration: 146.0
+- file: https://bpkcscreatives.s3.amazonaws.com/by_lang/it/BrufenAnalgesico-yQv8tZ8iz5M.mp4_20_s.mp4
+  id: ad-5
+  duration: 20
+  osd_label: BrufenAnalgesico-yQv8tZ8iz5M.mp4_20_s.mp4
+- file: https://bpkcscreatives.s3.amazonaws.com/CBTL/ActiveRide-15s.mp4
+  id: ad-6
+  duration: 14.973
+  osd_label: ActiveRide-15s.mp4
+- file: https://bpkcscreatives.s3.amazonaws.com/CBTL/CocaColaCommercial-11s.mp4
+  id: ad-7
+  duration: 11.208
+  osd_label: CocaColaCommercial-11s.mp4
+- file: https://bpkcscreatives.s3.amazonaws.com/CBTL/KFC-11s.mp4
+  id: ad-8
+  duration: 10.6
+  osd_label: KFC-11s.mp4
+- file: https://bpkioassets.s3-eu-west-1.amazonaws.com/Caminandes_3_Llamigos.mp4
+  id: asset-3
+  duration: 150.041
+enforce_scte35_marker_semantics: true
+scte35_numbering_scheme: SCTE35_2023R1
+break_numbering_supported: false
+normalize: true
+osd:
+  enabled: true
+  progress_bar:
+    mode: asset
+    height_pct: 3
+  text_size_pct: 3
+  text_color: '#FFFFFF'
+  ad_break_label: ad break
+  corner_box:
+    enabled: true
+    color: '#F51146'
+  corners:
+    top_left: null
+    top_right: is_adbreak
+    bottom_left: asset_id
+    bottom_right: next_asset_id
+markers:
+- event_id: 1
+  splice_type: splice_insert
+  assets:
+  - ad-1
+  - ad-2
+  - ad-3
+  - ad-4
+- event_id: 2
+  splice_type: splice_insert
+  assets:
+  - ad-5
+  - ad-6
+  - ad-7
+  - ad-8

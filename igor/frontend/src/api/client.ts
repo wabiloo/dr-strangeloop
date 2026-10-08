@@ -6,9 +6,12 @@ import type {
   BrowseResult,
   ChannelCreatePayload,
   ChannelHealth,
+  ChannelTimeline,
   ChannelListItem,
   ChannelOutputs,
   ChannelStatus,
+  DocPage,
+  DocSection,
   ManifestImportStatus,
   ManifestInspection,
   ManifestListItem,
@@ -332,6 +335,14 @@ export function getChannelHealth(name: string): Promise<ChannelHealth> {
   return getJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/health`)
 }
 
+/** `query` is a raw timeshift query string (e.g. "start=...&end=..."), or empty for the live
+ * view -- which then asks for whole loops (`scope=loops`) around the manifest window. */
+export function getChannelTimeline(name: string, query = ''): Promise<ChannelTimeline> {
+  const q = query.replace(/^\?/, '')
+  const qs = `?${q || 'scope=loops'}`
+  return getJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/timeline${qs}`)
+}
+
 export function createChannel(name: string): Promise<Job> {
   return postJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/create`)
 }
@@ -424,4 +435,18 @@ export async function uploadAsset(file: File): Promise<{ path: string; name: str
     }),
   )
   return res.json()
+}
+
+export function channelDocsUrl(name: string): string {
+  return `${CHANNELS_BASE}/${encodeURIComponent(name)}/docs`
+}
+
+const DOCS_BASE = '/api/v1/docs'
+
+export async function listDocs(): Promise<DocSection[]> {
+  return (await getJson<{ sections: DocSection[] }>(`${DOCS_BASE}/`)).sections
+}
+
+export async function getDocPage(slug: string): Promise<DocPage> {
+  return getJson(`${DOCS_BASE}/pages/${encodeURIComponent(slug)}`)
 }

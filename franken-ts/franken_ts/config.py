@@ -253,6 +253,20 @@ def is_instant_segmentation(segmentation: Optional["SegmentationConfig"]) -> boo
     return normalized in INSTANT_SEGMENTATION_TYPE_IDS
 
 
+def abbreviation_for_marker(marker: "MarkerConfig") -> str:
+    """Abbreviation shown for one covering SCTE-35 span (OSD `scte35_spans`
+    corner and the loop progress bar): 'SPI' for a bare splice_insert (no
+    segmentation descriptor); otherwise the stable three-letter code from
+    SEGMENTATION_TYPE_CODE, falling back to the raw type_id string."""
+    if marker.segmentation is None:
+        return "SPI"
+
+    type_id = marker.segmentation.type_id
+    value = int(type_id, 16) if isinstance(type_id, str) else int(type_id)
+    normalized = f"0x{value:02X}"
+    return SEGMENTATION_TYPE_CODE.get(normalized, normalized)
+
+
 def _marker_signal_identity(marker: "MarkerConfig") -> tuple:
     """What (splice_type, segmentation_type_id) this marker actually signals
     -- two markers over the exact same assets are only redundant duplicates
@@ -538,12 +552,16 @@ def to_ffmpeg_color(hex_color: str) -> str:
     return "0x" + hex_color.lstrip("#")
 
 
-class OsdCountdownConfig(BaseModel):
-    """A semi-transparent black horizontal bar at the bottom of the frame,
-    growing from 0% to 100% width over the current asset's playback."""
+class OsdProgressBarConfig(BaseModel):
+    """Where the playback is shown along the bottom of the frame. `asset`: a
+    semi-transparent black bar growing 0->100% over the current asset (resets
+    per asset). `loop`: a static two-row map of the whole loop (one row of
+    assets, one of SCTE-35 spans) with a playhead. `none`: nothing.
+    `height_pct` is the bar's height in `asset` mode and the height of EACH
+    of the two rows in `loop` mode."""
 
-    enabled: bool = True
-    height_pct: float = Field(default=3.0, ge=0, le=100)
+    mode: Literal["asset", "loop", "none"] = "asset"
+    height_pct: float = Field(default=3.0, ge=0, le=50)
 
 
 class OsdCornersConfig(BaseModel):
@@ -571,19 +589,19 @@ class OsdCornerBoxConfig(BaseModel):
 
 
 class OsdConfig(BaseModel):
-    """Playlist-level on-screen display: an optional countdown bar plus up
+    """Playlist-level on-screen display: an optional progress bar plus up
     to 4 corner text slots, applied to every asset in the playlist except
     those with `AssetConfig.no_osd` set. See `enabled` for the master
     on/off switch -- off by default."""
 
     enabled: bool = False
-    countdown: OsdCountdownConfig = Field(default_factory=OsdCountdownConfig)
+    progress_bar: OsdProgressBarConfig = Field(default_factory=OsdProgressBarConfig)
     corners: OsdCornersConfig = Field(default_factory=OsdCornersConfig)
     corner_box: OsdCornerBoxConfig = Field(default_factory=OsdCornerBoxConfig)
     # Percentage of the transcoded (rendition) output height, applied
     # uniformly to all 4 corners.
     text_size_pct: float = Field(default=3.0, ge=0, le=100)
-    # Applies to all corner text (not the countdown bar, which is always
+    # Applies to all corner text (not the progress bar, which is always
     # semi-transparent black per spec).
     text_color: str = Field(default="#FFFFFF", pattern=_HEX_COLOR_RE.pattern)
     # Text shown for the `is_adbreak` corner content when true.

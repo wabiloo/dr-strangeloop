@@ -8,7 +8,9 @@
  * concerns (display `label` wording, lane grouping/coloring) stay
  * hand-written here. */
 
-import { TABLE23 } from './segmentationTable23.generated'
+import { TABLE23, laneKey } from './segmentationTable23.generated'
+
+export { colorForLaneKey } from './segmentationTable23.generated'
 
 export interface PresetOption {
   value: string
@@ -163,10 +165,7 @@ export interface LaneableMarker {
  * Opportunity" marker shares a different lane, etc. `splice_insert` markers
  * (no type_id to group by) share one lane of their own. */
 export function laneKeyForMarker(marker: LaneableMarker): string {
-  if (marker.splice_type === 'time_signal' && marker.segmentation?.type_id) {
-    return `time_signal:${normalizeTypeId(marker.segmentation.type_id)}`
-  }
-  return 'splice_insert'
+  return laneKey(marker.splice_type, marker.segmentation?.type_id)
 }
 
 /** Human label for a lane -- the bare segmentation type name (no
@@ -178,20 +177,6 @@ export function laneLabelForMarker(marker: LaneableMarker): string {
     return pair?.name ?? normalized
   }
   return 'Ad Break (splice_insert)'
-}
-
-/** Deterministic color per lane key (same lane always gets the same color
- * everywhere it's shown -- the timeline lane bars and the marker editor's
- * "Timeline lane" badge -- without needing a fixed enum of known types,
- * since there can be as many lanes as distinct segmentation types used. */
-const LANE_PALETTE = [
-  '#dc2626', '#7c3aed', '#0891b2', '#d97706', '#059669',
-  '#db2777', '#4f46e5', '#65a30d', '#0d9488', '#ea580c',
-]
-export function colorForLaneKey(key: string): string {
-  let hash = 0
-  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0
-  return LANE_PALETTE[hash % LANE_PALETTE.length]
 }
 
 /** Table 23: segmentation_type_id (individual values, kept for reference /

@@ -32,6 +32,16 @@ segment list via `grave-robber ingest-url`), and Channels. A channel's
 both point `source_path` at a grave-robber `manifest.json` (a segment-list
 manifest, baked with the source's own segment durations).
 
+**Docs** (`/docs`, header menu): renders the repo's Markdown on demand and
+links the API docs. The catalog (which files, titles, grouping) is
+`src/igor/integrations/docs.py` -- **add a new `.md` there to make it appear**;
+`tests/test_docs.py` fails if a catalogued file is missing. Rendering
+(`frontend/src/utils/markdown.ts`, markdown-it with raw HTML off) rewrites
+relative links between catalogued pages to in-app routes and shows links to
+anything else (source files, folders) as plain paths. The new overview, Igor tour
+and CLI/API cheatsheet live in the repo-root `docs/` folder; keep the CLI
+cheatsheet in step with the tools' `--help` when flags change.
+
 If you're an agent asked to do a one-off content/deploy task via the CLI
 directly, prefer the per-tool `AGENTS.md` files (`franken-ts/AGENTS.md`,
 `its-a-live/AGENTS.md`, `loop-dee-loop/AGENTS.md`) -- this project exists
@@ -126,7 +136,10 @@ Rules, for any change that touches channel config:
 | ↳ `GET /api/v1/channels/` (+ `?live=false`), `GET .../{name}/summary` | the channel table. `?live=false` is instant (local TOML only: name, backend, source); `/{name}/summary` runs `channel.py list <that config>` (stack/live state + `reachable`, the slow part). The UI fetches the quick list, then every summary in parallel and fills rows in as they arrive; a row without a resolved summary is never deletable or startable. Plain `GET /` still returns the full list in one (slow) call |
 | ↳ Stream: `/spark`, `/start`, `/stop`, `/refresh`, `/update` (job-spawning), `/status` | is content actually playing -- available for every backend. `/update` is `/spark`+`/refresh` combined (channel.py's `update`); igor's UI shows it instead of a separate Spark/Refresh pair once the channel is running, and plain `/spark` otherwise (staging never depends on deploy state) |
 | ↳ `/health` (ecs-express) | loop-dee-loop `serve.py` proxy, not a `channel.py` command |
+| ↳ `GET .../{name}/timeline`, `.../docs`, `.../openapi.yaml` | proxies of `serve.py`'s `/timeline.json` (query params forwarded; drawn by the **Timeline** panel, `WindowPanel.vue`), `/docs` (HTML API docs, opened by the panel's **API docs** button) and `/openapi.yaml` (what `/docs` loads, via a relative URL) -- ecs-express / local-docker only |
 | ↳ `GET/POST /api/v1/channels/{name}/schedule`, `DELETE .../schedule/{window_id}` | scheduled on-air windows (`channel.py schedule list/add/remove`) -- aws-media/ecs-express only, hidden in igor's UI for local-docker. `POST` is job-spawning (an immediate window also runs `start`); `GET`/`DELETE` are synchronous (fast EventBridge Scheduler API calls). Requires `ItsALiveSharedStack-scheduler` deployed once per account/region -- see `its-a-live/README.md`'s "Scheduling" |
+| `GET /api/v1/docs/`, `.../pages/{slug}`, `.../channel-api/docs`, `.../channel-api/openapi.yaml` | documentation hub: catalog, Markdown of a catalogued page (only catalogued slugs are served), and the channel API spec (`loop-dee-loop/openapi.yaml`) with a ReDoc viewer that needs no running channel |
+| `GET /api/docs`, `/api/redoc`, `/api/openapi.json` | Igor's own generated OpenAPI docs. Deliberately under `/api` (not FastAPI's default `/docs`) so the one `/api` proxy rule in Vite dev and ingress covers them |
 | `GET /api/v1/jobs/*` | poll job status/log (`?log_offset=` for incremental tailing) |
 
 See `src/igor/app/routes/*.py` for the authoritative request/response

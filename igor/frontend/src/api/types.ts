@@ -321,6 +321,121 @@ export interface ChannelStatus {
 
 export type ChannelOutputs = Record<string, string>
 
+/** loop-dee-loop `GET /timeline.json` -- schema: loop-dee-loop/openapi.yaml
+ * (WindowDocument). Times are ISO-8601 UTC strings; durations are seconds. */
+export interface SegmentRange {
+  first: number
+  last: number
+  count: number
+}
+
+export interface TimelineWindow {
+  convention: string
+  ended: boolean
+  start_utc: string
+  end_utc: string
+  live_edge_utc: string | null
+  duration_s: number
+  segments: SegmentRange
+}
+
+/** Extent of periods/assets/markers/discontinuities (== window unless scope=loops). */
+export interface TimelineRange {
+  scope: 'window' | 'loops'
+  start_utc: string
+  end_utc: string
+  duration_s: number
+  segments: SegmentRange
+}
+
+export interface TimelineLoop {
+  number: number
+  start_utc: string
+  end_utc: string
+  segments: SegmentRange
+  current: boolean
+}
+
+export interface TimelineRendition {
+  name: string
+  reference: boolean
+  bandwidth: number
+  codecs: string
+  width: number
+  height: number
+  frame_rate: number
+  has_audio: boolean
+  playlist: string
+}
+
+export interface TimelinePeriod {
+  id: string
+  start_utc: string
+  end_utc: string | null
+  segments: SegmentRange
+}
+
+export interface TimelineDiscontinuity {
+  segment: number
+  utc: string
+  reason: string
+  sequence: number
+}
+
+export interface TimelineAsset {
+  asset_id: string
+  loop: number
+  start_utc: string
+  end_utc: string
+  duration_s: number
+  loop_start_s: number
+  loop_end_s: number
+  segments: SegmentRange
+  starts_before_range: boolean
+  ends_after_range: boolean
+}
+
+export interface TimelineMarker {
+  event_id: string
+  original_event_id?: string
+  type: string | null
+  splice_type: string | null
+  is_out: boolean
+  is_instant: boolean
+  loop: number
+  start_utc: string
+  end_utc: string | null
+  duration_s: number | null
+  segmentation_type_id: string | null
+  upid_type: number | null
+  upid_hex: string | null
+  assets: string[]
+  segments: SegmentRange
+  starts_before_range: boolean
+  ends_after_range: boolean
+  splice_command_b64: string | null
+}
+
+export interface ChannelTimeline {
+  version: number
+  channel: string
+  generated_at: string
+  mode: 'live' | 'timeshift'
+  timeline: 'periodic' | 'continuous'
+  clock_offset_s: number
+  timescale: number
+  epoch_utc: string
+  loop: { number: number; position_s: number; duration_s: number; segments: number; segment_duration_s: number }
+  window: TimelineWindow
+  range: TimelineRange
+  loops: TimelineLoop[]
+  renditions: TimelineRendition[]
+  periods: TimelinePeriod[]
+  discontinuities: TimelineDiscontinuity[]
+  assets: TimelineAsset[]
+  markers: TimelineMarker[]
+}
+
 export interface ChannelHealth {
   status: string
   package_dir: string
@@ -426,4 +541,25 @@ export interface Job {
   created_at: number
   started_at: number | null
   finished_at: number | null
+}
+
+export interface DocEntry {
+  slug: string
+  title: string
+  summary: string
+  /** Repo-relative path of the Markdown file. */
+  path: string
+}
+
+export interface DocSection {
+  id: string
+  title: string
+  entries: DocEntry[]
+}
+
+export interface DocPage {
+  slug: string
+  title: string
+  path: string
+  markdown: string
 }

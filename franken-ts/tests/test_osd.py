@@ -36,8 +36,8 @@ def _output(width: int = 1920, height: int = 1080, framerate: int = 25):
 def test_osd_config_defaults():
     osd = OsdConfig()
     assert osd.enabled is False
-    assert osd.countdown.enabled is True
-    assert osd.countdown.height_pct == 3.0
+    assert osd.progress_bar.mode == "asset"
+    assert osd.progress_bar.height_pct == 3.0
     assert osd.text_size_pct == 3.0
     assert osd.text_color == "#FFFFFF"
     assert osd.ad_break_label == "ad break"
@@ -417,8 +417,8 @@ def test_build_corner_text_filter_bottom_offset_accounts_for_bar():
     output = _output()
     entry = _entry(asset_id="a1")
 
-    osd_with_bar = OsdConfig()  # countdown.enabled defaults True
-    osd_without_bar = OsdConfig(countdown={"enabled": False})
+    osd_with_bar = OsdConfig()  # progress_bar.mode defaults to asset
+    osd_without_bar = OsdConfig(progress_bar={"mode": "none"})
 
     f_with_bar = build_corner_text_filter("asset_id", entry, output, osd_with_bar, "bottom_left", 10.0)
     f_without_bar = build_corner_text_filter("asset_id", entry, output, osd_without_bar, "bottom_left", 10.0)
@@ -426,14 +426,14 @@ def test_build_corner_text_filter_bottom_offset_accounts_for_bar():
 
 
 def test_build_corner_text_filter_bottom_gap_matches_top_margin():
-    """A bottom corner's clearance above the countdown bar must equal a top
+    """A bottom corner's clearance above the progress bar must equal a top
     corner's clearance from the frame's top edge -- not double it."""
     output = _output(height=1080)
     entry = _entry(asset_id="a1")
-    osd = OsdConfig()  # countdown.enabled defaults True, height_pct=3.0
+    osd = OsdConfig()  # progress_bar.mode defaults to asset, height_pct=3.0
 
     margin = round(1080 * 0.03)
-    bar_h = round(1080 * osd.countdown.height_pct / 100)
+    bar_h = round(1080 * osd.progress_bar.height_pct / 100)
 
     top = build_corner_text_filter("asset_id", entry, output, osd, "top_left", 10.0)
     bottom = build_corner_text_filter("asset_id", entry, output, osd, "bottom_left", 10.0)
@@ -708,3 +708,145 @@ def test_cache_key_changes_with_no_osd(tmp_path):
     k1 = entry_cache_key(make_entry(False), output, osd)
     k2 = entry_cache_key(make_entry(True), output, osd)
     assert k1 != k2
+
+
+# ── Loop-mode progress bar ───────────────────────────────────────────────
+
+def _nested_entries():
+    cfg = Config.model_validate(_nested_break_config())
+    infos = {a.file: _FakeInfo(10.0) for a in cfg.assets}
+    entries, _ = build_timeline(cfg.assets, infos, framerate=25, markers=cfg.markers)
+    return entries
+
+
+def _loop_osd(**kw):
+    return OsdConfig(enabled=True, progress_bar={"mode": "loop", **kw})
+
+
+def test_progress_bar_mode_validation():
+    assert OsdConfig(progress_bar={"mode": "none"}).progress_bar.mode == "none"
+    with pytest.raises(ValidationError):
+        OsdConfig.model_validate({"progress_bar": {"mode": "both"}})
+
+
+def test_build_timeline_shares_loop_layout_with_all_visible_spans_outermost_first():
+    entries = _nested_entries()
+    layout = entries[0].loop_layout
+    assert all(e.loop_layout is layout for e in entries)
+    assert layout.assets == tuple((i * 10.0, (i + 1) * 10.0) for i in range(5))
+    spans = [(s.start, s.end) for s in layout.spans]
+    assert spans[0] == (10.0, 40.0)  # the Break comes first, so inner spans paint over it
+    assert sorted(spans) == sorted([(10.0, 40.0), (10.0, 20.0), (20.0, 40.0), (20.0, 30.0), (30.0, 40.0)])
+    assert layout.spans[0].lane_key == "time_signal:0x22"
+
+
+def test_loop_layout_excludes_instant_markers():
+    raw = _nested_break_config()
+    baseline = Config.model_validate(raw)
+    infos = {a.file: _FakeInfo(10.0) for a in baseline.assets}
+    n = len(build_timeline(baseline.assets, infos, framerate=25, markers=baseline.markers)[0][0].loop_layout.spans)
+    raw["markers"].append(
+        {"event_id": 200, "splice_type": "time_signal",
+         "segmentation": {"type_id": "0x02", "upid_hex": "aa"}, "assets": ["content1"]}
+    )
+    cfg = Config.model_validate(raw)
+    entries, _ = build_timeline(cfg.assets, infos, framerate=25, markers=cfg.markers)
+    assert len(entries[0].loop_layout.spans) == n
+
+
+def test_lane_color_and_key_come_from_shared_package():
+    from scte35_table23 import lane_color, lane_key
+    # Known vectors, also cross-checked against igor's generated colorForLaneKey.
+    assert lane_color("time_signal:0x22") == "0d9488"
+    assert lane_color("time_signal:0x30") == "65a30d"
+    assert lane_color("time_signal:0x34") == "7c3aed"
+    assert lane_key("time_signal", 0x22) == "time_signal:0x22"
+    assert lane_key("time_signal", None) == "splice_insert"
+    assert lane_key("splice_insert", 0x22) == "splice_insert"
+
+
+def _loop_parts(width=1000, height=1000):
+    from franken_ts.osd import build_loop_progress_graph
+    entries = _nested_entries()
+    output = _output(width=width, height=height)
+    lines = build_loop_progress_graph("[in]", "osdx", entries[1], output, _loop_osd(), "tl_")
+    return lines, lines[0].split(",")
+
+
+def test_loop_progress_graph_assets_row_is_bottom_solid_with_dividers():
+    lines, parts = _loop_parts()
+    row_h = 30
+    assets_y = 1000 - row_h
+    spans_y = assets_y - row_h
+    assert not any(f"y={spans_y}:w=1000" in p for p in parts)  # no backing strip behind the span row
+    asset_boxes = [p for p in parts if f"y={assets_y}:w=200:h={row_h}:color=0x" in p and "0x000000" not in p]
+    assert len(asset_boxes) == 5
+    # Consecutive assets alternate shades so boundaries stay visible when downscaled.
+    colors = [p.split("color=")[1].split(":")[0] for p in asset_boxes]
+    assert colors[0] != colors[1] and colors[0] == colors[2] == colors[4] and colors[1] == colors[3]
+    dividers = [p for p in parts if f"y={assets_y}:w=2:" in p and "0x000000@0.85" in p]
+    assert len(dividers) == 4  # 4 inner boundaries, none at the loop edges
+    assert "x=199:" in dividers[0]
+    assert f"y={spans_y}" in lines[2] and "t+10.000000" in lines[2] and "/50.000000" in lines[2]
+    assert lines[-1].endswith("[osdx]")
+
+
+def test_loop_progress_graph_spans_single_row_above_assets_with_dividers_and_no_text():
+    from scte35_table23 import lane_color
+    _, parts = _loop_parts()
+    row_h = 30
+    spans_y = 1000 - 2 * row_h
+    span_boxes = [p for p in parts if p.startswith("drawbox") and f":y={spans_y}:" in p and f":h={row_h}:color=0x" in p
+                  and "0x000000" not in p]
+    # One full-height block per visible span, all on the same row, Break first.
+    assert len(span_boxes) == 5
+    assert span_boxes[0].startswith(f"drawbox=x=200:y={spans_y}:w=600:h={row_h}:color=0x{lane_color('time_signal:0x22')}")
+    # Dividers at every distinct span edge (200, 400, 600, 800), none at the loop edges.
+    dividers = sorted(int(p.split(":")[0].split("=")[-1]) for p in parts
+                      if f"y={spans_y}:w=2:" in p and "0x000000@0.85" in p)
+    assert dividers == [199, 399, 599, 799]
+    assert not any(p.startswith("drawtext") for p in parts)
+
+
+def test_loop_progress_without_layout_is_skipped():
+    lines, _ = build_osd_filters(_entry(), _output(), _loop_osd(), "[in]")
+    assert not any("drawbox" in ln for ln in lines)
+
+
+def test_build_osd_filters_mode_selects_exactly_one_bar():
+    entries = _nested_entries()
+    asset_lines, _ = build_osd_filters(entries[0], _output(), OsdConfig(enabled=True), "[in]")
+    assert asset_lines[0].startswith("color=") and not any("drawbox" in ln for ln in asset_lines)
+    loop_lines, _ = build_osd_filters(entries[0], _output(), _loop_osd(), "[in]")
+    assert "drawbox" in loop_lines[0] and "drawtext" in loop_lines[-1]
+    assert not any(ln.startswith("color=c=black") for ln in loop_lines)
+    none_lines, _ = build_osd_filters(entries[0], _output(), OsdConfig(enabled=True, progress_bar={"mode": "none"}), "[in]")
+    assert not any("overlay" in ln or "drawbox" in ln for ln in none_lines)
+
+
+def test_corner_clears_loop_progress_bar():
+    output = _output()
+    entry = _nested_entries()[0]
+    asset = build_corner_text_filter("asset_id", entry, output, OsdConfig(), "bottom_left", 10.0)
+    loop = build_corner_text_filter("asset_id", entry, output, _loop_osd(), "bottom_left", 10.0)
+    margin = round(1080 * 0.03)
+    bar = round(1080 * 3.0 / 100)
+    assert f"y=h-th-{margin + bar}" in asset
+    assert f"y=h-th-{margin + 2 * bar}" in loop
+
+
+def test_cache_key_changes_with_loop_layout_only_in_loop_mode(tmp_path):
+    src = tmp_path / "a.mp4"
+    src.write_bytes(b"x")
+
+    def key(entries, osd):
+        entries[0].source_file = src
+        return entry_cache_key(entries[0], _output(), osd)
+
+    base = _nested_entries()
+    changed = _nested_entries()
+    for e in changed:
+        e.loop_layout = type(e.loop_layout)(assets=e.loop_layout.assets[:-1], spans=e.loop_layout.spans)
+    assert key(base, _loop_osd()) != key(changed, _loop_osd())
+    asset_osd = OsdConfig(enabled=True)
+    assert key(base, asset_osd) == key(changed, asset_osd)

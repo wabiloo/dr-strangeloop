@@ -118,12 +118,17 @@ def _resolve_port(cfg, name):
     port. Only picks a brand new free port -- skipping any port already
     bound on this host, which naturally avoids other running channels'
     containers too -- when there's truly no prior container to recover
-    one from."""
+    one from. A recorded port is only reused if that container is actually
+    running (so it legitimately owns the port) or the port is still free; a
+    stale, non-running container whose old port has since been taken by
+    something else is ignored and a new free port is picked."""
     raw = infra_table(cfg, "docker").get("port", "auto")
     if raw != "auto":
         return int(raw)
     running_port = _running_port(name)
-    if running_port is not None:
+    if running_port is not None and (
+        _container_status(name) == "running" or _port_is_free(running_port)
+    ):
         return running_port
     return _find_free_port()
 

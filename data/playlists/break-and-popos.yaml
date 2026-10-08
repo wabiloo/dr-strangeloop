@@ -1,42 +1,67 @@
 output:
-  file: outputs/break-and-popos.ts
-  resolution: 1920x1080
   framerate: 25
   bitrate_kbps: 10000
-  gop: 50
   service_provider: broadpeak
   service_name: broadpeak.io
-normalize: true
-slate_image: /Users/fabrelambeau/Broadpeak/Resources/Backgrounds/testing-slate.png
+  gop: 50
+  file: outputs/break-and-popos.ts
+  resolution: 1920x1080
 assets:
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+  id: asset-1
   duration: 1 min
   fade_out: 1.6
 - file: /Users/fabrelambeau/Broadpeak/Resources/Backgrounds/Ad-slate-out.png
+  id: asset-2
   duration: 2s
   no_osd: true
 - file: /Users/fabrelambeau/Broadpeak/Resources/Video Idents/broadpeakio-promo-1080p_5000k.mp4
   id: ad1
   duration: 30s
 - file: /Users/fabrelambeau/Broadpeak/Resources/Backgrounds/Ad-slate-in.png
+  id: asset-3
   duration: 2s
   no_osd: true
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
+  id: asset-4
   start: 60s
   duration: 30s
   fade_in: 1.5
   fade_out: 1.5
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
-  fade_in: 1
+  id: asset-5
   duration: 30s
+  fade_in: 1
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
   id: ad2
   start: 30s
   duration: 20s
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset2.mp4
+  id: asset-6
   start: 50s
   duration: 30s
   fade_out: 2
+enforce_scte35_marker_semantics: true
+scte35_numbering_scheme: SCTE35_2023R1
+break_numbering_supported: false
+normalize: true
+slate_image: /Users/fabrelambeau/Broadpeak/Resources/Backgrounds/testing-slate.png
+osd:
+  enabled: true
+  progress_bar:
+    mode: loop
+    height_pct: 3
+  text_size_pct: 4
+  text_color: '#FFFFFF'
+  ad_break_label: ad break
+  corner_box:
+    enabled: true
+    color: '#26B5BD'
+  corners:
+    top_left: asset_id
+    top_right: next_asset_id
+    bottom_left: transition
+    bottom_right: loop_time
 markers:
 - event_id: 1
   splice_type: time_signal
@@ -62,14 +87,3 @@ markers:
     no_regional_blackout: false
     archive_allowed: false
     device_restrictions: 1
-osd:
-  enabled: true
-  countdown:
-    enabled: true
-    height_pct: 5
-  text_size_pct: 4
-  corners:
-    top_left: asset_id
-    top_right: scte35_spans
-    bottom_left: is_adbreak
-    bottom_right: next_asset_id

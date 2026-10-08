@@ -238,7 +238,7 @@ def _extract_video(
             )
         current = "[fo]"
 
-    # ── OSD (countdown bar + corner text) ─────────────────────────────────────
+    # ── OSD (progress bar + corner text) ─────────────────────────────────────
     osd_lines, current = build_osd_filters(entry, output, osd, current) if entry is not None else ([], current)
     graph.extend(osd_lines)
 

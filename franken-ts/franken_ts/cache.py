@@ -7,8 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from .config import OsdConfig, OutputConfig
-from .osd import abbreviation_for_marker
+from .config import OsdConfig, OutputConfig, abbreviation_for_marker
 from .utils import is_url, source_str
 
 if TYPE_CHECKING:
@@ -19,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Bump this whenever the extraction recipe changes in a way that makes old
 # cache artifacts incompatible (filters, codec params, stream layout, …) so
 # stale entries are not silently reused.
-_RECIPE_VERSION = "extract_v18_vonly+aonly+osd+loop-time+transition+fade+slate+image"
+_RECIPE_VERSION = "extract_v20_vonly+aonly+osd+loop-time+transition+fade+slate+image+loopbar-zebra"
 
 
 @dataclass(frozen=True)
@@ -75,9 +74,15 @@ def entry_cache_key(entry: TimelineEntry, output: OutputConfig, osd: Optional[Os
     transition_part = ""
     if "transition" in configured_corners:
         transition_part = f":{entry.role or ''}:{entry.output_end == entry.loop_duration}"
+    loop_bar_part = ""
+    if osd is not None and osd.progress_bar.mode == "loop":
+        # Loop mode: every clip bakes in the whole-loop map and its own playhead
+        # offset, so any asset/span change anywhere invalidates every clip.
+        layout_digest = hashlib.sha256(repr(entry.loop_layout).encode()).hexdigest()[:16]
+        loop_bar_part = f":{entry.output_start:.6f}:{entry.loop_duration:.6f}:{layout_digest}"
     osd_entry_part = (
         f"{entry.no_osd}:{entry.is_adbreak}:{entry.next_asset_id}:"
-        f"{entry.osd_label}:{span_abbrevs}{loop_time_part}{transition_part}"
+        f"{entry.osd_label}:{span_abbrevs}{loop_time_part}{transition_part}{loop_bar_part}"
     )
     osd_cfg_part = osd.model_dump_json() if osd is not None else "none"
     osd_part = f"{osd_entry_part}:{osd_cfg_part}"

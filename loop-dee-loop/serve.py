@@ -37,7 +37,7 @@ from pathlib import Path
 
 from urllib.parse import urlencode
 
-from flask import Flask, Response, abort, request, send_file
+from flask import Flask, Response, abort, jsonify, request, send_file
 
 import cmaf
 import continuity
@@ -146,6 +146,18 @@ def _dash_marker_comments(entries: list[tuple[dict, dict[str, str], int | None, 
     return "".join(f"    <!-- {line} -->\n" for line in _describe_markers(entries))
 
 
+_DOCS_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>loop-dee-loop API</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body><redoc spec-url="openapi.yaml"></redoc>
+<script src="https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js"></script></body></html>
+"""
+
+
+def _segment_range(first: int, last: int) -> dict:
+    return {"first": first, "last": last, "count": max(0, last - first + 1)}
+
+
 def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: int) -> bool:
     """Whether `marker` should be signaled (EXT-X-DATERANGE / DASH <Event>)
     on a segment spanning [seg_start_ticks, seg_end_ticks).
@@ -179,6 +191,32 @@ def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: in
         end = start + duration
         return seg_start_ticks < end and start < seg_end_ticks
     return seg_start_ticks <= start < seg_end_ticks
+
+
+def _marker_durations_ticks(markers: list[dict]) -> list[int]:
+    """Per-marker active duration in ticks (0 = point-in-time): the marker's
+    own `segmentation_duration_ticks` for an OUT, else the distance to the
+    matching IN (same event id / identity, later PTS) -- how a splice_insert
+    break, which carries no duration of its own, gets one."""
+    out = []
+    for m in markers:
+        if not is_out_marker(m) or is_instant_segmentation(m):
+            out.append(0)
+            continue
+        own = int(m.get("segmentation_duration_ticks") or 0)
+        if own:
+            out.append(own)
+            continue
+        ends = [
+            o["pts_time_ticks"]
+            for o in markers
+            if o["event_id"] == m["event_id"]
+            and o.get("marker_identity") == m.get("marker_identity")
+            and not is_out_marker(o)
+            and o["pts_time_ticks"] > m["pts_time_ticks"]
+        ]
+        out.append(min(ends) - m["pts_time_ticks"] if ends else 0)
+    return out
 
 
 def _asset_ids_starting_in_segment(
@@ -1023,6 +1061,286 @@ class Channel:
             )
         return out
 
+    def build_window_json(self, window: "TimeWindow | None" = None, scope: str = "window") -> dict:
+        """JSON view of the current window (openapi.yaml `WindowDocument`):
+        periods, discontinuities, assets and markers overlapping the same
+        segments the HLS media playlist advertises (trailing window ending
+        at the live edge, or the resolved startover/catchup range).
+
+        `scope="loops"` (live only) widens the returned *content* -- periods,
+        discontinuities, assets, markers -- to whole loops: the previous, the
+        current (holding the live edge) and the next one, extended further back
+        if the window reaches before the previous loop. `window` still describes
+        the manifest window and `range` the extent of the content.
+
+        Mirrors the window math of `_build_hls_media_playlist` rather than
+        sharing it, so the manifests stay untouched. All timing is integer
+        ticks until the final ISO/seconds conversion. Segment timing uses
+        the reference rendition's boundaries, like marker placement does.
+        """
+        pkg = self.package
+        ts, D, spl = pkg.timescale, pkg.total_loop_duration_ticks, pkg.segments_per_loop
+        boundary = pkg.segment_boundary_ticks
+        offsets = pkg.declared_offset_ticks_by_local_index
+        now = self.now_ticks()
+        pos = compute_loop_position(now, self.epoch_ticks, D)
+        live_edge = global_segment_number(
+            pos.loop_number, segment_index_for_position(pos.position_in_loop_ticks, boundary), spl
+        )
+        if window is None:
+            last = live_edge
+            first = max(0, last - self.window_segments + 1)
+            ended = False
+        else:
+            first, last, ended = window.first_global, window.last_global, window.ended
+        w_first, w_last = first, last
+        if scope == "loops" and window is None:
+            cur = live_edge // spl
+            first = min(max(cur - 1, 0), w_first // spl) * spl
+            last = (cur + 2) * spl - 1
+        else:
+            scope = "window"
+
+        def secs(t: int) -> float:
+            return round(ticks_to_wall_clock_seconds(t, ts), 3)
+
+        def seg_len(local: int) -> int:
+            return (boundary[local + 1] if local + 1 < len(boundary) else D) - boundary[local]
+
+        def seg_start(g: int) -> int:
+            loop, local = divmod(g, spl)
+            return program_date_time_ticks(loop, boundary[local] + offsets[local], D, self.epoch_ticks)
+
+        def seg_end(g: int) -> int:
+            return seg_start(g) + seg_len(g % spl)
+
+        def loop_tick(loop: int, local_ticks: int) -> int:
+            idx = segment_index_for_position(local_ticks, boundary)
+            return program_date_time_ticks(loop, local_ticks + offsets[idx], D, self.epoch_ticks)
+
+        def seg_of(loop: int, local_ticks: int) -> int:
+            return loop * spl + segment_index_for_position(local_ticks, boundary)
+
+        def overlaps(g_first: int, g_last: int) -> bool:
+            return g_first <= last and g_last >= first
+
+        loops = range(first // spl, last // spl + 1)
+
+        # --- discontinuities (HLS view) -----------------------------------
+        hls_starts = self.hls_period_starts
+        discontinuities = []
+        if hls_starts:
+            for g in range(first + 1, last + 1):
+                local = g % spl
+                if local not in hls_starts:
+                    continue
+                if local in pkg.boundaries:
+                    reason = "loop_wrap" if local == 0 else "asset_boundary"
+                else:
+                    reason = "signal_break"
+                discontinuities.append(
+                    {
+                        "segment": g,
+                        "utc": self._iso_ticks(seg_start(g)),
+                        "reason": reason,
+                        "sequence": compute_discontinuity_sequence(g, spl, hls_starts),
+                    }
+                )
+
+        # --- periods (DASH view) ------------------------------------------
+        periods = []
+        if self.continuous:
+            breaks = sorted(self.dash_signal_breaks)
+
+            def governing(g: int) -> int | None:
+                loop, local = divmod(g, spl)
+                earlier = [b for b in breaks if b <= local]
+                if earlier:
+                    return loop * spl + earlier[-1]
+                if breaks and loop > 0:
+                    return (loop - 1) * spl + breaks[-1]
+                return None
+
+            def next_break(brk: int | None) -> int | None:
+                if not breaks:
+                    return None
+                if brk is None:
+                    return breaks[0]
+                loop, local = divmod(brk, spl)
+                later = [b for b in breaks if b > local]
+                return loop * spl + later[0] if later else (loop + 1) * spl + breaks[0]
+
+            groups: list[tuple[int | None, int, int]] = []
+            for g in range(first, last + 1):
+                brk = governing(g)
+                if groups and groups[-1][0] == brk:
+                    groups[-1] = (brk, groups[-1][1], g)
+                else:
+                    groups.append((brk, g, g))
+            for brk, g_first, g_last in groups:
+                nxt = next_break(brk)
+                periods.append(
+                    {
+                        "id": "continuous" if brk is None else f"break{brk}",
+                        "start_utc": self._iso_ticks(seg_start(0 if brk is None else brk)),
+                        "end_utc": None if nxt is None else self._iso_ticks(seg_start(nxt)),
+                        "segments": _segment_range(g_first, g_last),
+                    }
+                )
+        else:
+            starts = sorted(self.dash_period_starts)
+            for loop in loops:
+                for i, s in enumerate(starts):
+                    e = starts[i + 1] if i + 1 < len(starts) else spl
+                    g_first, g_last = loop * spl + s, loop * spl + e - 1
+                    if not overlaps(g_first, g_last):
+                        continue
+                    periods.append(
+                        {
+                            "id": f"loop{loop}" if len(starts) == 1 else f"loop{loop}-{s}",
+                            "start_utc": self._iso_ticks(seg_start(g_first)),
+                            "end_utc": self._iso_ticks(seg_end(g_last)),
+                            "segments": _segment_range(max(g_first, first), min(g_last, last)),
+                        }
+                    )
+
+        # --- assets --------------------------------------------------------
+        assets = []
+        ordered = sorted(pkg.asset_boundaries, key=lambda b: b["start_ticks"])
+        for loop in loops:
+            for i, b in enumerate(ordered):
+                a_start = int(b["start_ticks"])
+                a_end = int(ordered[i + 1]["start_ticks"]) if i + 1 < len(ordered) else D
+                if a_end <= a_start:
+                    continue
+                g_first, g_last = seg_of(loop, a_start), seg_of(loop, a_end - 1)
+                if not overlaps(g_first, g_last):
+                    continue
+                start_abs = loop_tick(loop, a_start)
+                assets.append(
+                    {
+                        "asset_id": b["asset_id"],
+                        "loop": loop,
+                        "start_utc": self._iso_ticks(start_abs),
+                        "end_utc": self._iso_ticks(start_abs + a_end - a_start),
+                        "duration_s": secs(a_end - a_start),
+                        "loop_start_s": secs(a_start),
+                        "loop_end_s": secs(a_end),
+                        "segments": _segment_range(max(g_first, first), min(g_last, last)),
+                        "starts_before_range": g_first < first,
+                        "ends_after_range": g_last > last,
+                    }
+                )
+
+        # --- markers -------------------------------------------------------
+        durations = _marker_durations_ticks(pkg.markers)
+        markers = []
+        for loop in loops:
+            id_map = build_event_id_map(pkg.markers, loop) if pkg.increment_event_ids else {}
+            remapped = any(k != v for k, v in id_map.items())
+            for m, dur in zip(pkg.markers, durations):
+                pts = m["pts_time_ticks"]
+                end_local = min(pts + dur, D) if dur else pts + 1
+                g_first, g_last = seg_of(loop, pts), seg_of(loop, max(end_local - 1, pts))
+                if not overlaps(g_first, g_last):
+                    continue
+                start_abs = loop_tick(loop, pts)
+                event_id = id_map.get(m["event_id"], m["event_id"])
+                b64 = m.get("splice_command_b64")
+                if remapped and b64:
+                    b64 = reencode_event_ids(b64, id_map)
+                entry = {
+                    "event_id": event_id,
+                    "type": m.get("type"),
+                    "splice_type": m.get("splice_type"),
+                    "is_out": is_out_marker(m),
+                    "is_instant": is_instant_segmentation(m),
+                    "loop": loop,
+                    "start_utc": self._iso_ticks(start_abs),
+                    "end_utc": self._iso_ticks(start_abs + dur) if dur else None,
+                    "duration_s": secs(dur) if dur else None,
+                    "segmentation_type_id": m.get("segmentation_type_id"),
+                    "upid_type": m.get("upid_type"),
+                    "upid_hex": m.get("upid_hex"),
+                    "assets": list(m.get("assets") or []),
+                    "segments": _segment_range(max(g_first, first), min(g_last, last)),
+                    "starts_before_range": g_first < first,
+                    "ends_after_range": g_last > last,
+                    "splice_command_b64": b64,
+                }
+                if event_id != m["event_id"]:
+                    entry["original_event_id"] = m["event_id"]
+                markers.append(entry)
+        markers.sort(key=lambda e: (e["start_utc"], e["event_id"]))
+
+        # --- renditions ----------------------------------------------------
+        audio = pkg.audio_rendition.audio_variant if pkg.has_audio else None
+        renditions = []
+        for i, r in enumerate(pkg.video_renditions):
+            v = r.video_variant
+            renditions.append(
+                {
+                    "name": r.name,
+                    "reference": i == 0,
+                    "bandwidth": v["bandwidth"] + (audio["bandwidth"] if audio else 0),
+                    "codecs": ",".join([v["codecs"], *([audio["codecs"]] if audio else [])]),
+                    "width": v["width"],
+                    "height": v["height"],
+                    "frame_rate": v["frame_rate"],
+                    "has_audio": pkg.has_audio,
+                    "playlist": pkg.video_playlist_name(r),
+                }
+            )
+
+        return {
+            "version": 1,
+            "channel": self.channel_name,
+            "generated_at": self._iso_ticks(now),
+            "mode": "live" if window is None else "timeshift",
+            "timeline": "continuous" if self.continuous else "periodic",
+            "clock_offset_s": secs(self.offset_ticks),
+            "timescale": ts,
+            "epoch_utc": self._iso_ticks(self.epoch_ticks),
+            "loop": {
+                "number": pos.loop_number,
+                "position_s": secs(pos.position_in_loop_ticks),
+                "duration_s": secs(D),
+                "segments": spl,
+                "segment_duration_s": pkg.segment_duration_seconds,
+            },
+            "window": {
+                "convention": "hls-trailing",
+                "ended": ended,
+                "start_utc": self._iso_ticks(seg_start(w_first)),
+                "end_utc": self._iso_ticks(seg_end(w_last)),
+                "live_edge_utc": None if ended else self._iso_ticks(seg_start(w_last)),
+                "duration_s": secs(seg_end(w_last) - seg_start(w_first)),
+                "segments": _segment_range(w_first, w_last),
+            },
+            "range": {
+                "scope": scope,
+                "start_utc": self._iso_ticks(seg_start(first)),
+                "end_utc": self._iso_ticks(seg_end(last)),
+                "duration_s": secs(seg_end(last) - seg_start(first)),
+                "segments": _segment_range(first, last),
+            },
+            "loops": [
+                {
+                    "number": n,
+                    "start_utc": self._iso_ticks(seg_start(n * spl)),
+                    "end_utc": self._iso_ticks(seg_end(n * spl + spl - 1)),
+                    "segments": _segment_range(n * spl, n * spl + spl - 1),
+                    "current": window is None and n == live_edge // spl,
+                }
+                for n in loops
+            ],
+            "renditions": renditions,
+            "periods": periods,
+            "discontinuities": discontinuities,
+            "assets": assets,
+            "markers": markers,
+        }
+
     def build_hls_master_playlist(self, query: str = "") -> str:
         """Build the HLS multivariant (master) playlist -- required by the
         HLS spec and by most real players (Safari/hls.js, etc. generally
@@ -1256,7 +1574,7 @@ class Channel:
         # in increasing window order (oldest/earliest first), so a simple
         # "already emitted in this response" set is sufficient to enforce
         # the single-occurrence rule without a separate pre-pass.
-        already_emitted_markers: set[tuple[str, object, int]] = set()
+        already_emitted_markers: set[tuple[int, str, object, int]] = set()
 
         # [markers].cue_tags: which cue_breaks (see LoopPackage.__init__)
         # have already had their opening #EXT-X-CUE-OUT/-CONT emitted in
@@ -1267,7 +1585,7 @@ class Channel:
         # Markers already summarized in a `# markers:` comment in this
         # response (same once-per-response dedupe as already_emitted_markers,
         # but also covering cue_tags="only", which emits no DATERANGE).
-        described_marker_keys: set[tuple[str, object, int]] = set()
+        described_marker_keys: set[tuple[int, str, object, int]] = set()
 
         # Never emit past `media_sequence` (the live edge) -- when
         # first_global_index was clamped to 0 above (only possible in the
@@ -1342,13 +1660,13 @@ class Channel:
             # in that mode, #EXT-X-CUE-OUT/-IN below is the only signaling.
             segment_markers = [
                 m for m in pkg.markers
-                if (m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
+                if (local_loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
                 not in described_marker_keys
                 and _marker_covers_segment(m, ref_seg_start_ticks, ref_seg_end_ticks)
             ]
             if segment_markers:
                 described_marker_keys.update(
-                    (m["event_id"], m.get("marker_identity"), m["pts_time_ticks"]) for m in segment_markers
+                    (local_loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"]) for m in segment_markers
                 )
                 segment_id_map = (
                     build_event_id_map(pkg.markers, local_loop_number) if pkg.increment_event_ids else {}
@@ -1364,13 +1682,13 @@ class Channel:
                 matching_markers = [
                     m for m in pkg.markers
                     if (
-                        m["event_id"], m.get("marker_identity"), m["pts_time_ticks"]
+                        local_loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"]
                     ) not in already_emitted_markers
                     and _marker_covers_segment(m, ref_seg_start_ticks, ref_seg_end_ticks)
                 ]
                 for m in matching_markers:
                     already_emitted_markers.add(
-                        (m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
+                        (local_loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
                     )
                 if matching_markers:
                     loop_start_ticks = program_date_time_ticks(
@@ -2595,6 +2913,30 @@ def create_app(
                 else {"enabled": False}
             ),
         }
+
+    @app.get("/timeline.json")
+    def window_json():
+        """JSON view of the current window (periods, discontinuities, assets,
+        markers); schema in openapi.yaml. Honours the same timeshift query
+        params as the manifests."""
+        ch, window, _query = _request_view()
+        scope = request.args.get("scope", "window")
+        if scope not in ("window", "loops"):
+            abort(Response("'scope' must be 'window' or 'loops'\n", status=400, mimetype="text/plain"))
+        resp = jsonify(ch.build_window_json(window, scope))
+        resp.headers["Cache-Control"] = (
+            "public, max-age=31536000, immutable" if window is not None and window.ended else "public, max-age=1"
+        )
+        return resp
+
+    @app.get("/openapi.yaml")
+    def openapi_spec():
+        return send_file(Path(__file__).with_name("openapi.yaml"), mimetype="application/yaml")
+
+    @app.get("/docs")
+    def api_docs():
+        # Relative spec-url so it also resolves behind a path-prefixing proxy (igor).
+        return Response(_DOCS_HTML, mimetype="text/html")
 
     @app.get(f"/{LoopPackage.INDEX_PLAYLIST}")
     def hls_master_playlist():
