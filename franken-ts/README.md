@@ -81,8 +81,8 @@ slate_image: /path/to/slate.png  # optional — global cross-dissolve image for 
 
 osd:                            # optional — on-screen display, see "On-screen display (OSD)" below
   enabled: true                 # default: false
-  countdown:
-    enabled: true                # default: true
+  progress_bar:
+    mode: asset                  # asset | loop | none — default: asset
     height_pct: 3                 # default: 3 (% of transcoded output height)
   text_size_pct: 3               # default: 3 (% of transcoded output height)
   text_color: "#FFFFFF"          # default: "#FFFFFF"
@@ -294,16 +294,16 @@ use exactly one.
 
 `osd` (top-level, playlist-wide — not per-asset) configures a burned-in
 overlay shown on every asset in the playlist, except those with `no_osd:
-true`. It has two independent parts: a countdown progress bar, and up to 4
-corner text slots. Both are sized as a percentage of the transcoded output
-height, so they scale correctly across a multi-rendition ABR ladder.
+true`. It has two parts: a progress bar and up to 4 corner text slots. Both
+are sized as a percentage of the transcoded output height, so they scale
+correctly across a multi-rendition ABR ladder.
 
 ```yaml
 osd:
   enabled: true                 # master on/off switch — default: false
-  countdown:
-    enabled: true                # default: true
-    height_pct: 3                 # default: 3
+  progress_bar:
+    mode: asset                  # asset | loop | none — default: asset
+    height_pct: 3                 # default: 3 — height of the bar (asset) or of EACH row (loop)
   text_size_pct: 3               # default: 3 — applies to all 4 corners
   text_color: "#FFFFFF"          # default: "#FFFFFF" — applies to all corner text
   ad_break_label: "ad break"     # default: "ad break" — text for the is_adbreak corner
@@ -317,9 +317,22 @@ osd:
     bottom_right: time           # default: time
 ```
 
-**Countdown bar**: a semi-transparent black horizontal bar at the bottom of
-the frame, growing from 0% to 100% width over the current asset's playback
-(it resets at the start of each asset).
+**Progress bar** (`progress_bar`): `mode` selects exactly one of:
+
+- `asset` (default): a semi-transparent black bar at the bottom of the frame,
+  growing from 0% to 100% width over the current asset's playback (it resets at
+  the start of each asset). `height_pct` is its height.
+- `loop`: a static two-row map of the whole loop with a playhead, each row
+  `height_pct` high. Bottom row: the assets as one solid slate row, with dark
+  vertical dividers between assets. Row above it: the non-instant SCTE-35
+  spans (not individual markers) in a single row, each in its segmentation-type
+  color (the same palette Igor uses for its lanes), with a divider at every
+  span start and end. Nested spans are painted outermost first, so an inner
+  span covers its parent; the dividers still show where each begins and ends.
+  There are no text labels. A white playhead marks the current loop position.
+  Because every clip embeds the whole-loop map, changing any asset or span
+  invalidates the extraction cache for every clip.
+- `none`: no bar.
 
 **Corner text**: each of `top_left`/`top_right`/`bottom_left`/`bottom_right`
 can independently show one of:

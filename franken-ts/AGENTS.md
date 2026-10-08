@@ -100,9 +100,15 @@ type; nothing shown if unset).
 
 ### `osd` — top-level (playlist-wide, not per-asset), on-screen display
 
-`enabled` (bool, default `false`) is the master switch. When on: an
-optional `countdown` progress bar (`enabled`/`height_pct`, % of output
-height, grows 0→100% width over each asset's playback) plus up to 4
+`enabled` (bool, default `false`) is the master switch. When on: a
+`progress_bar` (`mode`: `asset` (default) | `loop` | `none`; `height_pct`, %
+of output height, default 3). `asset` grows a bar 0→100% width over each
+asset's playback; `loop` draws a static whole-loop map of `height_pct`-high
+rows (bottom: solid slate asset row with dividers; above it a single row of
+non-instant SCTE-35 spans colored like Igor's lanes, outermost painted first,
+dividers at every span edge, no labels) plus a playhead — the cache key then
+includes the whole-loop layout, so any asset/span change re-extracts every
+clip; plus up to 4
 `corners` (`top_left`/`top_right`/`bottom_left`/`bottom_right`, default
 `bottom_left: asset_id`/`bottom_right: time`, others unset), each one of
 `asset_id`/`time` (elapsed/total seconds in the current asset, sub-second

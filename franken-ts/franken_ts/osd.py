@@ -4,7 +4,7 @@ from __future__ import annotations
 On-screen display (OSD) overlay filter construction.
 
 Builds the ffmpeg filtergraph fragments for the playlist-level OSD: an
-optional countdown progress bar plus up to 4 corner text slots (see
+optional progress bar, an optional whole-loop timeline, and up to 4 corner text slots (see
 `config.OsdConfig`). Kept separate from extract.py -- which is exclusively
 concerned with frame-accurate extraction/timestamp hazards (see that
 module's docstring) -- since this is unrelated, purely presentational logic
@@ -14,14 +14,15 @@ with enough surface area (bar + 4 independently-gated text slots + escaping
 
 from typing import Literal, Optional
 
+from scte35_table23 import lane_color
+
 from .config import (
-    MarkerConfig,
     OsdConfig,
     OutputConfig,
-    SEGMENTATION_TYPE_CODE,
+    abbreviation_for_marker,
     to_ffmpeg_color,
 )
-from .timeline import TimelineEntry
+from .timeline import LoopLayout, TimelineEntry
 
 Corner = Literal["top_left", "top_right", "bottom_left", "bottom_right"]
 
@@ -71,6 +72,16 @@ _ACCENT_STRIPE_WIDTH_FRACTION = 0.22
 # hidden under the (now fully opaque) stripe instead of opening a gap.
 _ACCENT_STRIPE_OVERLAP_PX = 2
 
+# Loop-mode progress bar colors. Span colors come from `scte35_table23.lane_color`,
+# the same palette and hash igor's timeline lanes use (generated into igor).
+# Assets are a neutral slate (not igor's teal) so they never blend into a
+# teal lane (e.g. Break) in the row above.
+_LOOP_BAR_ASSET_COLOR = "0x475569@0.6"
+_LOOP_BAR_DIVIDER = "0x000000@0.7"
+_LOOP_BAR_DIVIDER_PX = 2
+_LOOP_BAR_SPAN_ALPHA = 0.6
+_LOOP_BAR_PLAYHEAD_WIDTH_FRACTION = 1 / 640
+
 # How long the Transition corner countdown is shown before an asset boundary.
 _TRANSITION_COUNTDOWN_SECONDS = 5.0
 
@@ -85,22 +96,6 @@ def escape_ffmpeg_text(text: str) -> str:
     commas and would be double-escaped if run through this.
     """
     return text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
-
-
-def abbreviation_for_marker(marker: MarkerConfig) -> str:
-    """Abbreviation shown for one covering SCTE-35 span in the
-    `scte35_spans` corner content: 'SPI' for a bare splice_insert
-    (no segmentation descriptor); otherwise the stable three-letter code
-    from config.SEGMENTATION_TYPE_CODE. Falls back to the raw type_id string
-    if it isn't in the table.
-    """
-    if marker.segmentation is None:
-        return "SPI"
-
-    type_id = marker.segmentation.type_id
-    value = int(type_id, 16) if isinstance(type_id, str) else int(type_id)
-    normalized = f"0x{value:02X}"
-    return SEGMENTATION_TYPE_CODE.get(normalized, normalized)
 
 
 def build_progress_bar_graph(
@@ -149,6 +144,88 @@ def build_progress_bar_graph(
         f"color=c=black:s={output.width}x{h}:d={clip_dur:.6f}:r={output.framerate},"
         f"format=rgba,colorchannelmixer=aa=0.5 [{bar}]",
         f"{input_label} [{bar}] overlay=x='{x_expr}':y={y} [{output_label}]",
+    ]
+
+
+def _bar_geometry(output: OutputConfig, osd: OsdConfig) -> tuple[int, int]:
+    """`(row_h, total_h)` of the progress bar: `asset` mode is one bar of
+    height_pct; `loop` mode is two rows of height_pct each; `none` is zero."""
+    mode = osd.progress_bar.mode
+    if mode == "none":
+        return 0, 0
+    h = round(output.height * osd.progress_bar.height_pct / 100)
+    if mode == "loop":
+        h = max(1, h)
+        return h, 2 * h
+    return h, h
+
+
+def build_loop_progress_graph(
+    input_label: str,
+    output_label: str,
+    entry: TimelineEntry,
+    output: OutputConfig,
+    osd: OsdConfig,
+    label_prefix: str,
+) -> Optional[list[str]]:
+    """Loop-mode progress bar: a static two-row map of the whole loop at the
+    bottom of the frame, plus a thin white playhead at the current loop
+    position (`t + entry.output_start`, same trick as the `loop_time` corner).
+
+    Bottom row: one solid block per asset. Row above it: the non-instant
+    SCTE-35 spans (not individual markers) in a single row, each in its lane
+    color, outermost first so nested spans paint over their parents. Both
+    rows have dark vertical dividers (between assets; at every span start
+    and end). No labels.
+
+    The map is identical for every clip, so it's plain `drawbox` with
+    constant coordinates; only the playhead overlay is time-aware. Block
+    edges come from rounding cumulative boundaries (not widths), so
+    neighbours abut exactly.
+    """
+    layout: Optional[LoopLayout] = entry.loop_layout
+    if layout is None or entry.loop_duration <= 0:
+        return None
+
+    width = output.width
+    row_h, total_h = _bar_geometry(output, osd)
+    assets_y = output.height - row_h
+    spans_y = assets_y - row_h
+
+    def px(seconds: float) -> int:
+        return max(0, min(width, round(seconds / entry.loop_duration * width)))
+
+    filters: list[str] = []
+    for start, end in layout.assets:
+        x0, x1 = px(start), px(end)
+        if x1 > x0:
+            filters.append(
+                f"drawbox=x={x0}:y={assets_y}:w={x1 - x0}:h={row_h}:color={_LOOP_BAR_ASSET_COLOR}:t=fill"
+            )
+    for span in layout.spans:
+        x0, x1 = px(span.start), px(span.end)
+        if x1 > x0:
+            color = f"0x{lane_color(span.lane_key)}@{_LOOP_BAR_SPAN_ALPHA}"
+            filters.append(f"drawbox=x={x0}:y={spans_y}:w={x1 - x0}:h={row_h}:color={color}:t=fill")
+
+    def divider(x: int, y: int) -> str:
+        return (
+            f"drawbox=x={x - _LOOP_BAR_DIVIDER_PX // 2}:y={y}:w={_LOOP_BAR_DIVIDER_PX}:"
+            f"h={row_h}:color={_LOOP_BAR_DIVIDER}:t=fill"
+        )
+
+    filters.extend(divider(px(start), assets_y) for start, _ in layout.assets[1:])
+    span_edges = sorted({px(t) for span in layout.spans for t in (span.start, span.end)} - {0, width})
+    filters.extend(divider(x, spans_y) for x in span_edges)
+
+    playhead_w = max(2, round(width * _LOOP_BAR_PLAYHEAD_WIDTH_FRACTION))
+    mid = f"{label_prefix}map"
+    head = f"{label_prefix}head"
+    x_expr = f"min(W-w\\,max(0\\,W*(t+{entry.output_start:.6f})/{entry.loop_duration:.6f}-w/2))"
+    return [
+        f"{input_label} {','.join(filters)} [{mid}]",
+        f"color=c=white:s={playhead_w}x{total_h}:d={entry.clip_duration:.6f}:r={output.framerate} [{head}]",
+        f"[{mid}] [{head}] overlay=x='{x_expr}':y={spans_y} [{output_label}]",
     ]
 
 
@@ -239,14 +316,14 @@ def _corner_geometry(output: OutputConfig, osd: OsdConfig) -> tuple[int, int, in
     """Shared sizing for a corner's text and (if enabled) its accent stripe:
     `(fontsize, margin, bottom_offset)`. `bottom_offset` is the distance
     from the frame's bottom edge to the bottom of bottom-corner text -- with
-    the countdown bar enabled, that's the bar's height plus one `margin`-
+    the progress bar enabled, that's the bar's height plus one `margin`-
     sized gap above it, deliberately the SAME gap as a top corner's distance
     from the top edge (not, say, double it) so top and bottom spacing read
     as consistent.
     """
     fontsize = round(output.height * osd.text_size_pct / 100)
     margin = round(output.height * _MARGIN_FRACTION)
-    bar_h = round(output.height * osd.countdown.height_pct / 100) if osd.countdown.enabled else 0
+    _, bar_h = _bar_geometry(output, osd)
     bottom_offset = margin + bar_h
     return fontsize, margin, bottom_offset
 
@@ -414,7 +491,7 @@ def build_osd_filters(
     anything.
 
     A plain list of self-contained bare filter strings (the pre-existing
-    interface) can't express the countdown bar, which needs a branching
+    interface) can't express the progress bar, which needs a branching
     sub-graph (color source + overlay, see build_progress_bar_graph) rather
     than a single one-input-one-output filter -- so this manages its own
     pad labels end-to-end instead of leaving that to the caller.
@@ -427,15 +504,22 @@ def build_osd_filters(
     current = input_label
     step = 0
 
-    if osd.countdown.enabled:
+    if osd.progress_bar.mode == "asset":
         next_label = f"osd{step}"
         lines.extend(
             build_progress_bar_graph(
-                current, next_label, clip_dur, output, osd.countdown.height_pct, f"osdbar{step}_"
+                current, next_label, clip_dur, output, osd.progress_bar.height_pct, f"osdbar{step}_"
             )
         )
         current = f"[{next_label}]"
         step += 1
+    elif osd.progress_bar.mode == "loop":
+        next_label = f"osd{step}"
+        loop_lines = build_loop_progress_graph(current, next_label, entry, output, osd, f"osdloop{step}_")
+        if loop_lines is not None:
+            lines.extend(loop_lines)
+            current = f"[{next_label}]"
+            step += 1
 
     corners: list[tuple[Corner, Optional[str]]] = [
         ("top_left", osd.corners.top_left),

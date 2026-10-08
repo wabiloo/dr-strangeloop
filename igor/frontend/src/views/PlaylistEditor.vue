@@ -111,9 +111,17 @@ const CORNER_CONTENT_OPTIONS: { label: string; value: CornerContent }[] = [
   { label: 'OSD label', value: 'osd_label' },
 ]
 
+type ProgressBarMode = 'asset' | 'loop' | 'none'
+
+const PROGRESS_BAR_MODE_OPTIONS: { label: string; value: ProgressBarMode }[] = [
+  { label: 'Per asset', value: 'asset' },
+  { label: 'Per loop', value: 'loop' },
+  { label: 'None', value: 'none' },
+]
+
 interface OsdForm {
   enabled: boolean
-  countdown: { enabled: boolean; height_pct: number }
+  progress_bar: { mode: ProgressBarMode; height_pct: number }
   text_size_pct: number
   text_color: string
   ad_break_label: string
@@ -229,7 +237,7 @@ function newAsset(): AssetForm {
 function defaultOsd(): OsdForm {
   return {
     enabled: false,
-    countdown: { enabled: true, height_pct: 3 },
+    progress_bar: { mode: 'asset', height_pct: 3 },
     text_size_pct: 3,
     text_color: '#FFFFFF',
     ad_break_label: 'ad break',
@@ -297,11 +305,24 @@ function osdPreviewTextStyle(side: 'left' | 'right') {
   }
 }
 
-/** Bottom preview text needs to clear the countdown bar preview, which is
- * sized as a percentage of the mockup's own height. */
-const osdPreviewBottomOffset = computed(() =>
-  form.osd.countdown.enabled ? `calc(${form.osd.countdown.height_pct}% + 0.5rem)` : '0.5rem',
-)
+/** Total height (% of the mockup) of the progress bar: one bar in per-asset
+ * mode, two rows (assets + SCTE-35 spans) in per-loop mode -- same as
+ * franken-ts's _bar_geometry. Bottom corner text must clear it. */
+const osdProgressBarTotalPct = computed(() => {
+  const { mode, height_pct } = form.osd.progress_bar
+  return mode === 'loop' ? 2 * height_pct : mode === 'asset' ? height_pct : 0
+})
+/** Sample span row for the loop-mode preview, in real lane colors (same 60%
+ * opacity and dividers as franken-ts), one stretch per sample lane. */
+const osdPreviewSpansBackground = computed(() => {
+  const span = (key: string) => colorForLaneKey(key) + '99'
+  const divider = 'rgba(0, 0, 0, 0.7)'
+  return `linear-gradient(90deg,
+    transparent 0 calc(25% - 1px), ${divider} calc(25% - 1px) 25%,
+    ${span('time_signal:0x30')} 25% calc(50% - 1px), ${divider} calc(50% - 1px) 50%,
+    ${span('time_signal:0x34')} 50% calc(75% - 1px), ${divider} calc(75% - 1px) 75%, transparent 75%)`
+})
+const osdPreviewBottomOffset = computed(() => `calc(${osdProgressBarTotalPct.value}% + 0.5rem)`)
 
 /** Resets the form to its blank-new-playlist state -- needed because vue-router
  * reuses this component instance when navigating between /playlists/new and
@@ -1565,7 +1586,7 @@ function toYamlPlaylist(): Record<string, unknown> {
     }
     cfg.osd = {
       enabled: true,
-      countdown: { ...form.osd.countdown },
+      progress_bar: { ...form.osd.progress_bar },
       text_size_pct: form.osd.text_size_pct,
       text_color: form.osd.text_color,
       ad_break_label: form.osd.ad_break_label,
@@ -1623,14 +1644,16 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
   form.slate_image = (data.slate_image as string) ?? ''
 
   const rawOsd = (data.osd as Record<string, unknown>) ?? {}
-  const rawOsdCountdown = (rawOsd.countdown as Record<string, unknown>) ?? {}
+  const rawOsdProgressBar = (rawOsd.progress_bar as Record<string, unknown>) ?? {}
   const rawOsdCornerBox = (rawOsd.corner_box as Record<string, unknown>) ?? {}
   const rawOsdCorners = (rawOsd.corners as Record<string, unknown>) ?? {}
   form.osd = {
     enabled: Boolean(rawOsd.enabled),
-    countdown: {
-      enabled: rawOsdCountdown.enabled !== undefined ? Boolean(rawOsdCountdown.enabled) : true,
-      height_pct: (rawOsdCountdown.height_pct as number) ?? 3,
+    progress_bar: {
+      mode: (['asset', 'loop', 'none'].includes(rawOsdProgressBar.mode as string)
+        ? rawOsdProgressBar.mode
+        : 'asset') as ProgressBarMode,
+      height_pct: (rawOsdProgressBar.height_pct as number) ?? 3,
     },
     text_size_pct: (rawOsd.text_size_pct as number) ?? 3,
     text_color: (rawOsd.text_color as string) ?? '#FFFFFF',
@@ -2128,9 +2151,18 @@ function applyHexPopover() {
                   >{{ previewTextFor('bottom_right') }}</div>
 
                   <div
-                    v-if="form.osd.countdown.enabled"
+                    v-if="form.osd.progress_bar.mode === 'loop'"
+                    class="osd-timeline-preview"
+                    :style="{ height: osdProgressBarTotalPct + '%' }"
+                  >
+                    <div class="osd-timeline-row osd-timeline-spans" :style="{ background: osdPreviewSpansBackground }" />
+                    <div class="osd-timeline-row osd-timeline-assets" />
+                    <div class="osd-timeline-playhead" />
+                  </div>
+                  <div
+                    v-else-if="form.osd.progress_bar.mode === 'asset'"
                     class="osd-bar-preview"
-                    :style="{ height: form.osd.countdown.height_pct + '%' }"
+                    :style="{ height: form.osd.progress_bar.height_pct + '%' }"
                   />
                 </div>
 
@@ -2191,14 +2223,20 @@ function applyHexPopover() {
                 <InputText v-model="form.osd.ad_break_label" :disabled="!form.osd.enabled" placeholder="ad break" class="osd-narrow-hex" />
                 <span /><span />
 
-                <label class="osd-option-label" for="osd-countdown-enabled">Countdown bar</label>
-                <Checkbox v-model="form.osd.countdown.enabled" binary input-id="osd-countdown-enabled" :disabled="!form.osd.enabled" />
-                <label class="osd-option-label-secondary">Bar height</label>
+                <label class="osd-option-label">Progress bar</label>
+                <Select
+                  v-model="form.osd.progress_bar.mode"
+                  :options="PROGRESS_BAR_MODE_OPTIONS"
+                  option-label="label"
+                  option-value="value"
+                  :disabled="!form.osd.enabled"
+                />
+                <label class="osd-option-label-secondary">{{ form.osd.progress_bar.mode === 'loop' ? 'Row height' : 'Bar height' }}</label>
                 <InputGroup class="osd-narrow-pct">
                   <InputNumber
-                    v-model="form.osd.countdown.height_pct"
-                    :min="0" :max="100"
-                    :disabled="!form.osd.enabled || !form.osd.countdown.enabled"
+                    v-model="form.osd.progress_bar.height_pct"
+                    :min="0" :max="50" :min-fraction-digits="0" :max-fraction-digits="1"
+                    :disabled="!form.osd.enabled || form.osd.progress_bar.mode === 'none'"
                   />
                   <InputGroupAddon>%</InputGroupAddon>
                 </InputGroup>
@@ -2844,8 +2882,8 @@ function applyHexPopover() {
 
 /* A stand-in for the video frame: fixed 16:9. The corner pickers live
  * OUTSIDE this box (in flex rows above/below it) so they never cover the
- * preview text; only the simulated corner text and the countdown-bar
- * preview render inside it, at the same percent-of-height sizing the real
+ * preview text; only the simulated corner text, the progress-bar
+ * and loop-timeline previews render inside it, at the same percent-of-height sizing the real
  * overlay uses. */
 .osd-frame-mockup {
   position: relative;
@@ -2931,6 +2969,35 @@ function applyHexPopover() {
   min-height: 3px;
   background: rgba(0, 0, 0, 0.55);
   border-top: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.osd-timeline-preview {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+}
+.osd-timeline-row {
+  flex: 1;
+  position: relative;
+}
+/* Single span row above a solid slate asset row, both with dark vertical
+ * dividers and no labels -- mirrors franken-ts's build_loop_progress_graph. */
+.osd-timeline-assets {
+  background: linear-gradient(90deg,
+    transparent calc(25% - 1px), rgba(0, 0, 0, 0.7) calc(25% - 1px) 25%, transparent 25% calc(50% - 1px),
+    rgba(0, 0, 0, 0.7) calc(50% - 1px) 50%, transparent 50% calc(75% - 1px), rgba(0, 0, 0, 0.7) calc(75% - 1px) 75%, transparent 75%),
+    rgba(71, 85, 105, 0.6);
+}
+.osd-timeline-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 60%;
+  width: 2px;
+  background: #fff;
 }
 
 /* Percentage fields (bar height, text size) are at most 2 digits (0-100)
