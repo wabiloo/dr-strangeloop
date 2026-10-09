@@ -53,8 +53,54 @@ const error = ref('')
 const showRaw = ref(false)
 const autoRefresh = ref(true)
 const polledAt = ref<Date | null>(null)
+// The raw JSON view: follows the polled document, or holds a snapshot while auto-refresh is off.
+// The timeline above always keeps polling.
+const rawDoc = ref<ChannelTimeline | null>(null)
+const rawPolledAt = ref<Date | null>(null)
+// The last polls, newest first, to step back to and compare against. Starred ones are never dropped
+// (at most MAX_STARS); the rest make way for new polls once HISTORY entries are held.
+const HISTORY = 15
+const MAX_STARS = 5
+type Poll = { at: Date; doc: ChannelTimeline; starred: boolean }
+const history = ref<Poll[]>([])
+const starCount = computed(() => history.value.filter((h) => h.starred).length)
+function addPoll(poll: Poll) {
+  const list = [poll, ...history.value]
+  while (list.length > HISTORY) {
+    let i = list.length - 1
+    while (i > 0 && list[i].starred) i--
+    list.splice(i, 1)
+  }
+  history.value = list
+}
+function toggleStar(h: Poll) {
+  if (!h.starred && starCount.value >= MAX_STARS) return
+  h.starred = !h.starred
+}
+function showPoll(entry: Poll) {
+  autoRefresh.value = false
+  rawDoc.value = entry.doc
+  rawPolledAt.value = entry.at
+}
+function syncRaw() {
+  rawDoc.value = doc.value
+  rawPolledAt.value = polledAt.value
+}
 type Selection = { kind: string; label: string; data: unknown }
 const selected = ref<Selection | null>(null)
+const copied = ref<'selected' | 'raw' | null>(null)
+let copiedTimer: ReturnType<typeof setTimeout> | undefined
+async function copyJson(which: 'selected' | 'raw') {
+  try {
+    const value = which === 'selected' ? selected.value?.data : rawDoc.value
+    await navigator.clipboard.writeText(JSON.stringify(value, null, 2) ?? '')
+    copied.value = which
+    clearTimeout(copiedTimer)
+    copiedTimer = setTimeout(() => (copied.value = null), 1500)
+  } catch {
+    // clipboard unavailable: nothing to do
+  }
+}
 
 // Animated view state (see "geometry" below); declared before the immediate watch uses it.
 type View = { t0: number; t1: number }
@@ -79,7 +125,10 @@ async function load() {
     const next = await getChannelTimeline(props.name, props.query ?? '')
     if (seq !== requestSeq) return // a newer request (e.g. query changed) superseded this one
     applyDoc(next)
-    polledAt.value = new Date()
+    const at = new Date()
+    polledAt.value = at
+    addPoll({ at, doc: next, starred: false })
+    if (autoRefresh.value || !rawDoc.value) syncRaw()
     error.value = ''
   } catch (e) {
     if (seq !== requestSeq) return
@@ -93,19 +142,19 @@ function restartPolling() {
   if (!open.value) return
   load()
   // An ended timeshift range is immutable; only the live window moves.
-  if (!props.query && autoRefresh.value) timer = setInterval(load, POLL_MS)
+  if (!props.query) timer = setInterval(load, POLL_MS)
 }
 watch(autoRefresh, (on) => {
-  if (on) {
-    restartPolling()
-  } else {
-    requestSeq++ // drop a response still in flight so the frozen view stays as polled
-    if (timer) clearInterval(timer)
-    timer = null
-  }
+  if (on) syncRaw()
 })
+async function refreshRaw() {
+  await load()
+  syncRaw()
+}
 watch([open, () => props.name, () => props.query], () => {
   doc.value = null
+  rawDoc.value = null
+  history.value = []
   view.value = null
   ghost.value = null
   tween = null
@@ -163,7 +212,7 @@ function frame() {
     }
   }
   const d = doc.value
-  if (d && d.mode === 'live' && autoRefresh.value) liveNow.value = Date.parse(d.generated_at) + (now - fetchedAt)
+  if (d && d.mode === 'live') liveNow.value = Date.parse(d.generated_at) + (now - fetchedAt)
 }
 onMounted(() => {
   raf = requestAnimationFrame(frame)
@@ -631,30 +680,83 @@ function isSelected(data: unknown): boolean {
         </div>
 
         <div v-if="selected" class="wp-detail surface-100 border-round p-2">
-          <div class="text-xs text-color-secondary mb-1">{{ selected.kind }} · {{ selected.label }}</div>
+          <div class="flex align-items-center justify-content-between mb-1">
+            <span class="text-xs text-color-secondary">{{ selected.kind }} · {{ selected.label }}</span>
+            <span class="flex align-items-center">
+              <Button
+                :icon="copied === 'selected' ? 'pi pi-check' : 'pi pi-copy'"
+                text
+                rounded
+                size="small"
+                severity="secondary"
+                aria-label="Copy JSON"
+                :title="copied === 'selected' ? 'Copied' : 'Copy JSON'"
+                @click="copyJson('selected')"
+              />
+              <Button icon="pi pi-times" text rounded size="small" severity="secondary" aria-label="Close details" title="Close" @click="selected = null" />
+            </span>
+          </div>
           <JsonViewer :value="selected.data" />
         </div>
         <div v-else class="text-xs text-color-secondary text-right">Click an item for its details.</div>
 
-        <template v-if="showRaw">
-          <div class="flex align-items-center gap-3 flex-wrap text-sm">
-            <span class="text-color-secondary">Polled at <strong>{{ polledAt ? polledAt.toLocaleTimeString([], { hour12: false }) : '—' }}</strong></span>
-            <label v-if="!query" class="flex align-items-center gap-2 cursor-pointer">
+        <div v-if="showRaw" class="wp-detail surface-100 border-round p-2">
+          <div class="flex align-items-center justify-content-between mb-1">
+            <span class="text-xs text-color-secondary">Raw JSON · polled at {{ rawPolledAt ? rawPolledAt.toLocaleTimeString([], { hour12: false }) : '—' }}</span>
+            <span class="flex align-items-center">
+              <Button
+                :icon="copied === 'raw' ? 'pi pi-check' : 'pi pi-copy'"
+                text
+                rounded
+                size="small"
+                severity="secondary"
+                aria-label="Copy JSON"
+                :title="copied === 'raw' ? 'Copied' : 'Copy JSON'"
+                @click="copyJson('raw')"
+              />
+              <Button icon="pi pi-times" text rounded size="small" severity="secondary" aria-label="Hide raw JSON" title="Close" @click="showRaw = false" />
+            </span>
+          </div>
+          <div v-if="!query" class="flex align-items-center gap-3 flex-wrap text-sm mb-2">
+            <label class="flex align-items-center gap-2 cursor-pointer">
               <Checkbox v-model="autoRefresh" binary input-id="wp-auto-refresh" />
               Auto-refresh every {{ POLL_MS / 1000 }} s
             </label>
-            <Button
-              v-if="!query && !autoRefresh"
-              label="Refresh now"
-              icon="pi pi-refresh"
-              size="small"
-              severity="secondary"
-              text
-              @click="load"
-            />
+            <Button v-if="!autoRefresh" label="Refresh now" icon="pi pi-refresh" size="small" severity="secondary" text @click="refreshRaw" />
           </div>
-          <JsonViewer :value="doc" max-height="24rem" />
-        </template>
+          <div class="wp-raw-body">
+            <JsonViewer class="wp-raw-viewer" :value="rawDoc" max-height="28rem" />
+            <div class="wp-history" aria-label="Last polls">
+              <div class="text-xs text-color-secondary mb-1">Last {{ HISTORY }} polls · {{ starCount }}/{{ MAX_STARS }} starred</div>
+              <div
+                v-for="(h, i) in history"
+                :key="h.at.getTime()"
+                class="wp-history-row"
+                :class="{ 'wp-history-current': h.at === rawPolledAt }"
+              >
+                <button
+                  type="button"
+                  class="wp-history-item"
+                  :title="i === 0 ? 'Latest poll' : 'Show this poll (stops auto-refresh)'"
+                  @click="showPoll(h)"
+                >
+                  {{ h.at.toLocaleTimeString([], { hour12: false }) }}<span v-if="i === 0" class="text-color-secondary"> · latest</span>
+                </button>
+                <button
+                  type="button"
+                  class="wp-history-star"
+                  :class="{ 'wp-history-starred': h.starred }"
+                  :disabled="!h.starred && starCount >= MAX_STARS"
+                  :aria-label="h.starred ? 'Unstar this poll' : 'Star this poll'"
+                  :title="h.starred ? 'Unstar' : starCount >= MAX_STARS ? `At most ${MAX_STARS} starred polls` : 'Star: keep this poll in the list'"
+                  @click="toggleStar(h)"
+                >
+                  <i :class="['pi', h.starred ? 'pi-star-fill' : 'pi-star']" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </template>
     </template>
   </div>
@@ -878,6 +980,69 @@ function isSelected(data: unknown): boolean {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
   border-right: 3px dashed rgba(255, 255, 255, 0.85);
+}
+.wp-raw-body {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+.wp-raw-viewer {
+  flex: 1;
+  min-width: 0;
+}
+.wp-history {
+  flex: 0 0 11rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.wp-history-row {
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+.wp-history-row:hover,
+.wp-history-current {
+  background: var(--p-surface-0, #fff);
+}
+.wp-history-current {
+  border-color: var(--p-primary-color, #b91c1c);
+}
+.wp-history-item {
+  flex: 1;
+  background: none;
+  border: 0;
+  padding: 0.15rem 0.4rem;
+  font: inherit;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.wp-history-star {
+  background: none;
+  border: 0;
+  padding: 0.15rem 0.35rem;
+  cursor: pointer;
+  color: var(--p-text-muted-color, #64748b);
+  font-size: 0.75rem;
+}
+.wp-history-star:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.wp-history-starred {
+  color: #d99a00;
+}
+@media (max-width: 700px) {
+  .wp-raw-body {
+    flex-direction: column;
+  }
+  .wp-history {
+    flex-basis: auto;
+  }
 }
 .wp-selected {
   outline: 2px solid var(--text-color);
