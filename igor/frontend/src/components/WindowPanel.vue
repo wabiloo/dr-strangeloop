@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
 import Checkbox from 'primevue/checkbox'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import InputText from 'primevue/inputtext'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue'
 import { channelDocsUrl, getChannelTimeline } from '../api/client'
 import type { ChannelTimeline } from '../api/types'
 import FieldHelp from './FieldHelp.vue'
@@ -59,10 +60,12 @@ const rawDoc = ref<ChannelTimeline | null>(null)
 const rawPolledAt = ref<Date | null>(null)
 // The last polls, newest first, to step back to and compare against. Starred ones are never dropped
 // (at most MAX_STARS); the rest make way for new polls once HISTORY entries are held.
-const HISTORY = 15
+const HISTORY = 12
 const MAX_STARS = 5
 type Poll = { at: Date; doc: ChannelTimeline; starred: boolean }
 const history = ref<Poll[]>([])
+// Key/index path in the raw JSON of the clicked timeline item, highlighted there.
+const rawHighlight = ref<(string | number)[] | null>(null)
 const starCount = computed(() => history.value.filter((h) => h.starred).length)
 function addPoll(poll: Poll) {
   const list = [poll, ...history.value]
@@ -79,20 +82,52 @@ function toggleStar(h: Poll) {
 }
 function showPoll(entry: Poll) {
   autoRefresh.value = false
+  rawHighlight.value = null
+  selected.value = null
   rawDoc.value = entry.doc
   rawPolledAt.value = entry.at
 }
 function syncRaw() {
+  rawHighlight.value = null
+  selected.value = null
   rawDoc.value = doc.value
   rawPolledAt.value = polledAt.value
 }
 type Selection = { kind: string; label: string; data: unknown }
 const selected = ref<Selection | null>(null)
-const copied = ref<'selected' | 'raw' | null>(null)
+// With an item selected the box shows just that item, or the full JSON with the item highlighted ("in context").
+const inContext = ref(false)
+const rawShown = computed<unknown>(() => (selected.value && !inContext.value ? selected.value.data : rawDoc.value))
+const jsonPath = computed(() => {
+  if (!selected.value || !rawHighlight.value) return ''
+  return '$' + rawHighlight.value.map((k) => (typeof k === 'number' ? `[${k}]` : /^[A-Za-z_]\w*$/.test(k) ? `.${k}` : `['${k.replace(/'/g, "\\'")}']`)).join('')
+})
+const rawTitle = computed(() => {
+  const s = selected.value
+  if (!s) return 'Raw JSON'
+  return inContext.value ? `Raw JSON · ${s.kind} · ${s.label}` : `${s.kind} · ${s.label}`
+})
+const rawBox = ref<HTMLElement | null>(null)
+const rawViewer = ref<InstanceType<typeof JsonViewer> | null>(null)
+const rawSearch = ref('')
+const rawSearchInfo = ref({ count: 0, index: 0 })
+// Searching holds the raw JSON as it is (auto-refresh off) so matches and the current position don't move under the reader.
+watch(rawSearch, (v) => {
+  if (v) autoRefresh.value = false
+  rawViewer.value?.setSearch(v)
+})
+watch(showRaw, (on) => {
+  if (!on) {
+    rawSearch.value = ''
+    rawHighlight.value = null
+    selected.value = null
+  }
+})
+const copied = ref<'raw' | null>(null)
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
-async function copyJson(which: 'selected' | 'raw') {
+async function copyJson(which: 'raw') {
   try {
-    const value = which === 'selected' ? selected.value?.data : rawDoc.value
+    const value = rawShown.value
     await navigator.clipboard.writeText(JSON.stringify(value, null, 2) ?? '')
     copied.value = which
     clearTimeout(copiedTimer)
@@ -161,6 +196,7 @@ watch([open, () => props.name, () => props.query], () => {
   vp.value = null
   altCache.clear()
   selected.value = null
+  rawHighlight.value = null
   restartPolling()
 }, { immediate: true })
 onBeforeUnmount(() => {
@@ -485,8 +521,29 @@ const summary = computed(() => {
   )
 })
 
+function pathTo(root: unknown, target: unknown): (string | number)[] | null {
+  const t = toRaw(target)
+  const same = JSON.stringify(t)
+  const walk = (node: unknown, exact: boolean): (string | number)[] | null => {
+    const n = toRaw(node)
+    if (exact ? n === t : n !== null && typeof n === 'object' && JSON.stringify(n) === same) return []
+    if (n === null || typeof n !== 'object') return null
+    for (const [k, v] of Object.entries(n as Record<string, unknown>)) {
+      const sub = walk(v, exact)
+      if (sub) return [Array.isArray(n) ? Number(k) : k, ...sub]
+    }
+    return null
+  }
+  return walk(root, true) ?? walk(root, false)
+}
+// Selecting an item opens the raw JSON, pinned to the current poll (auto-refresh off), with the item's lines highlighted.
 function select(kind: string, label: string, data: unknown) {
-  selected.value = selected.value?.data === data ? null : { kind, label, data }
+  autoRefresh.value = false
+  showRaw.value = true
+  syncRaw()
+  selected.value = { kind, label, data }
+  rawHighlight.value = doc.value ? pathTo(doc.value, data) : null
+  nextTick(() => rawBox.value?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }))
 }
 function isSelected(data: unknown): boolean {
   return selected.value?.data === data
@@ -679,30 +736,13 @@ function isSelected(data: unknown): boolean {
           <input type="range" min="0" max="1000" :value="scrollPos" aria-label="Scroll the timeline" @input="onScroll" />
         </div>
 
-        <div v-if="selected" class="wp-detail surface-100 border-round p-2">
-          <div class="flex align-items-center justify-content-between mb-1">
-            <span class="text-xs text-color-secondary">{{ selected.kind }} · {{ selected.label }}</span>
-            <span class="flex align-items-center">
-              <Button
-                :icon="copied === 'selected' ? 'pi pi-check' : 'pi pi-copy'"
-                text
-                rounded
-                size="small"
-                severity="secondary"
-                aria-label="Copy JSON"
-                :title="copied === 'selected' ? 'Copied' : 'Copy JSON'"
-                @click="copyJson('selected')"
-              />
-              <Button icon="pi pi-times" text rounded size="small" severity="secondary" aria-label="Close details" title="Close" @click="selected = null" />
-            </span>
-          </div>
-          <JsonViewer :value="selected.data" />
-        </div>
-        <div v-else class="text-xs text-color-secondary text-right">Click an item for its details.</div>
+        <div v-if="!showRaw" class="text-xs text-color-secondary text-right">Click an item to find it in the raw JSON.</div>
 
-        <div v-if="showRaw" class="wp-detail surface-100 border-round p-2">
+        <div v-if="showRaw" ref="rawBox" class="wp-detail surface-100 border-round p-2">
           <div class="flex align-items-center justify-content-between mb-1">
-            <span class="text-xs text-color-secondary">Raw JSON · polled at {{ rawPolledAt ? rawPolledAt.toLocaleTimeString([], { hour12: false }) : '—' }}</span>
+            <span class="text-xs text-color-secondary">
+              {{ rawTitle }}<template v-if="jsonPath"> · <code class="wp-jsonpath" title="JSONPath in the full JSON">{{ jsonPath }}</code></template>
+            </span>
             <span class="flex align-items-center">
               <Button
                 :icon="copied === 'raw' ? 'pi pi-check' : 'pi pi-copy'"
@@ -717,16 +757,41 @@ function isSelected(data: unknown): boolean {
               <Button icon="pi pi-times" text rounded size="small" severity="secondary" aria-label="Hide raw JSON" title="Close" @click="showRaw = false" />
             </span>
           </div>
-          <div v-if="!query" class="flex align-items-center gap-3 flex-wrap text-sm mb-2">
-            <label class="flex align-items-center gap-2 cursor-pointer">
-              <Checkbox v-model="autoRefresh" binary input-id="wp-auto-refresh" />
-              Auto-refresh every {{ POLL_MS / 1000 }} s
-            </label>
-            <Button v-if="!autoRefresh" label="Refresh now" icon="pi pi-refresh" size="small" severity="secondary" text @click="refreshRaw" />
-          </div>
           <div class="wp-raw-body">
-            <JsonViewer class="wp-raw-viewer" :value="rawDoc" max-height="28rem" />
+          <div class="wp-raw-main">
+          <div class="wp-raw-controls flex align-items-center gap-3 flex-wrap text-sm mb-2">
+            <template v-if="selected">
+              <label class="flex align-items-center gap-2 cursor-pointer">
+                <Checkbox v-model="inContext" binary input-id="wp-in-context" />
+                In context
+              </label>
+              <Button label="Full JSON" icon="pi pi-times" size="small" severity="secondary" text title="Deselect the item and show the full JSON" @click="selected = null; rawHighlight = null" />
+            </template>
+            <span class="flex align-items-center gap-1 ml-auto">
+              <i class="pi pi-search text-color-secondary" aria-hidden="true" />
+              <InputText
+                v-model="rawSearch"
+                size="small"
+                placeholder="Search"
+                aria-label="Search the JSON"
+                class="wp-search"
+                @keydown.enter.prevent="$event.shiftKey ? rawViewer?.prev() : rawViewer?.next()"
+              />
+              <span class="text-xs text-color-secondary wp-search-count">{{ rawSearch ? `${rawSearchInfo.index}/${rawSearchInfo.count}` : '' }}</span>
+              <Button icon="pi pi-chevron-up" text rounded size="small" severity="secondary" aria-label="Previous match" title="Previous (Shift+Enter)" :disabled="!rawSearch" @click="rawViewer?.prev()" />
+              <Button icon="pi pi-chevron-down" text rounded size="small" severity="secondary" aria-label="Next match" title="Next (Enter)" :disabled="!rawSearch" @click="rawViewer?.next()" />
+            </span>
+          </div>
+            <JsonViewer ref="rawViewer" class="wp-raw-viewer" :value="rawShown" :highlight="inContext ? rawHighlight : null" @search-info="rawSearchInfo = $event" max-height="30rem" />
+          </div>
             <div class="wp-history" aria-label="Last polls">
+              <template v-if="!query">
+                <label class="flex align-items-center gap-2 cursor-pointer text-sm mb-1">
+                  <Checkbox v-model="autoRefresh" binary input-id="wp-auto-refresh" />
+                  Auto-refresh · {{ POLL_MS / 1000 }} s
+                </label>
+                <Button v-if="!autoRefresh" label="Refresh now" icon="pi pi-refresh" size="small" severity="secondary" text class="mb-2 align-self-start" @click="refreshRaw" />
+              </template>
               <div class="text-xs text-color-secondary mb-1">Last {{ HISTORY }} polls · {{ starCount }}/{{ MAX_STARS }} starred</div>
               <div
                 v-for="(h, i) in history"
@@ -981,17 +1046,39 @@ function isSelected(data: unknown): boolean {
   border-bottom-right-radius: 0;
   border-right: 3px dashed rgba(255, 255, 255, 0.85);
 }
+.wp-jsonpath {
+  font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
+  color: var(--p-text-color, inherit);
+  user-select: all;
+}
+.wp-search {
+  width: 11rem;
+}
+.wp-search-count {
+  min-width: 3.2rem;
+  font-variant-numeric: tabular-nums;
+}
 .wp-raw-body {
-  display: flex;
-  gap: 0.75rem;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 11rem;
+  column-gap: 0.75rem;
+  align-items: start;
+}
+.wp-raw-main {
+  display: contents;
+}
+.wp-raw-controls {
+  grid-column: 1;
+  grid-row: 1;
 }
 .wp-raw-viewer {
-  flex: 1;
+  grid-column: 1;
+  grid-row: 2;
   min-width: 0;
 }
 .wp-history {
-  flex: 0 0 11rem;
+  grid-column: 2;
+  grid-row: 2;
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
@@ -1038,10 +1125,13 @@ function isSelected(data: unknown): boolean {
 }
 @media (max-width: 700px) {
   .wp-raw-body {
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
   }
+  .wp-raw-controls,
+  .wp-raw-viewer,
   .wp-history {
-    flex-basis: auto;
+    grid-column: 1;
+    grid-row: auto;
   }
 }
 .wp-selected {
