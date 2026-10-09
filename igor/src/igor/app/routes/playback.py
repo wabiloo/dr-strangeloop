@@ -20,8 +20,8 @@ mimetypes.add_type("text/javascript", ".js")
 class PlaybackTestPayload(BaseModel):
     players: list[str] | None = None
     formats: list[Literal["hls", "dash"]] | None = None
-    boundaries: int = Field(default=2, ge=1, le=20)
-    duration_s: int = Field(default=120, ge=10, le=3600, description="run length when the channel has no /timeline.json")
+    boundaries: int = Field(default=2, ge=0, le=20, description="0 = do not wait for boundaries: play for duration_s")
+    duration_s: int = Field(default=120, ge=10, le=3600, description="run length when the channel has no /timeline.json, or boundaries is 0")
     max_seconds: int = Field(default=600, ge=30, le=3600)
     ffmpeg_s: int | None = Field(default=None, ge=5, le=600)
 

@@ -38,7 +38,7 @@ class RunConfig:
     players: list[str] = field(default_factory=default_players)
     formats: list[str] | None = None
     boundaries: int = 2          # stop once this many boundaries were crossed (needs /timeline.json)
-    duration_s: float = 120.0    # fixed run length without a timeline; with one, the timeout is max_s
+    duration_s: float = 120.0    # fixed run length without a timeline, or on a continuous one (no loop boundaries); else max_s is the timeout
     max_s: float = 600.0
     settle_s: float = 40.0       # max wait after the timeline shows the boundaries (players trail the live edge)
     startup_grace_s: float = 40.0
@@ -156,7 +156,7 @@ def run(cfg: RunConfig) -> dict:
                     tracker.mark_start()
                     marked_at = now
                     _log(cfg, f"t={now:.0f}s players started; counting boundaries from here")
-            elif use_timeline:
+            elif use_timeline and cfg.boundaries > 0:
                 crossed = {f: tracker.crossed(f) for f in formats_run}
                 if reached_at is None and all(c >= cfg.boundaries for c in crossed.values()):
                     reached_at = now
@@ -165,10 +165,13 @@ def run(cfg: RunConfig) -> dict:
                     since = now - reached_at
                     reporting = [x for x in s if x.get("periodTransitions") is not None]
                     caught_up = bool(reporting) and all(x["periodTransitions"] >= cfg.boundaries for x in reporting)
-                    silent = len(reporting) < len(s)  # Shaka/Video.js give no transitions: wait the full settle time
+                    silent = len(reporting) < len(s)  # some players (Shaka) give no transitions: wait the full settle time
                     if since >= cfg.settle_s or (caught_up and not silent and since >= 3):
                         break
-            elif now >= cfg.duration_s:
+                elif tracker.continuous and now - marked_at >= cfg.duration_s:
+                    _log(cfg, f"t={now:.0f}s continuous timeline and no boundary yet: ending after {cfg.duration_s:.0f}s")
+                    break
+            elif now - marked_at >= cfg.duration_s:
                 break
             if now >= cfg.max_s:
                 _log(cfg, f"t={now:.0f}s timeout")
@@ -208,6 +211,7 @@ def run(cfg: RunConfig) -> dict:
         "boundaries": {
             "requested": cfg.boundaries,
             "source": "timeline.json" if use_timeline else "none (fixed duration)",
+            "continuous": tracker.continuous,
             "newPeriods": tracker.new_periods() if tracker.started else None,
             "newDiscontinuities": tracker.new_discontinuities() if tracker.started else None,
             "timelinePolls": tracker.polls,

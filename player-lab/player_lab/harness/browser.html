@@ -8,7 +8,7 @@ body{margin:0;padding:1.25rem;min-height:100vh;font:14px/1.45 system-ui,-apple-s
 .playback-panel{display:flex;flex-direction:column;gap:1rem;max-width:1500px;margin:0 auto}
 .playback-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
 .playback-header h3{margin:0;font-size:1.05rem;color:#f8fafc;display:flex;align-items:center;gap:.5rem}
-.live-dot{color:#ef4444;font-size:.55rem;animation:pulse 1.6s ease-in-out infinite}
+.live-dot{color:#facc15;font-size:.55rem;animation:pulse 1.6s ease-in-out infinite}
 .live-dot.idle{animation:none;color:#64748b}
 .live-dot.ok{animation:none;color:#4ade80}
 .live-dot.bad{animation:none;color:#f87171}
@@ -29,7 +29,7 @@ body{margin:0;padding:1.25rem;min-height:100vh;font:14px/1.45 system-ui,-apple-s
 .player-card-header{display:flex;align-items:center;justify-content:space-between;gap:.5rem;color:#cbd5e1}
 .player-card-header strong{font-size:.85rem;color:#e2e8f0}
 .player-card-header>span:first-child{display:flex;align-items:center;white-space:nowrap}
-.logo{height:30px;width:auto;max-width:150px;object-fit:contain;vertical-align:middle;margin-right:.6rem;filter:brightness(0) invert(1)}
+.logo{height:24px;width:auto;max-width:120px;object-fit:contain;vertical-align:middle;margin-right:.6rem;filter:brightness(0) invert(1)}
 .verdict{font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:.15rem .55rem;border-radius:999px}
 .verdict.pass{background:rgba(74,222,128,.18);color:#4ade80}
 .verdict.fail{background:rgba(248,113,113,.18);color:#f87171}
@@ -69,7 +69,7 @@ body{margin:0;padding:1.25rem;min-height:100vh;font:14px/1.45 system-ui,-apple-s
 </style></head><body>
 <div class="playback-panel">
   <div class="playback-header">
-    <h3><span id="dot" class="live-dot idle">●</span><span>Playback test</span></h3>
+    <h3><span id="dot" class="live-dot">●</span><span>Playback test</span></h3>
     <div class="playback-stats" id="stats"></div>
   </div>
   <div id="banner" class="banner"></div>

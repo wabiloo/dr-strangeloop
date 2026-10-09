@@ -60,7 +60,7 @@ def test_unknown_player_and_channel_rejected(outputs, monkeypatch):
     monkeypatch.setattr(player_lab, "info", lambda: {"players": {"hlsjs": ["hls"]}})
     assert client.post(f"/api/v1/playback-test/channels/{CHANNEL}", json={"players": ["nope"]}).status_code == 400
     assert client.post("/api/v1/playback-test/channels/does-not-exist", json={}).status_code == 404
-    assert client.post(f"/api/v1/playback-test/channels/{CHANNEL}", json={"boundaries": 0}).status_code == 422
+    assert client.post(f"/api/v1/playback-test/channels/{CHANNEL}", json={"boundaries": -1}).status_code == 422
 
 
 def test_list_and_read_reports(outputs):

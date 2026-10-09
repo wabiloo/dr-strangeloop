@@ -607,6 +607,12 @@ const showPlayback = computed(
 const windowAvailable = computed(
   () => !!showPlayback.value && usesChannelSection(String(section('deploy').backend ?? '')),
 )
+// A continuous timeline has no loop-wrap boundary: only forced signal-break Periods (period_on_segmentation) are any.
+const boundariesExpected = computed(() => {
+  const continuous = Boolean(section('timeline').continuous ?? true)
+  const forced = periodTypesFromConfig(section('markers').period_on_segmentation)
+  return !continuous || forced.length > 0
+})
 const windowQuery = computed(() => {
   const url = timeshiftPreview.value?.hlsUrl ?? timeshiftPreview.value?.dashUrl
   if (!url) return ''
@@ -896,6 +902,8 @@ watch(() => props.name, reload)
       v-if="showPlayback"
       :name="name"
       :has-timeline="windowAvailable"
+      :boundaries-expected="boundariesExpected"
+      :loop-duration-s="health?.total_loop_duration_seconds"
       :hls-url="playbackHlsUrl"
       :dash-url="playbackDashUrl"
     />

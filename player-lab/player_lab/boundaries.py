@@ -24,9 +24,12 @@ class BoundaryTracker:
         self._discs: set[int] = set()
         self.polls = 0
         self.errors = 0
+        # Continuous timeline: the loop wrap is no boundary, only forced signal-break Periods are.
+        self.continuous = False
 
     def update(self, doc: dict) -> None:
         self.polls += 1
+        self.continuous = doc.get("timeline") == "continuous"
         self._periods |= {p["id"] for p in doc.get("periods", [])}
         self._discs |= {d["segment"] for d in doc.get("discontinuities", [])}
 

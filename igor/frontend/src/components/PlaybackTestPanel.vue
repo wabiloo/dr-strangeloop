@@ -25,6 +25,10 @@ const props = defineProps<{
   /** ecs-express / local-docker serve /timeline.json: the run then ends after N boundaries.
    * Otherwise it plays for a fixed duration and only the generic checks apply. */
   hasTimeline: boolean
+  /** False on a continuous timeline without forced signal-break Periods: no boundary will ever go by. */
+  boundariesExpected?: boolean
+  /** Duration of one loop, if known (health): lets the run be sized in loops. */
+  loopDurationS?: number | null
   /** Live manifest URLs the player-side of the in-browser mode loads (as the Live Playback panel does). */
   hlsUrl?: string | null
   dashUrl?: string | null
@@ -65,6 +69,27 @@ const runs = ref<PlaybackRunSummary[]>([])
 const selectedPlayers = ref<string[]>([])
 const formatChoice = ref<'both' | 'hls' | 'dash'>('both')
 const boundaries = ref(2)
+const loops = ref(1)
+const LOOP_MARGIN_S = 30 // players start mid-loop and trail the live edge by about the window
+const stopBy = ref<'boundaries' | 'loops' | 'duration'>('boundaries')
+const canStopByBoundaries = computed(() => props.hasTimeline && props.boundariesExpected !== false)
+const canStopByLoops = computed(() => !!props.loopDurationS && props.loopDurationS > 0)
+// 0 = do not wait for boundaries: play for the duration (the timeline is still compared afterwards).
+const boundariesParam = computed(() => (canStopByBoundaries.value && stopBy.value === 'boundaries' ? boundaries.value : 0))
+const effectiveDurationS = computed(() =>
+  stopBy.value === 'loops' && props.loopDurationS
+    ? Math.min(3600, Math.ceil(loops.value * props.loopDurationS + LOOP_MARGIN_S))
+    : durationS.value,
+)
+// Hard cap: the run must be allowed to last as long as the boundaries / loops / duration need.
+const maxSecondsParam = computed(() => Math.min(3600, Math.max(600, effectiveDurationS.value + 180, stopBy.value === 'boundaries' && props.loopDurationS ? Math.ceil((boundaries.value + 1) * props.loopDurationS + 120) : 0)))
+// Default: loops (health, hence the loop length, may arrive after the panel); never override a choice the user made.
+let stopByChosen = false
+watch([canStopByBoundaries, canStopByLoops], () => {
+  const usable = (v: typeof stopBy.value) => v === 'duration' || (v === 'loops' ? canStopByLoops.value : canStopByBoundaries.value)
+  if (!stopByChosen && canStopByLoops.value) stopBy.value = 'loops'
+  else if (!usable(stopBy.value)) stopBy.value = canStopByLoops.value ? 'loops' : canStopByBoundaries.value ? 'boundaries' : 'duration'
+}, { immediate: true })
 const durationS = ref(120)
 const withFfmpeg = ref(false)
 const mode = ref<'server' | 'browser'>('browser')
@@ -144,8 +169,9 @@ async function run() {
     const job = await startPlaybackTest(props.name, {
       players: selectedPlayers.value,
       formats: formatChoice.value === 'both' ? undefined : [formatChoice.value],
-      boundaries: boundaries.value,
-      duration_s: durationS.value,
+      boundaries: boundariesParam.value,
+      duration_s: effectiveDurationS.value,
+      max_seconds: maxSecondsParam.value,
       ffmpeg_s: withFfmpeg.value ? 30 : null,
     })
     jobDone.value = false
@@ -175,8 +201,9 @@ function runInBrowser() {
     hls: props.hlsUrl,
     dash: props.dashUrl,
     withTimeline: props.hasTimeline,
-    boundaries: boundaries.value,
-    durationS: durationS.value,
+    boundaries: boundariesParam.value,
+    durationS: effectiveDurationS.value,
+    maxS: maxSecondsParam.value,
     skipped: playersList.value.filter(noKey),
   })
   // Opened synchronously from the click so popup blockers allow it.
@@ -313,7 +340,8 @@ const summaryLine = computed(() => {
         the channel, and its codecs decide what plays, e.g. Safari for native-like behaviour). For each player it measures the startup time, stalls (playhead frozen for a second or more, measured on
         the video element itself), player errors and dropped frames. If the channel serves /timeline.json, the run lasts
         until the requested number of loop boundaries (Periods / discontinuities) went by, and the transitions seen by
-        the players that report them (hls.js, dash.js) are compared with what the channel says it crossed.
+        the players that report them (hls.js, dash.js) are compared with what the channel says it crossed. A continuous
+        timeline has no loop boundaries (only forced signal-break Periods), so the run then lasts the fixed duration.
       </FieldHelp>
       <span v-if="!open" class="text-sm text-color-secondary">Stalls, errors and Period/discontinuity counts in several players</span>
       <template v-else-if="report">
@@ -368,14 +396,28 @@ const summaryLine = computed(() => {
           size="small"
           aria-label="Formats"
         />
-        <label v-if="hasTimeline" class="flex align-items-center gap-2 text-sm">
-          Boundaries
-          <InputNumber v-model="boundaries" :min="1" :max="20" show-buttons input-class="ptp-num" size="small" />
-        </label>
-        <label v-else class="flex align-items-center gap-2 text-sm" title="No /timeline.json on this backend: play for a fixed time; only stalls and errors are judged">
-          Duration (s)
-          <InputNumber v-model="durationS" :min="10" :max="3600" input-class="ptp-num" size="small" />
-        </label>
+        <div class="flex align-items-center gap-2 text-sm">
+          Stop after
+          <Select
+            v-model="stopBy"
+            @change="stopByChosen = true"
+            :options="[
+              { label: 'boundaries', value: 'boundaries', disabled: !canStopByBoundaries },
+              { label: 'loops', value: 'loops', disabled: !canStopByLoops },
+              { label: 'duration (s)', value: 'duration' },
+            ]"
+            option-label="label"
+            option-value="value"
+            option-disabled="disabled"
+            size="small"
+            aria-label="Stop condition"
+            :title="canStopByBoundaries ? '' : hasTimeline ? 'Continuous timeline without forced Periods: no loop boundary will go by' : 'No /timeline.json on this backend'"
+          />
+          <InputNumber v-if="stopBy === 'boundaries'" v-model="boundaries" :min="1" :max="20" show-buttons input-class="ptp-num" size="small" />
+          <InputNumber v-else-if="stopBy === 'loops'" v-model="loops" :min="1" :max="20" show-buttons input-class="ptp-num" size="small" />
+          <span v-if="stopBy === 'loops'" class="text-color-secondary">≈ {{ effectiveDurationS }} s</span>
+          <InputNumber v-else v-model="durationS" :min="10" :max="3600" input-class="ptp-num" size="small" />
+        </div>
         <label v-if="info.ffmpeg && mode === 'server'" class="flex align-items-center gap-2 text-sm" title="Also demux each manifest with ffmpeg for 30 s (informational)">
           <Checkbox v-model="withFfmpeg" binary />
           ffmpeg check
@@ -427,6 +469,7 @@ const summaryLine = computed(() => {
             {{ formatDateTime(report.generatedAt) }} · {{ report.durationS }} s ·
             boundaries from {{ report.boundaries.source }}
             <template v-if="report.mode === 'browser'"> · run in a browser ({{ report.userAgent }})</template>
+            <template v-if="report.boundaries.continuous"> (continuous timeline: no loop boundaries)</template>
             <template v-if="report.boundaries.newPeriods != null">
               (timeline: {{ report.boundaries.newPeriods }} Period(s), {{ report.boundaries.newDiscontinuities }} discontinuity(ies) crossed)
             </template>
@@ -437,15 +480,19 @@ const summaryLine = computed(() => {
           <table class="ptp-table">
             <thead>
               <tr>
-                <th>Player</th>
-                <th>Format</th>
-                <th class="num">Startup</th>
+                <th rowspan="2">Player</th>
+                <th rowspan="2">Format</th>
+                <th rowspan="2" class="num">Startup</th>
+                <th colspan="3" class="ptp-group" title="Playback problems measured on the video element and reported by the player">Issues</th>
+                <th colspan="2" class="ptp-group" title="Period/discontinuity boundaries: transitions the player reported vs. what the channel's /timeline.json says were crossed">Boundaries</th>
+                <th rowspan="2">Result</th>
+              </tr>
+              <tr>
                 <th class="num">Stalls</th>
                 <th class="num">Stalled</th>
                 <th class="num">Errors</th>
                 <th class="num" title="Period/discontinuity transitions the player reported">Seen</th>
-                <th class="num" title="Boundaries the channel's /timeline.json says were crossed">Expected</th>
-                <th>Result</th>
+                <th class="num" title="New Periods / discontinuities the channel's /timeline.json says were crossed">Expected</th>
               </tr>
             </thead>
             <tbody>
@@ -487,7 +534,7 @@ const summaryLine = computed(() => {
         </div>
         <div class="text-xs text-color-secondary">
           Shaka does not report Period transitions on DASH, so only its stalls and errors are judged there. Players
-          start a little behind the live edge, so the seen count may differ from the expected one by one.
+          start a little behind the live edge, so the boundaries seen may differ from the expected ones by one.
         </div>
       </template>
     </template>
@@ -518,14 +565,20 @@ const summaryLine = computed(() => {
 .ptp-table td {
   text-align: left;
   padding: 0.35rem 0.6rem;
-  border-bottom: 1px solid var(--surface-border);
+  border-bottom: 1px solid var(--p-content-border-color, #cbd5e1);
+}
+.ptp-table .ptp-group {
+  text-align: center;
+  border-bottom: 0;
+  /* underline inset on both sides, so neighbouring groups do not run together */
+  background: linear-gradient(var(--p-text-muted-color, #64748b), var(--p-text-muted-color, #64748b)) center bottom / calc(100% - 1.2rem) 2px no-repeat;
 }
 .ptp-table .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 .ptp-table .ptp-detail td {
-  border-bottom: 1px solid var(--surface-border);
+  border-bottom: 1px solid var(--p-content-border-color, #cbd5e1);
   padding-top: 0;
 }
 .ptp-fail td {

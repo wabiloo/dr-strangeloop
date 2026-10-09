@@ -177,7 +177,7 @@ function renderResult(report) {
 const updateHeader = (now, marked, crossedNow, label) => {
   pillElapsed.textContent = `${Math.round(now)} s`;
   pillBound.textContent = timelineUrl && marked !== null
-    ? Object.entries(crossedNow).map(([f, n]) => `${f.toUpperCase()} ${n}/${want}`).join('  ')
+    ? Object.entries(crossedNow).map(([f, n]) => `${f.toUpperCase()} ${n}${continuous || want === 0 ? '' : `/${want}`}`).join('  ')
     : (timelineUrl ? 'waiting for players' : 'n/a');
   if (label) pillStatus.textContent = label;
 };
@@ -189,12 +189,14 @@ let basePeriods = null;
 let baseDiscs = null;
 let polls = 0;
 let pollErrors = 0;
+let continuous = false;
 async function pollTimeline() {
   try {
     const r = await fetch(timelineUrl, { cache: 'no-store' });
     if (!r.ok) throw new Error(String(r.status));
     const doc = await r.json();
     polls++;
+    continuous = doc.timeline === 'continuous';
     (doc.periods || []).forEach((p) => periods.add(p.id));
     (doc.discontinuities || []).forEach((d) => discs.add(d.segment));
   } catch {
@@ -226,7 +228,7 @@ async function main() {
         baseDiscs = new Set(discs);
         marked = now;
       }
-    } else if (timelineUrl) {
+    } else if (timelineUrl && want > 0) {
       const c = Object.fromEntries(formatsRun.map((f) => [f, crossed(f)]));
       if (reached === null && Object.values(c).every((n) => n >= want)) reached = now;
       if (reached !== null) {
@@ -235,14 +237,16 @@ async function main() {
         const caughtUp = reporting.length > 0 && reporting.every((x) => x.periodTransitions >= want);
         const silent = reporting.length < s.length;
         if (since >= settleS || (caughtUp && !silent && since >= 3)) break;
+      } else if (continuous && now - marked >= durationS) {
+        break;
       }
-    } else if (now >= durationS) {
+    } else if (now - marked >= durationS) {
       break;
     }
     if (now >= maxS) break;
     renderCards(s);
     const crossedNow = marked !== null && timelineUrl ? Object.fromEntries(formatsRun.map((f) => [f, crossed(f)])) : {};
-    const label = marked === null ? 'starting players' : timelineUrl ? 'playing until boundaries pass' : `playing for ${durationS} s`;
+    const label = marked === null ? 'starting players' : timelineUrl && want > 0 && !continuous ? 'playing until boundaries pass' : `playing for ${durationS} s`;
     updateHeader(now, marked, crossedNow, label);
     tell({ type: 'progress', text: `t=${Math.round(now)}s ${label}` });
   }
@@ -263,6 +267,7 @@ async function main() {
       boundaries: {
         requested: want,
         source: timelineUrl ? 'timeline.json' : 'none (fixed duration)',
+        continuous,
         newPeriods: started ? countNew(periods, basePeriods) : null,
         newDiscontinuities: started ? countNew(discs, baseDiscs) : null,
         timelinePolls: polls,
