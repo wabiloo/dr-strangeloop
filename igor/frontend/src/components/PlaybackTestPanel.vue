@@ -54,8 +54,10 @@ const PLAYER_LABEL: Record<string, string> = {
   shaka: 'Shaka',
   hlsjs: 'hls.js',
   videojs: 'Video.js',
+  bitmovin: 'Bitmovin',
 }
 const label = (p: string) => PLAYER_LABEL[p] ?? p
+const noKey = (p: string) => info.value?.keys?.[p] === false
 
 const info = ref<PlaybackInfo | null>(null)
 const infoError = ref('')
@@ -102,6 +104,7 @@ async function refresh() {
   try {
     info.value = await getPlaybackInfo()
     if (selectedPlayers.value.length === 0) selectedPlayers.value = [...info.value.default_players]
+    selectedPlayers.value = selectedPlayers.value.filter((p) => !noKey(p))
     if (!info.value.chrome) mode.value = 'browser'
   } catch (e) {
     infoError.value = e instanceof Error ? e.message : String(e)
@@ -174,6 +177,7 @@ function runInBrowser() {
     withTimeline: props.hasTimeline,
     boundaries: boundaries.value,
     durationS: durationS.value,
+    skipped: playersList.value.filter(noKey),
   })
   // Opened synchronously from the click so popup blockers allow it.
   const win = window.open(src, '_blank')
@@ -304,7 +308,7 @@ const summaryLine = computed(() => {
         <h3 class="m-0 text-base">Playback test</h3>
       </button>
       <FieldHelp label="Playback test">
-        Plays this channel with several players (hls.js, dash.js, Shaka, Video.js), either in headless Chrome on
+        Plays this channel with several players (hls.js, dash.js, Bitmovin, Shaka, Video.js), either in headless Chrome on
         the machine running Igor, or in this browser (keep the tab in the foreground; the browser must be able to reach
         the channel, and its codecs decide what plays, e.g. Safari for native-like behaviour). For each player it measures the startup time, stalls (playhead frozen for a second or more, measured on
         the video element itself), player errors and dropped frames. If the channel serves /timeline.json, the run lasts
@@ -344,8 +348,13 @@ const summaryLine = computed(() => {
           aria-label="Where to run"
         />
         <div v-for="p in playersList" :key="p" class="flex align-items-center gap-2">
-          <Checkbox v-model="selectedPlayers" :input-id="`ptp-${p}`" :value="p" />
-          <label :for="`ptp-${p}`" :title="`formats: ${info.players[p].join(', ')}`">{{ label(p) }}</label>
+          <Checkbox v-model="selectedPlayers" :input-id="`ptp-${p}`" :value="p" :disabled="noKey(p)" />
+          <label
+            :for="`ptp-${p}`"
+            :class="{ 'text-color-secondary': noKey(p) }"
+            :title="noKey(p) ? 'No licence key: set BITMOVIN_LICENSE_KEY or add a bitmovin entry under [keys] in ~/.dr-strangeloop/config.toml' : `formats: ${info.players[p].join(', ')}`"
+            >{{ label(p) }}<span v-if="noKey(p)"> (no licence key)</span></label
+          >
         </div>
         <Select
           v-model="formatChoice"

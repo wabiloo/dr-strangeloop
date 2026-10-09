@@ -571,6 +571,7 @@ export interface DocPage {
 export interface PlaybackInfo {
   players: Record<string, string[]>
   default_players: string[]
+  keys?: Record<string, boolean>
   sdks_installed: boolean
   npm: boolean
   chrome: boolean

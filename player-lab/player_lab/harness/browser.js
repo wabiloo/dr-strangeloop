@@ -3,15 +3,16 @@
 // with the same Python code as the headless runner.
 // Query: channel= cases=player:fmt,... hls= dash= timeline= post= boundaries= duration= max= settle= grace=
 // Opened by Igor in its own tab; reports progress/result to window.opener.
-const LOGO_EXT = { dashjs: 'png', videojs: 'png' };
-const LOGO_DARK = new Set(['videojs']);
+const LOGO_EXT = { dashjs: 'png', videojs: 'png', bitmovin: 'png', shaka: 'png' };
 const LOGO_IS_MARK = new Set(['shaka']);
 const q = new URLSearchParams(location.search);
 const num = (k, d) => (q.has(k) ? Number(q.get(k)) : d);
-const ORDER = ['hlsjs', 'dashjs', 'shaka', 'videojs'];
+const ORDER = ['hlsjs', 'dashjs', 'bitmovin', 'shaka', 'videojs'];
+const FORMATS = { hlsjs: ['hls'], dashjs: ['dash'], bitmovin: ['hls', 'dash'], shaka: ['hls', 'dash'], videojs: ['hls', 'dash'] };
 const rank = (p) => (ORDER.includes(p) ? ORDER.indexOf(p) : ORDER.length);
 const cases = (q.get('cases') || '').split(',').filter(Boolean).map((c) => c.split(':')).sort((a, b) => rank(a[0]) - rank(b[0]));
 const urls = { hls: q.get('hls'), dash: q.get('dash') };
+const skipped = (q.get('skipped') || '').split(',').filter(Boolean);
 const timelineUrl = q.get('timeline');
 const postUrl = q.get('post');
 const channel = q.get('channel') || '';
@@ -23,7 +24,7 @@ const graceS = num('grace', 40);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tell = (msg) => { try { if (window.opener) window.opener.postMessage({ source: 'player-lab', ...msg }, location.origin); } catch { /* opener gone */ } };
-const PLAYER_LABEL = { dashjs: 'dash.js', shaka: 'Shaka', hlsjs: 'hls.js', videojs: 'Video.js' };
+const PLAYER_LABEL = { dashjs: 'dash.js', shaka: 'Shaka', hlsjs: 'hls.js', videojs: 'Video.js', bitmovin: 'Bitmovin' };
 
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
@@ -74,8 +75,9 @@ const copyUrl = async (btn, text) => {
   setTimeout(() => { btn.classList.remove('done'); btn.textContent = '⧉'; }, 1200);
 };
 ['hls', 'dash'].filter((fmt) => cases.some((c) => c[1] === fmt)).forEach((fmt) => {
-  const panel = el('div', 'format-panel');
-  panel.append(el('h4', null, fmt.toUpperCase()));
+  const panel = el('div', `format-panel ${fmt}`);
+  const head = el('div', 'format-head');
+  head.append(el('h4', null, fmt.toUpperCase()));
   const row = el('div', 'url-row mono');
   const copy = el('button', 'copy', '⧉');
   copy.type = 'button';
@@ -83,21 +85,38 @@ const copyUrl = async (btn, text) => {
   copy.addEventListener('click', () => copyUrl(copy, urls[fmt]));
   row.append(el('span', 'u', urls[fmt]), copy);
   const grid = el('div', 'players-grid');
-  panel.append(row, grid);
+  head.append(row);
+  panel.append(head, grid);
   document.getElementById('panels').append(panel);
   panelGrids[fmt] = grid;
 });
-const cards = cases.map(([player, fmt]) => {
-  const card = el('div', 'player-card');
-  const head = el('div', 'player-card-header');
+const playerTitle = (player) => {
   const title = el('span');
   const logo = el('img', 'logo');
   logo.src = `./logos/${player}.${LOGO_EXT[player] || 'svg'}`;
   logo.alt = PLAYER_LABEL[player] || player;
-  if (LOGO_DARK.has(player)) logo.classList.add('dark');
   title.append(logo);
   if (LOGO_IS_MARK.has(player)) title.append(el('strong', null, PLAYER_LABEL[player] || player));
-  title.append(el('span', 'fmt', fmt.toUpperCase()));
+  return title;
+};
+// Players that cannot run (no licence key) still get a greyed-out card, in their normal place.
+const entries = [
+  ...cases.map(([player, fmt]) => ({ player, fmt, active: true })),
+  ...skipped.flatMap((player) => (FORMATS[player] || []).filter((fmt) => panelGrids[fmt]).map((fmt) => ({ player, fmt, active: false }))),
+].sort((a, b) => rank(a.player) - rank(b.player));
+const cards = [];
+entries.forEach(({ player, fmt, active }) => {
+  if (!active) {
+    const off = el('div', 'player-card disabled');
+    const h = el('div', 'player-card-header');
+    h.append(playerTitle(player), el('span', 'verdict skip', 'no licence key'));
+    off.append(h);
+    panelGrids[fmt].append(off);
+    return;
+  }
+  const card = el('div', 'player-card');
+  const head = el('div', 'player-card-header');
+  const title = playerTitle(player);
   const verdict = el('span', 'verdict run', 'running');
   head.append(title, verdict);
   const wrap = el('div', 'video-wrapper');
@@ -124,7 +143,7 @@ const cards = cases.map(([player, fmt]) => {
   const details = el('div', 'failures');
   card.append(head, wrap, meta, details);
   panelGrids[fmt].append(card);
-  return { card, verdict, frame: f, wrap, chips, details };
+  cards.push({ card, verdict, frame: f, wrap, chips, details });
 });
 const frames = cards.map((c) => c.frame);
 const snaps = () => frames.map((f) => (f.contentWindow && f.contentWindow.__lab && f.contentWindow.__lab.snapshot()) || {});

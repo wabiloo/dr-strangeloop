@@ -9,7 +9,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import paths
+from . import keys, paths
 from .boundaries import BoundaryTracker, fetch_timeline
 from .harness_server import HarnessServer
 from .profile import Profile, judge
@@ -20,16 +20,22 @@ from .targets import Target
 PLAYERS: dict[str, tuple[str, ...]] = {
     "hlsjs": ("hls",),
     "dashjs": ("dash",),
+    "bitmovin": ("hls", "dash"),
     "shaka": ("hls", "dash"),
     "videojs": ("hls", "dash"),
 }
-DEFAULT_PLAYERS = list(PLAYERS)
+
+
+def default_players() -> list[str]:
+    """All players, minus the commercial ones whose licence key is not configured."""
+    have = keys.available()
+    return [p for p in PLAYERS if have.get(p, True)]
 
 
 @dataclass
 class RunConfig:
     target: Target
-    players: list[str] = field(default_factory=lambda: list(DEFAULT_PLAYERS))
+    players: list[str] = field(default_factory=default_players)
     formats: list[str] | None = None
     boundaries: int = 2          # stop once this many boundaries were crossed (needs /timeline.json)
     duration_s: float = 120.0    # fixed run length without a timeline; with one, the timeout is max_s
@@ -76,6 +82,9 @@ def plan_cases(cfg: RunConfig) -> list[tuple[str, str]]:
     unknown = [p for p in cfg.players if p not in PLAYERS]
     if unknown:
         raise ValueError(f"unknown player(s) {unknown}; known: {sorted(PLAYERS)}")
+    no_key = [p for p in cfg.players if p in keys.KEYED_PLAYERS and not keys.available()[p]]
+    if no_key:
+        raise ValueError(f"no licence key for {no_key} (set {', '.join(keys.ENV_VARS[p] for p in no_key)} or add it to {keys.key_file()})")
     formats = cfg.formats or cfg.target.formats()
     cases = []
     for fmt in formats:

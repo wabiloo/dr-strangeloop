@@ -85,11 +85,13 @@ behave like real Safari (to verify).
 ## Commercial players and keys
 
 - Key sources, in order: environment variables (`BITMOVIN_LICENSE_KEY`,
-  `THEOPLAYER_LICENSE`, ...), then `~/.dr-strangeloop/player-lab.toml`
-  (outside the repo; the runner refuses it if group/world-readable).
-- Headless: keys reach the page through a Playwright init script, never in
-  URLs. Reports and logs redact them. Igor mode: the server hands them to the
-  user's browser (acceptable for an internal tool; state it in the docs).
+  `THEOPLAYER_LICENSE`, ...), then the `[keys]` table of `~/.dr-strangeloop/config.toml`
+  (outside the repo).
+- The adapter fetches `./keys.json` from whatever serves the harness: the
+  runner's own 127.0.0.1 server (headless) or Igor (`GET /api/v1/playback-test/harness/keys.json`,
+  in-browser mode: Igor hands the key to the user's browser, acceptable for an
+  internal tool). Never in URLs or reports. A keyed player without a key is
+  shown disabled in Igor and the test tab and refused by the CLI.
 - SDKs are optional, installed from npm into a cache directory outside the
   repo. An adapter without its key or package is skipped with a clear message.
 - Available keys: Bitmovin (yes), THEOplayer (no). Phase 3 is therefore

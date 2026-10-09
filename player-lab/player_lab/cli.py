@@ -14,7 +14,8 @@ from .profile import load_profile
 from .judge_browser import judge_payload
 from .reference import ffmpeg_check
 from .report import format_table
-from .runner import DEFAULT_PLAYERS, PLAYERS, RunConfig, run
+from . import keys
+from .runner import PLAYERS, RunConfig, default_players, run
 from .targets import from_channel, from_manifest_urls
 
 
@@ -33,7 +34,8 @@ def cmd_setup(_args) -> int:
 def cmd_info(_args) -> int:
     info = {
         "players": {p: list(f) for p, f in PLAYERS.items()},
-        "default_players": DEFAULT_PLAYERS,
+        "default_players": default_players(),
+        "keys": keys.available(),
         "sdks_installed": (paths.vendor_root() / "dashjs").is_dir(),
         "npm": shutil.which("npm") is not None,
         "chrome": chrome_installed(),
@@ -42,6 +44,12 @@ def cmd_info(_args) -> int:
         "vendor_root": str(paths.vendor_root()),
     }
     print(json.dumps(info))
+    return 0
+
+
+def cmd_keys(_args) -> int:
+    """Print the licence keys as JSON (used by Igor to hand them to the user's own browser)."""
+    print(json.dumps(keys.load_keys()))
     return 0
 
 
@@ -95,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="player-lab", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("info", help="print what is available (players, SDKs, Chrome, ffmpeg) as JSON").set_defaults(fn=cmd_info)
+    sub.add_parser("keys", help="print the configured licence keys as JSON (secret)").set_defaults(fn=cmd_keys)
     sub.add_parser("setup", help="install the player SDKs (needs npm) into the cache").set_defaults(fn=cmd_setup)
 
     j = sub.add_parser("judge", help="judge results collected by the in-browser driver (JSON on stdin); prints the report")
@@ -109,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--dash", help="DASH MPD URL")
     r.add_argument("--timeline", help="override the /timeline.json URL (default: next to the manifest)")
     r.add_argument("--no-timeline", action="store_true", help="skip /timeline.json; run for --duration")
-    r.add_argument("--players", default=",".join(DEFAULT_PLAYERS), help=f"comma list of {sorted(PLAYERS)}")
+    r.add_argument("--players", default=",".join(default_players()), help=f"comma list of {sorted(PLAYERS)}")
     r.add_argument("--format", help="hls, dash or hls,dash (default: every format the channel has)")
     r.add_argument("--boundaries", type=int, default=2, help="stop after N boundaries were crossed (default %(default)s)")
     r.add_argument("--duration", type=float, default=120, help="seconds, when there is no timeline")

@@ -19,7 +19,7 @@ from pathlib import Path
 from igor import paths
 from igor.jobs.runner import Job, runner
 
-_PLAYER_ORDER = ("hlsjs", "dashjs", "shaka", "videojs")
+_PLAYER_ORDER = ("hlsjs", "dashjs", "bitmovin", "shaka", "videojs")
 
 _RUN_ID = re.compile(r"^\d{8}-\d{6}$")
 
@@ -38,6 +38,14 @@ def info() -> dict:
     proc = subprocess.run([*player_lab_cmd(), "info"], capture_output=True, text=True, timeout=60, cwd=paths.REPO_ROOT)
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "player-lab info failed")
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def licence_keys() -> dict:
+    """Commercial players' licence keys (player-lab reads env / ~/.dr-strangeloop/config.toml [keys]); handed to the user's own browser."""
+    proc = subprocess.run([*player_lab_cmd(), "keys"], capture_output=True, text=True, timeout=30, cwd=paths.REPO_ROOT)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "player-lab keys failed")
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 

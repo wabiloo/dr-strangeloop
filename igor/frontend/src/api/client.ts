@@ -488,7 +488,7 @@ export function playbackScreenshotUrl(name: string, runId: string, file: string)
 /** The in-browser driver page (served same-origin by Igor) for one run. */
 export function playbackBrowserRunUrl(
   name: string,
-  opts: { channel?: string; cases: string[]; hls?: string | null; dash?: string | null; withTimeline: boolean; boundaries: number; durationS: number },
+  opts: { channel?: string; cases: string[]; hls?: string | null; dash?: string | null; withTimeline: boolean; boundaries: number; durationS: number; skipped?: string[] },
 ): string {
   const q = new URLSearchParams({
     channel: opts.channel ?? name,
@@ -497,6 +497,7 @@ export function playbackBrowserRunUrl(
     boundaries: String(opts.boundaries),
     duration: String(opts.durationS),
   })
+  if (opts.skipped?.length) q.set('skipped', opts.skipped.join(','))
   if (opts.hls) q.set('hls', opts.hls)
   if (opts.dash) q.set('dash', opts.dash)
   if (opts.withTimeline) q.set('timeline', `${CHANNELS_BASE}/${encodeURIComponent(name)}/timeline`)

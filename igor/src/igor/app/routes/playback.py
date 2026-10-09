@@ -6,7 +6,7 @@ import mimetypes
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from igor.integrations import player_lab
@@ -96,6 +96,15 @@ def get_playback_screenshot(name: str, run_id: str, filename: str) -> FileRespon
     if path is None:
         raise HTTPException(status_code=404, detail="no such screenshot")
     return FileResponse(path, media_type="image/png")
+
+
+@router.get("/harness/keys.json")
+def get_harness_keys() -> JSONResponse:
+    """Licence keys of the commercial players, for the harness page running in the user's browser."""
+    try:
+        return JSONResponse(player_lab.licence_keys(), headers={"Cache-Control": "no-store"})
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"player-lab unavailable: {exc}") from exc
 
 
 @router.get("/harness/{path:path}")

@@ -106,3 +106,27 @@ def test_judge_browser_payload_matches_headless_judging(tmp_path):
     assert [c["pass"] for c in report["cases"]] == [True, False]
     assert report["cases"][0]["crossed"] == 1 and "crossed" not in report["boundaries"]
     assert (tmp_path / "run" / "report.json").is_file()
+
+
+def test_keyed_players_need_a_key(tmp_path, monkeypatch):
+    from player_lab import keys
+    from player_lab.runner import PLAYERS, RunConfig, default_players, plan_cases
+    from player_lab.targets import from_manifest_urls
+
+    monkeypatch.delenv("BITMOVIN_LICENSE_KEY", raising=False)
+    monkeypatch.setenv("DR_STRANGELOOP_CONFIG", str(tmp_path / "config.toml"))
+    (tmp_path / "config.toml").write_text("[paths]\n")
+    assert list(PLAYERS) == ["hlsjs", "dashjs", "bitmovin", "shaka", "videojs"]
+    assert "bitmovin" not in default_players()
+    assert keys.available() == {"bitmovin": False}
+    target = from_manifest_urls("http://x/index.m3u8", "http://x/stream.mpd", None)
+    with __import__("pytest").raises(ValueError, match="no licence key"):
+        plan_cases(RunConfig(target=target, players=["bitmovin"]))
+
+    f = tmp_path / "config.toml"
+    f.write_text('[keys]\nbitmovin = "abc"\n')
+    assert keys.load_keys() == {"bitmovin": "abc"}
+    assert "bitmovin" in default_players()
+    monkeypatch.setenv("BITMOVIN_LICENSE_KEY", "from-env")
+    assert keys.load_keys()["bitmovin"] == "from-env"
+    assert [c[0] for c in plan_cases(RunConfig(target=target))][:3] == ["hlsjs", "bitmovin", "shaka"]

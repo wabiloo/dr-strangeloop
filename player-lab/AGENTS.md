@@ -39,9 +39,11 @@ Needs the installed Google Chrome (H.264) and Node/npm for `setup`. Exit code 0
 - Period/discontinuity transitions come from each player's own mechanisms, never from the clock
   or the timeline: hls.js (`FRAG_CHANGED` continuity counter), dash.js (`PERIOD_SWITCH_COMPLETED`),
   Video.js/VHS (the playlist controller's `timelineChangeController_` `timelinechange` event) and
-  Shaka on HLS (no event: a jump of `start - mediaTimestamp` in `segmentappended`, i.e. the
-  timestamp offset it applies at a discontinuity). Shaka on DASH cannot tell (no media timestamp
-  for fMP4, Periods are flattened), so its boundary count is not compared (stalls/errors still are).
+  Bitmovin (`SegmentPlayback` `periodId` / `discontinuitySequenceNumber`).
+  Shaka reports nothing in either format (n/a, only stalls/errors are judged): it flattens Periods and
+  discontinuities into one timeline and has no event for them (issue #3159 closed unfixed; the `timelinechange`
+  event added in 5.2 is HLS-only and fires on PROGRAM-DATE-TIME jumps, not on every discontinuity), and
+  inferring it from segment timestamps was dropped as unreliable.
 - `--ffmpeg N` also demuxes each manifest with ffmpeg: informational only.
   ffmpeg's HLS demuxer is known to choke on discontinuities with separate
   audio playlists, so a problem there is not by itself a channel defect.
@@ -50,12 +52,21 @@ Needs the installed Google Chrome (H.264) and Node/npm for `setup`. Exit code 0
   `boundary_tolerance`), per-player overrides in `[player.<id>]` or
   `[player."<id>:<fmt>"]`.
 
+## Commercial players (Bitmovin)
+
+`bitmovin` needs a licence key: `BITMOVIN_LICENSE_KEY`, or `bitmovin = "..."` under `[keys]` in
+`~/.dr-strangeloop/config.toml`. Without a key it is left out
+of the default players, refused by `--players bitmovin`, and shown disabled in Igor and on the in-browser tab.
+The adapter reads the key from `./keys.json` (served by the runner on 127.0.0.1, or by Igor for the in-browser
+mode); licences are domain-bound, so the host serving the harness (localhost, Igor's host) must be allowlisted in the
+Bitmovin dashboard. Transitions: its `SegmentPlayback` event carries `periodId` (DASH) / `discontinuitySequenceNumber` (HLS).
+
 ## Adding a player
 
 Add `harness/adapters/<id>.js` (copy the closest one; set `formats` and
 `reports`), register the id in `PLAYERS` in `runner.py`, add its npm package to
 `vendor/package.json`. Keys for commercial players (phase 3) come from env vars
-or `~/.dr-strangeloop/player-lab.toml`, never from the repo.
+or `~/.dr-strangeloop/config.toml [keys]`, never from the repo.
 
 ## Tests
 
