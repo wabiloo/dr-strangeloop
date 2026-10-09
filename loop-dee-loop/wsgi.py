@@ -55,4 +55,5 @@ app = create_app(
     period_apply=parse_period_apply(os.environ.get("PERIOD_ON_SEGMENTATION_APPLY")),
     channel_name=os.environ.get("CHANNEL_NAME", ""),
     dash_addressing=os.environ.get("DASH_ADDRESSING") or "number",
+    dash_timeline=os.environ.get("DASH_TIMELINE") or "full",
 )

@@ -121,6 +121,7 @@ const editForm = reactive<ChannelCreatePayload>({
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
   dash_addressing: 'number',
+  dash_timeline: 'full',
   continuous: false,
   period_on_segmentation: [],
   period_on_segmentation_apply: 'both',
@@ -146,6 +147,10 @@ const editIsArchiveSource = computed(() => editForm.source_kind === 'archive' ||
 const dashAddressingOptions = [
   { label: '$Number$ (segment number + startNumber)', value: 'number' },
   { label: '$Time$ (segment start time)', value: 'time' },
+]
+const dashTimelineOptions = [
+  { label: 'Full (@t and @d on every S)', value: 'full' },
+  { label: 'Compact (implicit @t, @r for repeats)', value: 'compact' },
 ]
 const hlsFormatOptions = [
   { label: 'CMAF (fragmented MP4)', value: 'cmaf' },
@@ -237,6 +242,7 @@ function startEdit() {
     hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
     hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
     dash_addressing: (packaging.dash_addressing as ChannelCreatePayload['dash_addressing']) ?? 'number',
+    dash_timeline: (packaging.dash_timeline as ChannelCreatePayload['dash_timeline']) ?? 'full',
     continuous: Boolean(timeline.continuous ?? true),
     period_on_segmentation: periodTypesFromConfig(markers.period_on_segmentation),
     period_on_segmentation_apply:
@@ -1232,6 +1238,10 @@ watch(() => props.name, reload)
                 <div class="flex flex-column gap-1 config-field-wide">
                   <label class="text-xs text-color-secondary">{{ L.dash_addressing }}</label>
                   <Select v-model="editForm.dash_addressing" :options="dashAddressingOptions" option-label="label" option-value="value" fluid />
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <label class="text-xs text-color-secondary">{{ L.dash_timeline }}</label>
+                  <Select v-model="editForm.dash_timeline" :options="dashTimelineOptions" option-label="label" option-value="value" fluid />
                 </div>
               </div>
             </section>

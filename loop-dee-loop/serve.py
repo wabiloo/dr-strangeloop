@@ -310,6 +310,51 @@ def compute_discontinuity_sequence(
 
 
 DASH_ADDRESSING_CHOICES = ("number", "time")
+DASH_TIMELINE_CHOICES = ("full", "compact")
+
+
+def render_segment_timeline(items: list[tuple], compact: bool) -> str:
+    """The lines inside a <SegmentTimeline>. `items` mixes ("c", text) XML
+    comments and ("s", t, d) segments, in order. `full` writes every segment
+    with @t and @d. `compact` omits @t where a segment starts exactly where the
+    previous one ended and folds runs of equal @d into @r; a comment ends a run
+    (so it stays right before the segment it describes), and the first segment
+    always keeps its @t (a front-trimmed window must not change anyone's t)."""
+    out: list[str] = []
+    if not compact:
+        for item in items:
+            out.append(f"        <!-- {item[1]} -->" if item[0] == "c" else f'        <S t="{item[1]}" d="{item[2]}" />')
+        return "\n".join(out)
+    run: list[int] | None = None  # [t, d, repeats, write_t]
+    expected = None  # where the next segment starts if contiguous
+
+    def flush() -> None:
+        nonlocal run
+        if run is not None:
+            t, d, r, write_t = run
+            out.append(
+                "        <S"
+                + (f' t="{t}"' if write_t else "")
+                + f' d="{d}"'
+                + (f' r="{r}"' if r else "")
+                + " />"
+            )
+            run = None
+
+    for item in items:
+        if item[0] == "c":
+            flush()
+            out.append(f"        <!-- {item[1]} -->")
+            continue
+        _, t, d = item
+        if run is not None and t == expected and d == run[1]:
+            run[2] += 1
+        else:
+            flush()
+            run = [t, d, 0, expected is None or t != expected]
+        expected = t + d
+    flush()
+    return "\n".join(out)
 PERIOD_APPLY_CHOICES = ("both", "dash", "hls")
 
 
@@ -833,7 +878,10 @@ class Channel:
         period_apply: str = "both",
         channel_name: str = "",
         dash_addressing: str = "number",
+        dash_timeline: str = "full",
     ):
+        if dash_timeline not in DASH_TIMELINE_CHOICES:
+            raise ValueError(f"dash_timeline must be one of {DASH_TIMELINE_CHOICES}, got {dash_timeline!r}")
         if dash_addressing not in DASH_ADDRESSING_CHOICES:
             raise ValueError(f"dash_addressing must be one of {DASH_ADDRESSING_CHOICES}, got {dash_addressing!r}")
         if not isinstance(epoch_ticks, int):
@@ -856,6 +904,9 @@ class Channel:
         # DASH SegmentTemplate addressing: "number" ($Number$ + startNumber,
         # the default) or "time" ($Time$ = the <S t=...> value). HLS is unaffected.
         self.dash_addressing = dash_addressing
+        # "full": every <S> has @t and @d. "compact": implicit @t where
+        # contiguous + @r for runs of equal @d.
+        self.dash_timeline = dash_timeline
         # Local index where each real asset span starts (the Period origin of
         # the default, loop-relative timeline); $Time$ URLs name the span.
         self.real_span_starts = sorted(package.boundaries)
@@ -2227,14 +2278,14 @@ class Channel:
             emit_loop_comment = span_start_local == 0 or period_number == 0
 
             def _segment_timeline_xml(entries: list[tuple[int, int, int]]) -> str:
-                lines = []
+                items: list[tuple] = []
                 if emit_loop_comment:
-                    lines.append(f"        <!-- loop {self._loop_label(loop_number)} -->")
+                    items.append(("c", f"loop {self._loop_label(loop_number)}"))
                 for t, d, local_index in entries:
                     for asset_id in asset_ids_by_local_index.get(local_index, []):
-                        lines.append(f'        <!-- asset: {asset_id} -->')
-                    lines.append(f'        <S t="{t}" d="{d}" />')
-                return "\n".join(lines)
+                        items.append(("c", f"asset: {asset_id}"))
+                    items.append(("s", t, d))
+                return render_segment_timeline(items, self.dash_timeline == "compact")
 
             # `id` is a per-Period-unique synthetic id, never the raw
             # event_id directly -- see DIRECTION_CODE below. A player
@@ -2573,12 +2624,12 @@ class Channel:
         def _segment_timeline_xml(entries: list[tuple[int, int, int]]) -> str:
             # An XML comment naming the loop iteration before the first
             # segment of the Period and of each subsequent loop wrap inside it.
-            out = []
+            items: list[tuple] = []
             for n, (t, d, local_index) in enumerate(entries):
                 if local_index == 0 or n == 0:
-                    out.append(f"        <!-- loop {self._loop_label(t // pkg.total_loop_duration_ticks)} -->")
-                out.append(f'        <S t="{t}" d="{d}" />')
-            return "\n".join(out)
+                    items.append(("c", f"loop {self._loop_label(t // pkg.total_loop_duration_ticks)}"))
+                items.append(("s", t, d))
+            return render_segment_timeline(items, self.dash_timeline == "compact")
 
         group_of_global = {
             g: group_number for group_number, (_brk, indices) in enumerate(groups) for g in indices
@@ -2797,6 +2848,7 @@ def create_app(
     period_apply: str = "both",
     channel_name: str = "",
     dash_addressing: str = "number",
+    dash_timeline: str = "full",
 ) -> Flask:
     ts_cfg = timeshift or TimeshiftConfig()
     package = LoopPackage(package_dir)
@@ -2809,6 +2861,7 @@ def create_app(
         period_apply=period_apply,
         channel_name=channel_name,
         dash_addressing=dash_addressing,
+        dash_timeline=dash_timeline,
     )
     process_start_ticks = channel.now_ticks()
 
@@ -3240,6 +3293,14 @@ def main() -> int:
         "default) or time ($Time$ = each <S t=...>). HLS is unaffected.",
     )
     parser.add_argument(
+        "--dash-timeline",
+        choices=DASH_TIMELINE_CHOICES,
+        default="full",
+        help="DASH SegmentTimeline style: full (every <S> has @t and @d, "
+        "default) or compact (implicit @t where contiguous, @r for runs of "
+        "equal @d). HLS is unaffected.",
+    )
+    parser.add_argument(
         "--timeshift",
         action="store_true",
         help="SCOPE.md §13: enable startover/catchup via query parameters on "
@@ -3283,6 +3344,7 @@ def main() -> int:
         period_apply=args.period_on_segmentation_apply,
         channel_name=args.channel_name,
         dash_addressing=args.dash_addressing,
+        dash_timeline=args.dash_timeline,
         timeshift=TimeshiftConfig(
             enabled=args.timeshift,
             start_param=args.timeshift_start_param,

@@ -104,7 +104,7 @@ const configChips = (fmt, cfg) => {
   if (fmt === 'hls') {
     chips.push(['segments', pk.hls_format === 'ts' ? `MPEG-TS${pk.hls_ts_mux_audio === false ? ', separate audio' : ', muxed audio'}` : 'CMAF']);
   } else {
-    chips.push(['segments', 'CMAF'], ['addressing', pk.dash_addressing === 'time' ? '$Time$' : '$Number$']);
+    chips.push(['segments', 'CMAF'], ['addressing', pk.dash_addressing === 'time' ? '$Time$' : '$Number$'], ['SegmentTimeline', pk.dash_timeline === 'compact' ? 'compact (@r)' : 'full']);
   }
   if (pk.segment_duration != null) chips.push(['segment', `${pk.segment_duration} s`]);
   if (pk.dvr_window_seconds != null) chips.push(['DVR window', `${pk.dvr_window_seconds} s`]);

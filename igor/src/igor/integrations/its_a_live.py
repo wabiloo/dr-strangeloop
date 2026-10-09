@@ -107,6 +107,7 @@ dvr_window_seconds = {dvr_window_seconds}
 hls_format = "{hls_format}"
 hls_ts_mux_audio = {hls_ts_mux_audio}
 dash_addressing = "{dash_addressing}"
+dash_timeline = "{dash_timeline}"
 
 [timeline]
 epoch_utc = "{epoch_utc}"
@@ -126,6 +127,7 @@ dvr_window_seconds = {dvr_window_seconds}
 hls_format = "{hls_format}"
 hls_ts_mux_audio = {hls_ts_mux_audio}
 dash_addressing = "{dash_addressing}"
+dash_timeline = "{dash_timeline}"
 
 [timeline]
 epoch_utc = "{epoch_utc}"
@@ -159,6 +161,7 @@ def generate_toml(
     hls_format: str = "cmaf",
     hls_ts_mux_audio: bool = True,
     dash_addressing: str = "number",
+    dash_timeline: str = "full",
     continuous: bool = False,
     period_on_segmentation: list[str] | None = None,
     period_on_segmentation_apply: str = "both",
@@ -189,6 +192,8 @@ def generate_toml(
         raise ValueError("hls_format must be 'cmaf' or 'ts'")
     if dash_addressing not in ("number", "time"):
         raise ValueError("dash_addressing must be 'number' or 'time'")
+    if dash_timeline not in ("full", "compact"):
+        raise ValueError("dash_timeline must be 'full' or 'compact'")
     if source_kind not in ("playlist", "archive", "manifest"):
         raise ValueError("source_kind must be 'playlist', 'archive' or 'manifest'")
     if dash_signal_format not in ("binary", "xml"):
@@ -236,6 +241,7 @@ def generate_toml(
             epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
             dash_addressing=dash_addressing,
+            dash_timeline=dash_timeline,
             continuous=str(continuous).lower(),
             port=int(port), cpu=cpu, memory=memory,
             cdn=str(cdn).lower(),
@@ -258,6 +264,7 @@ def generate_toml(
             epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
             dash_addressing=dash_addressing,
+            dash_timeline=dash_timeline,
             continuous=str(continuous).lower(),
             port=_format_local_docker_port(port),
         )

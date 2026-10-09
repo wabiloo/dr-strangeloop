@@ -100,6 +100,15 @@ span is named because `t` repeats per span) and `/<track>/cseg/t/<t>.m4s`
 segment index per track (video rendition / audio each have their own
 boundaries); an unknown `t` is a 404. Tests: `tests/test_serve_dash_time.py`.
 
+## DASH SegmentTimeline style
+
+`serve.py --dash-timeline compact` (its-a-live `[packaging] dash_timeline =
+"compact"`; default `full`) omits `@t` where a segment starts where the
+previous one ended and folds runs of equal `@d` into `@r`. The first `<S>` of a
+Period always keeps `@t` (a front-trimmed window must not change anyone's t),
+`@t` returns after a gap, and a loop/asset comment ends a run. Independent of
+`--dash-addressing`; HLS unaffected. Tests: `tests/test_serve_dash_timeline.py`.
+
 ## Startover & catchup
 
 `serve.py --timeshift` (its-a-live: `[timeshift]`, on by default) makes the

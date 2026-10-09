@@ -73,6 +73,7 @@ segment_duration = 4.0
 dvr_window_seconds = 30
 hls_format = "cmaf"          # "cmaf" (default) | "ts"; HLS only, DASH remains CMAF
 hls_ts_mux_audio = true      # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
+dash_timeline = "full"       # "full" (default; every <S> has @t and @d) | "compact" (implicit @t where contiguous + @r for equal @d); DASH only, ecs-express/local-docker; serve.py flag
 dash_addressing = "number"   # "number" (default; $Number$ + startNumber) | "time" ($Time$ = each <S t>); DASH only, ecs-express/local-docker; applied on create/redeploy (serve.py flag)
 
 [timeline]                  # ecs-express/local-docker only

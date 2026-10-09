@@ -73,6 +73,7 @@ case "$SUBCOMMAND" in
             PERIOD_ON_SEGMENTATION_APPLY=""
             CHANNEL_NAME=""
             DASH_ADDRESSING=""
+            DASH_TIMELINE=""
             TIMESHIFT="false"
             TIMESHIFT_START_PARAM=""
             TIMESHIFT_END_PARAM=""
@@ -84,6 +85,7 @@ case "$SUBCOMMAND" in
                     --epoch-utc) EPOCH_UTC="$2"; shift 2 ;;
                     --channel-name) CHANNEL_NAME="$2"; shift 2 ;;
                     --dash-addressing) DASH_ADDRESSING="$2"; shift 2 ;;
+                    --dash-timeline) DASH_TIMELINE="$2"; shift 2 ;;
                     --dvr-window-seconds) DVR_WINDOW_SECONDS="$2"; shift 2 ;;
                     --window-segments) WINDOW_SEGMENTS="$2"; shift 2 ;;
                     --continuous-timeline) CONTINUOUS_TIMELINE="true"; shift ;;
@@ -106,7 +108,7 @@ case "$SUBCOMMAND" in
 
             export LOOP_PACKAGE_DIR="$LOOP_PACKAGE_LOCAL_DIR"
             export EPOCH_UTC DVR_WINDOW_SECONDS WINDOW_SEGMENTS CONTINUOUS_TIMELINE
-            export PERIOD_ON_SEGMENTATION PERIOD_ON_SEGMENTATION_APPLY CHANNEL_NAME DASH_ADDRESSING
+            export PERIOD_ON_SEGMENTATION PERIOD_ON_SEGMENTATION_APPLY CHANNEL_NAME DASH_ADDRESSING DASH_TIMELINE
             export TIMESHIFT TIMESHIFT_START_PARAM TIMESHIFT_END_PARAM
             export TIMESHIFT_MAX_SPAN_SECONDS
             WORKERS="${GUNICORN_WORKERS:-4}"
