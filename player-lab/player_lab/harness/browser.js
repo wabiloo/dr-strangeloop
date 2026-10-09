@@ -93,15 +93,13 @@ const copyUrl = async (btn, text) => {
   document.getElementById('panels').append(panel);
   panelGrids[fmt] = grid;
 });
-// Reminder of the channel's packaging/timeline settings that matter to each format, from
+// Reminder of the channel's [packaging] and [timeline] settings that matter to each format, from
 // Igor's channel config (same-origin; derived from the results URL). Best effort: no row if unavailable.
 const configUrl = postUrl && postUrl.includes('/playback-test/channels/')
   ? postUrl.replace('/playback-test/channels/', '/channels/').replace(/\/browser-results$/, '')
   : null;
 const configChips = (fmt, cfg) => {
-  const pk = cfg.packaging || {}, tl = cfg.timeline || {}, mk = cfg.markers || {}, ts = cfg.timeshift || {};
-  const forced = (mk.period_on_segmentation || []).length > 0;
-  const forcedFor = (mk.period_on_segmentation_apply || 'both');
+  const pk = cfg.packaging || {}, tl = cfg.timeline || {};
   const chips = [];
   if (fmt === 'hls') {
     chips.push(['segments', pk.hls_format === 'ts' ? `MPEG-TS${pk.hls_ts_mux_audio === false ? ', separate audio' : ', muxed audio'}` : 'CMAF']);
@@ -111,18 +109,6 @@ const configChips = (fmt, cfg) => {
   if (pk.segment_duration != null) chips.push(['segment', `${pk.segment_duration} s`]);
   if (pk.dvr_window_seconds != null) chips.push(['DVR window', `${pk.dvr_window_seconds} s`]);
   chips.push(['timeline', tl.continuous ? 'continuous' : (fmt === 'hls' ? 'discontinuity per loop' : 'Period per loop')]);
-  if (forced && (forcedFor === 'both' || forcedFor === fmt)) {
-    chips.push([fmt === 'hls' ? 'forced discontinuities' : 'forced Periods', mk.period_on_segmentation.map((i) => `0x${Number(i).toString(16).toUpperCase().padStart(2, '0')}`).join(' ')]);
-  }
-  if (fmt === 'hls') {
-    if (mk.daterange_mode) chips.push(['DATERANGE', mk.daterange_mode]);
-    if (mk.cue_tags) chips.push(['cue tags', mk.cue_tags]);
-  } else {
-    if (mk.dash_signal_format) chips.push(['signal', mk.dash_signal_format]);
-    if (mk.dash_descriptor_mode) chips.push(['descriptor', mk.dash_descriptor_mode]);
-  }
-  if (tl.epoch_utc) chips.push(['epoch', tl.epoch_utc]);
-  if (ts.enabled) chips.push(['timeshift', 'on']);
   return chips;
 };
 if (configUrl) {
