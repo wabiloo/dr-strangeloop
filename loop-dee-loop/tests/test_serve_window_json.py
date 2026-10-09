@@ -426,7 +426,6 @@ def test_dash_periods_and_events_match_json(increment, continuous):
             seen.add((match[0]["loop"], match[0]["is_out"], match[0]["start_utc"]))
 
     # ... and every marker covering a segment the MPD advertises is in the MPD
-    # (DASH has its own window rule in periodic mode, so go by the MPD's segments).
     pkg = channel.package
     expected = set()
     for g in mpd_segments:

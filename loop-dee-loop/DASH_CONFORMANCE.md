@@ -38,9 +38,10 @@ continuous). All pass the XSD except the negative-`presentationTime` case (#2).
 3. **Newest segment is advertised up to ~3.5 s past `publishTime`.** Deliberate
    (see the `suggestedPresentationDelay` comment in `serve.py`), but strictly a
    segment is only available once complete.
-4. **Per-loop mode ignores `timeShiftBufferDepth`**: the whole open loop
-   (~500 s) is listed while PT30S is advertised. Allowed, and required by
-   dash.js (see the comment on the currently open loop in `serve.py`).
+4. **Per-loop mode lists only the HLS-style trailing window** (last N
+   segments, kept segments' numbers/`t`/`Period@start` stable between
+   refreshes). Verified with dash.js and Shaka (`player-lab/`); an earlier
+   belief that players need the whole open Period was wrong.
 5. **Namespace for `urn:scte:scte35:2014:xml+bin`.** We emit
    `urn:scte:scte35:2013:xml`; AWS's xml+bin example uses
    `http://www.scte.org/schemas/35/2016`, threefive uses

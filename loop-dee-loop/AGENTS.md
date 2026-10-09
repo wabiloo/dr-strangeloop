@@ -73,8 +73,7 @@ match, fix the upstream franken-ts input instead.
 HLS/DASH builders through `Channel` helpers (window range, segment times,
 discontinuities, Period grouping/ids, marker anchors -- see "shared timeline
 plan" in `serve.py`): change those in one place, not in a builder. Only the
-DASH periodic window rule and the marker/asset *span* are JSON-vs-manifest
-differences. `tests/test_serve_window_json.py` (schema drift + HLS DATERANGE /
+marker/asset *span* is a JSON-vs-manifest difference. `tests/test_serve_window_json.py` (schema drift + HLS DATERANGE /
 DASH Period+Event consistency, both directions, with and without
 `increment_event_ids`, periodic and continuous) and
 `tests/test_serve_golden_manifests.py` (byte-exact hashes of 864 HLS/DASH

@@ -1162,6 +1162,24 @@ class Channel:
                 groups.append((brk, g, g))
         return groups
 
+    def dash_periodic_groups(self, first: int, last: int) -> list[tuple[int, int, int, int, int, int]]:
+        """Periodic mode: (loop, span index, span start local, span end local
+        (exclusive), first, last global segment) per DASH Period covering
+        [first, last]. A Period is one (loop, span) run; first/last are
+        clipped to the range, the span bounds are not."""
+        spl = self.package.segments_per_loop
+        starts = sorted(self.dash_period_starts)
+        groups: list[tuple[int, int, int, int, int, int]] = []
+        for g in range(first, last + 1):
+            loop, local = divmod(g, spl)
+            span = bisect.bisect_right(starts, local) - 1
+            if groups and groups[-1][0] == loop and groups[-1][1] == span:
+                groups[-1] = groups[-1][:5] + (g,)
+            else:
+                end = starts[span + 1] if span + 1 < len(starts) else spl
+                groups.append((loop, span, starts[span], end, g, g))
+        return groups
+
     def hls_discontinuities(self, first: int, last: int) -> list[int]:
         """Global indices in (first, last] that carry an #EXT-X-DISCONTINUITY.
         `first` never does: the header's DISCONTINUITY-SEQUENCE covers it."""
@@ -1294,21 +1312,16 @@ class Channel:
                     }
                 )
         else:
-            starts = sorted(self.dash_period_starts)
-            for loop in loops:
-                for i, s in enumerate(starts):
-                    e = starts[i + 1] if i + 1 < len(starts) else spl
-                    g_first, g_last = loop * spl + s, loop * spl + e - 1
-                    if not overlaps(g_first, g_last):
-                        continue
-                    periods.append(
-                        {
-                            "id": self.dash_period_id(loop, s),
-                            "start_utc": self._iso_ticks(seg_start(g_first)),
-                            "end_utc": self._iso_ticks(seg_end(g_last)),
-                            "segments": _segment_range(max(g_first, first), min(g_last, last)),
-                        }
-                    )
+            for loop, _span, s, e, g_first, g_last in self.dash_periodic_groups(first, last):
+                full_first, full_last = loop * spl + s, loop * spl + e - 1
+                periods.append(
+                    {
+                        "id": self.dash_period_id(loop, s),
+                        "start_utc": self._iso_ticks(seg_start(full_first)),
+                        "end_utc": self._iso_ticks(seg_end(full_last)),
+                        "segments": _segment_range(g_first, g_last),
+                    }
+                )
 
         # --- assets --------------------------------------------------------
         assets = []
@@ -1979,13 +1992,11 @@ class Channel:
         timestamp-continuity expectations at -- rather than a single Period
         silently lying about being one continuous timeline forever.
 
-        Within the currently OPEN (still loop-in-progress) Period, the
-        <SegmentTimeline> is never front-pruned/renumbered across requests
-        -- see the `open_count`/`periods_plan` comment below for why that's
-        both required (real DASH clients, e.g. dash.js, get stuck forever
-        once a still-growing Period's timeline is trimmed out from under
-        them) and safe to do without violating serve.py's "no persisted
-        state" rule (bounded naturally by `segments_per_loop`).
+        The window is the same sliding range HLS and /timeline.json use
+        (`window_range`). The open Period is front-trimmed like any live
+        window: dropping old segments is fine for players as long as the
+        kept segments keep their number, `t` and the Period's `start`
+        (verified in dash.js and Shaka, see player-lab/).
         """
         if self.continuous:
             return self._build_dash_manifest_continuous(window_segments, window)
@@ -1993,42 +2004,7 @@ class Channel:
         window_segments = window_segments or self.window_segments
         pkg = self.package
         win = self.window_range(window, window_segments)
-        current_loop_number, seg_index = divmod(win.last, pkg.segments_per_loop)
 
-        # Build the list of (loop_number, [local_index, ...]) pairs, one per
-        # <Period> to emit. Crucially, the CURRENTLY OPEN loop iteration
-        # (current_loop_number) always gets every one of its segments from
-        # local index 0 up to the current live edge (seg_index) -- it is
-        # NEVER front-pruned to fit `window_segments`.
-        #
-        # This is a real DASH client requirement, not a style choice: once a
-        # player has parsed a Period's <SegmentTimeline> and started walking
-        # forward through it, it expects each subsequent MPD refresh for
-        # that SAME (still-open) Period to be a strict superset of what it
-        # already saw -- new <S> entries appended at the tail, never a
-        # front-trimmed/renumbered replacement. A naive fixed-size sliding
-        # window applied to the currently-growing Period breaks that
-        # invariant every time the window slides, which was observed to
-        # make dash.js's reference player get stuck forever repeating
-        # "No segment found at index: N. Wait for next loop" once the
-        # window had slid a few segments past where it started watching.
-        #
-        # This is safe/bounded without any persisted state (SCOPE.md's
-        # "no accumulated state" rule): local index 0..seg_index is a
-        # small, fully deterministic function of current wall-clock time,
-        # capped at `segments_per_loop` entries (one whole loop) -- it can
-        # never grow unboundedly, since a new Period starts at the next
-        # loop wrap regardless.
-        #
-        # Only PAST, already-closed loop iterations (loop_number <
-        # current_loop_number) are eligible for window-based trimming --
-        # their own <SegmentTimeline> is permanently fixed/immutable content
-        # (that loop iteration already fully happened and will never gain
-        # new segments), so repeatedly re-serving the same fixed tail slice
-        # of a closed Period across polls is fully consistent and safe.
-        # Used only to pad out extra DVR history when the current loop
-        # hasn't yet produced `window_segments` worth of its own segments
-        # (e.g. right after a loop wrap).
         # grave-robber/SCOPE.md §6.1: generalizes "one Period per loop
         # iteration" to "one Period per asset span" -- a span being the run
         # of segments between consecutive entries of pkg.boundaries (always
@@ -2040,69 +2016,21 @@ class Channel:
         # (period_on_segmentation). A signal-only Period reuses its real
         # span's init segment and keeps that span's media timeline, so
         # `real_sorted` maps any Period back to the real span it lives in.
-        boundaries_sorted = sorted(self.dash_period_starts)
         real_sorted = sorted(pkg.boundaries)
-        spans_per_loop = len(boundaries_sorted)
+        spans_per_loop = len(self.dash_period_starts)
 
         def _real_span_index(local_index: int) -> int:
             return bisect.bisect_right(real_sorted, local_index) - 1
 
-        def _span_bounds(span_index: int) -> tuple[int, int]:
-            """[start_local, end_local) for asset span `span_index`."""
-            start = boundaries_sorted[span_index]
-            end = (
-                boundaries_sorted[span_index + 1]
-                if span_index + 1 < spans_per_loop
-                else pkg.segments_per_loop
-            )
-            return start, end
-
-        def _span_index_for_local(local_index: int) -> int:
-            idx = 0
-            for i, boundary in enumerate(boundaries_sorted):
-                if boundary <= local_index:
-                    idx = i
-                else:
-                    break
-            return idx
-
-        periods_plan: list[tuple[int, int, list[int]]] = []
-        if window is not None:
-            # SCOPE.md §13: one Period per (loop, span) run covering the
-            # whole [first_global, last_global] range -- never front-pruned.
-            for g in range(window.first_global, window.last_global + 1):
-                g_loop, g_local = divmod(g, pkg.segments_per_loop)
-                g_span = _span_index_for_local(g_local)
-                if periods_plan and periods_plan[-1][0] == g_loop and periods_plan[-1][1] == g_span:
-                    periods_plan[-1][2].append(g_local)
-                else:
-                    periods_plan.append((g_loop, g_span, [g_local]))
-        else:
-            current_span_index = _span_index_for_local(seg_index)
-            current_span_start, _ = _span_bounds(current_span_index)
-            # Segments served so far in the CURRENT open span -- never
-            # front-pruned (same DASH-client requirement as before, now scoped
-            # to the span rather than the whole loop).
-            open_count = seg_index - current_span_start + 1
-
-            if open_count < window_segments:
-                if current_span_index > 0:
-                    prev_loop_number, prev_span_index = current_loop_number, current_span_index - 1
-                elif current_loop_number > 0:
-                    prev_loop_number, prev_span_index = current_loop_number - 1, spans_per_loop - 1
-                else:
-                    prev_loop_number = None
-                if prev_loop_number is not None:
-                    prev_start, prev_end = _span_bounds(prev_span_index)
-                    needed_from_prev = min(window_segments - open_count, prev_end - prev_start)
-                    start_local = prev_end - needed_from_prev
-                    periods_plan.append(
-                        (prev_loop_number, prev_span_index, list(range(start_local, prev_end)))
-                    )
-            periods_plan.append(
-                (current_loop_number, current_span_index, list(range(current_span_start, seg_index + 1)))
-            )
-
+        # One Period per (loop, span) run over the window's segments. Same rule
+        # live and time-shifted: the open Period is front-trimmed like any
+        # sliding live window, with every kept segment's number, `t` and the
+        # Period's `start` unchanged. dash.js and Shaka accept that (see
+        # player-lab/); they only break when those change between refreshes.
+        periods_plan = [
+            (loop, span, s, list(range(g_first - loop * pkg.segments_per_loop, g_last - loop * pkg.segments_per_loop + 1)))
+            for loop, span, s, _e, g_first, g_last in self.dash_periodic_groups(win.first, win.last)
+        ]
 
         def _period_entries(
             boundary_ticks: list[int], local_indices: list[int], origin_local: int
@@ -2126,13 +2054,13 @@ class Channel:
         window_origin_abs = 0
         window_duration_ticks = 0
         if window is not None:
-            first_loop, _first_span, first_locals = periods_plan[0]
+            first_loop, _first_span, _first_start, first_locals = periods_plan[0]
             window_origin_abs = (
                 first_loop * pkg.total_loop_duration_ticks
                 + pkg.segment_boundary_ticks[first_locals[0]]
                 + pkg.declared_offset_ticks_by_local_index[first_locals[0]]
             )
-            last_loop, _last_span, last_locals = periods_plan[-1]
+            last_loop, _last_span, _last_start, last_locals = periods_plan[-1]
             last_local = last_locals[-1]
             last_end_local = (
                 pkg.segment_boundary_ticks[last_local + 1]
@@ -2147,10 +2075,9 @@ class Channel:
             )
 
         period_xml_parts = []
-        for period_number, (loop_number, span_index, local_indices) in enumerate(periods_plan):
+        for period_number, (loop_number, span_index, span_start_local, local_indices) in enumerate(periods_plan):
             if not local_indices:
                 continue
-            span_start_local, _ = _span_bounds(span_index)
             # Media-timeline origin: the real span this Period lives in. For
             # a signal-only Period (forced break inside a span) it is earlier
             # than span_start_local, `t` keeps counting from it, and the
@@ -2238,9 +2165,8 @@ class Channel:
             #
             # A Start/End pair SHARES one event_id by design (see the
             # module docstring on event_id reuse), and once enough of a
-            # loop iteration has played out that BOTH halves sit inside the
-            # currently-open Period's never-pruned segment range (see the
-            # comment above `periods_plan`), they're both due in the same
+            # loop iteration has played out that BOTH halves fall inside the
+            # same Period's window range, they're both due in the same
             # single <EventStream> -- if `id` were the raw event_id,
             # dash.js's EventController (confirmed against its own source)
             # would see the second one as a duplicate of the first (same
