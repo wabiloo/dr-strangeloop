@@ -3,6 +3,7 @@
   "private": true,
   "description": "Player SDKs served to the harness page. Installed by `player-lab setup` into the cache dir, never committed.",
   "dependencies": {
+    "bitmovin-player": "^8.279.0",
     "dashjs": "^5.2.1",
     "hls.js": "^1.6.0",
     "shaka-player": "^5.2.0",

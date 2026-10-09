@@ -23,3 +23,8 @@ local_package_dir = "its-a-live/.local-loop-package"   # baked loop packages
 # assets_dir      = "data/assets"       # files uploaded through Igor
 # archives_dir    = "data/archives"     # HAR / Proxyman captures
 # manifests_dir   = "data/manifests"    # saved VOD manifest URLs
+
+# Licence keys of commercial players for player-lab (the environment variable
+# wins). Secret: keep this file private.
+# [keys]
+# bitmovin = "your-licence-key"      # or BITMOVIN_LICENSE_KEY
