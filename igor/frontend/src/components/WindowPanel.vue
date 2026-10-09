@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import Button from 'primevue/button'
+import Checkbox from 'primevue/checkbox'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { channelDocsUrl, getChannelTimeline } from '../api/client'
 import type { ChannelTimeline } from '../api/types'
@@ -50,6 +51,8 @@ function toggleRaw() {
 const doc = ref<ChannelTimeline | null>(null)
 const error = ref('')
 const showRaw = ref(false)
+const autoRefresh = ref(true)
+const polledAt = ref<Date | null>(null)
 type Selection = { kind: string; label: string; data: unknown }
 const selected = ref<Selection | null>(null)
 
@@ -76,6 +79,7 @@ async function load() {
     const next = await getChannelTimeline(props.name, props.query ?? '')
     if (seq !== requestSeq) return // a newer request (e.g. query changed) superseded this one
     applyDoc(next)
+    polledAt.value = new Date()
     error.value = ''
   } catch (e) {
     if (seq !== requestSeq) return
@@ -89,8 +93,17 @@ function restartPolling() {
   if (!open.value) return
   load()
   // An ended timeshift range is immutable; only the live window moves.
-  if (!props.query) timer = setInterval(load, POLL_MS)
+  if (!props.query && autoRefresh.value) timer = setInterval(load, POLL_MS)
 }
+watch(autoRefresh, (on) => {
+  if (on) {
+    restartPolling()
+  } else {
+    requestSeq++ // drop a response still in flight so the frozen view stays as polled
+    if (timer) clearInterval(timer)
+    timer = null
+  }
+})
 watch([open, () => props.name, () => props.query], () => {
   doc.value = null
   view.value = null
@@ -150,7 +163,7 @@ function frame() {
     }
   }
   const d = doc.value
-  if (d && d.mode === 'live') liveNow.value = Date.parse(d.generated_at) + (now - fetchedAt)
+  if (d && d.mode === 'live' && autoRefresh.value) liveNow.value = Date.parse(d.generated_at) + (now - fetchedAt)
 }
 onMounted(() => {
   raf = requestAnimationFrame(frame)
@@ -623,7 +636,25 @@ function isSelected(data: unknown): boolean {
         </div>
         <div v-else class="text-xs text-color-secondary text-right">Click an item for its details.</div>
 
-        <JsonViewer v-if="showRaw" :value="doc" max-height="24rem" />
+        <template v-if="showRaw">
+          <div class="flex align-items-center gap-3 flex-wrap text-sm">
+            <span class="text-color-secondary">Polled at <strong>{{ polledAt ? polledAt.toLocaleTimeString([], { hour12: false }) : '—' }}</strong></span>
+            <label v-if="!query" class="flex align-items-center gap-2 cursor-pointer">
+              <Checkbox v-model="autoRefresh" binary input-id="wp-auto-refresh" />
+              Auto-refresh every {{ POLL_MS / 1000 }} s
+            </label>
+            <Button
+              v-if="!query && !autoRefresh"
+              label="Refresh now"
+              icon="pi pi-refresh"
+              size="small"
+              severity="secondary"
+              text
+              @click="load"
+            />
+          </div>
+          <JsonViewer :value="doc" max-height="24rem" />
+        </template>
       </template>
     </template>
   </div>

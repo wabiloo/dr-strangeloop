@@ -193,12 +193,32 @@ components:
     SegmentRange:
       type: object
       additionalProperties: false
-      required: [first, last, count]
-      description: Inclusive range of global segment numbers.
+      required: [first, last, count, hls, dash]
+      description: |
+        Inclusive range of global segment numbers, plus the URIs of its first
+        and last video segment per format. The numbers are global (the
+        `#EXT-X-MEDIA-SEQUENCE` numbering); file names are not always: periodic
+        mode (HLS and DASH) names segments by loop-local index, `seg/<local>`;
+        continuous mode uses `cseg/<global>`.
       properties:
         first: { type: integer, minimum: 0, description: Lowest segment number. }
         last: { type: integer, minimum: 0, description: Highest segment number. }
         count: { type: integer, minimum: 0, description: "Number of segments (`last - first + 1`)." }
+        hls: { $ref: "#/components/schemas/SegmentUris" }
+        dash: { $ref: "#/components/schemas/SegmentUris" }
+    SegmentUris:
+      type: object
+      additionalProperties: false
+      required: [first_uri, last_uri]
+      description: |
+        Video segment URIs of the reference rendition, relative to the manifest,
+        exactly as that format's manifest advertises them (`.ts` for HLS when the
+        package's HLS format is TS, `.m4s` otherwise and for DASH; `seg/`,
+        `cseg/` or `rseg/<origin_loop>/` prefix by mode). Audio uses the same
+        pattern under `audio/`.
+      properties:
+        first_uri: { type: string, examples: ["1080p/cseg/6436546.m4s"] }
+        last_uri: { type: string, examples: ["1080p/cseg/6436553.m4s"] }
     UtcTime:
       type: string
       format: date-time
@@ -357,12 +377,11 @@ components:
       type: object
       additionalProperties: false
       required:
-        [convention, ended, start_utc, end_utc, live_edge_utc, duration_s, segments]
+        [ended, start_utc, end_utc, live_edge_utc, duration_s, segments]
+      description: |
+        The part of the stream a player sees: the last N segments up to the live
+        edge (or the requested range). HLS and DASH use the same window.
       properties:
-        convention:
-          type: string
-          const: hls-trailing
-          description: The window is the last N segments up to the live edge (or the requested range).
         ended:
           type: boolean
           description: True when a timeshift range is entirely in the past (a finished VOD).

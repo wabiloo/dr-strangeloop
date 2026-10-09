@@ -208,6 +208,26 @@ def test_consistent_with_hls_media_playlist(boundaries):
         assert d["sequence"] == seq
 
 
+def _playlist_segment_uris(body: str) -> list[str]:
+    return [line for line in body.splitlines() if line and not line.startswith("#")]
+
+
+@pytest.mark.parametrize("hls_format", ["cmaf", "ts"])
+@pytest.mark.parametrize("continuous", [False, True])
+def test_segment_uris_match_hls_playlist(continuous, hls_format):
+    channel = _channel(now_ticks=NOW_LOOP4, continuous=continuous)
+    channel.package.hls_format = hls_format
+    seg = channel.build_window_json()["window"]["segments"]
+    uris = _playlist_segment_uris(channel.build_hls_manifest("archive"))
+    assert (seg["hls"]["first_uri"], seg["hls"]["last_uri"]) == (uris[0], uris[-1])
+    ext = "ts" if hls_format == "ts" else "m4s"
+    expected = ("archive/cseg/12.", "archive/cseg/17.") if continuous else ("archive/seg/0.", "archive/seg/1.")
+    assert (seg["hls"]["first_uri"], seg["hls"]["last_uri"]) == (expected[0] + ext, expected[1] + ext)
+    # DASH is always CMAF; apart from the extension it uses the same names as HLS
+    dash = ("archive/cseg/12.m4s", "archive/cseg/17.m4s") if continuous else ("archive/seg/0.m4s", "archive/seg/1.m4s")
+    assert (seg["dash"]["first_uri"], seg["dash"]["last_uri"]) == dash
+
+
 def test_declared_gap_offsets_shift_times():
     channel = _channel(boundaries=[2], now_ticks=NOW_LOOP4)
     channel.package.declared_offset_ticks_by_local_index = [0, 0, 45_000, 45_000]
@@ -262,8 +282,9 @@ def test_scope_loops_widens_content_to_whole_loops():
     narrow = ch.build_window_json()
     assert narrow["range"] == {
         "scope": "window", "start_utc": narrow["window"]["start_utc"], "end_utc": narrow["window"]["end_utc"],
-        "duration_s": 6.0, "segments": {"first": 12, "last": 17, "count": 6},
+        "duration_s": 6.0, "segments": narrow["window"]["segments"],
     }
+    assert {k: narrow["range"]["segments"][k] for k in ("first", "last", "count")} == {"first": 12, "last": 17, "count": 6}
 
     doc = ch.build_window_json(scope="loops")
     _assert_valid(doc)
@@ -408,8 +429,12 @@ def test_dash_periods_and_events_match_json(increment, continuous):
         jp = json_periods[pid]
         assert _epoch_s(jp["start_utc"]) == availability + start_s
         template = period.find(".//m:SegmentTemplate", ns)
-        assert int(template.attrib["startNumber"]) == jp["segments"]["first"]
         mpd_first = int(template.attrib["startNumber"])
+        # continuous: global numbers; periodic: loop-local, like HLS's /seg/<local>
+        spl = channel.package.segments_per_loop
+        assert mpd_first == (jp["segments"]["first"] if continuous else jp["segments"]["first"] % spl)
+        assert jp["segments"]["dash"]["first_uri"] == template.attrib["media"].replace("$Number$", str(mpd_first))
+        mpd_first = jp["segments"]["first"]  # global number of the Period's first segment
         mpd_segments.update(range(mpd_first, mpd_first + len(template.findall(".//m:S", ns))))
 
         for event in period.findall(".//{*}Event"):

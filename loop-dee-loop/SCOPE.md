@@ -549,9 +549,9 @@ request for local index 0 on either side of the exact instant the server's
 own "current loop" flips). So in continuity mode, `serve.py` puts the
 **ever-increasing global segment number** in the segment URI instead
 (`_build_hls_media_playlist`'s `global_index if self.continuous else
-local_index`) -- DASH already did this by construction (`$Number$` /
-`startNumber` was always the global number, see `build_dash_manifest`),
-only HLS's own URI needed to change. The byte-serving routes then decode
+local_index`) -- DASH's continuous builder does the same
+(`startNumber` = global number); in the default mode both formats use the
+loop-local index (`startNumber` = local index of each Period's first segment). The byte-serving routes then decode
 it back (`Channel.loop_number_and_local_index`) to get both the physical
 file to read and the exact shift to apply.
 
@@ -981,7 +981,7 @@ A machine-readable view of what the manifests currently describe, for tooling
 
 **Glossary.**
 - `window`: what a player sees now -- the last `window_segments` segments up
-  to the live edge (HLS trailing-window convention); with `start`/`end`
+  to the live edge (the same window in HLS and DASH); with `start`/`end`
   (timeshift) the requested range instead.
 - `range`: the span the content arrays are clipped to. Equals the window,
   except with `?scope=loops` (live only) where it covers the previous,
@@ -990,6 +990,11 @@ A machine-readable view of what the manifests currently describe, for tooling
   (inclusive, clipped to `range`; `starts_before_range` / `ends_after_range`
   say it was). The counter is `loop * segments_per_loop + index` = the HLS
   `#EXT-X-MEDIA-SEQUENCE` numbering. `start_utc`/`end_utc` are never clipped.
+  `segments.hls` / `segments.dash` give the first and last video segment URI
+  of the reference rendition as that format's manifest advertises it (the
+  numbers are global but file names are not: periodic mode uses the loop-local
+  index (`seg/<local>`) in both formats, continuous mode `cseg/<global>`;
+  `.ts` for HLS-TS, `.m4s` otherwise and for DASH).
 - `periods` are the DASH view (ids as in the MPD), `discontinuities` the HLS
   view of the same boundaries and forced breaks.
 - Marker `event_id` is a hex string (the DASH `<Event id>` is

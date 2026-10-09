@@ -166,10 +166,6 @@ class WindowRange:
     position: LoopPosition
 
 
-def _segment_range(first: int, last: int) -> dict:
-    return {"first": first, "last": last, "count": max(0, last - first + 1)}
-
-
 def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: int) -> bool:
     """Whether `marker` should be signaled (EXT-X-DATERANGE / DASH <Event>)
     on a segment spanning [seg_start_ticks, seg_end_ticks).
@@ -972,6 +968,28 @@ class Channel:
             raise TimeshiftError("offset puts 'now' before the channel epoch (nothing existed yet)")
         return variant
 
+    def segment_uris(self, first: int, last: int, window: "TimeWindow | None") -> dict:
+        """First/last video segment URI per format, for the reference
+        rendition, relative to the manifest. Built from the same `segment_uri`
+        the HLS playlist uses (periodic `/seg/<local>`, continuous
+        `/cseg/<global>`); only the extension can differ between formats."""
+        pkg, spl = self.package, self.package.segments_per_loop
+        name = pkg.video_renditions[0].name
+        hls_ext = "ts" if pkg.hls_format == "ts" else "m4s"
+        hls_tpl = f"{name}/seg/{{index}}.{hls_ext}"
+        dash_tpl = f"{name}/seg/{{index}}.m4s"
+
+        def hls(g: int) -> str:
+            return self.segment_uri(hls_tpl, g, g % spl, window)
+
+        def dash(g: int) -> str:
+            return self.segment_uri(dash_tpl, g, g % spl, window)
+
+        return {
+            "hls": {"first_uri": hls(first), "last_uri": hls(last)},
+            "dash": {"first_uri": dash(first), "last_uri": dash(last)},
+        }
+
     def segment_uri(
         self, template: str, global_index: int, local_index: int, window: "TimeWindow | None"
     ) -> str:
@@ -1261,6 +1279,14 @@ class Channel:
         def secs(t: int) -> float:
             return round(ticks_to_wall_clock_seconds(t, ts), 3)
 
+        def seg_range(first_seg: int, last_seg: int) -> dict:
+            return {
+                "first": first_seg,
+                "last": last_seg,
+                "count": max(0, last_seg - first_seg + 1),
+                **self.segment_uris(first_seg, last_seg, window),
+            }
+
         def seg_start(g: int) -> int:
             return self.segment_start_ticks(g)
 
@@ -1308,7 +1334,7 @@ class Channel:
                         "id": self.dash_continuous_period_id(brk),
                         "start_utc": self._iso_ticks(seg_start(0 if brk is None else brk)),
                         "end_utc": None if nxt is None else self._iso_ticks(seg_start(nxt)),
-                        "segments": _segment_range(g_first, g_last),
+                        "segments": seg_range(g_first, g_last),
                     }
                 )
         else:
@@ -1319,7 +1345,7 @@ class Channel:
                         "id": self.dash_period_id(loop, s),
                         "start_utc": self._iso_ticks(seg_start(full_first)),
                         "end_utc": self._iso_ticks(seg_end(full_last)),
-                        "segments": _segment_range(g_first, g_last),
+                        "segments": seg_range(g_first, g_last),
                     }
                 )
 
@@ -1345,7 +1371,7 @@ class Channel:
                         "duration_s": secs(a_end - a_start),
                         "loop_start_s": secs(a_start),
                         "loop_end_s": secs(a_end),
-                        "segments": _segment_range(max(g_first, first), min(g_last, last)),
+                        "segments": seg_range(max(g_first, first), min(g_last, last)),
                         "starts_before_range": g_first < first,
                         "ends_after_range": g_last > last,
                     }
@@ -1382,7 +1408,7 @@ class Channel:
                     "upid_type": m.get("upid_type"),
                     "upid_hex": m.get("upid_hex"),
                     "assets": list(m.get("assets") or []),
-                    "segments": _segment_range(max(g_first, first), min(g_last, last)),
+                    "segments": seg_range(max(g_first, first), min(g_last, last)),
                     "starts_before_range": g_first < first,
                     "ends_after_range": g_last > last,
                     "splice_command_b64": b64,
@@ -1428,27 +1454,26 @@ class Channel:
                 "segment_duration_s": pkg.segment_duration_seconds,
             },
             "window": {
-                "convention": "hls-trailing",
                 "ended": ended,
                 "start_utc": self._iso_ticks(seg_start(w_first)),
                 "end_utc": self._iso_ticks(seg_end(w_last)),
                 "live_edge_utc": None if ended else self._iso_ticks(seg_start(w_last)),
                 "duration_s": secs(seg_end(w_last) - seg_start(w_first)),
-                "segments": _segment_range(w_first, w_last),
+                "segments": seg_range(w_first, w_last),
             },
             "range": {
                 "scope": scope,
                 "start_utc": self._iso_ticks(seg_start(first)),
                 "end_utc": self._iso_ticks(seg_end(last)),
                 "duration_s": secs(seg_end(last) - seg_start(first)),
-                "segments": _segment_range(first, last),
+                "segments": seg_range(first, last),
             },
             "loops": [
                 {
                     "number": n,
                     "start_utc": self._iso_ticks(seg_start(n * spl)),
                     "end_utc": self._iso_ticks(seg_end(n * spl + spl - 1)),
-                    "segments": _segment_range(n * spl, n * spl + spl - 1),
+                    "segments": seg_range(n * spl, n * spl + spl - 1),
                     "current": window is None and n == live_edge // spl,
                 }
                 for n in loops
@@ -2115,7 +2140,8 @@ class Channel:
             period_start_seconds = ticks_to_wall_clock_seconds(
                 period_start_ticks_relative, pkg.timescale
             )
-            first_number = loop_number * pkg.segments_per_loop + local_indices[0]
+            # Loop-local, like HLS's /seg/<local>: same URLs, same cache entries.
+            first_number = local_indices[0]
 
             # Reference (ad-decision authority) entries for this period,
             # used for marker placement -- loop-relative ticks, since each

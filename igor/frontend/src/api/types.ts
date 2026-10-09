@@ -323,14 +323,20 @@ export type ChannelOutputs = Record<string, string>
 
 /** loop-dee-loop `GET /timeline.json` -- schema: loop-dee-loop/openapi.yaml
  * (WindowDocument). Times are ISO-8601 UTC strings; durations are seconds. */
+export interface SegmentUris {
+  first_uri: string
+  last_uri: string
+}
+
 export interface SegmentRange {
   first: number
   last: number
   count: number
+  hls: SegmentUris
+  dash: SegmentUris
 }
 
 export interface TimelineWindow {
-  convention: string
   ended: boolean
   start_utc: string
   end_utc: string
