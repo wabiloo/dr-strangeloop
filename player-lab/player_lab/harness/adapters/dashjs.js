@@ -1,4 +1,4 @@
-import { loadScript } from '/loadscript.js';
+import { loadScript } from '../loadscript.js';
 
 export default {
   id: 'dashjs',
@@ -6,7 +6,7 @@ export default {
   reports: ['periods', 'errors', 'quality'],
   version: null,
   async load({ video, url, emit }) {
-    await loadScript('/vendor/dashjs/dist/modern/umd/dash.all.min.js');
+    await loadScript('./vendor/dashjs/dist/modern/umd/dash.all.min.js');
     this.version = dashjs.Version;
     const p = dashjs.MediaPlayer().create();
     const E = dashjs.MediaPlayer.events;

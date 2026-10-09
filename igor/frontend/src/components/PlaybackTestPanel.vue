@@ -5,16 +5,18 @@ import InputNumber from 'primevue/inputnumber'
 import Message from 'primevue/message'
 import Select from 'primevue/select'
 import Tag from 'primevue/tag'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   getPlaybackInfo,
   getPlaybackReport,
   listPlaybackTests,
+  playbackBrowserRunUrl,
   playbackScreenshotUrl,
   setupPlayback,
   startPlaybackTest,
 } from '../api/client'
 import type { Job, PlaybackCase, PlaybackInfo, PlaybackReport, PlaybackRunSummary } from '../api/types'
+import { formatDateTime } from '../utils/dateFormat'
 import FieldHelp from './FieldHelp.vue'
 import JobPanel from './JobPanel.vue'
 
@@ -23,6 +25,9 @@ const props = defineProps<{
   /** ecs-express / local-docker serve /timeline.json: the run then ends after N boundaries.
    * Otherwise it plays for a fixed duration and only the generic checks apply. */
   hasTimeline: boolean
+  /** Live manifest URLs the player-side of the in-browser mode loads (as the Live Playback panel does). */
+  hlsUrl?: string | null
+  dashUrl?: string | null
 }>()
 
 const STORAGE_KEY = 'igor.playbackTestPanel.open'
@@ -60,6 +65,13 @@ const formatChoice = ref<'both' | 'hls' | 'dash'>('both')
 const boundaries = ref(2)
 const durationS = ref(120)
 const withFfmpeg = ref(false)
+const mode = ref<'server' | 'browser'>('browser')
+
+// In-browser mode: the driver page runs in its own tab and posts its measurements to Igor.
+const browserActive = ref(false)
+const browserStatus = ref('')
+let browserWin: Window | null = null
+let browserWatch: ReturnType<typeof setInterval> | null = null
 
 const activeJobId = ref<string | null>(null)
 const activeKind = ref<'run' | 'setup' | null>(null)
@@ -71,10 +83,10 @@ const report = ref<PlaybackReport | null>(null)
 const reportRunId = ref<string | null>(null)
 const reportError = ref('')
 
-const busy = computed(() => !!activeJobId.value && !jobDone.value)
+const busy = computed(() => (!!activeJobId.value && !jobDone.value) || browserActive.value)
 const jobDone = ref(false)
 
-const ready = computed(() => !!info.value && info.value.chrome && info.value.sdks_installed)
+const ready = computed(() => !!info.value && info.value.sdks_installed && (mode.value === 'browser' || info.value.chrome))
 const playersList = computed(() => Object.keys(info.value?.players ?? {}))
 const canRun = computed(() => ready.value && selectedPlayers.value.length > 0 && !busy.value && !starting.value)
 
@@ -90,6 +102,7 @@ async function refresh() {
   try {
     info.value = await getPlaybackInfo()
     if (selectedPlayers.value.length === 0) selectedPlayers.value = [...info.value.default_players]
+    if (!info.value.chrome) mode.value = 'browser'
   } catch (e) {
     infoError.value = e instanceof Error ? e.message : String(e)
     return
@@ -143,6 +156,79 @@ async function run() {
   }
 }
 
+function runInBrowser() {
+  actionError.value = ''
+  const urls = { hls: props.hlsUrl, dash: props.dashUrl }
+  const formats = (formatChoice.value === 'both' ? ['hls', 'dash'] : [formatChoice.value]).filter((f) => urls[f as 'hls' | 'dash'])
+  const cases = formats.flatMap((f) =>
+    playersList.value.filter((p) => selectedPlayers.value.includes(p) && info.value?.players[p]?.includes(f)).map((p) => `${p}:${f}`),
+  )
+  if (!cases.length) {
+    actionError.value = 'No player/format combination to run (is the channel running, and does a selected player support that format?).'
+    return
+  }
+  const src = playbackBrowserRunUrl(props.name, {
+    cases,
+    hls: props.hlsUrl,
+    dash: props.dashUrl,
+    withTimeline: props.hasTimeline,
+    boundaries: boundaries.value,
+    durationS: durationS.value,
+  })
+  // Opened synchronously from the click so popup blockers allow it.
+  const win = window.open(src, '_blank')
+  if (!win) {
+    actionError.value = 'The browser blocked the new tab: allow pop-ups for Igor and try again.'
+    return
+  }
+  browserWin = win
+  browserActive.value = true
+  browserStatus.value = 'starting...'
+  browserWatch = setInterval(() => {
+    if (browserWin && browserWin.closed) endBrowserRun('The test tab was closed before the run finished; nothing was saved.')
+  }, 1000)
+}
+
+function endBrowserRun(error?: string) {
+  if (browserWatch) clearInterval(browserWatch)
+  browserWatch = null
+  browserWin = null
+  browserActive.value = false
+  if (error) actionError.value = error
+}
+
+function stopBrowserRun() {
+  try {
+    browserWin?.close()
+  } catch {
+    // already gone
+  }
+  endBrowserRun()
+}
+
+async function onDriverMessage(ev: MessageEvent) {
+  const d = ev.data
+  if (ev.origin !== window.location.origin || !d || d.source !== 'player-lab' || !browserActive.value) return
+  if (d.type === 'progress') {
+    browserStatus.value = String(d.text)
+  } else if (d.type === 'error') {
+    endBrowserRun(`In-browser run failed: ${d.message}`)
+  } else if (d.type === 'done') {
+    endBrowserRun()
+    try {
+      runs.value = (await listPlaybackTests(props.name)).runs
+    } catch {
+      // history is a convenience
+    }
+    await showRun(String(d.runId))
+  }
+}
+onMounted(() => window.addEventListener('message', onDriverMessage))
+onBeforeUnmount(() => {
+  window.removeEventListener('message', onDriverMessage)
+  if (browserWatch) clearInterval(browserWatch)
+})
+
 async function install() {
   actionError.value = ''
   try {
@@ -176,6 +262,7 @@ watch(() => props.name, () => {
   report.value = null
   runs.value = []
   activeJobId.value = null
+  stopBrowserRun()
   if (open.value) void ensureLoaded()
 })
 onMounted(() => {
@@ -192,7 +279,7 @@ function seen(c: PlaybackCase) {
   return c.periodTransitions == null ? 'n/a' : String(c.periodTransitions)
 }
 function runLabel(r: PlaybackRunSummary) {
-  const when = r.generated_at ? new Date(r.generated_at).toLocaleString() : r.run_id
+  const when = r.generated_at ? formatDateTime(r.generated_at) : r.run_id
   return `${r.passed ? '✓' : '✗'} ${when}`
 }
 const selectedRun = computed({
@@ -217,11 +304,12 @@ const summaryLine = computed(() => {
         <h3 class="m-0 text-base">Playback test</h3>
       </button>
       <FieldHelp label="Playback test">
-        Plays this channel in headless Chrome with several players (dash.js, Shaka, hls.js, Video.js), on this
-        machine. For each player it measures the startup time, stalls (playhead frozen for a second or more, measured on
+        Plays this channel with several players (hls.js, dash.js, Shaka, Video.js), either in headless Chrome on
+        the machine running Igor, or in this browser (keep the tab in the foreground; the browser must be able to reach
+        the channel, and its codecs decide what plays, e.g. Safari for native-like behaviour). For each player it measures the startup time, stalls (playhead frozen for a second or more, measured on
         the video element itself), player errors and dropped frames. If the channel serves /timeline.json, the run lasts
         until the requested number of loop boundaries (Periods / discontinuities) went by, and the transitions seen by
-        the players that report them (dash.js, hls.js) are compared with what the channel says it crossed.
+        the players that report them (hls.js, dash.js) are compared with what the channel says it crossed.
       </FieldHelp>
       <span v-if="!open" class="text-sm text-color-secondary">Stalls, errors and Period/discontinuity counts in several players</span>
       <template v-else-if="report">
@@ -232,7 +320,7 @@ const summaryLine = computed(() => {
 
     <template v-if="open">
       <Message v-if="infoError" severity="error" :closable="false">{{ infoError }}</Message>
-      <Message v-else-if="info && !info.chrome" severity="warn" :closable="false">
+      <Message v-else-if="info && !info.chrome && mode === 'server'" severity="warn" :closable="false">
         Google Chrome was not found on the machine running Igor; the headless test needs it (H.264).
       </Message>
       <Message v-else-if="info && !info.sdks_installed" severity="info" :closable="false">
@@ -243,6 +331,18 @@ const summaryLine = computed(() => {
       </Message>
 
       <div v-if="info" class="flex align-items-center gap-4 flex-wrap">
+        <Select
+          v-model="mode"
+          :options="[
+            { label: 'In this browser', value: 'browser' },
+            { label: 'Headless Chrome', value: 'server', disabled: !info.chrome },
+          ]"
+          option-label="label"
+          option-value="value"
+          option-disabled="disabled"
+          size="small"
+          aria-label="Where to run"
+        />
         <div v-for="p in playersList" :key="p" class="flex align-items-center gap-2">
           <Checkbox v-model="selectedPlayers" :input-id="`ptp-${p}`" :value="p" />
           <label :for="`ptp-${p}`" :title="`formats: ${info.players[p].join(', ')}`">{{ label(p) }}</label>
@@ -267,7 +367,7 @@ const summaryLine = computed(() => {
           Duration (s)
           <InputNumber v-model="durationS" :min="10" :max="3600" input-class="ptp-num" size="small" />
         </label>
-        <label v-if="info.ffmpeg" class="flex align-items-center gap-2 text-sm" title="Also demux each manifest with ffmpeg for 30 s (informational)">
+        <label v-if="info.ffmpeg && mode === 'server'" class="flex align-items-center gap-2 text-sm" title="Also demux each manifest with ffmpeg for 30 s (informational)">
           <Checkbox v-model="withFfmpeg" binary />
           ffmpeg check
         </label>
@@ -277,11 +377,23 @@ const summaryLine = computed(() => {
           size="small"
           class="ml-auto"
           :disabled="!canRun"
-          :loading="starting || (busy && activeKind === 'run')"
-          @click="run"
+          :loading="starting || busy"
+          @click="mode === 'browser' ? runInBrowser() : run()"
         />
       </div>
       <Message v-if="actionError" severity="error" :closable="false">{{ actionError }}</Message>
+
+      <div v-if="browserActive" class="flex flex-column gap-2">
+        <div class="flex align-items-center gap-2 text-sm">
+          <i class="pi pi-spin pi-spinner" aria-hidden="true" />
+          <span class="ptp-status">Running in another tab: {{ browserStatus }}</span>
+          <Button label="Stop" icon="pi pi-stop" size="small" severity="secondary" class="ml-auto" @click="stopBrowserRun" />
+        </div>
+        <Message severity="info" :closable="false">
+          The players run in the new tab: keep it in the foreground (browsers throttle background tabs, which would
+          show up as stalls). The result appears here when the run ends; closing the tab discards it.
+        </Message>
+      </div>
 
       <JobPanel
         :job-id="activeJobId"
@@ -303,8 +415,9 @@ const summaryLine = computed(() => {
             aria-label="Earlier runs"
           />
           <span>
-            {{ new Date(report.generatedAt).toLocaleString() }} · {{ report.durationS }} s ·
+            {{ formatDateTime(report.generatedAt) }} · {{ report.durationS }} s ·
             boundaries from {{ report.boundaries.source }}
+            <template v-if="report.mode === 'browser'"> · run in a browser ({{ report.userAgent }})</template>
             <template v-if="report.boundaries.newPeriods != null">
               (timeline: {{ report.boundaries.newPeriods }} Period(s), {{ report.boundaries.newDiscontinuities }} discontinuity(ies) crossed)
             </template>
@@ -364,7 +477,7 @@ const summaryLine = computed(() => {
           <div v-for="p in f.problems ?? []" :key="p" class="text-xs ptp-err">{{ p }}</div>
         </div>
         <div class="text-xs text-color-secondary">
-          Shaka and Video.js do not report Period transitions, so only their stalls and errors are judged. Players
+          Shaka does not report Period transitions on DASH, so only its stalls and errors are judged there. Players
           start a little behind the live edge, so the seen count may differ from the expected one by one.
         </div>
       </template>
@@ -373,6 +486,10 @@ const summaryLine = computed(() => {
 </template>
 
 <style scoped>
+.ptp-status {
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
 .ptp-toggle {
   background: none;
   border: 0;

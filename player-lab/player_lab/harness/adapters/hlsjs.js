@@ -1,4 +1,4 @@
-import { loadScript } from '/loadscript.js';
+import { loadScript } from '../loadscript.js';
 
 export default {
   id: 'hlsjs',
@@ -6,7 +6,7 @@ export default {
   reports: ['periods', 'errors', 'quality'],
   version: null,
   async load({ video, url, emit }) {
-    await loadScript('/vendor/hls.js/dist/hls.min.js');
+    await loadScript('./vendor/hls.js/dist/hls.min.js');
     if (!Hls.isSupported()) throw new Error('hls.js: MSE not supported');
     this.version = Hls.version;
     // "periods" here = EXT-X-DISCONTINUITY crossings: count changes of the fragment continuity counter.

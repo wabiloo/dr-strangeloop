@@ -16,13 +16,14 @@ from .profile import Profile, judge
 from .targets import Target
 
 # player id -> formats it can play (mirrors harness/adapters/*.js)
+# (dict order is the display order: hls.js and dash.js first, then the others alphabetically)
 PLAYERS: dict[str, tuple[str, ...]] = {
+    "hlsjs": ("hls",),
     "dashjs": ("dash",),
     "shaka": ("hls", "dash"),
-    "hlsjs": ("hls",),
     "videojs": ("hls", "dash"),
 }
-DEFAULT_PLAYERS = ["dashjs", "shaka", "hlsjs", "videojs"]
+DEFAULT_PLAYERS = list(PLAYERS)
 
 
 @dataclass
@@ -80,7 +81,7 @@ def plan_cases(cfg: RunConfig) -> list[tuple[str, str]]:
     for fmt in formats:
         if not cfg.target.url_for(fmt):
             raise ValueError(f"target has no {fmt} URL")
-        cases += [(p, fmt) for p in cfg.players if fmt in PLAYERS[p]]
+        cases += [(p, fmt) for p in PLAYERS if p in cfg.players and fmt in PLAYERS[p]]
     if not cases:
         raise ValueError("no player/format combination to run")
     return cases

@@ -84,3 +84,40 @@ def test_run_id_and_screenshot_paths_are_validated(outputs):
     assert client.get(f"{base}/20261009-101500/hlsjs-hls.png").status_code == 200
     assert client.get(f"{base}/20261009-101500/report.json").status_code == 404
     assert client.get(f"{base}/20261009-101500/..%2Freport.png").status_code == 404
+
+
+def test_harness_files_are_served_without_escaping_their_roots(tmp_path, monkeypatch):
+    harness, vendor = tmp_path / "harness", tmp_path / "vendor"
+    (harness / "adapters").mkdir(parents=True)
+    (vendor / "hls.js").mkdir(parents=True)
+    (harness / "browser.html").write_text("<html>page</html>")
+    (harness / "adapters" / "x.js").write_text("export default 1")
+    (vendor / "hls.js" / "hls.min.js").write_text("var Hls")
+    (tmp_path / "secret.txt").write_text("nope")
+    monkeypatch.setattr(player_lab, "asset_roots", lambda: (harness, vendor))
+
+    base = "/api/v1/playback-test/harness"
+    assert client.get(f"{base}/browser.html").text == "<html>page</html>"
+    assert client.get(f"{base}/").status_code == 200  # defaults to the in-browser driver page
+    assert client.get(f"{base}/adapters/x.js").headers["content-type"].startswith("text/javascript")
+    assert client.get(f"{base}/vendor/hls.js/hls.min.js").text == "var Hls"
+    assert client.get(f"{base}/vendor/../secret.txt").status_code == 404
+    assert client.get(f"{base}/%2e%2e/secret.txt").status_code == 404
+    assert client.get(f"{base}/missing.js").status_code == 404
+
+
+def test_browser_results_are_judged_and_stored_under_the_channel(monkeypatch):
+    seen = {}
+
+    def fake_judge(channel, payload):
+        seen.update(channel=channel, payload=payload)
+        return "20261009-111111", {"pass": True, "cases": []}
+
+    monkeypatch.setattr(player_lab, "judge_browser_run", fake_judge)
+    body = {"cases": [{"player": "hlsjs", "format": "hls", "snapshot": {"startedAfterS": 1.2}}],
+            "boundaries": {"requested": 1, "crossed": {"hls": 1}}}
+    r = client.post(f"/api/v1/playback-test/channels/{CHANNEL}/browser-results", json=body)
+    assert r.status_code == 200 and r.json()["run_id"] == "20261009-111111"
+    assert seen["channel"] == CHANNEL and seen["payload"]["cases"][0]["player"] == "hlsjs"
+    assert client.post("/api/v1/playback-test/channels/nope/browser-results", json=body).status_code == 404
+    assert client.post(f"/api/v1/playback-test/channels/{CHANNEL}/browser-results", json={"cases": []}).status_code == 422

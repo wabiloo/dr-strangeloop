@@ -86,3 +86,23 @@ def test_harness_server_serves_page_and_blocks_traversal():
             with pytest.raises(urllib.error.HTTPError) as e:
                 urllib.request.urlopen(s.base + bad)
             assert e.value.code in (400, 403, 404)
+
+
+def test_judge_browser_payload_matches_headless_judging(tmp_path):
+    from player_lab.judge_browser import judge_payload
+    from player_lab.profile import Profile
+
+    good = {"startedAfterS": 1.5, "stallCount": 0, "stallSeconds": 0, "fatalErrors": 0, "periodTransitions": 1}
+    bad = {**good, "stallCount": 2, "stallSeconds": 3.0}
+    payload = {
+        "durationS": 70, "userAgent": "UA", "target": {"name": "ch", "hls": "h", "dash": "d", "timeline": "t"},
+        "boundaries": {"requested": 1, "source": "timeline.json", "newPeriods": 1, "newDiscontinuities": 1,
+                       "crossed": {"hls": 1, "dash": 1}},
+        "cases": [{"player": "hlsjs", "format": "hls", "snapshot": good},
+                  {"player": "dashjs", "format": "dash", "snapshot": bad}],
+    }
+    report = judge_payload(payload, Profile(), tmp_path / "run")
+    assert report["mode"] == "browser" and report["pass"] is False
+    assert [c["pass"] for c in report["cases"]] == [True, False]
+    assert report["cases"][0]["crossed"] == 1 and "crossed" not in report["boundaries"]
+    assert (tmp_path / "run" / "report.json").is_file()

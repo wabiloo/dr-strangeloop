@@ -1,6 +1,6 @@
 // Harness entry point. Query: ?player=<id>&url=<manifest>&format=hls|dash
 // Exposes window.__lab = { ready, snapshot() } for the driver (Playwright or Igor).
-import { createObserver } from '/observer.js';
+import { createObserver } from './observer.js';
 
 const params = new URLSearchParams(location.search);
 const playerId = params.get('player');
@@ -48,7 +48,7 @@ const lab = (window.__lab = {
 });
 
 try {
-  adapter = (await import(`/adapters/${playerId}.js`)).default;
+  adapter = (await import(`./adapters/${playerId}.js`)).default;
   if (!adapter.formats.includes(format)) throw new Error(`${playerId} does not support ${format}`);
   observer = createObserver(() => document.querySelector('video'), clock);
   await adapter.load({ video, url, format, emit });

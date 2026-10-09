@@ -1,6 +1,6 @@
 # player-lab — design
 
-Status: phase 1 implemented (see `AGENTS.md` for usage); phase 2 headless mode implemented (Igor **Playback test** panel); in-browser mode and phases 3-4 are proposals. Reviewed in conversation 2026-10-09.
+Status: phase 1 implemented (see `AGENTS.md` for usage); phase 2 implemented (Igor **Playback test** panel: headless mode and in-browser mode, the latter in its own tab); phases 3-4 are proposals. Reviewed in conversation 2026-10-09.
 
 ## Purpose
 
@@ -72,7 +72,7 @@ runs only: Playwright trace and video (optional artifacts).
 
 | Phase | Players |
 |---|---|
-| 1 (free) | dash.js, Shaka, hls.js, Video.js (VHS) |
+| 1 (free) | hls.js, dash.js, Shaka, Video.js (VHS) |
 | 3 (commercial) | Bitmovin, THEOplayer (Dolby OptiView); then JW Player; castLabs/Radiant/Flowplayer only on demand |
 | Skip | Mux Player, Clappr, Plyr and similar (hls.js wrappers) |
 | Reference | ffmpeg/ffprobe reading the manifest across a boundary (no browser); optional Apple `mediastreamvalidator` and DASH-IF validator |

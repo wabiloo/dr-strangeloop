@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
+import mimetypes
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -13,6 +14,7 @@ from igor.jobs.runner import runner
 from igor.store import channels as channel_store
 
 router = APIRouter()
+mimetypes.add_type("text/javascript", ".js")
 
 
 class PlaybackTestPayload(BaseModel):
@@ -94,3 +96,37 @@ def get_playback_screenshot(name: str, run_id: str, filename: str) -> FileRespon
     if path is None:
         raise HTTPException(status_code=404, detail="no such screenshot")
     return FileResponse(path, media_type="image/png")
+
+
+@router.get("/harness/{path:path}")
+def get_harness_file(path: str) -> FileResponse:
+    """The harness pages and player SDKs, served same-origin for the in-browser mode
+    (the browser driver reads each player's `<video>` through an iframe)."""
+    try:
+        f = player_lab.harness_file(path or "browser.html")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"player-lab unavailable: {exc}") from exc
+    if f is None:
+        raise HTTPException(status_code=404, detail="not found (player SDKs installed?)")
+    return FileResponse(f, media_type=mimetypes.guess_type(f.name)[0] or "application/octet-stream",
+                        headers={"Cache-Control": "no-store"})
+
+
+class BrowserResults(BaseModel):
+    startedAt: str | None = None
+    durationS: float | None = None
+    userAgent: str | None = None
+    target: dict[str, Any] = Field(default_factory=dict)
+    boundaries: dict[str, Any] = Field(default_factory=dict)
+    cases: list[dict[str, Any]] = Field(min_length=1)
+
+
+@router.post("/channels/{name}/browser-results")
+def post_browser_results(name: str, results: BrowserResults) -> dict:
+    """Measurements from a run in the user's own browser; judged and stored like a headless run."""
+    _channel_config(name)
+    try:
+        run_id, report = player_lab.judge_browser_run(name, results.model_dump())
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {**report, "run_id": run_id}

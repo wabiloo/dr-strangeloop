@@ -626,6 +626,9 @@ export interface PlaybackCase {
 
 export interface PlaybackReport {
   generatedAt: string
+  /** 'browser' when the run was driven from the user's own browser (no screenshots, no network stats) */
+  mode?: 'browser'
+  userAgent?: string | null
   durationS: number
   pass: boolean
   target: { name: string; hls: string | null; dash: string | null; timeline: string | null }

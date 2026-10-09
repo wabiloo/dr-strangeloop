@@ -1,6 +1,6 @@
 # player-lab
 
-Plays a channel's HLS and DASH in several real players (dash.js, Shaka, hls.js,
+Plays a channel's HLS and DASH in several real players (hls.js, dash.js, Shaka,
 Video.js) in a headless Chrome and reports startup time, stalls, errors and the
 Period/discontinuity transitions each player saw, compared with what the
 channel's own `/timeline.json` says it crossed. Design and phasing:
@@ -36,9 +36,12 @@ Needs the installed Google Chrome (H.264) and Node/npm for `setup`. Exit code 0
   = boundaries to cross), waits until the players had time to reach them
   (`--settle`, max wait after the timeline shows them: players trail the live
   edge by about the window), then judges with `profile.judge`.
-- Shaka and Video.js adapters do not report period transitions, so their
-  boundary count is not compared (stalls/errors still are). hls.js and dash.js
-  are.
+- Period/discontinuity transitions come from each player's own mechanisms, never from the clock
+  or the timeline: hls.js (`FRAG_CHANGED` continuity counter), dash.js (`PERIOD_SWITCH_COMPLETED`),
+  Video.js/VHS (the playlist controller's `timelineChangeController_` `timelinechange` event) and
+  Shaka on HLS (no event: a jump of `start - mediaTimestamp` in `segmentappended`, i.e. the
+  timestamp offset it applies at a discontinuity). Shaka on DASH cannot tell (no media timestamp
+  for fMP4, Periods are flattened), so its boundary count is not compared (stalls/errors still are).
 - `--ffmpeg N` also demuxes each manifest with ffmpeg: informational only.
   ffmpeg's HLS demuxer is known to choke on discontinuities with separate
   audio playlists, so a problem there is not by itself a channel defect.
@@ -62,3 +65,5 @@ browser run needs a live channel, e.g. a local `loop-dee-loop/serve.py`).
 ## Igor
 
 Igor's channel page has a **Playback test** panel that runs `player-lab run --channel` as a background job and renders `report.json` (code: `igor/src/igor/integrations/player_lab.py`, `igor/src/igor/app/routes/playback.py`, `igor/frontend/src/components/PlaybackTestPanel.vue`). Runs are stored under `outputs/player-lab/channels/<name>/<run_id>/`. It needs Chrome on the Igor host.
+
+The panel has a second mode, **In this browser**: Igor serves the harness and the vendor SDKs same-origin (`GET /api/v1/playback-test/harness/*`), the panel opens `harness/browser.html` in a new tab, which plays each case in an iframe (`index.html?embed=1`), tracks boundaries from `/timeline.json`, and POSTs the raw snapshots to `.../channels/{name}/browser-results`. Igor judges them with `player-lab judge` (stdin JSON, same `profile.judge` as the headless runner; `judge_browser.py`) and stores the same `report.json` (with `mode: "browser"` and the `userAgent`). The browser only measures; the tab must stay in the foreground (background tabs load no media), must be able to reach the channel URLs (mind HTTPS-vs-HTTP mixed content), and its codecs decide what plays.

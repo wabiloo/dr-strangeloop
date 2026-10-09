@@ -892,7 +892,13 @@ watch(() => props.name, reload)
 
     <WindowPanel v-if="windowAvailable" :name="name" :query="windowQuery" />
 
-    <PlaybackTestPanel v-if="showPlayback" :name="name" :has-timeline="windowAvailable" />
+    <PlaybackTestPanel
+      v-if="showPlayback"
+      :name="name"
+      :has-timeline="windowAvailable"
+      :hls-url="playbackHlsUrl"
+      :dash-url="playbackDashUrl"
+    />
 
     <div class="channel-detail-layout">
       <div class="flex flex-column gap-4 p-3 border-round surface-card channel-actions" style="border: 1px solid var(--surface-border)">

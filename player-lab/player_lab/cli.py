@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import paths
 from .profile import load_profile
+from .judge_browser import judge_payload
 from .reference import ffmpeg_check
 from .report import format_table
 from .runner import DEFAULT_PLAYERS, PLAYERS, RunConfig, run
@@ -37,6 +38,8 @@ def cmd_info(_args) -> int:
         "npm": shutil.which("npm") is not None,
         "chrome": chrome_installed(),
         "ffmpeg": shutil.which("ffmpeg") is not None,
+        "harness_dir": str(paths.HARNESS_DIR),
+        "vendor_root": str(paths.vendor_root()),
     }
     print(json.dumps(info))
     return 0
@@ -77,11 +80,27 @@ def cmd_run(args) -> int:
     return 0 if report["pass"] else 1
 
 
+def cmd_judge(args) -> int:
+    """Judge the JSON the in-browser driver collected (stdin) and print the report."""
+    report = judge_payload(
+        json.load(sys.stdin),
+        load_profile(Path(args.profile) if args.profile else None),
+        Path(args.out_dir) if args.out_dir else None,
+    )
+    print(json.dumps(report))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="player-lab", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("info", help="print what is available (players, SDKs, Chrome, ffmpeg) as JSON").set_defaults(fn=cmd_info)
     sub.add_parser("setup", help="install the player SDKs (needs npm) into the cache").set_defaults(fn=cmd_setup)
+
+    j = sub.add_parser("judge", help="judge results collected by the in-browser driver (JSON on stdin); prints the report")
+    j.add_argument("--profile", help="TOML thresholds file")
+    j.add_argument("--out-dir", help="also write report.json here")
+    j.set_defaults(fn=cmd_judge)
 
     r = sub.add_parser("run", help="play a channel in several players and report")
     src = r.add_mutually_exclusive_group(required=True)

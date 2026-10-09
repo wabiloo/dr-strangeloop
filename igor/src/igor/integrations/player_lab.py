@@ -9,6 +9,7 @@ which is why `info()` is exposed to the UI.
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import json
 import re
 import shutil
@@ -17,6 +18,8 @@ from pathlib import Path
 
 from igor import paths
 from igor.jobs.runner import Job, runner
+
+_PLAYER_ORDER = ("hlsjs", "dashjs", "shaka", "videojs")
 
 _RUN_ID = re.compile(r"^\d{8}-\d{6}$")
 
@@ -36,6 +39,34 @@ def info() -> dict:
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "player-lab info failed")
     return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@functools.lru_cache(maxsize=1)
+def asset_roots() -> tuple[Path, Path]:
+    """(harness page dir, SDK cache) as player-lab sees them; igor serves both to the browser."""
+    i = info()
+    return Path(i["harness_dir"]), Path(i["vendor_root"])
+
+
+def harness_file(rel: str) -> Path | None:
+    """Resolve a path under the harness page (or its vendor/ SDK folder) without escaping either root."""
+    harness, vendor = asset_roots()
+    root, rel = (vendor, rel[len("vendor/"):]) if rel.startswith("vendor/") else (harness, rel)
+    p = (root / rel).resolve()
+    return p if root.resolve() in p.parents and p.is_file() else None
+
+
+def judge_browser_run(channel: str, payload: dict) -> tuple[str, dict]:
+    """Judge results posted by the in-browser driver (player-lab judge) and store them like a headless run."""
+    run_id = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    payload = {**payload, "target": {**(payload.get("target") or {}), "name": channel}}
+    proc = subprocess.run(
+        [*player_lab_cmd(), "judge", "--out-dir", str(runs_root(channel) / run_id)],
+        input=json.dumps(payload), capture_output=True, text=True, timeout=60, cwd=paths.REPO_ROOT,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "player-lab judge failed")
+    return run_id, json.loads(proc.stdout.strip().splitlines()[-1])
 
 
 def spawn_setup() -> Job:
@@ -98,7 +129,7 @@ def summarise(run_id: str, report: dict) -> dict:
         "passed": bool(report.get("pass")),
         "cases": len(cases),
         "failed_cases": sum(1 for c in cases if not c.get("pass")),
-        "players": sorted({c["player"] for c in cases}),
+        "players": [p for p in _PLAYER_ORDER if any(c["player"] == p for c in cases)],
     }
 
 
