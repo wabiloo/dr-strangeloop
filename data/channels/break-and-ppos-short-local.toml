@@ -27,6 +27,8 @@ segment_duration   = 4.0
 dvr_window_seconds = 30.0
 hls_format = "cmaf"
 hls_ts_mux_audio = true
+dash_addressing = "time"
+dash_timeline = "compact"
 
 [timeline]
 epoch_utc = "2026-01-01T00:00:00Z"
