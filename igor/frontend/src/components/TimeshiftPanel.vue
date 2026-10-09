@@ -66,6 +66,12 @@ function readOpen(): boolean {
   }
 }
 const open = ref(readOpen())
+function onHeaderClick(e: MouseEvent) {
+  // The whole header row toggles; other buttons/links in it (help, docs, raw JSON...) keep their own behavior.
+  const hit = (e.target as HTMLElement).closest('button, a, input')
+  if (hit && !hit.classList.contains('ts-toggle')) return
+  toggleOpen()
+}
 function toggleOpen() {
   open.value = !open.value
   try {
@@ -330,13 +336,12 @@ const formatOptions = [
 
 <template>
   <section class="timeshift-panel surface-card border-round p-3 flex flex-column gap-3">
-    <div class="flex align-items-center gap-2 flex-wrap">
+    <div class="ts-toggle-row flex align-items-center gap-2 flex-wrap" @click="onHeaderClick">
       <button
         type="button"
         class="ts-toggle flex align-items-center gap-2"
         :aria-expanded="open"
         aria-controls="ts-body"
-        @click="toggleOpen"
       >
         <i :class="['pi', open ? 'pi-chevron-down' : 'pi-chevron-right']" aria-hidden="true" />
         <h3 class="m-0 text-base">Startover &amp; catchup</h3>
@@ -588,6 +593,9 @@ const formatOptions = [
 </template>
 
 <style scoped>
+.ts-toggle-row {
+  cursor: pointer;
+}
 .ts-toggle {
   background: none;
   border: 0;

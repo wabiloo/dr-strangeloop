@@ -27,6 +27,12 @@ function loadOpen(): boolean {
   }
 }
 const open = ref(loadOpen())
+function onHeaderClick(e: MouseEvent) {
+  // The whole header row toggles; other buttons/links in it (help, docs, raw JSON...) keep their own behavior.
+  const hit = (e.target as HTMLElement).closest('button, a, input')
+  if (hit && !hit.classList.contains('wp-toggle')) return
+  toggle()
+}
 function toggle() {
   open.value = !open.value
   try {
@@ -552,12 +558,11 @@ function isSelected(data: unknown): boolean {
 
 <template>
   <div class="window-panel surface-card border-round p-3 flex flex-column gap-3">
-    <div class="flex align-items-center gap-2 wp-header">
+    <div class="wp-toggle-row flex align-items-center gap-2 wp-header" @click="onHeaderClick">
       <button
         type="button"
         class="wp-toggle flex align-items-center gap-2"
         :aria-expanded="open"
-        @click="toggle"
       >
         <i :class="['pi', open ? 'pi-chevron-down' : 'pi-chevron-right']" aria-hidden="true" />
         <h3 class="m-0 text-base">Timeline</h3>
@@ -828,6 +833,9 @@ function isSelected(data: unknown): boolean {
 </template>
 
 <style scoped>
+.wp-toggle-row {
+  cursor: pointer;
+}
 .wp-toggle {
   background: none;
   border: 0;
