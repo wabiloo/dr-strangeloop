@@ -27,6 +27,20 @@ textarea {
   font-family: inherit;
 }
 
+/* Uppercase section label followed by a thin rule running to the end of the line. */
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  margin-right: 1.5rem;
+  background: var(--p-surface-200, #e2e8f0);
+}
+
 code {
   font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
 }

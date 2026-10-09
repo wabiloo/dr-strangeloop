@@ -43,6 +43,12 @@ function loadOpen(): boolean {
   }
 }
 const open = ref(loadOpen())
+function onHeaderClick(e: MouseEvent) {
+  // The whole header row toggles; other buttons/links in it (help...) keep their own behavior.
+  const hit = (e.target as HTMLElement).closest('button, a, input')
+  if (hit && !hit.classList.contains('ptp-toggle')) return
+  toggle()
+}
 function toggle() {
   open.value = !open.value
   try {
@@ -325,12 +331,22 @@ const summaryLine = computed(() => {
   const bad = r.cases.filter((c) => !c.pass).length
   return bad ? `${bad} of ${r.cases.length} failed` : `all ${r.cases.length} passed`
 })
+const summaryText = computed(() => {
+  const r = report.value
+  if (!r) return ''
+  const b = r.boundaries
+  let t = `${formatDateTime(r.generatedAt)} · ${r.durationS} s · boundaries from ${b.source}`
+  if (r.mode === 'browser') t += ` · run in a browser (${r.userAgent})`
+  if (b.continuous) t += ' (continuous timeline: no loop boundaries)'
+  if (b.newPeriods != null) t += ` (timeline: ${b.newPeriods} Period(s), ${b.newDiscontinuities} discontinuity(ies) crossed)`
+  return t
+})
 </script>
 
 <template>
   <div class="playback-test-panel surface-card border-round p-3 flex flex-column gap-3">
-    <div class="flex align-items-center gap-2 flex-wrap">
-      <button type="button" class="ptp-toggle flex align-items-center gap-2" :aria-expanded="open" @click="toggle">
+    <div class="ptp-toggle-row flex align-items-center gap-2 flex-wrap" @click="onHeaderClick">
+      <button type="button" class="ptp-toggle flex align-items-center gap-2" :aria-expanded="open">
         <i :class="['pi', open ? 'pi-chevron-down' : 'pi-chevron-right']" aria-hidden="true" />
         <h3 class="m-0 text-base">Playback test</h3>
       </button>
@@ -362,7 +378,8 @@ const summaryLine = computed(() => {
         </div>
       </Message>
 
-      <div v-if="info" class="flex align-items-center gap-4 flex-wrap">
+      <div v-if="info" class="flex flex-column gap-3">
+      <div class="flex align-items-center gap-4 flex-wrap">
         <Select
           v-model="mode"
           :options="[
@@ -396,6 +413,8 @@ const summaryLine = computed(() => {
           size="small"
           aria-label="Formats"
         />
+      </div>
+      <div class="flex align-items-center gap-4 flex-wrap">
         <div class="flex align-items-center gap-2 text-sm">
           Stop after
           <Select
@@ -426,11 +445,11 @@ const summaryLine = computed(() => {
           label="Run test"
           icon="pi pi-play"
           size="small"
-          class="ml-auto"
           :disabled="!canRun"
           :loading="starting || busy"
           @click="mode === 'browser' ? runInBrowser() : run()"
         />
+      </div>
       </div>
       <Message v-if="actionError" severity="error" :closable="false">{{ actionError }}</Message>
 
@@ -455,9 +474,11 @@ const summaryLine = computed(() => {
       <Message v-if="reportError" severity="warn" :closable="false">{{ reportError }}</Message>
 
       <template v-if="report">
-        <div class="flex align-items-center gap-2 flex-wrap text-sm text-color-secondary">
+        <h3 class="section-label mt-3 mb-0 mx-0 text-sm text-color-secondary uppercase">Previous runs</h3>
+        <div class="flex align-items-center gap-2 text-sm text-color-secondary">
           <Select
             v-if="runs.length > 1"
+            class="flex-none"
             v-model="selectedRun"
             :options="runs"
             :option-label="runLabel"
@@ -465,15 +486,7 @@ const summaryLine = computed(() => {
             size="small"
             aria-label="Earlier runs"
           />
-          <span>
-            {{ formatDateTime(report.generatedAt) }} · {{ report.durationS }} s ·
-            boundaries from {{ report.boundaries.source }}
-            <template v-if="report.mode === 'browser'"> · run in a browser ({{ report.userAgent }})</template>
-            <template v-if="report.boundaries.continuous"> (continuous timeline: no loop boundaries)</template>
-            <template v-if="report.boundaries.newPeriods != null">
-              (timeline: {{ report.boundaries.newPeriods }} Period(s), {{ report.boundaries.newDiscontinuities }} discontinuity(ies) crossed)
-            </template>
-          </span>
+          <span class="ptp-summary" :title="summaryText">{{ summaryText }}</span>
         </div>
 
         <div class="ptp-scroll">
@@ -542,9 +555,18 @@ const summaryLine = computed(() => {
 </template>
 
 <style scoped>
+.ptp-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ptp-status {
   font-variant-numeric: tabular-nums;
   word-break: break-all;
+}
+.ptp-toggle-row {
+  cursor: pointer;
 }
 .ptp-toggle {
   background: none;

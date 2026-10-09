@@ -924,7 +924,7 @@ watch(() => props.name, reload)
       <div class="flex flex-column gap-4 p-3 border-round surface-card channel-actions" style="border: 1px solid var(--surface-border)">
         <h3 class="m-0">Actions</h3>
         <div class="flex flex-column gap-2">
-          <h3 class="m-0 text-sm text-color-secondary uppercase">First deploy</h3>
+          <h3 class="section-label m-0 text-sm text-color-secondary uppercase">First deploy</h3>
           <div
             class="flex align-items-start gap-3 p-3 border-round"
             :class="firstDeployAction.disabled() ? 'surface-100' : 'surface-card'"
@@ -949,7 +949,7 @@ watch(() => props.name, reload)
         </div>
 
         <div class="flex flex-column gap-2">
-          <h3 class="m-0 text-sm text-color-secondary uppercase">Stream</h3>
+          <h3 class="section-label m-0 text-sm text-color-secondary uppercase">Stream</h3>
           <Message v-if="phase === 'not-deployed'" severity="secondary" :closable="false">
             {{
               byBackend(
@@ -985,7 +985,7 @@ watch(() => props.name, reload)
         </div>
 
         <div v-if="infrastructureActions.length" class="flex flex-column gap-2">
-          <h3 class="m-0 text-sm text-color-secondary uppercase">Infrastructure</h3>
+          <h3 class="section-label m-0 text-sm text-color-secondary uppercase">Infrastructure</h3>
           <div
             v-for="a in infrastructureActions"
             :key="a.key"
@@ -1016,7 +1016,7 @@ watch(() => props.name, reload)
         </div>
 
         <div v-if="liveBackend && liveBackend !== 'local-docker'" class="flex flex-column gap-2">
-          <h3 class="m-0 text-sm text-color-secondary uppercase">Schedule</h3>
+          <h3 class="section-label m-0 text-sm text-color-secondary uppercase">Schedule</h3>
           <div class="flex flex-column gap-2 p-3 border-round surface-card" style="border: 1px solid var(--surface-border)">
             <Message v-if="scheduleError" severity="warn" :closable="false">{{ scheduleError }}</Message>
 
