@@ -102,7 +102,7 @@ exactly one its-a-live TOML table, named after it**:
 | `[infrastructure.s3]` | Infrastructure · S3 | `bucket_name`, `content_folder` (not local-docker) |
 | `[infrastructure.express]` / `[infrastructure.docker]` | Infrastructure · Express / Docker | `port` (+ `cpu`, `memory`, `cdn` for express) |
 | `[timeline]` | Timeline | `epoch_utc`, `continuous` |
-| `[packaging]` | Packaging | `segment_duration`, `dvr_window_seconds`, `hls_format`, `hls_ts_mux_audio` |
+| `[packaging]` | Packaging | `segment_duration`, `dvr_window_seconds`, `hls_format`, `hls_ts_mux_audio`, `dash_addressing` |
 | `[timeshift]` | Timeshift | `enabled`, `start_param`, `end_param`, `max_span_seconds` |
 | `[markers]` | Markers | `daterange_mode`, `cue_tags`, `dash_*`, `increment_event_ids`, `daterange_id_format`, `period_on_segmentation(_apply)` |
 

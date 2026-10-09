@@ -58,6 +58,9 @@ class ChannelCreatePayload(BaseModel):
     epoch_utc: str = DEFAULT_EPOCH_UTC
     hls_format: str = "cmaf"
     hls_ts_mux_audio: bool = True
+    # [packaging].dash_addressing -- DASH SegmentTemplate $Number$ (default)
+    # or $Time$. ecs-express/local-docker only.
+    dash_addressing: Literal["number", "time"] = "number"
     # loop-dee-loop/SCOPE.md §12: default on -- serve.py rewrites each
     # segment's own timestamps per request (header patch, never a re-mux)
     # so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the

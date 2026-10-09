@@ -88,6 +88,18 @@ markers with those `segmentation_type_id`s, signal-only (timestamps stay
 continuous under `--continuous-timeline`). Design: `SCOPE.md` §14; tests:
 `tests/test_serve_signal_periods.py`.
 
+## DASH `$Time$` addressing
+
+`serve.py --dash-addressing time` (its-a-live `[packaging] dash_addressing =
+"time"`; default `number`) makes every DASH `SegmentTemplate` use `$Time$`
+(each `<S t>`) instead of `$Number$` + `startNumber`. HLS is unaffected.
+URL forms (nested under `/seg/` and `/cseg/` so CDN cache rules still match):
+`/<track>/seg/t/<real span>/<t>.m4s` (default mode; `t` is span-relative, the
+span is named because `t` repeats per span) and `/<track>/cseg/t/<t>.m4s`
+(continuous; `t` absolute = `loop*D + start`). The server inverts `t` to the
+segment index per track (video rendition / audio each have their own
+boundaries); an unknown `t` is a 404. Tests: `tests/test_serve_dash_time.py`.
+
 ## Startover & catchup
 
 `serve.py --timeshift` (its-a-live: `[timeshift]`, on by default) makes the

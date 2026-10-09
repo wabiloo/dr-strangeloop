@@ -26,6 +26,7 @@ from _host_paths import to_host_path
 from _infra_cfg import infra_table
 from _paths_cfg import get_paths
 from _markers_cfg import period_on_segmentation_serve_args
+from _packaging_cfg import dash_addressing_serve_args
 from _reachability import check_manifest_reachable
 from _epoch_cfg import config_epoch_utc
 from _timeshift_cfg import timeshift_serve_args
@@ -345,6 +346,7 @@ def start(cfg, session, outputs, extra_args=None):
         "--dvr-window-seconds", _dvr_window_seconds(cfg),
         *_continuous_timeline_args(cfg),
         *period_on_segmentation_serve_args(cfg),
+        *dash_addressing_serve_args(cfg),
         *timeshift_serve_args(cfg),
     ]
     print(f"==> Starting container {name} (port {port}, epoch {epoch}) ...")
@@ -404,6 +406,7 @@ def refresh(cfg, session, outputs):
         "--dvr-window-seconds", _dvr_window_seconds(cfg),
         *_continuous_timeline_args(cfg),
         *period_on_segmentation_serve_args(cfg),
+        *dash_addressing_serve_args(cfg),
         *timeshift_serve_args(cfg),
     ]
     result = subprocess.run(run_args)

@@ -55,6 +55,7 @@ export const CONFIG_FIELD_LABEL = {
   epoch_utc: 'Channel epoch (UTC)',
   hls_format: 'HLS segment format',
   hls_ts_mux_audio: 'Mux audio into each HLS TS video segment',
+  dash_addressing: 'DASH segment addressing',
   port: 'Serve port',
   cpu: 'Express CPU units',
   memory: 'Express memory (MB)',
@@ -181,6 +182,7 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
       ['dvr_window_seconds', packaging.dvr_window_seconds],
       ['hls_format', packaging.hls_format],
       ['hls_ts_mux_audio', packaging.hls_format === 'ts' ? packaging.hls_ts_mux_audio : undefined],
+      ['dash_addressing', packaging.dash_addressing ?? 'number'],
     ])
     // A channel written before [timeshift] existed gets its-a-live's
     // defaults (enabled) -- show those rather than hiding the section.

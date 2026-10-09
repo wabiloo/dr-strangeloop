@@ -82,7 +82,7 @@ grave-robber segment-list `manifest.json`. Notable options:
 `--allow-missing-segments`.
 
 `serve.py` notable options: `--port`, `--channel-name`,
-`--dvr-window-seconds`, `--continuous-timeline`, `--period-on-segmentation`,
+`--dvr-window-seconds`, `--continuous-timeline`, `--dash-addressing number|time`, `--period-on-segmentation`,
 `--timeshift` (+ `--timeshift-start-param`, `--timeshift-end-param`,
 `--timeshift-max-span-seconds`).
 
