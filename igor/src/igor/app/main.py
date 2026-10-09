@@ -11,6 +11,7 @@ from igor.app.routes.docs import router as docs_router
 from igor.app.routes.files import router as files_router
 from igor.app.routes.jobs import router as jobs_router
 from igor.app.routes.manifests import router as manifests_router
+from igor.app.routes.playback import router as playback_router
 from igor.app.routes.playlists import router as playlists_router
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]  # igor/
@@ -33,6 +34,7 @@ app.include_router(archives_router, prefix="/api/v1/archives", tags=["archives"]
 app.include_router(manifests_router, prefix="/api/v1/manifests", tags=["manifests"])
 app.include_router(channels_router, prefix="/api/v1/channels", tags=["channels"])
 app.include_router(jobs_router, prefix="/api/v1/jobs", tags=["jobs"])
+app.include_router(playback_router, prefix="/api/v1/playback-test", tags=["playback-test"])
 app.include_router(files_router, prefix="/api/v1/files", tags=["files"])
 app.include_router(docs_router, prefix="/api/v1/docs", tags=["docs"])
 

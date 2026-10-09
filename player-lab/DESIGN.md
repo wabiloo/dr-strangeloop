@@ -1,6 +1,6 @@
 # player-lab — design
 
-Status: proposal, not built. Reviewed in conversation 2026-10-09.
+Status: phase 1 implemented (see `AGENTS.md` for usage); phase 2 headless mode implemented (Igor **Playback test** panel); in-browser mode and phases 3-4 are proposals. Reviewed in conversation 2026-10-09.
 
 ## Purpose
 

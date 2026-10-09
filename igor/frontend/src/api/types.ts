@@ -563,3 +563,73 @@ export interface DocPage {
   path: string
   markdown: string
 }
+
+// ---------------------------------------------------------------------------
+// Playback test (player-lab)
+// ---------------------------------------------------------------------------
+
+export interface PlaybackInfo {
+  players: Record<string, string[]>
+  default_players: string[]
+  sdks_installed: boolean
+  npm: boolean
+  chrome: boolean
+  ffmpeg: boolean
+}
+
+export interface PlaybackTestPayload {
+  players?: string[]
+  formats?: ('hls' | 'dash')[]
+  boundaries?: number
+  duration_s?: number
+  max_seconds?: number
+  ffmpeg_s?: number | null
+}
+
+export interface PlaybackRunSummary {
+  run_id: string
+  generated_at: string | null
+  duration_s: number | null
+  passed: boolean
+  cases: number
+  failed_cases: number
+  players: string[]
+}
+
+export interface PlaybackRuns {
+  runs: PlaybackRunSummary[]
+  active: (Job & { run_id: string | null }) | null
+}
+
+export interface PlaybackCase {
+  player: string
+  format: 'hls' | 'dash'
+  version?: string
+  startedAfterS: number | null
+  stallCount: number
+  stallSeconds: number
+  longestStallS?: number
+  fatalErrors: number
+  errors?: { message?: string }[]
+  periodTransitions: number | null
+  crossed: number | null
+  maxBufferAheadS?: number
+  droppedFrames?: number
+  totalFrames?: number
+  failures: string[]
+  warnings?: string[]
+  pass: boolean
+  screenshot?: string
+  trace?: [number, number, number][]
+  network?: { manifestRequests: number; manifestGapMeanS: number | null; httpErrors: number }
+}
+
+export interface PlaybackReport {
+  generatedAt: string
+  durationS: number
+  pass: boolean
+  target: { name: string; hls: string | null; dash: string | null; timeline: string | null }
+  boundaries: { requested: number; source: string; newPeriods: number | null; newDiscontinuities: number | null }
+  cases: PlaybackCase[]
+  ffmpeg?: { url: string; pass?: boolean; skipped?: string; problems?: string[]; exitCode?: number }[]
+}

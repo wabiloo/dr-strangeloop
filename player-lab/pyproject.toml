@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "player-lab"
+version = "0.1.0"
+description = "Play a channel in several real players and report stalls, errors and Period/discontinuity counts"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.50",
+]
+
+[project.scripts]
+player-lab = "player_lab.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["player_lab"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -16,6 +16,7 @@ import BackendBadge from '../components/BackendBadge.vue'
 import ItsAliveBanner from '../components/ItsAliveBanner.vue'
 import JobPanel from '../components/JobPanel.vue'
 import PlaybackPanel from '../components/PlaybackPanel.vue'
+import PlaybackTestPanel from '../components/PlaybackTestPanel.vue'
 import EpochFields from '../components/EpochFields.vue'
 import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
@@ -890,6 +891,8 @@ watch(() => props.name, reload)
     />
 
     <WindowPanel v-if="windowAvailable" :name="name" :query="windowQuery" />
+
+    <PlaybackTestPanel v-if="showPlayback" :name="name" :has-timeline="windowAvailable" />
 
     <div class="channel-detail-layout">
       <div class="flex flex-column gap-4 p-3 border-round surface-card channel-actions" style="border: 1px solid var(--surface-border)">

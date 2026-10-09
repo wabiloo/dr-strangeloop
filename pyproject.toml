@@ -12,4 +12,5 @@ members = [
     "igor",
     "scte35-table23",
     "grave-robber",
+    "player-lab",
 ]

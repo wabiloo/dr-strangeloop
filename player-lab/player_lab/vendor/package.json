@@ -1,0 +1,11 @@
+{
+  "name": "player-lab-vendor",
+  "private": true,
+  "description": "Player SDKs served to the harness page. Installed by `player-lab setup` into the cache dir, never committed.",
+  "dependencies": {
+    "dashjs": "^5.2.1",
+    "hls.js": "^1.6.0",
+    "shaka-player": "^5.2.0",
+    "video.js": "^8.23.0"
+  }
+}
