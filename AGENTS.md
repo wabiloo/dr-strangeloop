@@ -23,6 +23,7 @@ names or CLI flags from this file alone.
 | 3. Deploy + run in AWS | `its-a-live/` | [`its-a-live/AGENTS.md`](./its-a-live/AGENTS.md), [`its-a-live/AGENT_BRIEF.md`](./its-a-live/AGENT_BRIEF.md) |
 | (3a) Self-hosted backend internals | `loop-dee-loop/` | [`loop-dee-loop/AGENTS.md`](./loop-dee-loop/AGENTS.md) |
 | Inspect/verify a built `.ts` | `inspector-krogh/` (`frame-extractor` CLI: every frame + GOP/I-P-B timeline; `krogh` CLI: scans the file's *actual* SCTE-35 markers, independent of franken-ts, optionally compared against `markers.json`) | [`inspector-krogh/README.md`](./inspector-krogh/README.md) |
+| Validate playback of a running channel in several players (hls.js, dash.js, Shaka, Video.js): startup, stalls, errors, Period/discontinuity counts vs `/timeline.json` | `player-lab/` (`player-lab run --channel <name>`) | [`player-lab/AGENTS.md`](./player-lab/AGENTS.md), [`player-lab/DESIGN.md`](./player-lab/DESIGN.md) |
 | (alt. source) Derive a loop from a captured HAR/Proxyman session, or from a VOD HLS/DASH manifest URL (`ingest-url`, multi-rendition ladder), instead of authoring one | `grave-robber/` (feeds `loop-dee-loop`'s sparse segment-list `bake.py` mode, not `franken-ts`) | [`grave-robber/AGENTS.md`](./grave-robber/AGENTS.md) |
 | Startover / catchup (past-range playback via `?start=&end=` on the normal manifest URLs) | `loop-dee-loop/` (`serve.py --timeshift`; on by default via `[timeshift]` in the its-a-live TOML) | [`loop-dee-loop/README.md`](./loop-dee-loop/README.md) "Startover & catchup", `loop-dee-loop/SCOPE.md` §13 |
 | Web UI over all of the above (playlists, archive imports, VOD manifest imports, channels); its **Docs** menu browses all the documentation and API docs | `igor/` | [`igor/AGENTS.md`](./igor/AGENTS.md) |
@@ -92,7 +93,7 @@ rename or move a table/key in one place only -- see
 ## Environments
 
 - Repo-root `.venv` (`uv sync --all-packages`): `franken-ts`,
-  `inspector-krogh`, `loop-dee-loop`, `grave-robber`.
+  `inspector-krogh`, `loop-dee-loop`, `grave-robber`, `player-lab`.
 - `its-a-live/` manages its **own separate** venv (`aws-cdk-lib`/`boto3`
   don't need to resolve alongside media tooling): `cd its-a-live && uv
   sync` once, then `uv run --project its-a-live ...` from the repo root.

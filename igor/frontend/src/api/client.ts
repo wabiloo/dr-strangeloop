@@ -19,6 +19,10 @@ import type {
   Job,
   MarkersNumberingPreview,
   MarkersPreview,
+  PlaybackInfo,
+  PlaybackReport,
+  PlaybackRuns,
+  PlaybackTestPayload,
   PlaylistListItem,
   ProbeResult,
   ScheduleWindow,
@@ -449,4 +453,53 @@ export async function listDocs(): Promise<DocSection[]> {
 
 export async function getDocPage(slug: string): Promise<DocPage> {
   return getJson(`${DOCS_BASE}/pages/${encodeURIComponent(slug)}`)
+}
+
+// ---------------------------------------------------------------------------
+// Playback test (player-lab)
+// ---------------------------------------------------------------------------
+
+const PLAYBACK_BASE = '/api/v1/playback-test'
+
+export function getPlaybackInfo(): Promise<PlaybackInfo> {
+  return getJson(`${PLAYBACK_BASE}/info`)
+}
+
+export function setupPlayback(): Promise<Job> {
+  return postJson(`${PLAYBACK_BASE}/setup`)
+}
+
+export function listPlaybackTests(name: string): Promise<PlaybackRuns> {
+  return getJson(`${PLAYBACK_BASE}/channels/${encodeURIComponent(name)}`)
+}
+
+export function startPlaybackTest(name: string, payload: PlaybackTestPayload): Promise<Job & { run_id: string }> {
+  return postJson(`${PLAYBACK_BASE}/channels/${encodeURIComponent(name)}`, payload)
+}
+
+export function getPlaybackReport(name: string, runId: string): Promise<PlaybackReport> {
+  return getJson(`${PLAYBACK_BASE}/channels/${encodeURIComponent(name)}/${encodeURIComponent(runId)}`)
+}
+
+export function playbackScreenshotUrl(name: string, runId: string, file: string): string {
+  return `${PLAYBACK_BASE}/channels/${encodeURIComponent(name)}/${encodeURIComponent(runId)}/${encodeURIComponent(file)}`
+}
+
+/** The in-browser driver page (served same-origin by Igor) for one run. */
+export function playbackBrowserRunUrl(
+  name: string,
+  opts: { channel?: string; cases: string[]; hls?: string | null; dash?: string | null; withTimeline: boolean; boundaries: number; durationS: number; skipped?: string[] },
+): string {
+  const q = new URLSearchParams({
+    channel: opts.channel ?? name,
+    cases: opts.cases.join(','),
+    post: `${PLAYBACK_BASE}/channels/${encodeURIComponent(name)}/browser-results`,
+    boundaries: String(opts.boundaries),
+    duration: String(opts.durationS),
+  })
+  if (opts.skipped?.length) q.set('skipped', opts.skipped.join(','))
+  if (opts.hls) q.set('hls', opts.hls)
+  if (opts.dash) q.set('dash', opts.dash)
+  if (opts.withTimeline) q.set('timeline', `${CHANNELS_BASE}/${encodeURIComponent(name)}/timeline`)
+  return `${PLAYBACK_BASE}/harness/browser.html?${q}`
 }
