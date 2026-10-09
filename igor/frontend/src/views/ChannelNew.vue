@@ -144,6 +144,7 @@ const form = reactive<ChannelCreatePayload>({
   epoch_utc: DEFAULT_EPOCH_UTC,
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
+  dash_addressing: 'number',
   continuous: false,
   period_on_segmentation: [],
   period_on_segmentation_apply: 'both',
@@ -237,6 +238,7 @@ async function prefillFromChannel(from: string) {
       dvr_window_seconds: Number(packaging.dvr_window_seconds ?? form.dvr_window_seconds),
       hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? form.hls_format,
       hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? form.hls_ts_mux_audio),
+      dash_addressing: (packaging.dash_addressing as ChannelCreatePayload['dash_addressing']) ?? form.dash_addressing,
       epoch_utc: String(timeline.epoch_utc ?? DEFAULT_EPOCH_UTC),
       continuous: Boolean(timeline.continuous ?? true),
       period_on_segmentation: periodTypesFromConfig(markers.period_on_segmentation),
@@ -294,6 +296,10 @@ watch(
 // either way). Only ecs-express additionally needs Fargate cpu/memory (also
 // in [infrastructure.express]).
 const usesChannelSection = computed(() => isEcsExpress.value || isLocalDocker.value)
+const dashAddressingOptions = [
+  { label: '$Number$ (segment number + startNumber)', value: 'number' },
+  { label: '$Time$ (segment start time)', value: 'time' },
+]
 const hlsFormatOptions = [
   { label: 'CMAF (fragmented MP4)', value: 'cmaf' },
   { label: 'MPEG-TS', value: 'ts' },
@@ -549,6 +555,10 @@ async function submit() {
         <div v-if="form.hls_format === 'ts'" class="col-12 flex align-items-center gap-2">
           <Checkbox v-model="form.hls_ts_mux_audio" binary input-id="hls-ts-mux-audio" />
           <label for="hls-ts-mux-audio">{{ L.hls_ts_mux_audio }}</label>
+        </div>
+        <div class="col-12 flex flex-column gap-1">
+          <label for="dash-addressing">{{ L.dash_addressing }}</label>
+          <Select id="dash-addressing" v-model="form.dash_addressing" :options="dashAddressingOptions" option-label="label" option-value="value" />
         </div>
       </div>
 

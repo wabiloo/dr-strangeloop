@@ -106,6 +106,7 @@ segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
 hls_format = "{hls_format}"
 hls_ts_mux_audio = {hls_ts_mux_audio}
+dash_addressing = "{dash_addressing}"
 
 [timeline]
 epoch_utc = "{epoch_utc}"
@@ -124,6 +125,7 @@ segment_duration   = {segment_duration}
 dvr_window_seconds = {dvr_window_seconds}
 hls_format = "{hls_format}"
 hls_ts_mux_audio = {hls_ts_mux_audio}
+dash_addressing = "{dash_addressing}"
 
 [timeline]
 epoch_utc = "{epoch_utc}"
@@ -156,6 +158,7 @@ def generate_toml(
     epoch_utc: str = DEFAULT_EPOCH_UTC,
     hls_format: str = "cmaf",
     hls_ts_mux_audio: bool = True,
+    dash_addressing: str = "number",
     continuous: bool = False,
     period_on_segmentation: list[str] | None = None,
     period_on_segmentation_apply: str = "both",
@@ -184,6 +187,8 @@ def generate_toml(
     validate_epoch_utc(epoch_utc)
     if hls_format not in ("cmaf", "ts"):
         raise ValueError("hls_format must be 'cmaf' or 'ts'")
+    if dash_addressing not in ("number", "time"):
+        raise ValueError("dash_addressing must be 'number' or 'time'")
     if source_kind not in ("playlist", "archive", "manifest"):
         raise ValueError("source_kind must be 'playlist', 'archive' or 'manifest'")
     if dash_signal_format not in ("binary", "xml"):
@@ -230,6 +235,7 @@ def generate_toml(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
+            dash_addressing=dash_addressing,
             continuous=str(continuous).lower(),
             port=int(port), cpu=cpu, memory=memory,
             cdn=str(cdn).lower(),
@@ -251,6 +257,7 @@ def generate_toml(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
+            dash_addressing=dash_addressing,
             continuous=str(continuous).lower(),
             port=_format_local_docker_port(port),
         )

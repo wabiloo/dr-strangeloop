@@ -33,6 +33,27 @@ def test_channel_continuous_roundtrip(backend, continuous):
     assert config["timeline"]["continuous"] is continuous
 
 
+@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("dash_addressing", ["number", "time"])
+def test_channel_dash_addressing_roundtrip(backend, dash_addressing):
+    payload = ChannelCreatePayload(
+        name="test-channel", backend=backend, region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+        dash_addressing=dash_addressing,
+    )
+    config = tomllib.loads(generate_toml(**payload.model_dump()))
+    assert config["packaging"]["dash_addressing"] == dash_addressing
+
+
+def test_invalid_dash_addressing_rejected():
+    with pytest.raises(ValueError, match="dash_addressing"):
+        ChannelCreatePayload(
+            name="test-channel", backend="ecs-express", region="eu-west-1",
+            bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+            dash_addressing="bogus",
+        )
+
+
 def test_channel_continuous_defaults_false():
     payload = ChannelCreatePayload(
         name="test-channel", backend="ecs-express", region="eu-west-1",

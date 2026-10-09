@@ -120,6 +120,7 @@ const editForm = reactive<ChannelCreatePayload>({
   epoch_utc: DEFAULT_EPOCH_UTC,
   hls_format: 'cmaf',
   hls_ts_mux_audio: true,
+  dash_addressing: 'number',
   continuous: false,
   period_on_segmentation: [],
   period_on_segmentation_apply: 'both',
@@ -142,6 +143,10 @@ const editIsEcsExpress = computed(() => editForm.backend === 'ecs-express')
 const editIsLocalDocker = computed(() => editForm.backend === 'local-docker')
 const editUsesChannelSection = computed(() => editIsEcsExpress.value || editIsLocalDocker.value)
 const editIsArchiveSource = computed(() => editForm.source_kind === 'archive' || editForm.source_kind === 'manifest')
+const dashAddressingOptions = [
+  { label: '$Number$ (segment number + startNumber)', value: 'number' },
+  { label: '$Time$ (segment start time)', value: 'time' },
+]
 const hlsFormatOptions = [
   { label: 'CMAF (fragmented MP4)', value: 'cmaf' },
   { label: 'MPEG-TS', value: 'ts' },
@@ -231,6 +236,7 @@ function startEdit() {
     epoch_utc: String(timeline.epoch_utc ?? DEFAULT_EPOCH_UTC),
     hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
     hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
+    dash_addressing: (packaging.dash_addressing as ChannelCreatePayload['dash_addressing']) ?? 'number',
     continuous: Boolean(timeline.continuous ?? true),
     period_on_segmentation: periodTypesFromConfig(markers.period_on_segmentation),
     period_on_segmentation_apply:
@@ -1222,6 +1228,10 @@ watch(() => props.name, reload)
                 <div v-if="editForm.hls_format === 'ts'" class="flex align-items-center gap-2 config-field-wide">
                   <Checkbox v-model="editForm.hls_ts_mux_audio" binary input-id="edit-hls-ts-mux-audio" />
                   <label for="edit-hls-ts-mux-audio" class="text-xs text-color-secondary">{{ L.hls_ts_mux_audio }}</label>
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <label class="text-xs text-color-secondary">{{ L.dash_addressing }}</label>
+                  <Select v-model="editForm.dash_addressing" :options="dashAddressingOptions" option-label="label" option-value="value" fluid />
                 </div>
               </div>
             </section>

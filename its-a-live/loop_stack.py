@@ -16,6 +16,7 @@ from _host_paths import to_host_path
 from _epoch_cfg import config_epoch_utc
 from _infra_cfg import infra_table
 from _markers_cfg import period_on_segmentation_serve_args
+from _packaging_cfg import dash_addressing_serve_args
 from _timeshift_cfg import timeshift_param_names, timeshift_serve_args
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
@@ -216,6 +217,7 @@ class LoopStack(Stack):
                     "--channel-name", config.get("deploy", {}).get("name", "default"),
                     *(["--continuous-timeline"] if continuous else []),
                     *period_on_segmentation_serve_args(config),
+                    *dash_addressing_serve_args(config),
                     *timeshift_serve_args(config),
                 ],
                 environment=[

@@ -489,6 +489,8 @@ export interface ChannelCreatePayload {
   epoch_utc?: string
   hls_format?: 'cmaf' | 'ts'
   hls_ts_mux_audio?: boolean
+  /** [packaging].dash_addressing -- DASH SegmentTemplate `$Number$` (default) or `$Time$`. */
+  dash_addressing?: 'number' | 'time'
   /** loop-dee-loop/SCOPE.md §12: default true -- no #EXT-X-DISCONTINUITY /
    * DASH Period restart at the loop wrap (serve.py rewrites each segment's
    * own timestamps per request instead). ecs-express/local-docker only. */

@@ -73,6 +73,7 @@ segment_duration = 4.0
 dvr_window_seconds = 30
 hls_format = "cmaf"          # "cmaf" (default) | "ts"; HLS only, DASH remains CMAF
 hls_ts_mux_audio = true      # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
+dash_addressing = "number"   # "number" (default; $Number$ + startNumber) | "time" ($Time$ = each <S t>); DASH only, ecs-express/local-docker; applied on create/redeploy (serve.py flag)
 
 [timeline]                  # ecs-express/local-docker only
 epoch_utc = "2026-01-01T00:00:00Z"   # optional (this is the default) -- loop 0's start and the DASH availabilityStartTime; UTC, exactly this form. A recent epoch keeps loop numbers small. ecs-express/local-docker only; applied on create/redeploy (local-docker: redeploy/refresh), not by a plain `start`. Changing it on a running channel restarts loop numbering.

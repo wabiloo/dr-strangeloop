@@ -309,6 +309,7 @@ def compute_discontinuity_sequence(
     return loop_number * k + local_rank - (1 if 0 in boundaries else 0)
 
 
+DASH_ADDRESSING_CHOICES = ("number", "time")
 PERIOD_APPLY_CHOICES = ("both", "dash", "hls")
 
 
@@ -831,7 +832,10 @@ class Channel:
         period_on_segmentation: frozenset[int] = frozenset(),
         period_apply: str = "both",
         channel_name: str = "",
+        dash_addressing: str = "number",
     ):
+        if dash_addressing not in DASH_ADDRESSING_CHOICES:
+            raise ValueError(f"dash_addressing must be one of {DASH_ADDRESSING_CHOICES}, got {dash_addressing!r}")
         if not isinstance(epoch_ticks, int):
             raise ValueError("epoch_ticks must be int")
         if window_segments < 1:
@@ -849,6 +853,12 @@ class Channel:
         self.package = package
         self.epoch_ticks = epoch_ticks
         self.channel_name = channel_name
+        # DASH SegmentTemplate addressing: "number" ($Number$ + startNumber,
+        # the default) or "time" ($Time$ = the <S t=...> value). HLS is unaffected.
+        self.dash_addressing = dash_addressing
+        # Local index where each real asset span starts (the Period origin of
+        # the default, loop-relative timeline); $Time$ URLs name the span.
+        self.real_span_starts = sorted(package.boundaries)
         # Channel-level: segmentation_type_ids whose markers force a new
         # Period / #EXT-X-DISCONTINUITY (signal only -- timestamps stay
         # continuous across it). Resolved once to local segment indices.
@@ -983,12 +993,55 @@ class Channel:
             return self.segment_uri(hls_tpl, g, g % spl, window)
 
         def dash(g: int) -> str:
+            if self.dash_addressing == "time":
+                return self.dash_time_segment_uri(name, pkg.video_renditions[0].segment_boundary_ticks, g)
             return self.segment_uri(dash_tpl, g, g % spl, window)
 
         return {
             "hls": {"first_uri": hls(first), "last_uri": hls(last)},
             "dash": {"first_uri": dash(first), "last_uri": dash(last)},
         }
+
+    def real_span_index(self, local_index: int) -> int:
+        return bisect.bisect_right(self.real_span_starts, local_index) - 1
+
+    def dash_time_segment_uri(self, prefix: str, boundary_ticks: list[int], global_index: int) -> str:
+        """`$Time$` addressing (--dash-addressing time): the segment URI whose
+        trailing number is the segment's `<S t=...>` value. Continuity:
+        `<prefix>/cseg/t/<t>` with t absolute (`loop*D + start`). Default
+        mode: `<prefix>/seg/t/<real span>/<t>` with t relative to that span's
+        start, as in the Period-relative timeline; the span is named in the
+        path because t alone repeats from one span to the next."""
+        pkg = self.package
+        loop_number, local = divmod(global_index, pkg.segments_per_loop)
+        if self.continuous:
+            t = loop_number * pkg.total_loop_duration_ticks + boundary_ticks[local]
+            return f"{prefix}/cseg/t/{t}.m4s"
+        span = self.real_span_index(local)
+        t = boundary_ticks[local] - boundary_ticks[self.real_span_starts[span]]
+        return f"{prefix}/seg/t/{span}/{t}.m4s"
+
+    def local_index_from_span_time(self, boundary_ticks: list[int], span: int, t: int) -> int | None:
+        """Inverse of the default-mode `$Time$` URI: loop-local index of the
+        segment at span-relative time `t`, or None if there is none."""
+        if not 0 <= span < len(self.real_span_starts):
+            return None
+        origin = self.real_span_starts[span]
+        target = boundary_ticks[origin] + t
+        i = bisect.bisect_left(boundary_ticks, target)
+        if i >= len(boundary_ticks) or boundary_ticks[i] != target or self.real_span_index(i) != span:
+            return None
+        return i
+
+    def global_index_from_time(self, boundary_ticks: list[int], t: int) -> int | None:
+        """Inverse of the continuity `$Time$` URI: global index of the segment
+        whose absolute start is `t`, or None."""
+        pkg = self.package
+        loop_number, rem = divmod(t, pkg.total_loop_duration_ticks)
+        i = bisect.bisect_left(boundary_ticks, rem)
+        if i >= len(boundary_ticks) or boundary_ticks[i] != rem:
+            return None
+        return loop_number * pkg.segments_per_loop + i
 
     def segment_uri(
         self, template: str, global_index: int, local_index: int, window: "TimeWindow | None"
@@ -2306,8 +2359,19 @@ class Channel:
                     f"    </Event>"
                 ))
 
+            time_addressing = self.dash_addressing == "time"
+            start_number_attr = "" if time_addressing else f' startNumber="{first_number}"'
+            audio_media = (
+                f"audio/seg/t/{real_span_index}/$Time$.m4s" if time_addressing else "audio/seg/$Number$.m4s"
+            )
+
             video_representations = []
             for idx, rendition in enumerate(pkg.video_renditions):
+                video_media = (
+                    f"{rendition.name}/seg/t/{real_span_index}/$Time$.m4s"
+                    if time_addressing
+                    else f"{rendition.name}/seg/$Number$.m4s"
+                )
                 entries = _period_entries(
                     rendition.segment_boundary_ticks, local_indices, origin_local
                 )
@@ -2326,8 +2390,8 @@ class Channel:
                     init_attr = f' initialization="{rendition.name}/init.mp4"'
 
                 video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{_dash_frame_rate(v["frame_rate"])}">
-        <SegmentTemplate media="{rendition.name}/seg/$Number$.m4s"{init_attr}
-                         timescale="{pkg.timescale}" startNumber="{first_number}"{pto_attr}>
+        <SegmentTemplate media="{video_media}"{init_attr}
+                         timescale="{pkg.timescale}"{start_number_attr}{pto_attr}>
           <SegmentTimeline>
 {timeline_lines}
           </SegmentTimeline>
@@ -2350,8 +2414,8 @@ class Channel:
                 audio_adaptation_set = f'''
     <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
       <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
-        <SegmentTemplate media="audio/seg/$Number$.m4s" initialization="{audio_init}"
-                         timescale="{pkg.timescale}" startNumber="{first_number}"{audio_pto_attr}>
+        <SegmentTemplate media="{audio_media}" initialization="{audio_init}"
+                         timescale="{pkg.timescale}"{start_number_attr}{audio_pto_attr}>
           <SegmentTimeline>
 {audio_timeline_lines}
           </SegmentTimeline>
@@ -2617,8 +2681,17 @@ class Channel:
             pto_attr = f' presentationTimeOffset="{pto}"' if pto else ""
             first_global = indices[0]
 
+            time_addressing = self.dash_addressing == "time"
+            start_number_attr = "" if time_addressing else f' startNumber="{first_global}"'
+            audio_media = "audio/cseg/t/$Time$.m4s" if time_addressing else "audio/cseg/$Number$.m4s"
+
             video_representations = []
             for idx, rendition in enumerate(pkg.video_renditions):
+                video_media = (
+                    f"{rendition.name}/cseg/t/$Time$.m4s"
+                    if time_addressing
+                    else f"{rendition.name}/cseg/$Number$.m4s"
+                )
                 timeline_lines = _segment_timeline_xml(_entries(rendition.segment_boundary_ticks, indices))
                 v = rendition.video_variant
                 # SCOPE.md §12.6: a sparse rendition may be self-initializing
@@ -2633,8 +2706,8 @@ class Channel:
                 else:
                     init_attr = f' initialization="{rendition.name}/init.mp4"'
                 video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{_dash_frame_rate(v["frame_rate"])}">
-        <SegmentTemplate media="{rendition.name}/cseg/$Number$.m4s"{init_attr}
-                         timescale="{pkg.timescale}" startNumber="{first_global}"{pto_attr}>
+        <SegmentTemplate media="{video_media}"{init_attr}
+                         timescale="{pkg.timescale}"{start_number_attr}{pto_attr}>
           <SegmentTimeline>
 {timeline_lines}
           </SegmentTimeline>
@@ -2656,8 +2729,8 @@ class Channel:
                 audio_adaptation_set = f'''
     <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
       <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
-        <SegmentTemplate media="audio/cseg/$Number$.m4s" initialization="{audio_init}"
-                         timescale="{pkg.timescale}" startNumber="{first_global}"{pto_attr}>
+        <SegmentTemplate media="{audio_media}" initialization="{audio_init}"
+                         timescale="{pkg.timescale}"{start_number_attr}{pto_attr}>
           <SegmentTimeline>
 {audio_timeline_lines}
           </SegmentTimeline>
@@ -2723,6 +2796,7 @@ def create_app(
     period_on_segmentation: frozenset[int] = frozenset(),
     period_apply: str = "both",
     channel_name: str = "",
+    dash_addressing: str = "number",
 ) -> Flask:
     ts_cfg = timeshift or TimeshiftConfig()
     package = LoopPackage(package_dir)
@@ -2734,6 +2808,7 @@ def create_app(
         period_on_segmentation=period_on_segmentation,
         period_apply=period_apply,
         channel_name=channel_name,
+        dash_addressing=dash_addressing,
     )
     process_start_ticks = channel.now_ticks()
 
@@ -2951,6 +3026,31 @@ def create_app(
 
     _SEG_DEFAULTS = {"mode": "local", "origin_loop": None}
 
+    def _time_index(boundary_ticks: list[int], t: int, span: int | None) -> int:
+        """Segment index named by a `$Time$` URL (--dash-addressing time): the
+        loop-local one for `/seg/t/<span>/<t>`, the global one for
+        `/cseg/t/<t>`. 404 when no segment of this track starts at `t`."""
+        if span is None:
+            try:
+                ch = channel.for_mode(True)
+            except TimeshiftError:
+                abort(404)
+            index = ch.global_index_from_time(boundary_ticks, t)
+        else:
+            index = channel.local_index_from_span_time(boundary_ticks, span, t)
+        if index is None:
+            abort(404)
+        return index
+
+    @app.get("/<rendition_name>/seg/t/<int:span>/<int:time>.m4s", defaults={"mode": "local", "origin_loop": None})
+    @app.get("/<rendition_name>/cseg/t/<int:time>.m4s", defaults={"mode": "global", "origin_loop": None, "span": None})
+    def segment_by_time(rendition_name: str, time: int, span: int | None, mode: str, origin_loop: int | None):
+        try:
+            ticks = package.rendition_by_name(rendition_name).segment_boundary_ticks
+        except KeyError:
+            abort(404)
+        return segment(rendition_name, _time_index(ticks, time, span), mode, origin_loop)
+
     @app.get("/<rendition_name>/seg/<int:physical_index>.m4s", defaults=_SEG_DEFAULTS)
     @app.get("/<rendition_name>/cseg/<int:physical_index>.m4s", defaults={"mode": "global", "origin_loop": None})
     def segment(rendition_name: str, physical_index: int, mode: str, origin_loop: int | None):
@@ -3002,6 +3102,12 @@ def create_app(
             if path is None:
                 abort(404)
             return send_file(path)
+
+        @app.get("/audio/seg/t/<int:span>/<int:time>.m4s", defaults={"mode": "local", "origin_loop": None})
+        @app.get("/audio/cseg/t/<int:time>.m4s", defaults={"mode": "global", "origin_loop": None, "span": None})
+        def audio_segment_by_time(time: int, span: int | None, mode: str, origin_loop: int | None):
+            ticks = package.audio_rendition.audio_segment_boundary_ticks
+            return audio_segment(_time_index(ticks, time, span), mode, origin_loop)
 
         @app.get("/audio/seg/<int:physical_index>.m4s", defaults=_SEG_DEFAULTS)
         @app.get("/audio/cseg/<int:physical_index>.m4s", defaults={"mode": "global", "origin_loop": None})
@@ -3127,6 +3233,13 @@ def main() -> int:
         "(Periods only), hls (discontinuities only) or both (default).",
     )
     parser.add_argument(
+        "--dash-addressing",
+        choices=DASH_ADDRESSING_CHOICES,
+        default="number",
+        help="DASH SegmentTemplate addressing: number ($Number$ + startNumber, "
+        "default) or time ($Time$ = each <S t=...>). HLS is unaffected.",
+    )
+    parser.add_argument(
         "--timeshift",
         action="store_true",
         help="SCOPE.md §13: enable startover/catchup via query parameters on "
@@ -3169,6 +3282,7 @@ def main() -> int:
         period_on_segmentation=parse_segmentation_type_ids(args.period_on_segmentation),
         period_apply=args.period_on_segmentation_apply,
         channel_name=args.channel_name,
+        dash_addressing=args.dash_addressing,
         timeshift=TimeshiftConfig(
             enabled=args.timeshift,
             start_param=args.timeshift_start_param,
