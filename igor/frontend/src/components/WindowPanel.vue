@@ -330,10 +330,9 @@ const assetRows = computed(() =>
 const discontinuityRows = computed(() =>
   merged((d) => d.discontinuities, (x) => String(x.segment), (x) => x.utc)
     .filter((x) => inView(x.utc, null))
-    .map((d) => ({ d, style: at(d.utc), flip: pct(d.utc) > 85 })),
+    .map((d) => ({ d, style: at(d.utc) })),
 )
 
-const crowdedDiscontinuities = computed(() => discontinuityRows.value.length > 12)
 
 const eventIdDec = (hex: string) => {
   const n = parseInt(hex, 16)
@@ -563,10 +562,9 @@ function isSelected(data: unknown): boolean {
               class="wp-disc"
               :class="{ 'wp-selected': isSelected(r.d) }"
               :style="r.style"
-              :title="`${r.d.reason}\nsegment ${r.d.segment}, sequence ${r.d.sequence}\n${hms(r.d.utc)}`"
+              :title="`segment ${r.d.segment}, sequence ${r.d.sequence}\n${hms(r.d.utc)}`"
               @click="select('Discontinuity', r.d.reason, r.d)"
             >
-              <span v-if="!crowdedDiscontinuities" class="wp-disc-label" :class="{ 'wp-flip': r.flip }">{{ r.d.reason.replace('_', ' ') }}</span>
             </div>
           </div>
 
@@ -685,7 +683,7 @@ function isSelected(data: unknown): boolean {
   position: absolute;
   top: 22px;
   bottom: 0;
-  border-left: 2px solid rgba(100, 116, 139, 0.75);
+  border-left: 2px dashed rgba(100, 116, 139, 0.75);
 }
 .wp-loop {
   background: transparent;
@@ -712,8 +710,8 @@ function isSelected(data: unknown): boolean {
   top: 22px;
   bottom: 0;
   background: rgba(99, 102, 241, 0.14);
-  border-left: 1px solid rgba(99, 102, 241, 0.7);
-  border-right: 1px solid rgba(99, 102, 241, 0.7);
+  border-left: 1px dashed rgba(99, 102, 241, 0.7);
+  border-right: 1px dashed rgba(99, 102, 241, 0.7);
 }
 .wp-window-label {
   position: absolute;
@@ -816,12 +814,18 @@ function isSelected(data: unknown): boolean {
 .wp-period {
   background: #3b82f6;
 }
-.wp-asset {
-  background: var(--teal-600, #0d9488);
-}
-.wp-period.wp-alt,
-.wp-asset.wp-alt {
+.wp-period.wp-alt {
   filter: brightness(1.2);
+}
+/* Alternating slate shades, like franken-ts's loop-bar OSD (lighter dark shade here). */
+.wp-asset {
+  background: #64748b;
+}
+.wp-asset.wp-alt {
+  background: #94a3b8;
+}
+.wp-asset.wp-alt .wp-text {
+  color: #0f172a;
 }
 .wp-marker {
   background: var(--lane);
@@ -855,18 +859,6 @@ function isSelected(data: unknown): boolean {
   background: #d97706;
   cursor: pointer;
   overflow: visible;
-}
-.wp-disc-label {
-  position: absolute;
-  top: 3px;
-  left: 4px;
-  font-size: 0.65rem;
-  white-space: nowrap;
-  color: #d97706;
-}
-.wp-flip {
-  left: auto;
-  right: 4px;
 }
 .wp-detail {
   max-height: 16rem;
