@@ -40,8 +40,10 @@ continuous). All pass the XSD except the negative-`presentationTime` case (#2).
    segment is only available once complete.
 4. **Per-loop mode lists only the HLS-style trailing window** (last N
    segments, kept segments' numbers/`t`/`Period@start` stable between
-   refreshes). Verified with dash.js and Shaka (`player-lab/`); an earlier
-   belief that players need the whole open Period was wrong.
+   refreshes). Tested 2026-10 with dash.js 5.2.1 and Shaka 5.2.12 in Chrome
+   (70 s and 655 s loops, several Periods per loop, across wraps); an earlier
+   belief that players need the whole open Period was wrong. Renumbering or
+   rebasing kept segments between refreshes is what breaks them.
 5. **Namespace for `urn:scte:scte35:2014:xml+bin`.** We emit
    `urn:scte:scte35:2013:xml`; AWS's xml+bin example uses
    `http://www.scte.org/schemas/35/2016`, threefive uses

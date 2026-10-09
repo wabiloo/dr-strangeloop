@@ -1996,7 +1996,8 @@ class Channel:
         (`window_range`). The open Period is front-trimmed like any live
         window: dropping old segments is fine for players as long as the
         kept segments keep their number, `t` and the Period's `start`
-        (verified in dash.js and Shaka, see player-lab/).
+        (tested 2026-10 with dash.js 5.2.1 and Shaka 5.2.12; both break
+        when those change between refreshes).
         """
         if self.continuous:
             return self._build_dash_manifest_continuous(window_segments, window)
@@ -2025,8 +2026,8 @@ class Channel:
         # One Period per (loop, span) run over the window's segments. Same rule
         # live and time-shifted: the open Period is front-trimmed like any
         # sliding live window, with every kept segment's number, `t` and the
-        # Period's `start` unchanged. dash.js and Shaka accept that (see
-        # player-lab/); they only break when those change between refreshes.
+        # Period's `start` unchanged. dash.js and Shaka accept that; they only
+        # break when those change between refreshes.
         periods_plan = [
             (loop, span, s, list(range(g_first - loop * pkg.segments_per_loop, g_last - loop * pkg.segments_per_loop + 1)))
             for loop, span, s, _e, g_first, g_last in self.dash_periodic_groups(win.first, win.last)
