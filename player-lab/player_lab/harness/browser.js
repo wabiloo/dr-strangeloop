@@ -49,7 +49,7 @@ const dot = document.getElementById('dot');
 const banner = document.getElementById('banner');
 const setBanner = (text, kind) => { banner.className = `banner ${kind || ''}`; banner.textContent = text; };
 setBanner('Keep this tab in the foreground while the test runs: browsers throttle background tabs, which would show up as stalls. Closing it discards the run.');
-document.title = `Playback test${channel ? ` · ${channel}` : ''}`;
+document.title = `Playback Lab${channel ? ` · ${channel}` : ''}`;
 
 const chip = (icon, label, fixed) => {
   const c = el('span', 'playhead-chip');
