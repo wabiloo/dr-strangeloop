@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { channelDocsUrl, getChannelTimeline } from '../api/client'
 import type { ChannelTimeline } from '../api/types'
 import FieldHelp from './FieldHelp.vue'
+import JsonViewer from './JsonViewer.vue'
 import { colorForLaneKey, laneKeyForMarker, laneLabelForMarker } from '../segmentationPresets'
 
 const props = defineProps<{
@@ -618,11 +619,11 @@ function isSelected(data: unknown): boolean {
 
         <div v-if="selected" class="wp-detail surface-100 border-round p-2">
           <div class="text-xs text-color-secondary mb-1">{{ selected.kind }} · {{ selected.label }}</div>
-          <pre class="m-0 text-xs wp-pre">{{ JSON.stringify(selected.data, null, 2) }}</pre>
+          <JsonViewer :value="selected.data" />
         </div>
         <div v-else class="text-xs text-color-secondary text-right">Click an item for its details.</div>
 
-        <pre v-if="showRaw" class="wp-detail surface-100 border-round p-2 m-0 text-xs wp-pre">{{ JSON.stringify(doc, null, 2) }}</pre>
+        <JsonViewer v-if="showRaw" :value="doc" max-height="24rem" />
       </template>
     </template>
   </div>
@@ -859,13 +860,5 @@ function isSelected(data: unknown): boolean {
   background: #d97706;
   cursor: pointer;
   overflow: visible;
-}
-.wp-detail {
-  max-height: 16rem;
-  overflow: auto;
-}
-.wp-pre {
-  white-space: pre-wrap;
-  word-break: break-all;
 }
 </style>
