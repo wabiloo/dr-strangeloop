@@ -56,6 +56,7 @@ from timeshift import (
     resolve_window,
 )
 from loop_math import (
+    LoopPosition,
     compute_loop_position,
     global_segment_number,
     program_date_time_ticks,
@@ -152,6 +153,17 @@ _DOCS_HTML = """<!doctype html>
 <body><redoc spec-url="openapi.yaml"></redoc>
 <script src="https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js"></script></body></html>
 """
+
+
+@dataclasses.dataclass(frozen=True)
+class WindowRange:
+    """Global segment range of a manifest window (see Channel.window_range)."""
+
+    first: int
+    last: int
+    live_edge: int
+    ended: bool
+    position: LoopPosition
 
 
 def _segment_range(first: int, last: int) -> dict:
@@ -1016,6 +1028,149 @@ class Channel:
             self.now_ticks(), self.epoch_ticks, self.package.total_loop_duration_ticks
         )
 
+    # ── shared timeline plan ────────────────────────────────────────────────
+    # Pure helpers used by the HLS/DASH manifest builders AND build_window_json,
+    # so the two views cannot disagree about where the window is, where a
+    # segment starts, which segments are discontinuities, or which segment a
+    # marker is signaled on.
+
+    def window_range(
+        self, window: "TimeWindow | None" = None, window_segments: int | None = None, now: int | None = None
+    ) -> WindowRange:
+        """The window's global segment range. Live: the last `window_segments`
+        up to the live edge (the segment containing "now"; clamped to 0 in the
+        first moments after start). Time-shifted: the resolved range."""
+        pkg = self.package
+        position = compute_loop_position(
+            self.now_ticks() if now is None else now, self.epoch_ticks, pkg.total_loop_duration_ticks
+        )
+        live_edge = global_segment_number(
+            position.loop_number,
+            segment_index_for_position(position.position_in_loop_ticks, pkg.segment_boundary_ticks),
+            pkg.segments_per_loop,
+        )
+        if window is not None:
+            return WindowRange(window.first_global, window.last_global, live_edge, window.ended, position)
+        count = window_segments or self.window_segments
+        return WindowRange(max(0, live_edge - count + 1), live_edge, live_edge, False, position)
+
+    def ref_segment_bounds(self, local_index: int) -> tuple[int, int]:
+        """Loop-relative [start, end) ticks of a segment on the reference
+        rendition's timeline -- the ad-decision authority for markers/assets."""
+        boundaries = self.package.segment_boundary_ticks
+        end = boundaries[local_index + 1] if local_index + 1 < len(boundaries) else self.package.total_loop_duration_ticks
+        return boundaries[local_index], end
+
+    def loop_tick(self, loop_number: int, local_ticks: int) -> int:
+        """Absolute (PROGRAM-DATE-TIME / Period@start frame) tick of a
+        loop-relative position: the loop's start plus the declared asset-gap
+        offset of the segment containing it."""
+        pkg = self.package
+        index = segment_index_for_position(local_ticks, pkg.segment_boundary_ticks)
+        return program_date_time_ticks(
+            loop_number,
+            local_ticks + pkg.declared_offset_ticks_by_local_index[index],
+            pkg.total_loop_duration_ticks,
+            self.epoch_ticks,
+        )
+
+    def segment_start_ticks(self, global_index: int, boundary_ticks: list[int] | None = None) -> int:
+        """Absolute declared start tick of a segment (its EXT-X-PROGRAM-DATE-TIME),
+        on `boundary_ticks`' timeline (default: the reference rendition's)."""
+        pkg = self.package
+        loop_number, local_index = divmod(global_index, pkg.segments_per_loop)
+        start = (boundary_ticks or pkg.segment_boundary_ticks)[local_index]
+        return program_date_time_ticks(
+            loop_number,
+            start + pkg.declared_offset_ticks_by_local_index[local_index],
+            pkg.total_loop_duration_ticks,
+            self.epoch_ticks,
+        )
+
+    def marker_anchors(self, first: int, last: int) -> dict[int, list[dict]]:
+        """Markers signaled on each global segment of [first, last].
+
+        A marker (one occurrence per loop) is described ONCE per response, on
+        the earliest in-range segment its active interval overlaps (see
+        `_marker_covers_segment`). Anchors therefore move forward as older
+        segments leave the window, and vanish with the last overlapping one.
+        Keyed per loop: the same marker recurs every loop. Segment -> markers
+        in package order; segments with nothing to signal are absent.
+        """
+        markers = self.package.markers
+        seen: set[tuple[int, str, object, int]] = set()
+        anchors: dict[int, list[dict]] = {}
+        for g in range(first, last + 1):
+            loop_number, local_index = divmod(g, self.package.segments_per_loop)
+            start, end = self.ref_segment_bounds(local_index)
+            hits = []
+            for m in markers:
+                key = (loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
+                if key not in seen and _marker_covers_segment(m, start, end):
+                    seen.add(key)
+                    hits.append(m)
+            if hits:
+                anchors[g] = hits
+        return anchors
+
+    def dash_period_id(self, loop_number: int, span_start_local: int | None = None) -> str:
+        """DASH Period@id. Periodic: `loop<N>`, or `loop<N>-<first segment>`
+        when a loop holds several Periods. Continuous: `continuous` before the
+        first forced break, then `break<global index of the break>`
+        (`dash_continuous_period_id`)."""
+        return f"loop{loop_number}" if len(self.dash_period_starts) == 1 else f"loop{loop_number}-{span_start_local}"
+
+    @staticmethod
+    def dash_continuous_period_id(brk: int | None) -> str:
+        return "continuous" if brk is None else f"break{brk}"
+
+    def dash_governing_break(self, global_index: int) -> int | None:
+        """Continuous mode: global index of the forced break that opened the
+        Period this segment belongs to (None: before the first one ever)."""
+        breaks = sorted(self.dash_signal_breaks)
+        spl = self.package.segments_per_loop
+        loop_number, local_index = divmod(global_index, spl)
+        earlier = [b for b in breaks if b <= local_index]
+        if earlier:
+            return loop_number * spl + earlier[-1]
+        if breaks and loop_number > 0:
+            return (loop_number - 1) * spl + breaks[-1]
+        return None
+
+    def dash_next_break(self, brk: int | None) -> int | None:
+        """The forced break that closes the Period opened by `brk` (None: it
+        stays open, or there are no breaks)."""
+        breaks = sorted(self.dash_signal_breaks)
+        if not breaks:
+            return None
+        if brk is None:
+            return breaks[0]
+        spl = self.package.segments_per_loop
+        loop_number, local_index = divmod(brk, spl)
+        later = [b for b in breaks if b > local_index]
+        return loop_number * spl + later[0] if later else (loop_number + 1) * spl + breaks[0]
+
+    def dash_continuous_groups(self, first: int, last: int) -> list[tuple[int | None, int, int]]:
+        """Continuous mode: (governing break, first, last global segment) per
+        DASH Period covering [first, last]."""
+        groups: list[tuple[int | None, int, int]] = []
+        for g in range(first, last + 1):
+            brk = self.dash_governing_break(g)
+            if groups and groups[-1][0] == brk:
+                groups[-1] = (brk, groups[-1][1], g)
+            else:
+                groups.append((brk, g, g))
+        return groups
+
+    def hls_discontinuities(self, first: int, last: int) -> list[int]:
+        """Global indices in (first, last] that carry an #EXT-X-DISCONTINUITY.
+        `first` never does: the header's DISCONTINUITY-SEQUENCE covers it."""
+        starts = self.hls_period_starts
+        if not starts:
+            return []
+        spl = self.package.segments_per_loop
+        return [g for g in range(first + 1, last + 1) if g % spl in starts]
+
     def _loop_label(self, loop_number: int) -> str:
         """`<n> (starts <UTC wall-clock>)` -- the loop's real start time."""
         start = program_date_time_ticks(
@@ -1027,18 +1182,7 @@ class Channel:
         """The marker's wall-clock start (ISO 8601, UTC) in the given loop,
         including any declared asset-gap offset, as DATERANGE START-DATE and
         the DASH Period start carry it."""
-        pkg = self.package
-        offset = pkg.declared_offset_ticks_by_local_index[
-            segment_index_for_position(marker["pts_time_ticks"], pkg.segment_boundary_ticks)
-        ]
-        return self._iso_ticks(
-            program_date_time_ticks(
-                loop_number,
-                marker["pts_time_ticks"] + offset,
-                pkg.total_loop_duration_ticks,
-                self.epoch_ticks,
-            )
-        )
+        return self._iso_ticks(self.loop_tick(loop_number, marker["pts_time_ticks"]))
 
     def _header_comments(self, window: "TimeWindow | None") -> list[str]:
         """Comment text (no comment syntax) for the top of a manifest: live
@@ -1073,26 +1217,21 @@ class Channel:
         if the window reaches before the previous loop. `window` still describes
         the manifest window and `range` the extent of the content.
 
-        Mirrors the window math of `_build_hls_media_playlist` rather than
-        sharing it, so the manifests stay untouched. All timing is integer
-        ticks until the final ISO/seconds conversion. Segment timing uses
-        the reference rendition's boundaries, like marker placement does.
+        Window range, segment timing, discontinuities, Period grouping/ids and
+        marker placement come from the same `Channel` helpers the HLS/DASH
+        builders use (`window_range`, `segment_start_ticks`, `loop_tick`,
+        `hls_discontinuities`, `dash_continuous_groups`, `dash_period_id`,
+        `marker_anchors`). What stays JSON-specific: a marker/asset *span*
+        (a splice_insert break also covers the time up to its IN) and the
+        loops-scope widening. All timing is integer ticks until the final
+        ISO/seconds conversion; segment timing uses the reference rendition.
         """
         pkg = self.package
         ts, D, spl = pkg.timescale, pkg.total_loop_duration_ticks, pkg.segments_per_loop
         boundary = pkg.segment_boundary_ticks
-        offsets = pkg.declared_offset_ticks_by_local_index
         now = self.now_ticks()
-        pos = compute_loop_position(now, self.epoch_ticks, D)
-        live_edge = global_segment_number(
-            pos.loop_number, segment_index_for_position(pos.position_in_loop_ticks, boundary), spl
-        )
-        if window is None:
-            last = live_edge
-            first = max(0, last - self.window_segments + 1)
-            ended = False
-        else:
-            first, last, ended = window.first_global, window.last_global, window.ended
+        win = self.window_range(window, now=now)
+        pos, live_edge, first, last, ended = win.position, win.live_edge, win.first, win.last, win.ended
         w_first, w_last = first, last
         if scope == "loops" and window is None:
             cur = live_edge // spl
@@ -1104,19 +1243,14 @@ class Channel:
         def secs(t: int) -> float:
             return round(ticks_to_wall_clock_seconds(t, ts), 3)
 
-        def seg_len(local: int) -> int:
-            return (boundary[local + 1] if local + 1 < len(boundary) else D) - boundary[local]
-
         def seg_start(g: int) -> int:
-            loop, local = divmod(g, spl)
-            return program_date_time_ticks(loop, boundary[local] + offsets[local], D, self.epoch_ticks)
+            return self.segment_start_ticks(g)
 
         def seg_end(g: int) -> int:
-            return seg_start(g) + seg_len(g % spl)
+            start, end = self.ref_segment_bounds(g % spl)
+            return seg_start(g) + end - start
 
-        def loop_tick(loop: int, local_ticks: int) -> int:
-            idx = segment_index_for_position(local_ticks, boundary)
-            return program_date_time_ticks(loop, local_ticks + offsets[idx], D, self.epoch_ticks)
+        loop_tick = self.loop_tick
 
         def seg_of(loop: int, local_ticks: int) -> int:
             return loop * spl + segment_index_for_position(local_ticks, boundary)
@@ -1130,10 +1264,8 @@ class Channel:
         hls_starts = self.hls_period_starts
         discontinuities = []
         if hls_starts:
-            for g in range(first + 1, last + 1):
+            for g in self.hls_discontinuities(first, last):
                 local = g % spl
-                if local not in hls_starts:
-                    continue
                 if local in pkg.boundaries:
                     reason = "loop_wrap" if local == 0 else "asset_boundary"
                 else:
@@ -1150,38 +1282,12 @@ class Channel:
         # --- periods (DASH view) ------------------------------------------
         periods = []
         if self.continuous:
-            breaks = sorted(self.dash_signal_breaks)
-
-            def governing(g: int) -> int | None:
-                loop, local = divmod(g, spl)
-                earlier = [b for b in breaks if b <= local]
-                if earlier:
-                    return loop * spl + earlier[-1]
-                if breaks and loop > 0:
-                    return (loop - 1) * spl + breaks[-1]
-                return None
-
-            def next_break(brk: int | None) -> int | None:
-                if not breaks:
-                    return None
-                if brk is None:
-                    return breaks[0]
-                loop, local = divmod(brk, spl)
-                later = [b for b in breaks if b > local]
-                return loop * spl + later[0] if later else (loop + 1) * spl + breaks[0]
-
-            groups: list[tuple[int | None, int, int]] = []
-            for g in range(first, last + 1):
-                brk = governing(g)
-                if groups and groups[-1][0] == brk:
-                    groups[-1] = (brk, groups[-1][1], g)
-                else:
-                    groups.append((brk, g, g))
+            groups = self.dash_continuous_groups(first, last)
             for brk, g_first, g_last in groups:
-                nxt = next_break(brk)
+                nxt = self.dash_next_break(brk)
                 periods.append(
                     {
-                        "id": "continuous" if brk is None else f"break{brk}",
+                        "id": self.dash_continuous_period_id(brk),
                         "start_utc": self._iso_ticks(seg_start(0 if brk is None else brk)),
                         "end_utc": None if nxt is None else self._iso_ticks(seg_start(nxt)),
                         "segments": _segment_range(g_first, g_last),
@@ -1197,7 +1303,7 @@ class Channel:
                         continue
                     periods.append(
                         {
-                            "id": f"loop{loop}" if len(starts) == 1 else f"loop{loop}-{s}",
+                            "id": self.dash_period_id(loop, s),
                             "start_utc": self._iso_ticks(seg_start(g_first)),
                             "end_utc": self._iso_ticks(seg_end(g_last)),
                             "segments": _segment_range(max(g_first, first), min(g_last, last)),
@@ -1465,20 +1571,11 @@ class Channel:
         marker appears at the same segment index in every rendition's
         playlist and in the audio playlist.
         """
-        window_segments = window_segments or self.window_segments
         pkg = self.package
-        if window is not None:
-            # SCOPE.md §13: explicit startover/catchup range instead of the
-            # sliding live window ending at "now".
-            media_sequence = window.last_global
-        else:
-            pos = self.current_position()
-            seg_index = segment_index_for_position(
-                pos.position_in_loop_ticks, pkg.segment_boundary_ticks
-            )
-            media_sequence = global_segment_number(
-                pos.loop_number, seg_index, pkg.segments_per_loop
-            )
+        # SCOPE.md §13: explicit startover/catchup range, else the sliding
+        # live window ending at "now".
+        win = self.window_range(window, window_segments)
+        media_sequence = win.last
 
         # Every physical segment file is reused, byte-for-byte, on every
         # loop iteration (SCOPE.md §4.1 step 6): its internal fMP4
@@ -1514,9 +1611,7 @@ class Channel:
         # process starts, when fewer than `window_segments` have "aged"
         # yet -- the window is simply smaller than requested until then,
         # same as any real live stream's startup ramp-up.
-        first_global_index = (
-            window.first_global if window is not None else max(0, media_sequence - window_segments + 1)
-        )
+        first_global_index = win.first
         # grave-robber/SCOPE.md §6.1: generalizes the original "one
         # discontinuity per loop wrap" counter (previously just
         # `first_global_index // segments_per_loop`) to also count internal
@@ -1561,31 +1656,18 @@ class Channel:
             lines.append(f'#EXT-X-MAP:URI="{init_uri}"')
 
         # An EXT-X-DATERANGE describes one point on the presentation
-        # timeline; it must appear exactly ONCE per manifest response, on
-        # whichever currently-in-window segment is the earliest one its
-        # active interval still overlaps -- NOT repeated on every segment
-        # that interval spans. As older overlapping segments age out of the
-        # window across successive polls, the tag's anchor simply moves
-        # forward to whatever is now the earliest still-present overlapping
-        # segment (same ID, byte-identical attributes, per RFC 8216
-        # 4.4.5.1) -- it disappears entirely only once the very last
-        # overlapping segment (i.e. the one containing the marker's own end
-        # tick, for a CUE-IN) has scrolled out. Segments are visited below
-        # in increasing window order (oldest/earliest first), so a simple
-        # "already emitted in this response" set is sufficient to enforce
-        # the single-occurrence rule without a separate pre-pass.
-        already_emitted_markers: set[tuple[int, str, object, int]] = set()
+        # timeline; it appears exactly ONCE per manifest response, on the
+        # earliest in-window segment its active interval overlaps (see
+        # Channel.marker_anchors) -- not repeated on every segment the
+        # interval spans. Same ID and byte-identical attributes on every
+        # poll (RFC 8216 4.4.5.1).
+        anchors = self.marker_anchors(first_global_index, media_sequence)
 
         # [markers].cue_tags: which cue_breaks (see LoopPackage.__init__)
         # have already had their opening #EXT-X-CUE-OUT/-CONT emitted in
         # this response -- same per-response, visited-in-increasing-order
-        # dedupe pattern as already_emitted_markers above.
+        # dedupe pattern as the marker anchors above.
         seen_cue_event_ids: set[str] = set()
-
-        # Markers already summarized in a `# markers:` comment in this
-        # response (same once-per-response dedupe as already_emitted_markers,
-        # but also covering cue_tags="only", which emits no DATERANGE).
-        described_marker_keys: set[tuple[int, str, object, int]] = set()
 
         # Never emit past `media_sequence` (the live edge) -- when
         # first_global_index was clamped to 0 above (only possible in the
@@ -1593,12 +1675,13 @@ class Channel:
         # `range(window_segments)` would overshoot past the live edge and
         # reintroduce future segments, the exact bug being fixed here.
         entries_in_window = media_sequence - first_global_index + 1
+        discontinuities = set(self.hls_discontinuities(first_global_index, media_sequence))
         for i in range(entries_in_window):
             global_index = first_global_index + i
             local_index = global_index % pkg.segments_per_loop
             local_loop_number = global_index // pkg.segments_per_loop
 
-            if i > 0 and local_index in period_starts:
+            if global_index in discontinuities:
                 # This segment starts a new loop iteration OR an internal
                 # asset-boundary join (grave-robber/SCOPE.md §6.1), and
                 # isn't the very first entry in the window (whose implicit
@@ -1631,11 +1714,7 @@ class Channel:
             # timeline (the ad-decision authority), applied to this same
             # segment index, so every playlist advertises the same marker
             # at the same index even though boundary tick VALUES differ.
-            ref_seg_start_ticks = pkg.segment_boundary_ticks[local_index]
-            if local_index + 1 < len(pkg.segment_boundary_ticks):
-                ref_seg_end_ticks = pkg.segment_boundary_ticks[local_index + 1]
-            else:
-                ref_seg_end_ticks = pkg.total_loop_duration_ticks
+            ref_seg_start_ticks, ref_seg_end_ticks = self.ref_segment_bounds(local_index)
 
             # Markers whose loop-relative tick falls inside this segment's
             # loop-relative window get their DATERANGE built here, fresh,
@@ -1655,19 +1734,11 @@ class Channel:
             # A CUE-OUT's DATERANGE stays "active" (per _marker_covers_segment)
             # across every segment its interval overlaps, but must only be
             # emitted on the FIRST such segment still present in this window
-            # -- not repeated on each one (see already_emitted_markers above).
+            # -- not repeated on each one (see marker_anchors above).
             # Skipped entirely when cue_tags="only" -- no DATERANGE fallback
             # in that mode, #EXT-X-CUE-OUT/-IN below is the only signaling.
-            segment_markers = [
-                m for m in pkg.markers
-                if (local_loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
-                not in described_marker_keys
-                and _marker_covers_segment(m, ref_seg_start_ticks, ref_seg_end_ticks)
-            ]
+            segment_markers = anchors.get(global_index, [])
             if segment_markers:
-                described_marker_keys.update(
-                    (local_loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"]) for m in segment_markers
-                )
                 segment_id_map = (
                     build_event_id_map(pkg.markers, local_loop_number) if pkg.increment_event_ids else {}
                 )
@@ -1679,17 +1750,7 @@ class Channel:
                 )
 
             if pkg.cue_tags != "only":
-                matching_markers = [
-                    m for m in pkg.markers
-                    if (
-                        local_loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"]
-                    ) not in already_emitted_markers
-                    and _marker_covers_segment(m, ref_seg_start_ticks, ref_seg_end_ticks)
-                ]
-                for m in matching_markers:
-                    already_emitted_markers.add(
-                        (local_loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
-                    )
+                matching_markers = segment_markers
                 if matching_markers:
                     loop_start_ticks = program_date_time_ticks(
                         local_loop_number, 0, pkg.total_loop_duration_ticks, self.epoch_ticks
@@ -1776,9 +1837,6 @@ class Channel:
             # never perturbed. 0 for every index on a package with no
             # internal asset boundaries, so this is exactly today's value
             # unchanged in that (the common) case.
-            declared_segment_start_ticks = (
-                segment_start_ticks + pkg.declared_offset_ticks_by_local_index[local_index]
-            )
             # Asset-boundary comments (from franken-ts's .timeline.json, see
             # bake.py's load_asset_boundaries): plain `#` playlist comments
             # -- ignored by every HLS client -- naming which playlist asset
@@ -1793,12 +1851,7 @@ class Channel:
             ):
                 lines.append(f"# asset: {asset_id}")
 
-            program_date_ticks = program_date_time_ticks(
-                local_loop_number,
-                declared_segment_start_ticks,
-                pkg.total_loop_duration_ticks,
-                self.epoch_ticks,
-            )
+            program_date_ticks = self.segment_start_ticks(global_index, boundary_ticks)
             program_date_seconds = ticks_to_wall_clock_seconds(
                 program_date_ticks, pkg.timescale
             )
@@ -1939,16 +1992,8 @@ class Channel:
 
         window_segments = window_segments or self.window_segments
         pkg = self.package
-        if window is not None:
-            seg_index = window.last_global % pkg.segments_per_loop
-            current_loop_number = window.last_global // pkg.segments_per_loop
-        else:
-            pos = self.current_position()
-            seg_index = segment_index_for_position(
-                pos.position_in_loop_ticks, pkg.segment_boundary_ticks
-            )
-            current_loop_number = pos.loop_number
-
+        win = self.window_range(window, window_segments)
+        current_loop_number, seg_index = divmod(win.last, pkg.segments_per_loop)
 
         # Build the list of (loop_number, [local_index, ...]) pairs, one per
         # <Period> to emit. Crucially, the CURRENTLY OPEN loop iteration
@@ -2375,11 +2420,7 @@ class Channel:
                 if event_xml else ""
             )
 
-            period_id = (
-                f"loop{loop_number}"
-                if spans_per_loop == 1
-                else f"loop{loop_number}-{span_start_local}"
-            )
+            period_id = self.dash_period_id(loop_number, span_start_local)
             period_xml_parts.append(f'''  <Period id="{period_id}" start="PT{period_start_seconds}S">
 {event_streams_xml}
     <AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
@@ -2440,18 +2481,11 @@ class Channel:
         """
         window_segments = window_segments or self.window_segments
         pkg = self.package
-        if window is not None:
-            # SCOPE.md §13: explicit range; presentation time 0 is the first
-            # segment (presentationTimeOffset below), t values stay absolute
-            # so they match the tfdt the cseg route writes.
-            first_global_index, media_sequence = window.first_global, window.last_global
-        else:
-            pos = self.current_position()
-            seg_index = segment_index_for_position(
-                pos.position_in_loop_ticks, pkg.segment_boundary_ticks
-            )
-            media_sequence = global_segment_number(pos.loop_number, seg_index, pkg.segments_per_loop)
-            first_global_index = max(0, media_sequence - window_segments + 1)
+        # SCOPE.md §13: with an explicit range, presentation time 0 is the
+        # first segment (presentationTimeOffset below), t values stay absolute
+        # so they match the tfdt the cseg route writes.
+        win = self.window_range(window, window_segments)
+        first_global_index, media_sequence = win.first, win.last
         global_indices = list(range(first_global_index, media_sequence + 1))
         first_loop, first_local = divmod(first_global_index, pkg.segments_per_loop)
         last_loop, last_local = divmod(media_sequence, pkg.segments_per_loop)
@@ -2466,27 +2500,12 @@ class Channel:
             else pkg.total_loop_duration_ticks
         )
         spl = pkg.segments_per_loop
-        signal_breaks = sorted(self.dash_signal_breaks)
-
-        def _governing_break(global_index: int) -> int | None:
-            """Global index of the forced break that opened the Period this
-            segment belongs to (None: before the first one ever)."""
-            loop_number, local_index = divmod(global_index, spl)
-            earlier = [b for b in signal_breaks if b <= local_index]
-            if earlier:
-                return loop_number * spl + earlier[-1]
-            if signal_breaks and loop_number > 0:
-                return (loop_number - 1) * spl + signal_breaks[-1]
-            return None
 
         # (governing break or None, [global indices]) -- one Period each.
-        groups: list[tuple[int | None, list[int]]] = []
-        for g in global_indices:
-            brk = _governing_break(g)
-            if groups and groups[-1][0] == brk:
-                groups[-1][1].append(g)
-            else:
-                groups.append((brk, [g]))
+        groups = [
+            (brk, list(range(g_first, g_last + 1)))
+            for brk, g_first, g_last in self.dash_continuous_groups(first_global_index, media_sequence)
+        ]
 
         def _abs_ticks(global_index: int) -> int:
             loop_number, local_index = divmod(global_index, spl)
@@ -2548,10 +2567,9 @@ class Channel:
             g: group_number for group_number, (_brk, indices) in enumerate(groups) for g in indices
         }
 
-        # Markers: one <Event> per (event_id, loop_number) occurrence whose
-        # interval overlaps the window, placed in the Period of the first
-        # segment that covers it -- mirrors the per-Period builder's own
-        # once-per-marker dedup, just across the whole window.
+        # Markers: one <Event> per marker occurrence (per loop) whose interval
+        # overlaps the window, placed in the Period of the first segment that
+        # covers it (Channel.marker_anchors, the same placement HLS uses).
         DIRECTION_CODE = {"out": 0, "in": 1, "instant": 2}
         scheme_id_uri = (
             SCTE35_XML_NAMESPACE if pkg.dash_signal_format == "xml" else "urn:scte:scte35:2014:xml+bin"
@@ -2560,22 +2578,12 @@ class Channel:
         event_markers_by_group: list[list[tuple[dict, dict[str, str], int | None, str]]] = [
             [] for _ in groups
         ]
-        emitted: set[tuple[str, int]] = set()
+        anchors = self.marker_anchors(first_global_index, media_sequence)
         for global_index in global_indices:
-            loop_number, local_index = divmod(global_index, spl)
+            loop_number = global_index // spl
             group_number = group_of_global[global_index]
-            ref_start = pkg.segment_boundary_ticks[local_index]
-            ref_end = (
-                pkg.segment_boundary_ticks[local_index + 1]
-                if local_index + 1 < len(pkg.segment_boundary_ticks)
-                else pkg.total_loop_duration_ticks
-            )
             event_id_map = build_event_id_map(pkg.markers, loop_number) if pkg.increment_event_ids else {}
-            for marker in pkg.markers:
-                key = (marker["event_id"], loop_number)
-                if key in emitted or not _marker_covers_segment(marker, ref_start, ref_end):
-                    continue
-                emitted.add(key)
+            for marker in anchors.get(global_index, []):
                 event_markers_by_group[group_number].append(
                     (marker, event_id_map, loop_number, self._marker_start_iso(marker, loop_number))
                 )
@@ -2707,7 +2715,7 @@ class Channel:
             # Stable across polls: named after the break that opened it,
             # never after where the sliding window happens to clip it. With
             # no forced breaks this is the single never-restarted Period.
-            period_id = "continuous" if brk is None else f"break{brk}"
+            period_id = self.dash_continuous_period_id(brk)
             start_seconds = ticks_to_wall_clock_seconds(start_rel, pkg.timescale)
             period_start = "PT0S" if start_rel == 0 else f"PT{start_seconds}S"
             period_xml_parts.append(f'''  <Period id="{period_id}" start="{period_start}">

@@ -996,8 +996,13 @@ A machine-readable view of what the manifests currently describe, for tooling
   `event_id_dec*4 + direction`, DATERANGE ids embed the decimal id and loop).
   `assets` carry ids and start/end only (bake keeps no filenames/in-out points).
 
-**Drift.** The math is mirrored, not shared, with the manifest builders;
-`tests/test_serve_window_json.py` checks the JSON against the HLS DATERANGEs
-and DASH Periods/Events. Known differences: DASH uses its own live span, not
-the HLS trailing window. A CDN strips unknown query params, so `scope` only
+**Drift.** The timeline maths is shared with the manifest builders (window
+range, segment times, discontinuities, Period grouping/ids and marker anchors
+are `Channel` methods used by HLS, DASH and the JSON alike);
+`tests/test_serve_window_json.py` still checks the JSON against the HLS
+DATERANGEs and DASH Periods/Events, and `tests/test_serve_golden_manifests.py`
+pins the manifests byte for byte. Known differences: DASH (periodic) uses its
+own live span, not the HLS trailing window, and a JSON marker's `segments`
+includes a splice_insert break's implied duration up to its IN, whereas
+HLS/DASH signal it only on the segment its start/end fall in. A CDN strips unknown query params, so `scope` only
 works against the service directly (Igor proxies it).

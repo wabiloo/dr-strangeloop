@@ -69,13 +69,17 @@ match, fix the upstream franken-ts input instead.
 
 `serve.py` exposes `/timeline.json`, documented in
 [`openapi.yaml`](./openapi.yaml) (served at `/openapi.yaml`, rendered at
-`/docs`). It is a *mirror* of the HLS/DASH window maths in
-`Channel.build_window_json`, not shared code: when you change how manifests
-place markers, periods, discontinuities or the window, update the builder and
-`openapi.yaml` too. `tests/test_serve_window_json.py` (schema drift +
-HLS DATERANGE / DASH Period+Event consistency, with and without
-`increment_event_ids`) fails if they diverge. Igor's Timeline panel draws it.
-Design/glossary: `SCOPE.md` §15.
+`/docs`). `Channel.build_window_json` shares its timeline maths with the
+HLS/DASH builders through `Channel` helpers (window range, segment times,
+discontinuities, Period grouping/ids, marker anchors -- see "shared timeline
+plan" in `serve.py`): change those in one place, not in a builder. Only the
+DASH periodic window rule and the marker/asset *span* are JSON-vs-manifest
+differences. `tests/test_serve_window_json.py` (schema drift + HLS DATERANGE /
+DASH Period+Event consistency, both directions, with and without
+`increment_event_ids`, periodic and continuous) and
+`tests/test_serve_golden_manifests.py` (byte-exact hashes of 864 HLS/DASH
+manifests -- regenerate with `UPDATE_GOLDEN=1` only for an intended manifest
+change) guard it. Igor's Timeline panel draws it. Design/glossary: `SCOPE.md` §15.
 
 ## Forced Periods on SCTE-35 types
 

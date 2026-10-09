@@ -15,7 +15,8 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serve import Channel, create_app  # noqa: E402
+from scte35_signaling import is_out_marker  # noqa: E402
+from serve import Channel, _marker_covers_segment, create_app  # noqa: E402
 from test_serve_asset_boundaries import _sparse_fake_package, _write_sparse_package  # noqa: E402
 from timeshift import TimeshiftConfig, TimeWindow  # noqa: E402
 
@@ -335,8 +336,8 @@ def test_schema_rejects_undocumented_and_missing_fields():
 
 
 # ── consistency with the manifests ──────────────────────────────────────────
-# The JSON builder mirrors (not shares) the manifest builders' maths, so these
-# tests pin the two views together: same periods, same marker ids and times.
+# The JSON builder and the manifest builders share their timeline helpers; these
+# tests pin the two views together anyway: same periods, same marker ids and times.
 
 REAL_B64 = "/DAvAAAAAAAA///wFAVIAACPf+/+c2nALv4AUsz1AAAAAAAKAAhDVUVJAAABNWLbowo="  # valid SCTE-35
 DIRECTION_CODE = {"out": 0, "in": 1, "instant": 2}
@@ -386,16 +387,18 @@ def test_hls_dateranges_match_markers(increment):
         assert any(e > 10 for _, e, _, _ in got)
 
 
+@pytest.mark.parametrize("continuous", [False, True])
 @pytest.mark.parametrize("increment", [False, True])
-def test_dash_periods_and_events_match_json(increment):
+def test_dash_periods_and_events_match_json(increment, continuous):
     channel = _consistency_channel(increment)
+    channel.continuous = continuous
     doc = channel.build_window_json(scope="loops")
     root = ET.fromstring(channel.build_dash_manifest().split("?>", 1)[1])
     ns = {"m": "urn:mpeg:dash:schema:mpd:2011"}
     availability = _epoch_s(root.attrib["availabilityStartTime"])
     json_periods = {p["id"]: p for p in doc["periods"]}
-    markers = [m for m in doc["markers"]]
 
+    seen, mpd_segments = set(), set()
     periods = root.findall("m:Period", ns)
     assert periods
     for period in periods:
@@ -404,15 +407,32 @@ def test_dash_periods_and_events_match_json(increment):
         assert pid in json_periods, f"MPD period {pid} missing from JSON"
         jp = json_periods[pid]
         assert _epoch_s(jp["start_utc"]) == availability + start_s
-        assert int(period.find(".//m:SegmentTemplate", ns).attrib["startNumber"]) == jp["segments"]["first"]
+        template = period.find(".//m:SegmentTemplate", ns)
+        assert int(template.attrib["startNumber"]) == jp["segments"]["first"]
+        mpd_first = int(template.attrib["startNumber"])
+        mpd_segments.update(range(mpd_first, mpd_first + len(template.findall(".//m:S", ns))))
 
         for event in period.findall(".//{*}Event"):
-            event_id = int(event.attrib["id"])
+            # continuous mode folds the loop parity into the id (id = base * 2 + loop & 1)
+            event_id = int(event.attrib["id"]) // (2 if continuous else 1)
             at = availability + start_s + int(event.attrib["presentationTime"]) / 90_000
             match = [
-                m for m in markers
+                m for m in doc["markers"]
                 if int(m["event_id"], 16) == event_id // 4
                 and DIRECTION_CODE[_direction(m)] == event_id % 4
                 and _epoch_s(m["start_utc"]) == at
             ]
             assert len(match) == 1, (pid, event.attrib)
+            seen.add((match[0]["loop"], match[0]["is_out"], match[0]["start_utc"]))
+
+    # ... and every marker covering a segment the MPD advertises is in the MPD
+    # (DASH has its own window rule in periodic mode, so go by the MPD's segments).
+    pkg = channel.package
+    expected = set()
+    for g in mpd_segments:
+        loop, local = divmod(g, pkg.segments_per_loop)
+        start, end = channel.ref_segment_bounds(local)
+        for m in pkg.markers:
+            if _marker_covers_segment(m, start, end):
+                expected.add((loop, is_out_marker(m), channel._marker_start_iso(m, loop)))
+    assert seen == expected
