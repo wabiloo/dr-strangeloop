@@ -827,7 +827,7 @@ async function onJobFinished(job: Job) {
   toast.add({
     severity: 'info',
     summary: `${activeAction.value} finished`,
-    detail: `See the job log above for details.`,
+    detail: `See the Jobs drawer for the log.`,
     life: 4000,
   })
   const wasRunning = phaseBeforeAction.value === 'alive'

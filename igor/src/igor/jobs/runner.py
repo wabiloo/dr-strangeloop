@@ -19,6 +19,8 @@ table without changing the public interface.
 from __future__ import annotations
 
 import itertools
+import os
+import signal
 import subprocess
 import threading
 import time
@@ -43,6 +45,8 @@ class Job:
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
     finished_at: float | None = None
+    cancelled: bool = False
+    proc: subprocess.Popen | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self, log_offset: int = 0) -> dict:
         return {
@@ -57,6 +61,7 @@ class Job:
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "cancelled": self.cancelled,
         }
 
 
@@ -85,8 +90,6 @@ class JobRunner:
         return job
 
     def _run(self, job: Job, env: dict[str, str] | None) -> None:
-        import os
-
         job.status = "running"
         job.started_at = time.time()
         try:
@@ -105,7 +108,13 @@ class JobRunner:
                 text=True,
                 bufsize=1,
                 env=full_env,
+                # Own process group so cancel() can take down children too
+                # (cdk spawns node/docker/etc.).
+                start_new_session=True,
             )
+            job.proc = proc
+            if job.cancelled:  # cancelled between spawn and Popen
+                self._signal(job, signal.SIGTERM)
             assert proc.stdout is not None
             for line in proc.stdout:
                 job.log.append(line.rstrip("\n"))
@@ -120,6 +129,29 @@ class JobRunner:
             job.finished_at = time.time()
             job.status = "failed"
             job.return_code = -1
+
+    @staticmethod
+    def _signal(job: Job, sig: int) -> None:
+        proc = job.proc
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def cancel(self, job_id: str) -> Job | None:
+        """SIGTERM the job's process group (SIGKILL after 5s). The job ends as
+        `failed` with `cancelled=True`."""
+        job = self._jobs.get(job_id)
+        if job is None:
+            return None
+        if job.status in ("queued", "running") and not job.cancelled:
+            job.cancelled = True
+            job.log.append("igor: cancel requested")
+            self._signal(job, signal.SIGTERM)
+            threading.Timer(5.0, self._signal, args=(job, signal.SIGKILL)).start()
+        return job
 
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)

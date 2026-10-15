@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import Toast from 'primevue/toast'
+import JobDrawer from './components/JobDrawer.vue'
 import { computed } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 
@@ -87,6 +88,7 @@ const isDocsActive = computed(() => route.path.startsWith('/docs'))
       <RouterView />
     </main>
 
+    <JobDrawer />
     <Toast />
   </div>
 </template>
@@ -273,6 +275,7 @@ const isDocsActive = computed(() => route.path.startsWith('/docs'))
   z-index: 1;
   flex: 1;
   padding: 1.5rem;
+  padding-bottom: calc(1.5rem + var(--job-drawer-h, 0px));
   max-width: 1400px;
   width: 100%;
   margin: 0 auto;

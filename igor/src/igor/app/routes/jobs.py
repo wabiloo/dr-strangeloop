@@ -20,3 +20,11 @@ def get_job(job_id: str, log_offset: int = Query(default=0, ge=0)) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail=f"No such job: {job_id}")
     return job.to_dict(log_offset=log_offset)
+
+
+@router.post("/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict:
+    job = runner.cancel(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"No such job: {job_id}")
+    return job.to_dict(log_offset=len(job.log))

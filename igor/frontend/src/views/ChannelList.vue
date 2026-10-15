@@ -16,6 +16,7 @@ import type { Phase } from '../utils/channelPhase'
 import BackendBadge from '../components/BackendBadge.vue'
 import { alignConfirmPopup } from '../utils/confirmPopup'
 import { usePersistedSort } from '../utils/persistedSort'
+import { trackJob } from '../jobDrawer'
 
 const router = useRouter()
 const confirm = useConfirm()
@@ -252,6 +253,7 @@ async function runAction(channel: ChannelListItem, action: 'start' | 'stop') {
   pendingActions.add(channel.name)
   try {
     const job = await (action === 'start' ? startChannel(channel.name) : stopChannel(channel.name))
+    trackJob(job)
     pollJob(channel.name, action, job.id)
   } catch (e) {
     pendingActions.delete(channel.name)

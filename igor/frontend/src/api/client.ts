@@ -421,6 +421,10 @@ export function getJob(id: string, logOffset = 0): Promise<Job> {
   return getJson(`${JOBS_BASE}/${encodeURIComponent(id)}?log_offset=${logOffset}`)
 }
 
+export function cancelJob(id: string): Promise<Job> {
+  return postJson(`${JOBS_BASE}/${encodeURIComponent(id)}/cancel`)
+}
+
 // ---------------------------------------------------------------------------
 // local files (browse + probe, for the asset file picker)
 // ---------------------------------------------------------------------------

@@ -48,6 +48,20 @@ directly, prefer the per-tool `AGENTS.md` files (`franken-ts/AGENTS.md`,
 for the interactive/monitoring use case, not to be scripted against by
 another agent unless you're specifically building on its HTTP API.
 
+## Jobs drawer
+
+Job output no longer renders inline. `frontend/src/components/JobDrawer.vue`
+(mounted in `App.vue`) is a bottom drawer with one tab per job: resizable
+(drag the top edge; height + open state remembered in localStorage), copy /
+download log, Cancel (`POST /api/v1/jobs/{id}/cancel`, kills the process group;
+job ends `failed` with `cancelled: true`), per-tab dismiss and *Clear
+finished*. State and the single poller live in `frontend/src/jobDrawer.ts`; on
+load it pulls `GET /api/v1/jobs/` so jobs survive closing the page (until the
+backend restarts). A new job adds a tab but does **not** open the drawer.
+`JobPanel.vue` is now just a one-line status + *View output* that registers its
+`jobId` with the drawer and still emits `finished`. To surface a job from new
+code, call `trackJob(job)` (or render `JobPanel`).
+
 ## Startover & catchup (channel detail page)
 
 For `ecs-express` / `local-docker` channels with `[timeshift]` enabled (the

@@ -32,3 +32,18 @@ def test_failed_job_also_has_a_duration(tmp_path):
     _wait_terminal(job)
     assert job.status == "failed" and job.return_code == 3
     assert job.finished_at is not None
+
+
+def test_cancel_kills_process_group(tmp_path):
+    runner = JobRunner()
+    job = runner.spawn(
+        "test", [sys.executable, "-c", "import time; print('hi', flush=True); time.sleep(60)"], cwd=tmp_path
+    )
+    deadline = time.time() + 10
+    while "hi" not in job.log:
+        assert time.time() < deadline
+        time.sleep(0.01)
+    runner.cancel(job.id)
+    _wait_terminal(job)
+    assert job.status == "failed" and job.cancelled
+    assert job.finished_at is not None
