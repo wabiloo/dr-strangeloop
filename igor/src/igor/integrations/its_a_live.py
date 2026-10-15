@@ -9,7 +9,7 @@ Two kinds of operations:
 - Fast, read-only ones (`list_channels`, `get_status`, `get_outputs`) are
   run synchronously (single AWS API call, <1s) and return parsed JSON.
 - Long-running ones (`create`, `spark`, `start`, `stop`, `refresh`,
-  `update`, `redeploy`, `terminate`) are dispatched as background Jobs
+  `update`, `redeploy`, `terminate`, and local-docker's `image`) are dispatched as background Jobs
   (see jobs/runner.py) since they can block for minutes (cdk
   deploy/destroy, ECS Express canary, etc).
 """
@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import subprocess
 import string
+from pathlib import Path
 
 from igor import paths
 from igor.jobs.runner import Job, runner
@@ -101,6 +102,7 @@ continuous_timeline = {continuous_timeline}
 
 [docker]
 port = {port}
+bundle_content = {bundle_content}
 """
 
 
@@ -127,6 +129,7 @@ def generate_toml(
     hls_ts_mux_audio: bool = True,
     continuous_timeline: bool = False,
     port: int | str = 8080,
+    bundle_content: bool = False,
     cpu: int = 256,
     memory: int = 512,
     daterange_mode: str = "shared",
@@ -143,6 +146,8 @@ def generate_toml(
     if source_kind not in ("playlist", "archive", "manifest"):
         raise ValueError("source_kind must be 'playlist', 'archive' or 'manifest'")
     validate_daterange_id_format(daterange_id_format)
+    if bundle_content and backend != "local-docker":
+        raise ValueError("bundle_content is only supported for the local-docker backend")
     if hls_format not in ("cmaf", "ts"):
         raise ValueError("hls_format must be 'cmaf' or 'ts'")
     if source_kind not in ("playlist", "archive", "manifest"):
@@ -189,6 +194,7 @@ def generate_toml(
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
             continuous_timeline=str(continuous_timeline).lower(),
             port=_format_local_docker_port(port),
+            bundle_content=str(bundle_content).lower(),
         )
     return content
 
@@ -220,6 +226,13 @@ def _run_json(extra: list[str], config_path: str | None = None) -> dict | list:
     return json.loads(lines[-1])
 
 
+def exported_image_path(channel_name: str) -> Path:
+    """Where `channel.py image --save` (no explicit path) writes the
+    channel's exported image tarball -- keep in sync with
+    _local_docker_ops._DEFAULT_IMAGE_EXPORT_DIR."""
+    return Path(paths.ITS_A_LIVE_DIR) / ".local-images" / f"{channel_name}.tar"
+
+
 def list_channels(configs_dir: str | None = None) -> list[dict]:
     extra = ["list"]
     if configs_dir:
@@ -237,9 +250,9 @@ def get_outputs(config_path: str) -> dict:
 
 def spawn_job(job_type: str, config_path: str, channel_name: str, extra_args: list[str] | None = None) -> Job:
     """Dispatches one of the long-running channel.py subcommands
-    (create/spark/start/stop/refresh/update/redeploy/terminate) as a
+    (create/spark/start/stop/refresh/update/redeploy/terminate/image) as a
     background Job."""
-    if job_type not in ("create", "spark", "start", "stop", "refresh", "update", "redeploy", "terminate"):
+    if job_type not in ("create", "spark", "start", "stop", "refresh", "update", "redeploy", "terminate", "image"):
         raise ValueError(f"Unsupported job_type: {job_type!r}")
     cmd = _channel_py_cmd([job_type, *(extra_args or [])], config_path=config_path, as_json=False)
     return runner.spawn(job_type, cmd, cwd=paths.ITS_A_LIVE_DIR, channel_name=channel_name)

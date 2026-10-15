@@ -16,6 +16,7 @@ import ItsAliveBanner from '../components/ItsAliveBanner.vue'
 import JobPanel from '../components/JobPanel.vue'
 import PlaybackPanel from '../components/PlaybackPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
+import BundleContentField from '../components/BundleContentField.vue'
 import FieldHelp from '../components/FieldHelp.vue'
 import {
   CONFIG_FIELD_LABEL as L,
@@ -26,6 +27,8 @@ import {
 import { alignConfirmPopup } from '../utils/confirmPopup'
 import {
   addScheduleWindow,
+  buildChannelImage,
+  channelImageDownloadUrl,
   createChannel,
   getChannel,
   getChannelHealth,
@@ -108,6 +111,7 @@ const editForm = reactive<ChannelCreatePayload>({
   hls_ts_mux_audio: true,
   continuous_timeline: false,
   port: 8080,
+  bundle_content: false,
   cpu: 256,
   memory: 512,
   daterange_mode: 'shared',
@@ -207,6 +211,7 @@ function startEdit() {
     hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
     continuous_timeline: Boolean(packaging.continuous_timeline ?? true),
     port: portSection.port === 'auto' ? 'auto' : Number(portSection.port ?? 8080),
+    bundle_content: backend === 'local-docker' ? Boolean(docker.bundle_content ?? false) : false,
     cpu: Number(express.cpu ?? 256),
     memory: Number(express.memory ?? 512),
     daterange_mode: (markers.daterange_mode as ChannelCreatePayload['daterange_mode']) ?? 'shared',
@@ -330,6 +335,16 @@ watch(
   { immediate: true },
 )
 
+// local-docker with `[docker] bundle_content = true`: Start / Refresh /
+// Update content rebuild a per-channel image with the loop package copied
+// in, instead of bind-mounting it.
+const bundled = computed(() => status.value?.backend === 'local-docker' && Boolean(status.value.bundle_content))
+const bundleNote = computed(() =>
+  bundled.value
+    ? ' Content is bundled into the image, so this also rebuilds the self-contained image from the current loop package (slower than a volume mount).'
+    : '',
+)
+
 function byBackend(localDocker: string, ecsExpress: string, awsMedia: string): string {
   if (backend.value === 'local-docker') return localDocker
   if (backend.value === 'ecs-express') return ecsExpress
@@ -375,11 +390,11 @@ const contentAction = computed<ActionDef>(() => {
       icon: 'pi pi-refresh',
       severity: 'secondary',
       description: byBackend(
-        'Bakes the franken-ts output locally and recreates the container from it, in one step -- the routine way to ship new content to a running channel.',
+        `Bakes the franken-ts output locally and recreates the container from it, in one step -- the routine way to ship new content to a running channel.${bundleNote.value}`,
         'Bakes the franken-ts output locally, stages it to S3, then re-syncs the running channel -- the routine way to ship new content, in one step.',
         'Uploads the franken-ts output to S3, then cycles the channel to pick it up -- the routine way to ship new content, in one step.',
       ),
-      eta: byBackend('~15-90s.', '~40-90s.', 'A full stop/start cycle (a few minutes) on top of the bake/upload.'),
+      eta: byBackend(bundled.value ? '~30s-several min (image rebuild scales with loop size).' : '~15-90s.', '~40-90s.', 'A full stop/start cycle (a few minutes) on top of the bake/upload.'),
       fn: () => updateChannelContent(props.name),
       disabled: () => false,
       disabledReason: () => '',
@@ -391,7 +406,9 @@ const contentAction = computed<ActionDef>(() => {
     icon: 'pi pi-sparkles',
     severity: 'secondary',
     description: byBackend(
-      'Bakes the franken-ts output locally into the loop package the container serves. Run this after building new content, before Start picks it up.',
+      bundled.value
+        ? 'Bakes the franken-ts output locally into the loop package. The bundled image is NOT rebuilt by Spark alone -- Start (or Update content on a running channel) does that.'
+        : 'Bakes the franken-ts output locally into the loop package the container serves. Run this after building new content, before Start picks it up.',
       'Bakes the franken-ts output locally, then stages the result to S3. Run this after building new content, before Start picks it up.',
       'Uploads the franken-ts output to S3. Run this after building new content, before Start picks it up.',
     ),
@@ -412,12 +429,12 @@ const streamActions = computed<ActionDef[]>(() => [
     icon: 'pi pi-play',
     severity: 'success',
     description: byBackend(
-      'Goes live: starts the local-docker container. Requires content to already be Sparked at least once.',
+      `Goes live: starts the local-docker container. Requires content to already be Sparked at least once.${bundleNote.value}`,
       'Goes live: scales the ECS Express service to 1 task. Requires content to already be Sparked at least once.',
       'Goes live: starts the MediaLive channel. Requires content to already be Sparked at least once.',
     ),
     eta: byBackend(
-      '~10-30s (container startup + health check).',
+      bundled.value ? '~30s-several min (image rebuild scales with loop size), then container startup.' : '~10-30s (container startup + health check).',
       '~30-60s (task startup + health check).',
       'A couple of minutes (MediaLive channel start).',
     ),
@@ -453,6 +470,36 @@ const streamActions = computed<ActionDef[]>(() => [
       phase.value === 'not-deployed' ? 'Requires the channel to be deployed first.' : 'Channel is already stopped.',
   },
 ])
+
+// local-docker only: build the self-contained image (code + this channel's
+// loop package) and export it as a tarball someone else can `docker load`.
+// Independent of the bundle_content setting -- that only decides what
+// Start/Refresh run locally.
+const shareAction = computed<ActionDef>(() => ({
+  key: 'image',
+  label: 'Export shareable image',
+  icon: 'pi pi-box',
+  severity: 'secondary',
+  outlined: true,
+  description:
+    'Builds a self-contained Docker image of this channel (the loop package is copied in) and exports it as a .tar. ' +
+    'Anyone can `docker load` it and `docker run -p 8080:8080 <image>` -- no S3, AWS credentials or volume needed. ' +
+    'Spark first: the image is a snapshot of the loop package as it is now.',
+  eta: '~30s-several min -- the image is about as large as the loop, and exporting writes it all to disk.',
+  fn: () => buildChannelImage(props.name, true),
+  disabled: () => false,
+  disabledReason: () => '',
+  confirmMessage:
+    `Build and export an image containing the entire loop for "${props.name}"? ` +
+    'Anyone with the file can extract the video, and it will not follow later content updates. ' +
+    "Don't publish it to a public registry unless you may publish the content.",
+}))
+const exportedImageBytes = computed(() => (status.value?.backend === 'local-docker' ? status.value.exported_image_bytes : null))
+function formatBytes(n: number): string {
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
 
 // Infrastructure: does the stack/container exist at all. `redeploy` only
 // means anything where there's a CloudFormation stack to repair/reapply --
@@ -859,6 +906,32 @@ watch(() => props.name, reload)
           </div>
         </div>
 
+        <div v-if="backend === 'local-docker'" class="flex flex-column gap-2">
+          <h3 class="m-0 text-sm text-color-secondary uppercase">Share</h3>
+          <div class="flex align-items-start gap-3 p-3 border-round surface-card" style="border: 1px solid var(--surface-border)">
+            <Button
+              :label="shareAction.label"
+              :icon="shareAction.icon"
+              :severity="effectiveSeverity(shareAction)"
+              :outlined="effectiveOutlined(shareAction)"
+              :disabled="shareAction.disabled()"
+              :loading="loading && activeAction === shareAction.key"
+              style="min-width: 11rem"
+              @click="onActionClick($event, shareAction)"
+            />
+            <div class="flex flex-column gap-2 text-sm">
+              <div class="text-color">{{ shareAction.description }}</div>
+              <div class="text-color-secondary text-xs"><i class="pi pi-clock mr-1" />{{ shareAction.eta }}</div>
+              <div v-if="exportedImageBytes" class="flex align-items-center gap-2">
+                <a :href="channelImageDownloadUrl(props.name)" download class="p-button p-button-sm p-button-text no-underline">
+                  <i class="pi pi-download mr-2" />Download image ({{ formatBytes(exportedImageBytes) }})
+                </a>
+                <span class="text-color-secondary text-xs">then <code>docker load -i its-a-live-{{ props.name }}.tar</code></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div v-if="infrastructureActions.length" class="flex flex-column gap-2">
           <h3 class="m-0 text-sm text-color-secondary uppercase">Infrastructure</h3>
           <div
@@ -1033,6 +1106,9 @@ watch(() => props.name, reload)
                     </FieldHelp>
                   </div>
                   <InputNumber v-if="!editIsLocalDocker || !editAutoPort" v-model="editForm.port as number" :use-grouping="false" fluid />
+                </div>
+                <div v-if="editIsLocalDocker" class="config-field-wide">
+                  <BundleContentField v-model="editForm.bundle_content" input-id="edit-bundle-content" />
                 </div>
                 <template v-if="editIsEcsExpress">
                   <div class="flex flex-column gap-1">

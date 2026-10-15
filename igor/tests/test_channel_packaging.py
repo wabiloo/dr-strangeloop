@@ -111,3 +111,34 @@ def test_invalid_dash_descriptor_mode_rejected():
             bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
             dash_descriptor_mode="invalid",
         )
+
+
+def _payload(**overrides):
+    base = dict(
+        name="test-channel", backend="local-docker", region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+    )
+    base.update(overrides)
+    return ChannelCreatePayload(**base)
+
+
+def test_bundle_content_defaults_false():
+    config = tomllib.loads(generate_toml(**_payload().model_dump()))
+    assert config["docker"]["bundle_content"] is False
+
+
+@pytest.mark.parametrize("bundle_content", [True, False])
+def test_local_docker_bundle_content_roundtrip(bundle_content):
+    config = tomllib.loads(generate_toml(**_payload(bundle_content=bundle_content).model_dump()))
+    assert config["docker"]["bundle_content"] is bundle_content
+
+
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-media"])
+def test_bundle_content_rejected_outside_local_docker(backend):
+    with pytest.raises(ValueError, match="bundle_content"):
+        _payload(backend=backend, bundle_content=True)
+    with pytest.raises(ValueError, match="bundle_content"):
+        generate_toml(
+            name="x", backend=backend, region="r", bucket_name="b", content_folder="c",
+            source_path="p", bundle_content=True,
+        )

@@ -163,6 +163,8 @@ uv run --project its-a-live python its-a-live/channel.py -c data/channels/my-cha
 uv run --project its-a-live python its-a-live/channel.py -c data/channels/my-channel.toml stop
 ```
 
+By default the container bind-mounts the baked loop package from your machine, so the Docker image alone is useless to anyone else (it holds code, not video). To hand a channel to someone else, set `[docker] bundle_content = true` in the channel config, or run `channel.py -c data/channels/my-channel.toml image --save`: that builds a self-contained image with the loop inside (and exports it as a tarball for `docker load`), runnable anywhere with `docker run -p 8080:8080 <image>`. The image contains the whole loop, so don't publish it unless the content is yours to publish — see [`its-a-live/README.md`](./its-a-live/README.md#local-docker-bundled-content). Igor has the same option as a checkbox and an "Export shareable image" action.
+
 For an HAR or VOD manifest source, run `grave-robber ingest` / `ingest-url` instead of `franken-ts` and point `[input].source_path` at the resulting `manifest.json`:
 
 ```bash

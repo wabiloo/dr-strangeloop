@@ -62,6 +62,7 @@ match, fix the upstream franken-ts input instead.
 | `loop_math.py` | Integer epoch/loop_number/position_in_loop arithmetic — the drift-freedom guarantee (`SCOPE.md` §4.2/§5). No floats in persisted timing state, ever. |
 | `serve.py` | Stateless HTTP serving of manifests + segments per request. |
 | `continuity.py` | Opt-in `--continuous-timeline` mode (`SCOPE.md` §12): per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite so the channel has no discontinuity/Period-restart at the loop wrap — header patch only, never a re-mux. |
+| `Dockerfile` / `Dockerfile.baked` / `docker-entrypoint.sh` | `Dockerfile`: code-only image shared by every channel (content comes from S3 or a bind mount). `Dockerfile.baked`: layers one channel's loop package on top for a self-contained, shareable image (`LOOP_PACKAGE_BAKED=1`, local-docker `bundle_content` only — see `its-a-live/AGENTS.md`). The entrypoint picks S3 / baked / passthrough mode from env vars. |
 | `load_test.py` | Concurrent-viewer load generator (see `PERFS.md`). |
 
 ## Requirements

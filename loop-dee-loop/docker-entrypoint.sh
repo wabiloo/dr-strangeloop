@@ -27,7 +27,20 @@
 #     CMD:  bake.py --segment-duration 4.0 [other flags]
 #     (no input-path positional argument, no --output flag)
 #
-# If the relevant *_S3_URI env var is NOT set, both scripts fall back to
+#   serve.py, baked mode (local-docker "bundle content" images, see
+#   Dockerfile.baked):
+#     LOOP_PACKAGE_BAKED=1  the loop package is already inside the image at
+#                           $LOOP_PACKAGE_LOCAL_DIR (/var/loop-package) --
+#                           no S3, no AWS credentials, no mount needed.
+#     CMD:  serve.py [--epoch-utc ... --port 8080 ... to override the
+#     image's defaults, which Dockerfile.baked seeds via the EPOCH_UTC /
+#     DVR_WINDOW_SECONDS / WINDOW_SEGMENTS / CONTINUOUS_TIMELINE env vars]
+#     (no package-dir positional argument). Goes through the same gunicorn
+#     production path as the S3 mode, just without the sync step.
+#     LOOP_PACKAGE_S3_URI, if also set, wins (S3 mode).
+#
+# If neither LOOP_PACKAGE_S3_URI nor LOOP_PACKAGE_BAKED is set (and, for
+# bake.py, FRANKEN_TS_S3_URI is not set), both scripts fall back to
 # running exactly as given (e.g. for local `docker run` testing with a
 # bind-mounted volume) — the shim is then a pure passthrough.
 #
@@ -58,15 +71,26 @@ SUBCOMMAND="${1:-}"
 case "$SUBCOMMAND" in
     serve.py)
         shift
-        if [[ -n "${LOOP_PACKAGE_S3_URI:-}" ]]; then
-            sync_down "$LOOP_PACKAGE_S3_URI" "$LOOP_PACKAGE_LOCAL_DIR"
+        if [[ -n "${LOOP_PACKAGE_S3_URI:-}" || "${LOOP_PACKAGE_BAKED:-}" == "1" ]]; then
+            if [[ -n "${LOOP_PACKAGE_S3_URI:-}" ]]; then
+                sync_down "$LOOP_PACKAGE_S3_URI" "$LOOP_PACKAGE_LOCAL_DIR"
+            else
+                if [[ ! -d "$LOOP_PACKAGE_LOCAL_DIR" || -z "$(ls -A "$LOOP_PACKAGE_LOCAL_DIR" 2>/dev/null)" ]]; then
+                    log "ERROR: LOOP_PACKAGE_BAKED=1 but no loop package found at" \
+                        "${LOOP_PACKAGE_LOCAL_DIR} -- this image was not built with content."
+                    exit 2
+                fi
+                log "using loop package baked into the image at ${LOOP_PACKAGE_LOCAL_DIR} (no S3 sync)"
+            fi
 
             HOST="0.0.0.0"
             PORT="8080"
-            EPOCH_UTC=""
-            DVR_WINDOW_SECONDS=""
-            WINDOW_SEGMENTS=""
-            CONTINUOUS_TIMELINE="false"
+            # Env vars of the same names (set as image defaults by
+            # Dockerfile.baked) seed the values; explicit flags override.
+            EPOCH_UTC="${EPOCH_UTC:-}"
+            DVR_WINDOW_SECONDS="${DVR_WINDOW_SECONDS:-}"
+            WINDOW_SEGMENTS="${WINDOW_SEGMENTS:-}"
+            CONTINUOUS_TIMELINE="${CONTINUOUS_TIMELINE:-false}"
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --host) HOST="$2"; shift 2 ;;
@@ -92,7 +116,7 @@ case "$SUBCOMMAND" in
             log "starting gunicorn (${WORKERS} workers) on ${HOST}:${PORT}"
             exec gunicorn --bind "${HOST}:${PORT}" --workers "$WORKERS" wsgi:app
         else
-            log "LOOP_PACKAGE_S3_URI not set — running serve.py as given (local/dev mode)"
+            log "neither LOOP_PACKAGE_S3_URI nor LOOP_PACKAGE_BAKED set — running serve.py as given (local/dev mode)"
             exec python3 serve.py "$@"
         fi
         ;;

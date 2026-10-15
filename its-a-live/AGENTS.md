@@ -79,6 +79,11 @@ memory = 512   # MB
 #                # and remembers it across start/refresh/status via the
 #                # container itself (no state file). Set an explicit
 #                # port = 8080 (int) instead to pin it.
+# bundle_content = false  # default -- the container bind-mounts the baked loop
+#                # package from this machine. true copies the package INTO a
+#                # per-channel image (its-a-live-<name>:baked) and runs it with no
+#                # mount, so the image is self-contained and shareable. See
+#                # "local-docker: volume vs bundled content" below.
 ```
 
 `daterange_id_format` accepts static text and these `{placeholder}` fields.
@@ -117,6 +122,11 @@ these IDs, so this setting applies only to ecs-express and local-docker.
 6. For `local-docker`: confirm a local Docker install is available
    (`docker` on `PATH`); the loop-dee-loop image is built automatically
    on first `start` (cached after that).
+7. For `local-docker`: will anyone other than this machine need to run the
+   channel? If yes, they need the *content* too, not just the image — see
+   "local-docker: volume vs bundled content" below, and set
+   `bundle_content = true` (or run `channel.py image --save`). Warn the user
+   that the image then contains the whole loop.
 
 ## Commands (identical across all three backends)
 
@@ -176,6 +186,11 @@ uv run python channel.py -c <config.toml> spark    # stage input (bake or upload
 uv run python channel.py -c <config.toml> start    # go live, prints playback URLs
 uv run python channel.py -c <config.toml> stop     # stop paying for compute (or stop the local container)
 uv run python channel.py -c <config.toml> refresh  # pick up newly-sparked content on a running channel
+uv run python channel.py -c <config.toml> image    # local-docker only: build the self-contained image
+                                                    # (code + baked loop package), regardless of
+                                                    # `bundle_content`. [--epoch-utc ...] [--save [PATH]]
+                                                    # --save exports a tarball for `docker load`
+                                                    # (default its-a-live/.local-images/<name>.tar)
 uv run python channel.py -c <config.toml> status   # current status -- "running" infra doesn't imply
                                                     # HlsPlaybackUrl/DashPlaybackUrl are actually
                                                     # serving; status/list report a `reachable`
@@ -202,6 +217,32 @@ error instead of crash-looping since there's no ECS service to loop).
 container recreate — a few seconds — for `local-docker`) — see
 `README.md` → "Updating content on a running channel" before promising a
 hot reload.
+
+### local-docker: volume vs bundled content
+
+The `loop-dee-loop:local` image holds only code (GPAC, ffmpeg, `serve.py`…)
+— never the video. Where the loop package comes from is the one choice
+`[docker] bundle_content` makes:
+
+| | `bundle_content = false` (default) | `bundle_content = true` |
+|---|---|---|
+| Content | bind-mounted read-only from `bake.local_output_dir` at `docker run` | copied into `its-a-live-<name>:baked` (`loop-dee-loop/Dockerfile.baked`); no mount |
+| Run by someone else | **Won't work** — the image alone has no content | `docker run -p 8080:8080 <image>` works anywhere; no S3/AWS/volume |
+| Updating content | `update` (spark + fast container recreate) | `update` also **rebuilds the image** (slower; image ≈ size of the loop) |
+| `spark` alone | changes what the next start/refresh serves | changes nothing until `start`/`refresh`/`image` rebuilds the image |
+| Server | `serve.py` (Flask) on the mounted dir | gunicorn via `docker-entrypoint.sh`, `LOOP_PACKAGE_BAKED=1` |
+
+`channel.py image [--save]` builds the bundled image on demand even with
+`bundle_content = false` (that setting only decides what `start`/`refresh`
+run locally), and `--save` exports it for another machine. The image bakes
+in the channel's epoch (default Unix epoch, `--epoch-utc` to change), DVR
+window and continuous-timeline setting as defaults; the recipient can
+override any `serve.py` flag after the image name. **Always warn the user**
+before bundling: the image contains the entire loop (anyone with it can
+extract the video), it is a snapshot (later content needs a rebuild), and
+old images pile up until `docker image prune`. `ecs-express` is unaffected
+— it keeps content in S3. igor exposes this as a checkbox on the channel
+form, an "Export shareable image" action, and a download link.
 
 `local-docker` has **no CloudFormation stack**: `channel.py outputs` and
 `cdk deploy`/`cdk destroy` (and hence `channel.py terminate`) don't apply

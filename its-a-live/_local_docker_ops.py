@@ -7,6 +7,19 @@ Franken-ts output is baked locally with the same Python-venv bake step
 locally-run container bind-mounting the baked loop package. Intended for
 local dev/demo/testing of a channel before committing to any AWS spend.
 
+Content delivery has two modes, chosen per channel by `[docker]
+bundle_content` (default false):
+
+  - volume (default): the shared `loop-dee-loop:local` image holds only
+    code; the baked package is bind-mounted read-only at run time. Fast to
+    update (re-`spark` + `refresh`), but the image alone is useless to
+    anyone else -- the content lives on this machine.
+  - bundle: the loop package is copied INTO a per-channel image
+    (`its-a-live-<name>:baked`, see loop-dee-loop/Dockerfile.baked) that is
+    then run with no mount at all. The image is fully self-contained and can
+    be shared (`channel.py image --save ...` -> `docker load`), at the cost
+    of a rebuild per content change and an image as large as the loop.
+
 Because there is no CloudFormation stack, channel.py skips
 `_cf_outputs()`/`cdk deploy` entirely for this backend -- state across
 separate `channel.py` invocations is tracked by Docker itself via a
@@ -27,8 +40,10 @@ from _reachability import check_manifest_reachable
 
 _LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 _IMAGE_TAG = "loop-dee-loop:local"
+_BAKED_DOCKERFILE = os.path.join(_LOOP_DEE_LOOP_DIR, "Dockerfile.baked")
 _CONTAINER_PREFIX = "its-a-live-"
 _DEFAULT_EPOCH = "1970-01-01T00:00:00Z"
+_DEFAULT_IMAGE_EXPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".local-images")
 
 
 def _container_name(channel_name):
@@ -49,6 +64,21 @@ def _resolve_python_cmd():
     if shutil.which("uv"):
         return ["uv", "run", "--project", _LOOP_DEE_LOOP_DIR, "python"]
     return ["python3"]
+
+
+def _baked_image_tag(channel_name):
+    return f"{_CONTAINER_PREFIX}{channel_name}:baked"
+
+
+def _bundle_content(cfg):
+    """`[docker] bundle_content = true`: serve from a per-channel image with
+    the loop package copied into it, instead of bind-mounting it."""
+    return bool(cfg.get("docker", {}).get("bundle_content", False))
+
+
+def _exported_image_bytes(channel_name):
+    path = os.path.join(_DEFAULT_IMAGE_EXPORT_DIR, f"{channel_name}.tar")
+    return os.path.getsize(path) if os.path.isfile(path) else None
 
 
 def _local_output_dir(cfg, channel_name):
@@ -219,6 +249,105 @@ def _build_image():
     return _image_id(_IMAGE_TAG)
 
 
+def _dir_size_bytes(path):
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def _human_size(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def _require_package(local_output_dir):
+    if not os.path.isdir(local_output_dir) or not os.listdir(local_output_dir):
+        sys.exit(f"No baked loop package found at {local_output_dir} -- run "
+                  f"`channel.py spark` first.")
+
+
+def _print_bundle_warnings(package_bytes):
+    print("")
+    print("  NOTE -- bundling content into the image:")
+    print(f"   * The image will contain the ENTIRE loop package (~{_human_size(package_bytes)}). "
+          f"Anyone with the image can extract the video.")
+    print("   * It is a snapshot: later `spark` runs do NOT change it. Rebuild "
+          "(`start`/`refresh`/`image`) to ship new content.")
+    print("   * Each rebuild leaves the previous image layers behind until you "
+          "`docker image prune`.")
+    print("   * Don't push it to a public registry if the content isn't yours to publish.")
+    print("")
+
+
+def _build_baked_image(cfg, channel_name, local_output_dir, epoch=None):
+    """Build the per-channel self-contained image (base image + loop
+    package copied in). Returns (tag, image_id). The base image
+    (`_IMAGE_TAG`) must already be built -- callers run `_build_image()`
+    first. Serve defaults (epoch, DVR window, continuous timeline) are baked
+    in as image env so a recipient running the image bare gets the same
+    stream settings this channel uses; any serve.py flag still overrides."""
+    _require_package(local_output_dir)
+    if not os.path.isfile(_BAKED_DOCKERFILE):
+        sys.exit(f"{_BAKED_DOCKERFILE} not found -- cannot build a bundled image.")
+
+    tag = _baked_image_tag(channel_name)
+    _print_bundle_warnings(_dir_size_bytes(local_output_dir))
+    cont = "true" if _continuous_timeline_args(cfg) else "false"
+    build_cmd = [
+        "docker", "build",
+        "-f", to_host_path(_BAKED_DOCKERFILE),
+        "--build-arg", f"BASE_IMAGE={_IMAGE_TAG}",
+        "--build-arg", f"EPOCH_UTC={epoch or _DEFAULT_EPOCH}",
+        "--build-arg", f"DVR_WINDOW_SECONDS={_dvr_window_seconds(cfg)}",
+        "--build-arg", f"CONTINUOUS_TIMELINE={cont}",
+        "-t", tag,
+        to_host_path(local_output_dir),
+    ]
+    print(f"==> Building self-contained image {tag} from {local_output_dir} ...")
+    result = subprocess.run(build_cmd)
+    if result.returncode != 0:
+        sys.exit(f"docker build (bundled image) failed (exit {result.returncode}) -- see output above.")
+    return tag, _image_id(tag)
+
+
+def _prepare_image(cfg, channel_name, local_output_dir, epoch=None):
+    """Build whatever image `start`/`refresh` will run: the shared code-only
+    image (volume mode) or the per-channel bundled image on top of it.
+    Returns (tag, image_id, bundled)."""
+    base_id = _build_image()
+    if _bundle_content(cfg):
+        tag, image_id = _build_baked_image(cfg, channel_name, local_output_dir, epoch)
+        return tag, image_id, True
+    return _IMAGE_TAG, base_id, False
+
+
+def _run_container(cfg, name, port, epoch, image_tag, bundled, local_output_dir):
+    """`docker run` the channel's container. Volume mode bind-mounts the
+    loop package and runs serve.py on it directly; bundled mode runs the
+    self-contained image with no mount (the entrypoint finds the package at
+    /var/loop-package itself -- note the missing positional)."""
+    run_args = ["docker", "run", "-d", "--name", name, "-p", f"{port}:{port}"]
+    serve_args = ["serve.py"]
+    if not bundled:
+        run_args += ["-v", f"{to_host_path(local_output_dir)}:/var/loop-package:ro"]
+        serve_args.append("/var/loop-package")
+    run_args += [image_tag, *serve_args,
+                 "--epoch-utc", epoch,
+                 "--port", str(port),
+                 "--dvr-window-seconds", _dvr_window_seconds(cfg),
+                 *_continuous_timeline_args(cfg)]
+    result = subprocess.run(run_args)
+    if result.returncode != 0:
+        sys.exit(f"docker run failed (exit {result.returncode}) -- see output above.")
+
+
 def _running_image_id(name):
     result = subprocess.run(
         ["docker", "inspect", "-f", "{{.Image}}", name],
@@ -297,9 +426,7 @@ def start(cfg, session, outputs, extra_args=None):
     local_output_dir = _local_output_dir(cfg, channel_name)
     port = _resolve_port(cfg, name)
 
-    if not os.path.isdir(local_output_dir) or not os.listdir(local_output_dir):
-        sys.exit(f"No baked loop package found at {local_output_dir} -- run "
-                  f"`channel.py spark` first.")
+    _require_package(local_output_dir)
 
     epoch_arg = None
     extra_args = extra_args or []
@@ -308,7 +435,10 @@ def start(cfg, session, outputs, extra_args=None):
             sys.exit("Usage: channel.py start [--epoch-utc now|<ISO8601 UTC timestamp>]")
         epoch_arg = _resolve_epoch_arg(extra_args[1])
 
-    image_id = _build_image()
+    # In bundle mode this also rebuilds the per-channel image from the
+    # current package on disk, so a new image id (and hence a recreate)
+    # falls out naturally whenever either the code or the content changed.
+    image_tag, image_id, bundled = _prepare_image(cfg, channel_name, local_output_dir, epoch_arg)
 
     status = _container_status(name)
     if status == "running" and epoch_arg is None and _running_image_id(name) == image_id:
@@ -324,21 +454,9 @@ def start(cfg, session, outputs, extra_args=None):
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     epoch = epoch_arg or preserved_epoch or _DEFAULT_EPOCH
-    run_args = [
-        "docker", "run", "-d", "--name", name,
-        "-p", f"{port}:{port}",
-        "-v", f"{to_host_path(local_output_dir)}:/var/loop-package:ro",
-        _IMAGE_TAG,
-        "serve.py", "/var/loop-package",
-        "--epoch-utc", epoch,
-        "--port", str(port),
-        "--dvr-window-seconds", _dvr_window_seconds(cfg),
-        *_continuous_timeline_args(cfg),
-    ]
-    print(f"==> Starting container {name} (port {port}, epoch {epoch}) ...")
-    result = subprocess.run(run_args)
-    if result.returncode != 0:
-        sys.exit(f"docker run failed (exit {result.returncode}) -- see output above.")
+    print(f"==> Starting container {name} (port {port}, epoch {epoch}, "
+          f"content: {'bundled in image ' + image_tag if bundled else 'bind-mounted volume'}) ...")
+    _run_container(cfg, name, port, epoch, image_tag, bundled, local_output_dir)
 
     print("Container started.")
     _print_urls(port)
@@ -369,35 +487,79 @@ def refresh(cfg, session, outputs):
     port = _resolve_port(cfg, name)
     local_output_dir = _local_output_dir(cfg, channel_name)
 
-    if not os.path.isdir(local_output_dir) or not os.listdir(local_output_dir):
-        sys.exit(f"No baked loop package found at {local_output_dir} -- run "
-                  f"`channel.py spark` first.")
+    _require_package(local_output_dir)
 
     was_running = _container_status(name) == "running"
     print(f"Recreating container {name} to pick up latest spark ...")
     subprocess.run(["docker", "rm", "-f", name],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    _build_image()
+    image_tag, _, bundled = _prepare_image(cfg, channel_name, local_output_dir)
 
-    run_args = [
-        "docker", "run", "-d", "--name", name,
-        "-p", f"{port}:{port}",
-        "-v", f"{to_host_path(local_output_dir)}:/var/loop-package:ro",
-        _IMAGE_TAG,
-        "serve.py", "/var/loop-package",
-        "--epoch-utc", _DEFAULT_EPOCH,
-        "--port", str(port),
-        "--dvr-window-seconds", _dvr_window_seconds(cfg),
-        *_continuous_timeline_args(cfg),
-    ]
-    result = subprocess.run(run_args)
-    if result.returncode != 0:
-        sys.exit(f"docker run failed (exit {result.returncode}) -- see output above.")
+    _run_container(cfg, name, port, _DEFAULT_EPOCH, image_tag, bundled, local_output_dir)
 
     if not was_running:
         print("Note: container was not previously running -- started fresh.")
     print("Refreshed.")
     _print_urls(port)
+
+
+def image(cfg, session, channel_name, extra_args=None):
+    """Build the self-contained, shareable image for this channel
+    (`its-a-live-<name>:baked`: loop-dee-loop code + the baked loop package)
+    and optionally export it as a tarball another machine can `docker load`.
+    Independent of `[docker] bundle_content` -- that setting only decides
+    what `start`/`refresh` run locally; this always produces the bundle.
+
+      channel.py image [--epoch-utc now|<ISO8601>] [--save [PATH]]
+
+    --epoch-utc sets the default epoch baked into the image (default: the
+    Unix epoch, same as `start`). --save writes `docker save` output to PATH
+    (default: its-a-live/.local-images/<name>.tar)."""
+    _require_docker()
+    local_output_dir = _local_output_dir(cfg, channel_name)
+    _require_package(local_output_dir)
+
+    epoch = None
+    save_path = None
+    args = list(extra_args or [])
+    i = 0
+    while i < len(args):
+        if args[i] == "--epoch-utc" and i + 1 < len(args):
+            epoch = _resolve_epoch_arg(args[i + 1])
+            i += 2
+        elif args[i] == "--save":
+            if i + 1 < len(args) and not args[i + 1].startswith("--"):
+                save_path = os.path.abspath(args[i + 1])
+                i += 2
+            else:
+                save_path = os.path.join(_DEFAULT_IMAGE_EXPORT_DIR, f"{channel_name}.tar")
+                i += 1
+        else:
+            sys.exit("Usage: channel.py image [--epoch-utc now|<ISO8601 UTC timestamp>] [--save [PATH]]")
+
+    _build_image()
+    tag, image_id = _build_baked_image(cfg, channel_name, local_output_dir, epoch)
+
+    size = subprocess.run(
+        ["docker", "image", "inspect", "-f", "{{.Size}}", tag],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+    ).stdout.strip()
+    print(f"Built {tag}" + (f" ({_human_size(int(size))})" if size.isdigit() else "") + ".")
+
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        print(f"==> Exporting {tag} -> {save_path} ...")
+        result = subprocess.run(["docker", "save", "-o", save_path, tag])
+        if result.returncode != 0:
+            sys.exit(f"docker save failed (exit {result.returncode}) -- see output above.")
+        print(f"Exported {_human_size(os.path.getsize(save_path))} to {save_path}")
+        print(f"IMAGE_FILE={save_path}")
+        print("\nOn the receiving machine:")
+        print(f"  docker load -i {os.path.basename(save_path)}")
+    print("\nRun it anywhere Docker is available -- no S3, AWS credentials or volume needed:")
+    print(f"  docker run -p 8080:8080 {tag}")
+    print("  HLS:  http://localhost:8080/index.m3u8")
+    print("  DASH: http://localhost:8080/stream.mpd")
 
 
 def status(cfg, session, outputs):
@@ -416,6 +578,12 @@ def status(cfg, session, outputs):
     result = {
         "backend": "local-docker",
         "container_name": name,
+        "bundle_content": _bundle_content(cfg),
+        "image": _baked_image_tag(channel_name) if _bundle_content(cfg) else _IMAGE_TAG,
+        # Size of the tarball `channel.py image --save` last exported for
+        # this channel (None if there isn't one) -- igor offers it for
+        # download.
+        "exported_image_bytes": _exported_image_bytes(channel_name),
         "status": docker_status or "not created",
         "port": port,
         "hls_url": hls_url,

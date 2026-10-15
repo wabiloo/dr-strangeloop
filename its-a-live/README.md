@@ -12,7 +12,11 @@ you pick:
   media services, real live transcoding).
 - **`local-docker`** — `loop-dee-loop` in a `docker run` container on
   your own machine. No AWS resources at all, no CloudFormation stack —
-  good for local dev/demo/testing before spending anything on AWS.
+  good for local dev/demo/testing before spending anything on AWS. The
+  loop package is bind-mounted from your machine by default; set
+  `[docker] bundle_content = true` (or run `channel.py image`) to build a
+  self-contained, shareable image instead — see
+  [local-docker: bundled content](#local-docker-bundled-content).
 
 > A fourth backend, `k8s` — `local-docker`'s idea (no AWS, no
 > CloudFormation) retargeted at a generic Kubernetes cluster instead of a
@@ -150,7 +154,7 @@ memory = 512
 See `AGENTS.md`'s config reference for the full schema, including the
 `[markers]` section controlling the shape of the HLS/DASH SCTE-35
 signaling `loop-dee-loop` renders, and `local-docker`'s `[docker]`
-section (in place of `[express]`, holding just `port`).
+section (in place of `[express]`, holding `port` and `bundle_content`).
 
 For `ecs-express` and `local-docker`, `[markers].daterange_id_format`
 controls HLS DATERANGE IDs. Its default is
@@ -225,11 +229,51 @@ groups: **Infrastructure** (does the stack/container exist at all) and
 | Command | `ecs-express` | `aws-media` | `local-docker` |
 |---|---|---|---|
 | `spark` | Bake locally (GPAC via `bake.py`), push loop package to S3 | Upload the raw `.ts` to S3 as-is | Bake locally (GPAC via `bake.py`), no upload — package stays on disk |
-| `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Start the MediaLive channel, wait for `RUNNING` | `docker run` a container bind-mounting the baked package (building the image on first use); epoch defaults to the Unix epoch, `--epoch-utc` works the same as `ecs-express` |
+| `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Start the MediaLive channel, wait for `RUNNING` | `docker run` a container bind-mounting the baked package (building the image on first use) — or, with `bundle_content = true`, build the per-channel image with the package inside and run it with no mount; epoch defaults to the Unix epoch, `--epoch-utc` works the same as `ecs-express` |
 | `stop` | Scale ECS to 0 tasks (shared ALB keeps running for other channels) | Stop the MediaLive channel, wait for `IDLE` | `docker rm -f` the container |
 | `refresh` | Force a new ECS task launch to re-sync S3 content | Full stop→start cycle (no hot-reload exists) | Recreate the container (seconds, no canary) |
 | `update` | `spark` then `refresh` in one step — the routine "ship new content to a running channel" combo | (same) | (same) |
-| `status` | ECS service scaling/status | MediaLive channel state | Docker container status |
+| `image` | Errors — content lives in S3, nothing to export | Errors | Build the self-contained image (`its-a-live-<name>:baked`: code + baked loop package), regardless of `bundle_content`; `--save [PATH]` exports a tarball for `docker load` on another machine |
+| `status` | ECS service scaling/status | MediaLive channel state | Docker container status (plus `bundle_content`, the image, and the size of any exported tarball) |
+
+### local-docker: bundled content
+
+By default the `local-docker` container bind-mounts the baked loop package
+from your machine, so the image on its own is **useless to anyone else** —
+it holds code and the GPAC/ffmpeg toolchain, never the video. To hand a
+channel to someone else, bundle the content into the image:
+
+```toml
+[docker]
+bundle_content = true   # default false
+```
+
+or, without changing the config, `channel.py -c <config> image --save`.
+Either builds `its-a-live-<name>:baked` (`loop-dee-loop/Dockerfile.baked`:
+the code image plus the loop package, served through gunicorn with
+`LOOP_PACKAGE_BAKED=1` — no S3, AWS credentials or volume). `--save`
+writes a tarball (default `its-a-live/.local-images/<name>.tar`):
+
+```bash
+# on your machine
+uv run python channel.py -c my-channel.toml image --save
+# on theirs
+docker load -i my-channel.tar
+docker run -p 8080:8080 its-a-live-my-channel:baked   # http://localhost:8080/index.m3u8
+```
+
+Things to know before bundling:
+
+- The image contains the **entire loop** (roughly the size of the source
+  video) and anyone holding it can extract the video — don't publish it
+  anywhere public unless the content is yours to publish.
+- It is a **snapshot**. `spark` alone changes nothing; `start`, `refresh`,
+  `update` and `image` rebuild it (slower than a volume mount, and each
+  rebuild leaves old layers behind until `docker image prune`).
+- Defaults baked in: epoch (Unix epoch, or `--epoch-utc`), DVR window and
+  continuous timeline from the channel config; override any `serve.py`
+  flag after the image name (`docker run … <image> serve.py --port 9000`).
+- `ecs-express` is unaffected: its content stays in S3.
 
 `local-docker` has no CloudFormation/CDK involvement whatsoever: no
 `cdk deploy`/`cdk destroy` step exists for it, `redeploy`, `terminate`

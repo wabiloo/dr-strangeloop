@@ -33,6 +33,7 @@ export const CONFIG_FIELD_LABEL = {
   hls_format: 'HLS segment format',
   hls_ts_mux_audio: 'Mux audio into each HLS TS video segment',
   port: 'Serve port',
+  bundle_content: 'Bundle content into the Docker image',
   cpu: 'Express CPU units',
   memory: 'Express memory (MB)',
   daterange_mode: 'HLS DATERANGE mode',
@@ -124,6 +125,7 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
   if (usesChannelSection(backend)) {
     add('serving', [
       ['port', portTable.port],
+      ['bundle_content', isLocalDocker ? Boolean(portTable.bundle_content ?? false) : undefined],
       ['cpu', isEcsExpress ? portTable.cpu : undefined],
       ['memory', isEcsExpress ? portTable.memory : undefined],
     ])

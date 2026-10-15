@@ -26,6 +26,7 @@ cdk.out/
 
 # its-a-live: locally-baked (sparked) packages before they're pushed to S3
 its-a-live/.local-loop-package/
+its-a-live/.local-images/
 # Personal/real per-channel deploy configs (bucket names, etc.): not committed.
 its-a-live/configs/*.toml
 outputs
