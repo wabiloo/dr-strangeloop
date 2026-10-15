@@ -218,7 +218,7 @@ cdk destroy ItsALiveStack-my-stream-aws-media -c config=../data/channels/my-stre
 ### Web UI
 
 ```bash
-./igor/dev.sh          # backend on :8090 plus the Vite dev server
+./igor/dev.sh          # backend on :8090 (IGOR_PORT=... to change it) plus the Vite dev server
 ```
 
 See [`igor/README.md`](./igor/README.md) for the production build, and [`DOCKER_LOCAL.md`](./DOCKER_LOCAL.md) to run it from a container.
