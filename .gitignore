@@ -34,3 +34,8 @@ outputs
 # Imported HAR captures and saved VOD manifest URLs (may contain tokens)
 data/archives/
 data/manifests/
+
+# Per-user channel configs and playlists: new ones stay local. Files already
+# tracked are unaffected; use `git add -f` to commit a new one.
+data/channels/*.toml
+data/playlists/*.yaml
