@@ -795,3 +795,33 @@ def test_legacy_asset_level_ad_break_field_has_no_effect():
     cfg = Config.model_validate(raw)
     assert cfg.markers == []
     assert not hasattr(cfg.assets[1], "ad_break")
+
+
+@pytest.mark.parametrize("auto_return", [True, False])
+def test_splice_insert_markers_carry_the_span_duration(auto_return):
+    """A splice_insert is defined as a span, so its duration is in the sidecar
+    whether the output has one cue (auto_return) or an out/in pair -- on the
+    start; the stop carries 0, like a time_signal's."""
+    raw = {
+        "output": {"file": "out.ts"},
+        "assets": [{"file": "program.mp4", "id": "program"}],
+        "markers": [{
+            "event_id": 1,
+            "splice_type": "splice_insert",
+            "auto_return": auto_return,
+            "assets": ["program"],
+        }],
+    }
+    cfg = Config.model_validate(raw)
+    boundaries = resolve_markers(cfg.markers, _entries_from_config(cfg))
+    span = boundaries[0].break_duration
+    assert span > 0
+    pts = {(1, True): 900_000, (1, False): 900_000 + round(span * 90_000)}
+    markers = build_markers(boundaries, pts)
+
+    assert len(markers) == (1 if auto_return else 2)
+    assert markers[0]["is_out"] is True
+    assert markers[0]["segmentation_duration_ticks"] == round(span * 90_000)
+    if not auto_return:
+        assert markers[1]["is_out"] is False
+        assert markers[1]["segmentation_duration_ticks"] == 0

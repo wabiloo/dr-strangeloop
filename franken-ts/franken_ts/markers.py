@@ -65,6 +65,15 @@ def build_markers(
         if boundary.event_id in duplicate_ids:
             entry["marker_identity"] = boundary.marker_index
 
+        if ab.splice_type == "splice_insert":
+            # The marker is defined as a span, so its duration is known whether
+            # the output has one cue (auto_return) or a splice-out/splice-in
+            # pair. Same field and convention as time_signal below: the span on
+            # the start, 0 on the stop. It is the splice_insert's break_duration.
+            entry["segmentation_duration_ticks"] = (
+                round(boundary.break_duration * PTS_CLOCK) if boundary.is_start else 0
+            )
+
         if ab.splice_type == "time_signal" and ab.segmentation is not None:
             seg = ab.segmentation
             type_id = boundary.segmentation_type_id

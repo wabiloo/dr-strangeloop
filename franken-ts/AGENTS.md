@@ -200,6 +200,10 @@ Playlist-level `enforce_scte35_marker_semantics` defaults to `true` and computes
 - `.markers.json` is always written alongside `.ts` (or once per ladder
   dir) — the single source of truth for SCTE-35 timing downstream; never
   regenerate it by hand.
+  Every start entry (`splice_insert` or `time_signal`) carries the marker's
+  span as `segmentation_duration_ticks` (0 on a stop), with or without
+  `auto_return`; loop-dee-loop signals it as HLS `PLANNED-DURATION` / DASH
+  `Event@duration`. Entries from before this was added lack it on `splice_insert`.
 - `<name>.timeline.json` is also written alongside `.ts` (per rendition for
   ladders): where each source asset sits in the output. Not consumed by
   loop-dee-loop; `inspector-krogh` uses it to show asset joins that carry no
