@@ -4,7 +4,6 @@ import Column from 'primevue/column'
 import ConfirmPopup from 'primevue/confirmpopup'
 import DataTable from 'primevue/datatable'
 import Message from 'primevue/message'
-import MultiSelect from 'primevue/multiselect'
 import Tag from 'primevue/tag'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
@@ -171,30 +170,6 @@ function actionsSortKey(channel: ChannelListItem) {
   return isDeletable(channel) ? '3-delete' : '4-none'
 }
 
-// Backend filter (empty = all), remembered in the browser.
-const BACKEND_FILTER_KEY = 'igor.channels.backendFilter'
-const BACKEND_OPTIONS = [
-  { label: 'aws-media', value: 'aws-media' },
-  { label: 'ecs-express', value: 'ecs-express' },
-  { label: 'local-docker', value: 'local-docker' },
-]
-function loadBackendFilter(): string[] {
-  try {
-    const v = JSON.parse(localStorage.getItem(BACKEND_FILTER_KEY) ?? '[]')
-    return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []
-  } catch {
-    return []
-  }
-}
-const backendFilter = ref<string[]>(loadBackendFilter())
-watch(backendFilter, (v) => {
-  try {
-    localStorage.setItem(BACKEND_FILTER_KEY, JSON.stringify(v))
-  } catch {
-    /* filter just won't be remembered */
-  }
-})
-
 // Grouping (none/backend/state/source), remembered in the browser. DataTable
 // row groups need the data sorted by the group key, so while grouping is on
 // the table's sort is pinned to it (column-header sorting is ignored) and the
@@ -262,7 +237,6 @@ const tableSortOrder = computed({
 
 const rows = computed(() =>
   channels.value
-    .filter((c) => !backendFilter.value.length || backendFilter.value.includes(c.backend))
     .map((c) => {
       const _live = liveState[c.name]?.status ?? 'pending'
       return {
@@ -434,17 +408,6 @@ onBeforeUnmount(() => {
     <div class="flex justify-content-between align-items-center">
       <h2 class="m-0">Channels</h2>
       <div class="flex gap-2 align-items-center">
-        <MultiSelect
-          v-model="backendFilter"
-          :options="BACKEND_OPTIONS"
-          option-label="label"
-          option-value="value"
-          placeholder="All backends"
-          :max-selected-labels="2"
-          selected-items-label="{0} backends"
-          show-clear
-          style="min-width: 13rem"
-        />
         <Button label="Refresh" icon="pi pi-refresh" severity="secondary" outlined @click="load" :loading="loading || refreshing" />
         <Button label="New channel" icon="pi pi-plus" @click="router.push('/channels/new')" />
       </div>
@@ -621,8 +584,7 @@ onBeforeUnmount(() => {
         <span class="text-color-secondary text-sm ml-2">({{ groupCounts[data._group] }})</span>
       </template>
       <template #empty>
-        <template v-if="backendFilter.length && channels.length">No channels match the backend filter.</template>
-        <template v-else>No channels defined yet. Click "New channel" to create one from a playlist build, an imported archive, or an imported manifest.</template>
+        No channels defined yet. Click "New channel" to create one from a playlist build, an imported archive, or an imported manifest.
       </template>
     </DataTable>
     <ConfirmPopup />
