@@ -11,6 +11,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { buildPlaylist, defineChannel, getChannel, listArchives, listManifests, listPlaylists } from '../api/client'
 import JobPanel from '../components/JobPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
+import BundleContentField from '../components/BundleContentField.vue'
 import FieldHelp from '../components/FieldHelp.vue'
 import EpochFields from '../components/EpochFields.vue'
 import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
@@ -154,6 +155,7 @@ const form = reactive<ChannelCreatePayload>({
   timeshift_end_param: 'end',
   timeshift_max_span_seconds: 21600,
   port: 'auto',
+  bundle_content: false,
   cpu: 256,
   memory: 512,
   cdn: true,
@@ -289,6 +291,8 @@ watch(
   () => form.backend,
   (backend) => {
     autoPort.value = backend === 'local-docker'
+    // bundle_content is local-docker-only (the API rejects it elsewhere).
+    if (backend !== 'local-docker') form.bundle_content = false
   },
 )
 // Both ecs-express and local-docker bake+serve via loop-dee-loop and share
@@ -501,6 +505,8 @@ async function submit() {
           :use-grouping="false"
         />
       </div>
+
+      <BundleContentField v-if="isLocalDocker" v-model="form.bundle_content" input-id="bundle-content" />
 
       <div v-if="isEcsExpress" class="grid">
         <div class="col-6 flex flex-column gap-1">

@@ -29,7 +29,25 @@
 #     CMD:  bake.py --segment-duration 4.0 [other flags]
 #     (no input-path positional argument, no --output flag)
 #
-# If the relevant *_S3_URI env var is NOT set, both scripts fall back to
+#   serve.py, baked mode (local-docker "bundle content" images, see
+#   Dockerfile.baked):
+#     LOOP_PACKAGE_BAKED=1  the loop package is already inside the image at
+#                           $LOOP_PACKAGE_LOCAL_DIR (/var/loop-package) --
+#                           no S3, no AWS credentials, no mount needed.
+#     CMD:  serve.py [any serve.py flag, to override the image's defaults]
+#     The channel's full serve flag list (epoch, port, DVR window,
+#     timeline, markers, ...) is stored in the image at
+#     $BAKED_SERVE_ARGS_FILE (/etc/loop-serve-args.json, a JSON array,
+#     written by Dockerfile.baked) and is prepended to the CMD's flags, so
+#     a bare `docker run <image>` serves exactly what the channel serves
+#     locally and e.g. `docker run <image> serve.py --port 9000` only
+#     changes the port.
+#     (no package-dir positional argument). Goes through the same gunicorn
+#     production path as the S3 mode, just without the sync step.
+#     LOOP_PACKAGE_S3_URI, if also set, wins (S3 mode).
+#
+# If neither LOOP_PACKAGE_S3_URI nor LOOP_PACKAGE_BAKED is set (and, for
+# bake.py, FRANKEN_TS_S3_URI is not set), both scripts fall back to
 # running exactly as given (e.g. for local `docker run` testing with a
 # bind-mounted volume) — the shim is then a pure passthrough.
 #
@@ -38,6 +56,7 @@
 set -euo pipefail
 
 LOOP_PACKAGE_LOCAL_DIR="${LOOP_PACKAGE_LOCAL_DIR:-/var/loop-package}"
+BAKED_SERVE_ARGS_FILE="${BAKED_SERVE_ARGS_FILE:-/etc/loop-serve-args.json}"
 FRANKEN_TS_LOCAL_DIR="${FRANKEN_TS_LOCAL_DIR:-/var/franken-ts-input}"
 
 log() { echo "[entrypoint] $*" >&2; }
@@ -60,8 +79,25 @@ SUBCOMMAND="${1:-}"
 case "$SUBCOMMAND" in
     serve.py)
         shift
-        if [[ -n "${LOOP_PACKAGE_S3_URI:-}" ]]; then
-            sync_down "$LOOP_PACKAGE_S3_URI" "$LOOP_PACKAGE_LOCAL_DIR"
+        if [[ -n "${LOOP_PACKAGE_S3_URI:-}" || "${LOOP_PACKAGE_BAKED:-}" == "1" ]]; then
+            if [[ -n "${LOOP_PACKAGE_S3_URI:-}" ]]; then
+                sync_down "$LOOP_PACKAGE_S3_URI" "$LOOP_PACKAGE_LOCAL_DIR"
+            else
+                if [[ ! -d "$LOOP_PACKAGE_LOCAL_DIR" || -z "$(ls -A "$LOOP_PACKAGE_LOCAL_DIR" 2>/dev/null)" ]]; then
+                    log "ERROR: LOOP_PACKAGE_BAKED=1 but no loop package found at" \
+                        "${LOOP_PACKAGE_LOCAL_DIR} -- this image was not built with content."
+                    exit 2
+                fi
+                log "using loop package baked into the image at ${LOOP_PACKAGE_LOCAL_DIR} (no S3 sync)"
+                # The image carries the channel's serve flags (epoch, port,
+                # timeline, ...) as defaults; flags given on the command line
+                # come after them, so they win (the parser below is last-wins).
+                if [[ -f "$BAKED_SERVE_ARGS_FILE" ]]; then
+                    mapfile -t _baked_defaults < <(python3 -c \
+                        'import json,sys; print("\n".join(json.load(sys.stdin)))' < "$BAKED_SERVE_ARGS_FILE")
+                    set -- "${_baked_defaults[@]}" "$@"
+                fi
+            fi
 
             HOST="0.0.0.0"
             PORT="8080"
@@ -118,7 +154,7 @@ case "$SUBCOMMAND" in
                 --access-logformat '%(h)s "%(r)s" %(s)s %(b)s "%(a)s"' \
                 wsgi:app
         else
-            log "LOOP_PACKAGE_S3_URI not set — running serve.py as given (local/dev mode)"
+            log "neither LOOP_PACKAGE_S3_URI nor LOOP_PACKAGE_BAKED set — running serve.py as given (local/dev mode)"
             exec python3 serve.py "$@"
         fi
         ;;

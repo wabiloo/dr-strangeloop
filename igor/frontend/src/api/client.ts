@@ -375,6 +375,17 @@ export function redeployChannel(name: string): Promise<Job> {
   return postJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/redeploy`)
 }
 
+/** local-docker only: build the self-contained image (loop-dee-loop + this
+ * channel's loop package). `save` also exports it as a tarball, downloadable
+ * from channelImageDownloadUrl(). */
+export function buildChannelImage(name: string, save = false): Promise<Job> {
+  return postJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/image`, { save })
+}
+
+export function channelImageDownloadUrl(name: string): string {
+  return `${CHANNELS_BASE}/${encodeURIComponent(name)}/image`
+}
+
 export function terminateChannel(name: string): Promise<Job> {
   return postJson(`${CHANNELS_BASE}/${encodeURIComponent(name)}/terminate`)
 }

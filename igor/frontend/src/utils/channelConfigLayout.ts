@@ -58,6 +58,7 @@ export const CONFIG_FIELD_LABEL = {
   dash_addressing: 'DASH segment addressing',
   dash_timeline: 'DASH SegmentTimeline',
   port: 'Serve port',
+  bundle_content: 'Bundle content into the Docker image',
   cpu: 'Express CPU units',
   memory: 'Express memory (MB)',
   cdn: 'CloudFront CDN',
@@ -168,6 +169,7 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
   if (usesChannelSection(backend)) {
     add(isLocalDocker ? 'infrastructure.docker' : 'infrastructure.express', [
       ['port', portTable.port],
+      ['bundle_content', isLocalDocker ? Boolean(portTable.bundle_content ?? false) : undefined],
       ['cpu', isEcsExpress ? portTable.cpu : undefined],
       ['memory', isEcsExpress ? portTable.memory : undefined],
       ['cdn', isEcsExpress ? (portTable.cdn ?? true) : undefined],

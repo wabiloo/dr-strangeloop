@@ -63,6 +63,7 @@ match, fix the upstream franken-ts input instead.
 | `serve.py` | Stateless HTTP serving of manifests + segments per request. |
 | `continuity.py` | Opt-in `--continuous-timeline` mode (`SCOPE.md` §12): per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite so the channel has no discontinuity/Period-restart at the loop wrap — header patch only, never a re-mux. |
 | `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig`, and integer-tick `resolve_window` (segment snapping, `full-loops` widening, max-span cap). Pure ints, no Flask. |
+| `Dockerfile` / `Dockerfile.baked` / `docker-entrypoint.sh` | `Dockerfile`: code-only image shared by every channel (content comes from S3 or a bind mount). `Dockerfile.baked`: layers one channel's loop package on top for a self-contained, shareable image (`LOOP_PACKAGE_BAKED=1`, local-docker `bundle_content` only — see `its-a-live/AGENTS.md`). The entrypoint picks S3 / baked / passthrough mode from env vars. |
 | `load_test.py` | Concurrent-viewer load generator (see `PERFS.md`). |
 
 ## Window JSON (`/timeline.json`)

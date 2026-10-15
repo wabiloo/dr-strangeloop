@@ -482,6 +482,18 @@ the one-shot bake step) and pushes the result to S3 with a plain
 `aws s3 sync`, since baking once per schedule change doesn't warrant its
 own cloud task definition.
 
+A third mode, **baked** (`LOOP_PACKAGE_BAKED=1`), is for `local-docker`
+channels that want a self-contained image: `Dockerfile.baked` layers a loop
+package on top of this image at `/var/loop-package` and sets that env var.
+`serve.py` then skips the S3 sync and goes straight to gunicorn, taking its
+starting values from the `EPOCH_UTC` / `DVR_WINDOW_SECONDS` /
+`WINDOW_SEGMENTS` / `CONTINUOUS_TIMELINE` env vars (which `Dockerfile.baked`
+seeds from build args); any `serve.py` flag on the command line overrides
+them. Unlike the two S3 modes, this one is one image *per channel* — it
+holds that channel's video — and is built by `its-a-live` (`channel.py
+image`, or `start`/`refresh` with `[infrastructure.docker] bundle_content = true`), not by
+hand. `LOOP_PACKAGE_S3_URI`, if also set, wins.
+
 This means one shared image + one shared CDK stack serve every
 channel/schedule — only S3 prefixes differ. See `../push-to-aws-loop/` for
 the full CDK project that provisions the long-running `serve` side on

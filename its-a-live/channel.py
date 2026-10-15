@@ -33,6 +33,13 @@ config file selects "aws-media" (MediaLive + MediaPackage v1) or
             running channel" combo (see README.md's "Updating content on
             a running channel"). `spark` and `refresh` remain available
             separately for finer-grained control.
+  image     local-docker only: build the self-contained image for this
+            channel (loop-dee-loop code + the baked loop package copied in,
+            `its-a-live-<name>:baked`) and optionally export it with
+            `--save [PATH]` as a tarball another machine can `docker load`.
+            The same image `start` runs when `[infrastructure.docker] bundle_content =
+            true`; `image` builds it regardless of that setting.
+              image [--epoch-utc now|<ISO8601>] [--save [PATH]]
   status    Print the channel's current status
   outputs   Print all CloudFormation stack outputs
   redeploy  Delete a broken stack if needed, then run cdk deploy
@@ -194,6 +201,13 @@ def cmd_start(cfg, extra_args):
     _ops(cfg).start(cfg, _session(cfg), outputs, extra_args)
 
 
+def cmd_image(cfg, extra_args):
+    if _backend(cfg) != "local-docker":
+        sys.exit("`image` is only available for the local-docker backend -- "
+                  "ecs-express keeps its content in S3 and aws-media has no image.")
+    _ops(cfg).image(cfg, _session(cfg), _channel_name(cfg), extra_args)
+
+
 def cmd_stop(cfg, extra_args):
     if extra_args:
         sys.exit("`stop` does not take extra arguments")
@@ -313,6 +327,7 @@ def _list_entry(path):
             # equivalent identifier is the deterministic local Docker
             # container name (see _local_docker_ops.status()).
             "container_name": result.get("container_name"),
+            "bundle_content": result.get("bundle_content"),
             "stack_status": result.get("status"),
             "reachable": result.get("reachable"),
         }
@@ -636,6 +651,7 @@ COMMANDS = {
     "stop": cmd_stop,
     "refresh": cmd_refresh,
     "update": cmd_update,
+    "image": cmd_image,
 }
 
 # Commands taking (cfg, extra_args, as_json) instead of just (cfg, extra_args).

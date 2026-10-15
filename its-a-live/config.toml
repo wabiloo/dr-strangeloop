@@ -68,7 +68,7 @@ epoch_utc = "2026-01-01T00:00:00Z"  # optional, this is the default -- loop 0's 
 continuous = true # default -- no discontinuity/Period restart at the loop wrap (loop-dee-loop/SCOPE.md §12); false reverts to the signaled-discontinuity default
 
 [infrastructure.express]
-# ecs-express only -- local-docker gets [infrastructure.docker] instead (just `port`).
+# ecs-express only -- local-docker gets [infrastructure.docker] instead (`port`, `bundle_content`).
 port   = 8080  # serve.py listen port, container-internal
 # ECS Express Mode CPU/memory codes (same numeric convention as Fargate:
 # 256 = 0.25 vCPU). See AWS ECS Express Mode docs for the full supported
@@ -79,3 +79,11 @@ memory = 512   # 0.5 GB
 # local-docker only, in place of [infrastructure.express]:
 # [infrastructure.docker]
 # port = 8080  # host+container port, so http://localhost:<port>
+# bundle_content = false  # default: the container bind-mounts the baked loop
+#                         # package from this machine (the image alone is useless
+#                         # to anyone else). true copies the package INTO a
+#                         # per-channel, self-contained image
+#                         # (its-a-live-<name>:baked) that anyone can
+#                         # `docker run -p 8080:8080` -- with no S3/AWS/volume.
+#                         # The image contains the WHOLE loop and is a snapshot:
+#                         # start/refresh/update rebuild it. See `channel.py image`.

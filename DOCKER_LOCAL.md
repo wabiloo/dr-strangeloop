@@ -103,6 +103,18 @@ containers), so `http://localhost:<port>/index.m3u8` from `channel.py
 start`'s output is immediately reachable from your own browser -- no port
 plumbing between igor's container and your host was needed for that case.
 
+## Handing a channel to someone else
+
+A `local-docker` channel's container bind-mounts its baked loop package from
+your machine, so the image on its own contains no video. For a shareable,
+self-contained image, tick **Bundle content into the Docker image** on the
+channel (or use **Export shareable image** on its page) and download the
+tarball -- the recipient only needs `docker load -i <file>` and `docker run
+-p 8080:8080 <image>`. The tarball is written to `outputs/images/`
+(your configured outputs folder). It contains the whole loop; don't publish it
+unless the content is yours to publish. Details: `its-a-live/README.md`'s
+"local-docker: bundled content".
+
 ## What you get vs. what you don't
 
 Included: franken-ts builds (ffmpeg/tsduck/GPAC all in-image), HTTP(S)

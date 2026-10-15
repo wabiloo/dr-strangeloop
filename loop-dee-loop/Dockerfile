@@ -71,9 +71,12 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # All channel-specific data (franken-ts input, baked loop package) lives in
-# S3, never in the image -- see docker-entrypoint.sh for the sync contract
-# driven by FRANKEN_TS_S3_URI / LOOP_PACKAGE_S3_URI. Only code + the
-# GPAC/ffmpeg toolchain above are baked in, so this image is shared
-# unchanged across every channel/schedule.
+# S3 (ecs-express) or a bind-mounted volume (local-docker), never in THIS
+# image -- see docker-entrypoint.sh for the sync contract driven by
+# FRANKEN_TS_S3_URI / LOOP_PACKAGE_S3_URI. Only code + the GPAC/ffmpeg
+# toolchain above are baked in, so this image is shared unchanged across
+# every channel/schedule. local-docker channels that want a self-contained,
+# shareable image layer the loop package on top of this one with
+# Dockerfile.baked (`[infrastructure.docker] bundle_content = true`, `channel.py image`).
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["serve.py", "--help"]

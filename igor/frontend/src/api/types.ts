@@ -266,6 +266,9 @@ export interface ChannelListItem {
   // equivalent identifier: the deterministic `its-a-live-<name>` Docker
   // container name.
   container_name?: string | null
+  // local-docker only: whether the loop package is bundled into the
+  // channel's image (true) or bind-mounted from this machine (false).
+  bundle_content?: boolean | null
   stack_status: string | null
   source_path?: string
   source_kind?: 'playlist' | 'archive' | 'manifest'
@@ -311,6 +314,15 @@ export interface ChannelStatus {
   channel_id?: string
   // local-docker only:
   container_name?: string
+  // local-docker only -- true when the loop package is baked INTO the
+  // channel's image (`[infrastructure.docker] bundle_content`), false when it is
+  // bind-mounted from this machine.
+  bundle_content?: boolean
+  // local-docker only -- the image the container runs.
+  image?: string
+  // local-docker only -- size of the exported image tarball
+  // (`channel.py image --save`), null when none has been exported yet.
+  exported_image_bytes?: number | null
   // local-docker only -- the resolved port, even when docker.port is
   // "auto" in the config; null if no container has ever been created yet.
   port?: number | null
@@ -512,6 +524,9 @@ export interface ChannelCreatePayload {
   // int to pin an explicit host port, "auto" (local-docker only) to let
   // it self-select a free one at start/refresh time.
   port?: number | 'auto'
+  /** local-docker only: copy the baked loop package INTO the channel's
+   * image (self-contained, shareable) instead of bind-mounting it. */
+  bundle_content?: boolean
   cpu?: number
   memory?: number
   cdn?: boolean

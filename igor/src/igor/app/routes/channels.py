@@ -9,7 +9,7 @@ from typing import Literal
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, field_validator, model_validator
 
 from igor.integrations import archives, franken_ts, its_a_live, manifests
@@ -87,6 +87,10 @@ class ChannelCreatePayload(BaseModel):
     # it self-select a free one at start/refresh time -- see
     # its-a-live/AGENTS.md and _local_docker_ops._resolve_port.
     port: int | str = 8080
+    # local-docker only: copy the baked loop package INTO the channel's
+    # image (self-contained, shareable) instead of bind-mounting it from
+    # this machine. Default off. See its-a-live/AGENTS.md ([infrastructure.docker]).
+    bundle_content: bool = False
     cpu: int = 256
     memory: int = 512
     cdn: bool = True
@@ -220,6 +224,8 @@ class ChannelCreatePayload(BaseModel):
     def _validate_port_backend(self) -> "ChannelCreatePayload":
         if self.port == "auto" and self.backend != "local-docker":
             raise ValueError("port: 'auto' is only supported for the local-docker backend")
+        if self.bundle_content and self.backend != "local-docker":
+            raise ValueError("bundle_content is only supported for the local-docker backend")
         return self
 
 
@@ -537,6 +543,53 @@ def update_channel_content(name: str) -> dict:
     """Spark then refresh in one step -- the routine "ship new content to
     a running channel" action (see channel.py's `update` command)."""
     return _spawn("update", name)
+
+
+class ImageBuildPayload(BaseModel):
+    """`save`: also export the built image as a tarball (`docker save`)
+    another machine can `docker load` -- downloadable afterwards from
+    GET /{name}/image. `epoch_utc`: default epoch baked into the image."""
+    save: bool = False
+    epoch_utc: str | None = None
+
+
+@router.post("/{name}/image")
+def build_channel_image(name: str, payload: ImageBuildPayload | None = None) -> dict:
+    """local-docker only: build the self-contained image (loop-dee-loop code
+    + this channel's baked loop package) and optionally export it -- see
+    channel.py's `image` command. Works regardless of the channel's
+    `bundle_content` setting, which only decides what `start`/`refresh` run
+    locally."""
+    try:
+        cfg = channel_store.read_channel_config(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    backend = cfg.get("deploy", {}).get("backend")
+    if backend != "local-docker":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Building a self-contained image is only available for local-docker channels (this one is {backend!r}).",
+        )
+    payload = payload or ImageBuildPayload()
+    extra: list[str] = []
+    if payload.epoch_utc:
+        extra += ["--epoch-utc", payload.epoch_utc]
+    if payload.save:
+        extra += ["--save"]
+    return _spawn("image", name, extra)
+
+
+@router.get("/{name}/image")
+def download_channel_image(name: str) -> FileResponse:
+    """Streams the tarball exported by `POST /{name}/image` with
+    `save: true` (`docker load -i <file>` on the receiving machine)."""
+    path = its_a_live.exported_image_path(name)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="No exported image for this channel yet -- build one with save=true first.",
+        )
+    return FileResponse(path, media_type="application/x-tar", filename=f"its-a-live-{name}.tar")
 
 
 @router.post("/{name}/redeploy")

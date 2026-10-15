@@ -1,0 +1,31 @@
+# "Bundle content" variant of the loop-dee-loop image: the loop package
+# (a baked HLS/DASH segment set) is copied INTO the image, so the result is
+# fully self-contained -- no S3, no AWS credentials, no bind mount. Anyone
+# with the image can `docker run -p 8080:8080 <image>` and get the stream.
+#
+# Used by its-a-live's local-docker backend (`[infrastructure.docker]
+# bundle_content = true`, or `channel.py image`); never by ecs-express, which
+# keeps content in S3. Build context is the loop package directory itself:
+#
+#   docker build -f loop-dee-loop/Dockerfile.baked \
+#       --build-arg BASE_IMAGE=loop-dee-loop:local \
+#       --build-arg SERVE_ARGS_JSON='["--epoch-utc","2026-01-01T00:00:00Z","--port","8080"]' \
+#       -t its-a-live-<channel>:baked <loop-package-dir>
+#
+# One image == one channel's content. Rebuild it whenever the content (or
+# the base image's code) changes.
+ARG BASE_IMAGE=loop-dee-loop:local
+FROM ${BASE_IMAGE}
+
+# The channel's serve.py flags, as a JSON array (built by its-a-live from the
+# same helper that builds the local `docker run` command, so the two cannot
+# drift). docker-entrypoint.sh prepends them to whatever flags the container
+# is started with, which therefore override them.
+ARG SERVE_ARGS_JSON='["--epoch-utc","2026-01-01T00:00:00Z","--port","8080"]'
+ENV LOOP_PACKAGE_BAKED=1
+RUN printf '%s' "${SERVE_ARGS_JSON}" > /etc/loop-serve-args.json
+
+COPY . /var/loop-package/
+
+EXPOSE 8080
+CMD ["serve.py"]

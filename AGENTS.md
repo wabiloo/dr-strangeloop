@@ -52,7 +52,10 @@ data/playlists/*.yaml
         │
         └── backend = "local-docker"  → no cdk, no AWS at all →
                                         loop-dee-loop/bake.py → `docker run`
-                                        on your own machine
+                                        on your own machine (content
+                                        bind-mounted, or bundled into a
+                                        shareable image with
+                                        `[infrastructure.docker] bundle_content = true`)
 ```
 
 Three backends exist for phase 3, chosen per-channel via

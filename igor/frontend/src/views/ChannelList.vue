@@ -340,6 +340,14 @@ onBeforeUnmount(() => {
       <Column field="backend" header="Backend" sortable>
         <template #body="{ data }">
           <BackendBadge :backend="data.backend" />
+          <Tag
+            v-if="data.backend === 'local-docker' && data.bundle_content"
+            value="bundled"
+            severity="info"
+            icon="pi pi-box"
+            class="ml-2"
+            title="Loop package is bundled into the Docker image (self-contained, shareable)"
+          />
         </template>
       </Column>
       <Column header="Source">
