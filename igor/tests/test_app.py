@@ -20,6 +20,12 @@ def test_health():
     assert resp.json() == {"status": "ok"}
 
 
+def test_version():
+    resp = client.get("/api/v1/version")
+    assert resp.status_code == 200
+    assert resp.json()["version"] == "1.0.0"
+
+
 def test_playlist_schema_is_derived_from_franken_ts():
     resp = client.get("/api/v1/playlists/schema")
     assert resp.status_code == 200

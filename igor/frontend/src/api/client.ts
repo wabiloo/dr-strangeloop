@@ -42,6 +42,10 @@ async function handle(res: Response): Promise<Response> {
   return res
 }
 
+export async function fetchAppVersion(): Promise<string> {
+  return (await getJson<{ version: string }>('/api/v1/version')).version
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await handle(await fetch(url))
   return res.json()

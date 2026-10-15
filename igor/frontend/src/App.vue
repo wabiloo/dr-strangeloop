@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import Toast from 'primevue/toast'
 import JobDrawer from './components/JobDrawer.vue'
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { fetchAppVersion } from './api/client'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 
 const route = useRoute()
@@ -10,6 +11,15 @@ const isArchivesActive = computed(() => route.path.startsWith('/archives'))
 const isManifestsActive = computed(() => route.path.startsWith('/manifests'))
 const isChannelsActive = computed(() => route.path.startsWith('/channels'))
 const isDocsActive = computed(() => route.path.startsWith('/docs'))
+
+const appVersion = ref('')
+onMounted(async () => {
+  try {
+    appVersion.value = await fetchAppVersion()
+  } catch {
+    /* version label is cosmetic */
+  }
+})
 </script>
 
 <template>
@@ -46,6 +56,7 @@ const isDocsActive = computed(() => route.path.startsWith('/docs'))
         <RouterLink to="/channels" class="app-brand">
           <img src="/brand-mark.png" alt="" class="app-brand-icon" />
           <span class="app-brand-text">Dr. Strangeloop</span>
+          <span v-if="appVersion" class="app-brand-version">v{{ appVersion }}</span>
         </RouterLink>
 
         <nav class="app-nav">
@@ -264,6 +275,13 @@ const isDocsActive = computed(() => route.path.startsWith('/docs'))
   height: 4px;
   background: var(--p-primary-color, #b91c1c);
   z-index: 1;
+}
+
+.app-brand-version {
+  align-self: flex-end;
+  margin: 0 0 0.9rem 0.5rem;
+  font-size: 0.7rem;
+  color: #94a3b8;
 }
 
 .app-main {

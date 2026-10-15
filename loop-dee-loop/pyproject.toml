@@ -1,6 +1,6 @@
 [project]
 name = "loop-dee-loop"
-version = "0.1.0"
+version = "1.0.0"
 description = "Bake franken-ts outputs into loopable HLS packages and serve them"
 requires-python = ">=3.11"
 dependencies = [

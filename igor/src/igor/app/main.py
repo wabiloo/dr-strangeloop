@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import tomllib
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -16,8 +18,26 @@ from igor.app.routes.playlists import router as playlists_router
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]  # igor/
 
+def _app_version() -> str:
+    """The dr-strangeloop release version: the repo-root pyproject.toml when
+    running from a checkout (single source of truth), else igor's installed
+    package metadata (same value -- all workspace members share it)."""
+    root_pyproject = PROJECT_ROOT.parent / "pyproject.toml"
+    try:
+        return tomllib.loads(root_pyproject.read_text())["project"]["version"]
+    except (OSError, KeyError, tomllib.TOMLDecodeError):
+        pass
+    try:
+        return _pkg_version("igor")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+APP_VERSION = _app_version()
+
 app = FastAPI(
     title="Dr. Strangeloop",
+    version=APP_VERSION,
     description=(
         "Define, launch, and monitor dr-strangeloop channels: "
         "franken-ts content/ad-break authoring, its-a-live deploy/lifecycle, "
@@ -37,6 +57,11 @@ app.include_router(jobs_router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(playback_router, prefix="/api/v1/playback-test", tags=["playback-test"])
 app.include_router(files_router, prefix="/api/v1/files", tags=["files"])
 app.include_router(docs_router, prefix="/api/v1/docs", tags=["docs"])
+
+
+@app.get("/api/v1/version")
+def get_version() -> dict:
+    return {"version": APP_VERSION}
 
 
 @app.get("/health")
