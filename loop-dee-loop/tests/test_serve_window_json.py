@@ -389,13 +389,24 @@ def test_hls_dateranges_match_markers(increment):
 
     # default ID format "...-{event id, decimal}-{loop}"
     got = set()
+    opened = {}  # ID -> START-DATE of its SCTE35-OUT
+    closing = []  # (ID, START-DATE) of splice-ins that carry an END-DATE
     for ln in lines:
         if not ln.startswith("#EXT-X-DATERANGE:"):
             continue
         attrs = dict(re.findall(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)', ln.split(":", 1)[1]))
         event, loop = re.search(r"-(\d+)-(\d+)$", attrs["ID"].strip('"')).groups()
         direction = "out" if "SCTE35-OUT" in attrs else "in" if "SCTE35-IN" in attrs else "instant"
-        got.add((attrs["START-DATE"].strip('"'), int(event), int(loop), direction))
+        date = attrs["START-DATE"].strip('"')
+        if direction == "out":
+            opened[attrs["ID"]] = date
+        if direction == "in" and "END-DATE" in attrs:
+            # A splice_insert splice-in updates its splice-out's range: the
+            # OUT's ID and START-DATE, with END-DATE where the break closes.
+            closing.append((attrs["ID"], date))
+            date = attrs["END-DATE"].strip('"')
+        got.add((date, int(event), int(loop), direction))
+    assert all(opened.get(i) in (None, start) for i, start in closing)
 
     expected = {
         (m["start_utc"], int(m["event_id"], 16), m["loop"], _direction(m))

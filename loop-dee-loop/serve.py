@@ -1901,7 +1901,7 @@ class Channel:
                         loop_start_ticks, pkg.timescale
                     )
                     loop_start_datetime = _dt.datetime.utcfromtimestamp(loop_start_seconds)
-                    signaling_markers = markers_to_signaling(matching_markers)
+                    signaling_markers = markers_to_signaling(matching_markers, all_markers=pkg.markers)
                     # grave-robber/SCOPE.md §6.2: DATERANGE START-DATE is an
                     # absolute wall-clock value (unlike DASH's Period-relative
                     # <Event presentationTime>, which needs no adjustment --
@@ -1912,8 +1912,8 @@ class Channel:
                     # falls in -> that segment's accumulated declared offset.
                     # A no-op (0 for every index) for any package with no
                     # internal asset boundaries.
-                    signaling_markers = [
-                        dataclasses.replace(
+                    def _declared(sm: SignalingMarker) -> SignalingMarker:
+                        return dataclasses.replace(
                             sm,
                             pts_time_ticks=sm.pts_time_ticks
                             + pkg.declared_offset_ticks_by_local_index[
@@ -1921,9 +1921,10 @@ class Channel:
                                     sm.pts_time_ticks, pkg.segment_boundary_ticks
                                 )
                             ],
+                            paired_out=_declared(sm.paired_out) if sm.paired_out is not None else None,
                         )
-                        for sm in signaling_markers
-                    ]
+
+                    signaling_markers = [_declared(sm) for sm in signaling_markers]
                     if pkg.increment_event_ids:
                         signaling_markers = _remap_signaling_markers(
                             signaling_markers, pkg.markers, local_loop_number

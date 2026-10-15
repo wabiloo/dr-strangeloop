@@ -53,6 +53,19 @@ write a `<output>.markers.json` sidecar (not gated behind `--debug` or
 ]
 ```
 
+`segmentation_duration_ticks` is the marker's span: on every start it is the
+duration (a `time_signal`'s segmentation duration, a `splice_insert`'s
+`break_duration`, known whether the output has one cue with `auto_return` or an
+out/in pair), and `0` on the stop. HLS (`PLANNED-DURATION`) and DASH
+(`Event@duration`) both read it. A `.markers.json` made before this was added
+has no duration on `splice_insert` entries: re-assemble it with franken-ts.
+
+HLS: a `splice_insert` splice-in's `EXT-X-DATERANGE` updates the range its
+splice-out opened — the OUT's `ID`, `START-DATE` and `PLANNED-DURATION`,
+`SCTE35-IN` instead of `SCTE35-OUT`, plus an `END-DATE` where the break closes
+(also when the OUT has scrolled out of the window). `time_signal` start/end
+pairs keep separate ranges. DASH: the return's `Event` has `duration="0"`.
+
 `pts_time_ticks` is in the 90kHz clock, matching the `.ts`'s own timescale — this
 is the single source of truth for every downstream timing decision in this tool.
 Do **not** re-derive marker timing by re-probing the `.ts` in `loop-dee-loop`;

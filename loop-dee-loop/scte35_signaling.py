@@ -16,6 +16,7 @@ per request, in serve.py.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import datetime as _dt
 import string
 import unicodedata
@@ -49,6 +50,11 @@ class SignalingMarker:
     is_out: bool  # True = CUE-OUT / splice-out, False = CUE-IN / splice-in
     is_instant: bool = False  # True = standalone signal, no OUT/IN pairing
     marker_identity: str | None = None
+    # For a bare splice_insert splice-in: the splice-out it closes (same event
+    # id / identity, earlier PTS). Its DATERANGE then updates the OUT's (same
+    # ID, START-DATE and PLANNED-DURATION, plus END-DATE) instead of being a
+    # separate, unrelated range. See `build_daterange_tags`.
+    paired_out: "SignalingMarker | None" = None
 
 
 def _splice_command_base64_from_marker(marker: dict) -> str:
@@ -520,10 +526,15 @@ def is_out_marker(m: dict) -> bool:
 def markers_to_signaling(
     markers: list[dict],
     timescale: int = DEFAULT_TIMESCALE,
+    all_markers: list[dict] | None = None,
 ) -> list[SignalingMarker]:
     """Convert raw `.markers.json` entries (with attached base64 splice
     commands) into the intermediate `SignalingMarker` representation shared
-    by both the HLS and DASH authoring functions below."""
+    by both the HLS and DASH authoring functions below.
+
+    `all_markers` (every marker of the package) lets a bare splice_insert
+    splice-in find the splice-out it closes (`SignalingMarker.paired_out`),
+    even when that OUT is not among `markers`."""
     result = []
     for m in markers:
         seg_type_id = m.get("segmentation_type_id")
@@ -540,9 +551,31 @@ def markers_to_signaling(
                 is_out=is_out,
                 is_instant=is_instant,
                 marker_identity=(str(m["marker_identity"]) if m.get("marker_identity") is not None else None),
+                paired_out=_paired_splice_out(m, all_markers) if all_markers else None,
             )
         )
     return result
+
+
+def _paired_splice_out(marker: dict, all_markers: list[dict]) -> "SignalingMarker | None":
+    """The splice-out a bare splice_insert splice-in closes: same event id and
+    identity, nearest earlier PTS. None for anything else (time_signal
+    segmentation pairs keep their own, separate ranges)."""
+    if marker.get("segmentation_type_id") is not None or is_out_marker(marker):
+        return None
+    candidates = [
+        o for o in all_markers
+        if o is not marker
+        and o.get("segmentation_type_id") is None
+        and is_out_marker(o)
+        and o["event_id"] == marker["event_id"]
+        and o.get("marker_identity") == marker.get("marker_identity")
+        and o["pts_time_ticks"] < marker["pts_time_ticks"]
+    ]
+    if not candidates:
+        return None
+    out = max(candidates, key=lambda o: o["pts_time_ticks"])
+    return markers_to_signaling([out])[0]
 
 
 def _iso8601_duration_seconds(ticks: int, timescale: int) -> float:
@@ -602,18 +635,35 @@ def build_daterange_tags(
         start_date = program_start_datetime + _dt.timedelta(seconds=offset_seconds)
         start_date_str = start_date.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
+        # A splice_insert splice-in updates the range its splice-out opened:
+        # same ID, START-DATE and PLANNED-DURATION, SCTE35-IN in place of
+        # SCTE35-OUT, and an END-DATE where the break closes. The ID uses the
+        # OUT's PTS but this marker's (possibly loop-remapped) event id.
+        opener = (
+            dataclasses.replace(marker.paired_out, event_id=marker.event_id)
+            if marker.paired_out is not None and not marker.is_instant
+            else None
+        )
+        id_marker, id_start_date, id_start_str = marker, start_date, start_date_str
+        if opener is not None:
+            id_marker = opener
+            id_start_date = program_start_datetime + _dt.timedelta(
+                seconds=_iso8601_duration_seconds(opener.pts_time_ticks, timescale)
+            )
+            id_start_str = id_start_date.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
         if daterange_id_format is None:
-            marker_id = _legacy_daterange_id(marker, loop_number)
+            marker_id = _legacy_daterange_id(id_marker, loop_number)
         else:
             marker_id = _render_daterange_id(
-                daterange_id_format, marker, loop_number, start_date,
+                daterange_id_format, id_marker, loop_number, id_start_date,
             )
         if marker.marker_identity is not None:
             marker_id += f"-{marker.marker_identity}"
         marker_id = _sanitize_daterange_id(marker_id)
         attrs = [
             f'ID="{marker_id}"',
-            f'START-DATE="{start_date_str}"',
+            f'START-DATE="{id_start_str}"',
             'CLASS="com.scte35"',
         ]
 
@@ -626,11 +676,12 @@ def build_daterange_tags(
             # with no PLANNED-DURATION (there is no avail interval).
             attrs.append(f'SCTE35-CMD=0x{_b64_to_hex(marker.splice_command_b64)}')
         else:
-            if marker.segmentation_duration_ticks is not None:
-                duration_seconds = _iso8601_duration_seconds(
-                    marker.segmentation_duration_ticks, timescale
-                )
+            planned_ticks = (opener or marker).segmentation_duration_ticks
+            if planned_ticks is not None:
+                duration_seconds = _iso8601_duration_seconds(planned_ticks, timescale)
                 attrs.append(f'PLANNED-DURATION={duration_seconds:.3f}')
+            if opener is not None:
+                attrs.append(f'END-DATE="{start_date_str}"')
 
             if marker.is_out:
                 attrs.append(f'SCTE35-OUT=0x{_b64_to_hex(marker.splice_command_b64)}')
