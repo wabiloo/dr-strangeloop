@@ -176,6 +176,10 @@ def parse_scte35_xml(xml_path: Path) -> list[RawEvent]:
                 is_start = si.get("out_of_network", "").lower() == "true"
             except (ValueError, TypeError):
                 continue
+            # The splice-out's break_duration is the span, the counterpart of a
+            # segmentation descriptor's segmentation_duration.
+            bd = si.find("break_duration")
+            break_dur = bd.get("duration") if bd is not None else None
             events.append(RawEvent(
                 event_id=event_id,
                 splice_type="splice_insert",
@@ -183,6 +187,7 @@ def parse_scte35_xml(xml_path: Path) -> list[RawEvent]:
                 is_instant=False,
                 pts_ticks=pts_ticks,
                 pts_seconds=pts_ticks / PTS_CLOCK,
+                segmentation_duration_ticks=_parse_int(break_dur) if break_dur else None,
             ))
             continue
 

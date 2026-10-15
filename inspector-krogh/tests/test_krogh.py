@@ -30,6 +30,16 @@ def _splice_insert_table(event_id: int, pts_seconds: float, out_of_network: bool
   </splice_information_table>"""
 
 
+def _splice_insert_with_break_table(event_id: int, pts_seconds: float, duration_seconds: float) -> str:
+    pts = round(pts_seconds * PTS_CLOCK)
+    return f"""
+  <splice_information_table>
+    <splice_insert splice_event_id="0x{event_id:X}" out_of_network="true" pts_time="{pts}">
+      <break_duration auto_return="true" duration="{round(duration_seconds * PTS_CLOCK)}"/>
+    </splice_insert>
+  </splice_information_table>"""
+
+
 def _time_signal_table(pts_seconds: float, descriptors: list[dict]) -> str:
     pts = round(pts_seconds * PTS_CLOCK)
     descs = "\n".join(
@@ -59,6 +69,12 @@ def test_parse_splice_insert_pair(tmp_path):
     assert events[0].pts_seconds == pytest.approx(10.0)
     assert events[1].is_start is False
     assert events[1].pts_seconds == pytest.approx(40.0)
+
+
+def test_parse_splice_insert_break_duration_is_the_span(tmp_path):
+    xml = _write_xml(tmp_path, _splice_insert_with_break_table(1, 10.0, 15.0))
+    (event,) = scan.parse_scte35_xml(xml)
+    assert event.segmentation_duration_ticks == 15 * PTS_CLOCK
 
 
 def test_parse_time_signal_multiple_concurrent_descriptors(tmp_path):
