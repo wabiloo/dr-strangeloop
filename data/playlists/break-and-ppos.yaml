@@ -55,7 +55,7 @@ normalize: true
 osd:
   enabled: true
   progress_bar:
-    mode: asset
+    mode: loop
     height_pct: 3
   text_size_pct: 3
   text_color: '#FFFFFF'
@@ -65,7 +65,7 @@ osd:
     color: '#FCD64B'
   corners:
     top_left: null
-    top_right: is_adbreak
+    top_right: transition
     bottom_left: asset_id
     bottom_right: next_asset_id
 markers:
@@ -159,22 +159,6 @@ markers:
     type_id: '0x22'
     upid_type: '0x09'
     upid_hex: 42 52 45 41 4b 32
-    web_delivery_allowed: true
-    no_regional_blackout: false
-    archive_allowed: false
-    device_restrictions: 1
-- event_id: 201
-  splice_type: time_signal
-  assets:
-  - ad2a
-  - ad2b
-  - ad2c
-  - ad2d
-  - ad2e
-  segmentation:
-    type_id: '0x34'
-    upid_type: '0x09'
-    upid_hex: 50 50 4f 32
     web_delivery_allowed: true
     no_regional_blackout: false
     archive_allowed: false
@@ -369,5 +353,21 @@ markers:
     upid_hex: 414446520133f10134b04f065e060220
     web_delivery_allowed: true
     no_regional_blackout: false
+    archive_allowed: false
+    device_restrictions: 1
+- event_id: 201
+  splice_type: time_signal
+  assets:
+  - ad2a
+  - ad2b
+  - ad2c
+  - ad2d
+  - ad2e
+  segmentation:
+    type_id: '0x34'
+    upid_type: '0x09'
+    upid_hex: 50 50 4f 32
+    web_delivery_allowed: true
+    no_regional_blackout: true
     archive_allowed: false
     device_restrictions: 1
