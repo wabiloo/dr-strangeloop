@@ -4,10 +4,11 @@ import Column from 'primevue/column'
 import ConfirmPopup from 'primevue/confirmpopup'
 import DataTable from 'primevue/datatable'
 import Message from 'primevue/message'
+import MultiSelect from 'primevue/multiselect'
 import Tag from 'primevue/tag'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { deleteChannel, getChannelSummary, getJob, listChannelsQuick, startChannel, stopChannel } from '../api/client'
 import type { ChannelListItem, Job } from '../api/types'
@@ -170,15 +171,118 @@ function actionsSortKey(channel: ChannelListItem) {
   return isDeletable(channel) ? '3-delete' : '4-none'
 }
 
+// Backend filter (empty = all), remembered in the browser.
+const BACKEND_FILTER_KEY = 'igor.channels.backendFilter'
+const BACKEND_OPTIONS = [
+  { label: 'aws-media', value: 'aws-media' },
+  { label: 'ecs-express', value: 'ecs-express' },
+  { label: 'local-docker', value: 'local-docker' },
+]
+function loadBackendFilter(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(BACKEND_FILTER_KEY) ?? '[]')
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+const backendFilter = ref<string[]>(loadBackendFilter())
+watch(backendFilter, (v) => {
+  try {
+    localStorage.setItem(BACKEND_FILTER_KEY, JSON.stringify(v))
+  } catch {
+    /* filter just won't be remembered */
+  }
+})
+
+// Grouping (none/backend/state/source), remembered in the browser. DataTable
+// row groups need the data sorted by the group key, so while grouping is on
+// the table's sort is pinned to it (column-header sorting is ignored) and the
+// rows inside each group stay in name order.
+// PrimeVue spans group headers over (columns - 1), leaving the last column
+// unpainted; the `pt` above widens it to all of them. Keep in step with <Column>s.
+const COLUMN_COUNT = 7
+
+type GroupBy = 'none' | 'backend' | 'state' | 'source'
+const GROUP_KEY = 'igor.channels.groupBy'
+const GROUPS: GroupBy[] = ['none', 'backend', 'state', 'source']
+function loadGroupBy(): GroupBy {
+  try {
+    const v = localStorage.getItem(GROUP_KEY)
+    return GROUPS.includes(v as GroupBy) ? (v as GroupBy) : 'none'
+  } catch {
+    return 'none'
+  }
+}
+const groupBy = ref<GroupBy>(loadGroupBy())
+watch(groupBy, (v) => {
+  try {
+    localStorage.setItem(GROUP_KEY, v)
+  } catch {
+    /* not remembered */
+  }
+})
+
+function toggleGroup(g: GroupBy) {
+  groupBy.value = groupBy.value === g ? 'none' : g
+}
+
+function sourceLabel(c: ChannelListItem): string {
+  const name = c.archive_display_name || c.archive_name || c.manifest_display_name || c.manifest_name || c.playlist_name || c.source_path
+  if (!name) return 'No source'
+  const kind = c.source_kind ?? 'playlist'
+  return `${kind[0].toUpperCase()}${kind.slice(1)}: ${name}`
+}
+
+function groupKeyOf(c: ChannelListItem & { _live?: string }): string {
+  switch (groupBy.value) {
+    case 'backend':
+      return c.backend
+    case 'state':
+      return c._live === 'pending' ? 'Checking…' : runningStatusLabel(c)
+    case 'source':
+      return sourceLabel(c)
+    default:
+      return ''
+  }
+}
+
+const tableSortField = computed({
+  get: () => (groupBy.value === 'none' ? sortField.value : '_group'),
+  set: (v) => {
+    if (groupBy.value === 'none') sortField.value = v
+  },
+})
+const tableSortOrder = computed({
+  get: () => (groupBy.value === 'none' ? sortOrder.value : 1),
+  set: (v) => {
+    if (groupBy.value === 'none') sortOrder.value = v
+  },
+})
+
 const rows = computed(() =>
-  channels.value.map((c) => ({
-    ...c,
-    _live: liveState[c.name]?.status ?? 'pending',
-    _live_error: liveState[c.name]?.error,
-    _state_sort: isLiveReady(c) ? runningStatusLabel(c) : '~',
-    _actions_sort: actionsSortKey(c),
-  })),
+  channels.value
+    .filter((c) => !backendFilter.value.length || backendFilter.value.includes(c.backend))
+    .map((c) => {
+      const _live = liveState[c.name]?.status ?? 'pending'
+      return {
+        ...c,
+        _live,
+        _live_error: liveState[c.name]?.error,
+        _state_sort: isLiveReady(c) ? runningStatusLabel(c) : '~',
+        _actions_sort: actionsSortKey(c),
+        _group: groupKeyOf({ ...c, _live }),
+      }
+    })
+    // Stable sort downstream keeps this name order inside each group.
+    .sort((a, b) => a.name.localeCompare(b.name)),
 )
+
+const groupCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const r of rows.value) counts[r._group] = (counts[r._group] ?? 0) + 1
+  return counts
+})
 
 // Deleting only removes igor's local TOML config, never touches AWS/Docker
 // (see routes/channels.py's delete_channel) -- restrict it in the UI to
@@ -329,7 +433,18 @@ onBeforeUnmount(() => {
   <div class="flex flex-column gap-3">
     <div class="flex justify-content-between align-items-center">
       <h2 class="m-0">Channels</h2>
-      <div class="flex gap-2">
+      <div class="flex gap-2 align-items-center">
+        <MultiSelect
+          v-model="backendFilter"
+          :options="BACKEND_OPTIONS"
+          option-label="label"
+          option-value="value"
+          placeholder="All backends"
+          :max-selected-labels="2"
+          selected-items-label="{0} backends"
+          show-clear
+          style="min-width: 13rem"
+        />
         <Button label="Refresh" icon="pi pi-refresh" severity="secondary" outlined @click="load" :loading="loading || refreshing" />
         <Button label="New channel" icon="pi pi-plus" @click="router.push('/channels/new')" />
       </div>
@@ -337,9 +452,30 @@ onBeforeUnmount(() => {
 
     <Message v-if="error" severity="error">{{ error }}</Message>
 
-    <DataTable v-model:sort-field="sortField" v-model:sort-order="sortOrder" :value="rows" :loading="loading" data-key="name" @row-click="(e) => router.push(`/channels/${e.data.name}`)" class="cursor-pointer">
-      <Column field="name" header="Name" sortable />
-      <Column field="backend" header="Backend" sortable>
+    <DataTable v-model:sort-field="tableSortField" v-model:sort-order="tableSortOrder" :value="rows" :pt="{ rowGroupHeaderCell: { colspan: COLUMN_COUNT } }" :row-group-mode="groupBy === 'none' ? undefined : 'subheader'" :group-rows-by="groupBy === 'none' ? undefined : '_group'" :loading="loading" data-key="name" @row-click="(e) => router.push(`/channels/${e.data.name}`)" class="cursor-pointer">
+      <Column field="name" header="Name" sortable>
+      <template #sorticon="{ sorted, sortOrder }">
+        <i :class="sorted ? (sortOrder === 1 ? 'pi pi-sort-amount-up-alt' : 'pi pi-sort-amount-down') : 'pi pi-sort-alt'" />
+      </template>
+      </Column>
+      <Column field="backend" sortable>
+      <template #sorticon="{ sorted, sortOrder }">
+        <i :class="sorted ? (sortOrder === 1 ? 'pi pi-sort-amount-up-alt' : 'pi pi-sort-amount-down') : 'pi pi-sort-alt'" />
+      </template>
+        <template #header>
+          <span class="p-datatable-column-title">Backend</span>
+          <button
+            type="button"
+            class="group-toggle"
+            :class="{ 'group-toggle-on': groupBy === 'backend' }"
+            :title="groupBy === 'backend' ? 'Ungroup' : 'Group by backend'"
+            @click.stop="toggleGroup('backend')"
+          >
+            <svg class="group-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12h-8" /><path d="M21 6H8" /><path d="M21 18h-8" /><path d="M3 6v4c0 1.1.9 2 2 2h3" /><path d="M3 10v6c0 1.1.9 2 2 2h3" />
+            </svg>
+          </button>
+        </template>
         <template #body="{ data }">
           <BackendBadge :backend="data.backend" />
           <Tag
@@ -352,7 +488,21 @@ onBeforeUnmount(() => {
           />
         </template>
       </Column>
-      <Column header="Source">
+      <Column>
+        <template #header>
+          <span class="p-datatable-column-title">Source</span>
+          <button
+            type="button"
+            class="group-toggle"
+            :class="{ 'group-toggle-on': groupBy === 'source' }"
+            :title="groupBy === 'source' ? 'Ungroup' : 'Group by source'"
+            @click.stop="toggleGroup('source')"
+          >
+            <svg class="group-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12h-8" /><path d="M21 6H8" /><path d="M21 18h-8" /><path d="M3 6v4c0 1.1.9 2 2 2h3" /><path d="M3 10v6c0 1.1.9 2 2 2h3" />
+            </svg>
+          </button>
+        </template>
         <template #body="{ data }">
           <div v-if="data.source_path" class="flex align-items-center gap-2" :title="data.source_path">
             <i
@@ -389,7 +539,24 @@ onBeforeUnmount(() => {
           <span v-else class="text-color-secondary text-sm">--</span>
         </template>
       </Column>
-      <Column header="State"  sort-field="_state_sort" sortable>
+      <Column sort-field="_state_sort" sortable>
+      <template #sorticon="{ sorted, sortOrder }">
+        <i :class="sorted ? (sortOrder === 1 ? 'pi pi-sort-amount-up-alt' : 'pi pi-sort-amount-down') : 'pi pi-sort-alt'" />
+      </template>
+        <template #header>
+          <span class="p-datatable-column-title">State</span>
+          <button
+            type="button"
+            class="group-toggle"
+            :class="{ 'group-toggle-on': groupBy === 'state' }"
+            :title="groupBy === 'state' ? 'Ungroup' : 'Group by state'"
+            @click.stop="toggleGroup('state')"
+          >
+            <svg class="group-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12h-8" /><path d="M21 6H8" /><path d="M21 18h-8" /><path d="M3 6v4c0 1.1.9 2 2 2h3" /><path d="M3 10v6c0 1.1.9 2 2 2h3" />
+            </svg>
+          </button>
+        </template>
         <template #body="{ data }">
           <i v-if="data._live === 'pending'" class="pi pi-spin pi-spinner text-color-secondary" title="Checking..." />
           <Tag v-else :value="runningStatusLabel(data)" :severity="statusSeverity(data)" :title="data._live_error" />
@@ -410,6 +577,9 @@ onBeforeUnmount(() => {
         </template>
       </Column>
       <Column header="Actions"  sort-field="_actions_sort" sortable>
+      <template #sorticon="{ sorted, sortOrder }">
+        <i :class="sorted ? (sortOrder === 1 ? 'pi pi-sort-amount-up-alt' : 'pi pi-sort-amount-down') : 'pi pi-sort-alt'" />
+      </template>
         <template #body="{ data }">
           <div class="flex gap-2" @click.stop>
             <Button
@@ -443,8 +613,16 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </Column>
+      <template #groupheader="{ data }">
+        <span class="font-semibold">
+          <BackendBadge v-if="groupBy === 'backend'" :backend="data.backend" />
+          <template v-else>{{ data._group }}</template>
+        </span>
+        <span class="text-color-secondary text-sm ml-2">({{ groupCounts[data._group] }})</span>
+      </template>
       <template #empty>
-        No channels defined yet. Click "New channel" to create one from a playlist build, an imported archive, or an imported manifest.
+        <template v-if="backendFilter.length && channels.length">No channels match the backend filter.</template>
+        <template v-else>No channels defined yet. Click "New channel" to create one from a playlist build, an imported archive, or an imported manifest.</template>
       </template>
     </DataTable>
     <ConfirmPopup />
@@ -452,6 +630,53 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* Group header rows: tinted so they read as section dividers, not channels. */
+:deep(.p-datatable-row-group-header),
+:deep(.p-datatable-row-group-header:hover) {
+  background: #e2e8f0;
+  cursor: default;
+}
+:deep(.p-datatable-row-group-header > td) {
+  background: #e2e8f0;
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid #cbd5e1;
+}
+:deep(.p-datatable-row-group-header > td:first-child) {
+  border-left: 4px solid var(--p-primary-color, #b91c1c);
+}
+.group-toggle {
+  /* The header slot renders inside PrimeVue's flex header container, before
+     the sort icon; `order` puts this after it, and the container's
+     align-items: center keeps it level with the sort arrow. */
+  order: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding: 0.2rem;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--p-text-muted-color, #64748b);
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.group-toggle-icon {
+  width: 1.2em;
+  height: 1.2em;
+}
+.group-toggle:hover {
+  color: var(--p-primary-color, #b91c1c);
+}
+.group-toggle-on {
+  background: var(--p-primary-color, #b91c1c);
+  color: #fff;
+}
+.group-toggle-on:hover {
+  color: #fff;
+}
 .source-link {
   color: var(--p-primary-color, #b91c1c);
   text-decoration: none;
