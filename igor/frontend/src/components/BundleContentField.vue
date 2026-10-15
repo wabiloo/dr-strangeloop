@@ -1,10 +1,9 @@
 <script setup lang="ts">
 // local-docker only: "bundle the loop package into the Docker image" toggle,
 // shared by the New channel form and the Configuration edit form on the
-// channel detail page. Default off (volume mount) -- turning it on shows the
-// trade-offs inline, since it changes what `start`/`refresh` build and run.
+// channel detail page. Default off (volume mount); it changes what
+// `start`/`refresh` build and run.
 import Checkbox from 'primevue/checkbox'
-import Message from 'primevue/message'
 import FieldHelp from './FieldHelp.vue'
 
 defineProps<{ inputId: string }>()
@@ -27,12 +26,5 @@ const model = defineModel<boolean>({ default: false })
         (&ldquo;Export shareable image&rdquo;).
       </FieldHelp>
     </div>
-    <Message v-if="model" severity="warn" :closable="false" class="text-sm">
-      <ul class="m-0 pl-3 line-height-3">
-        <li>The image contains the <strong>entire loop</strong> (about the size of the source video); anyone with the image can extract it. Don't push it to a public registry unless you may publish the content.</li>
-        <li>It is a <strong>snapshot</strong>: Spark alone changes nothing. Start / Refresh / Update content rebuild the image, which is slower than a volume mount and leaves old images behind until <code>docker image prune</code>.</li>
-        <li>Applies to <strong>local-docker</strong> only; ecs-express keeps its content in S3.</li>
-      </ul>
-    </Message>
   </div>
 </template>

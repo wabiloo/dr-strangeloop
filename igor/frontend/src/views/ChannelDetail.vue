@@ -1032,7 +1032,7 @@ watch(() => props.name, reload)
         </div>
 
         <div v-if="backend === 'local-docker'" class="flex flex-column gap-2">
-          <h3 class="m-0 text-sm text-color-secondary uppercase">Share</h3>
+          <h3 class="section-label m-0 text-sm text-color-secondary uppercase">Share</h3>
           <div class="flex align-items-start gap-3 p-3 border-round surface-card" style="border: 1px solid var(--surface-border)">
             <Button
               :label="shareAction.label"
