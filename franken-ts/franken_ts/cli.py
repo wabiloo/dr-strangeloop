@@ -107,8 +107,6 @@ def _setup_logging(verbosity: int, debug: bool) -> None:
               default=None, help="Override output file path from config.")
 @click.option("--temp-dir", type=click.Path(file_okay=False, path_type=Path),
               default=None, help="Directory for temporary files (default: system temp).")
-@click.option("--normalize", is_flag=True, default=False,
-              help="Pre-transcode non-conforming inputs to match output spec.")
 @click.option("--cache-dir", type=click.Path(file_okay=False, path_type=Path),
               default=None,
               help=f"Cache directory for normalized files (default: {_DEFAULT_CACHE_DIR}).")
@@ -134,7 +132,6 @@ def main(
     config: Path,
     output: Optional[Path],
     temp_dir: Optional[Path],
-    normalize: bool,
     cache_dir: Optional[Path],
     no_cache: bool,
     stream_concurrency: int,
@@ -199,10 +196,7 @@ def main(
         cfg.output.file = output
 
     # Every clip is always extracted + normalized (see extract.py).  The cache
-    # is enabled by default and only disabled with --no-cache.  The historical
-    # --normalize flag / cfg.normalize are accepted for backwards compatibility
-    # but no longer gate anything.
-    _ = normalize or cfg.normalize
+    # is enabled by default and only disabled with --no-cache.
     effective_cache_dir: Optional[Path] = None
     if not no_cache:
         effective_cache_dir = cache_dir or _DEFAULT_CACHE_DIR
@@ -359,7 +353,7 @@ def _run_report_only(cfg, temp_dir: Path, dry_run: bool = False) -> None:
         raise RuntimeError(f"Output TS does not exist: {cfg.output.file}")
 
     with console.status("  Validating inputs for report...", spinner="dots"):
-        report, infos = validate_inputs(cfg.assets, cfg.output, normalize=True)
+        report, infos = validate_inputs(cfg.assets, cfg.output)
     if report.has_errors:
         raise RuntimeError("; ".join(report.errors))
 
@@ -560,10 +554,10 @@ def _run_pipeline_single(
         cfg.output.file.parent.mkdir(parents=True, exist_ok=True)
 
     # ── Step 1: validate ─────────────────────────────────────────────────────
-    # normalize=True: every clip is extracted+normalized regardless, so format
+    # Every clip is extracted+normalized regardless, so format
     # mismatches (fps/resolution) are informational warnings, never errors.
     with console.status("  Validating inputs...", spinner="dots"):
-        report, infos = validate_inputs(cfg.assets, cfg.output, normalize=True)
+        report, infos = validate_inputs(cfg.assets, cfg.output)
 
     for w in report.warnings:
         _warn(w)

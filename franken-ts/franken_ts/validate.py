@@ -132,7 +132,6 @@ def probe_file(path: Path) -> VideoInfo:
 def validate_inputs(
     assets: list[AssetConfig],
     output: OutputConfig,
-    normalize: bool,
 ) -> tuple[ValidationReport, dict[Path, VideoInfo]]:
     """Validate all asset files. Returns report and per-file info."""
     report = ValidationReport()
@@ -215,7 +214,7 @@ def validate_inputs(
             report.warnings.append(
                 f"{asset.file.name}: variable frame rate detected — "
                 "duration estimates may be imprecise"
-                + (" (will normalize)" if normalize else " (pass --normalize to fix)")
+                + " (will normalize)"
             )
 
         if info.fps is not None:
@@ -225,10 +224,7 @@ def validate_inputs(
                     f"{asset.file.name}: frame rate {info.fps:.3f} differs from "
                     f"target {output.framerate}"
                 )
-                if normalize:
-                    report.warnings.append(msg + " (will normalize)")
-                else:
-                    report.errors.append(msg + " (pass --normalize to re-encode)")
+                report.warnings.append(msg + " (will normalize)")
 
         if info.width and info.height:
             if info.width != output.width or info.height != output.height:
@@ -236,9 +232,6 @@ def validate_inputs(
                     f"{asset.file.name}: resolution {info.width}x{info.height} differs from "
                     f"target {output.resolution}"
                 )
-                if normalize:
-                    report.warnings.append(msg + " (will normalize)")
-                else:
-                    report.errors.append(msg + " (pass --normalize to re-encode)")
+                report.warnings.append(msg + " (will normalize)")
 
     return report, infos

@@ -43,12 +43,6 @@ single-rendition only — renditions set their own), `framerate` (default
 25), `bitrate_kbps` (default 10000, single-rendition only), `gop`
 (default `framerate * 2`), `service_provider`, `service_name`.
 
-### `normalize` (bool, default `false`)
-
-Set `true` if source assets don't already share the target
-resolution/framerate/codec — auto-transcodes mismatched inputs instead of
-hard-failing.
-
 ### `slate_image` (optional, top-level)
 
 Global cross-dissolve image used by any asset's `fade_in`/`fade_out` that
@@ -189,8 +183,6 @@ Playlist-level `enforce_scte35_marker_semantics` defaults to `true` and computes
    `its-a-live`'s `[input].source_path`).
 4. **Visual polish** — OSD overlays, fades, slates: only ask if the user
    mentioned wanting them; otherwise omit (`osd.enabled` defaults `false`).
-5. **`normalize`** — only needed if source assets have mismatched
-   resolution/framerate/codec; leave `false` by default.
 
 ## Output
 

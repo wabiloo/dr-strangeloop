@@ -28,7 +28,6 @@ markers:
     no_regional_blackout: false
     archive_allowed: false
     device_restrictions: 1
-normalize: true
 osd:
   enabled: true
   corners:

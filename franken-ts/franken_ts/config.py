@@ -620,7 +620,6 @@ class Config(BaseModel):
     enforce_scte35_marker_semantics: bool = True
     scte35_numbering_scheme: Literal["SCTE35_2019A", "SCTE35_2023R1", "AF2M_SNPTV"] = "SCTE35_2023R1"
     break_numbering_supported: bool = False
-    normalize: bool = False
     slate_image: Optional[Path] = None
     osd: OsdConfig = Field(default_factory=OsdConfig)
 

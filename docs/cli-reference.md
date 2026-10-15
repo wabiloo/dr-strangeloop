@@ -28,7 +28,6 @@ uv run franken-ts [OPTIONS] CONFIG
 | Option | Meaning |
 |---|---|
 | `-o, --output FILE` | Override the output path from the config |
-| `--normalize` | Pre-transcode non-conforming inputs to match the output spec |
 | `--cache-dir DIR`, `--no-cache` | Location of / opt out of the normalisation cache |
 | `--temp-dir DIR` | Temporary files directory |
 | `--stream-concurrency N` | Parallel fragment downloads per HLS/DASH asset (default 4) |

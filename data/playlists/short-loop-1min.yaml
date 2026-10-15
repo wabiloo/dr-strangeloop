@@ -23,7 +23,6 @@ assets:
   id: asset-3
   start: 20s
   duration: 10s
-normalize: true
 osd:
   enabled: true
   progress_bar:

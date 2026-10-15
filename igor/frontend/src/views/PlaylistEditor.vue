@@ -262,7 +262,6 @@ function defaultOutput() {
 const form = reactive({
   output: defaultOutput(),
   renditions: [] as RenditionForm[],
-  normalize: false,
   slate_image: '',
   osd: defaultOsd(),
   assets: [] as AssetForm[],
@@ -331,7 +330,6 @@ function resetForm() {
   outputMode.value = 'single'
   Object.assign(form.output, defaultOutput())
   form.renditions = []
-  form.normalize = false
   form.slate_image = ''
   Object.assign(form.osd, defaultOsd())
   form.assets = []
@@ -1573,7 +1571,6 @@ function toYamlPlaylist(): Record<string, unknown> {
   cfg.enforce_scte35_marker_semantics = form.enforce_scte35_marker_semantics
   cfg.scte35_numbering_scheme = form.scte35_numbering_scheme
   cfg.break_numbering_supported = form.break_numbering_supported
-  if (form.normalize) cfg.normalize = true
   if (form.slate_image.trim()) cfg.slate_image = form.slate_image
   if (form.osd.enabled) {
     // Every corner key is written explicitly (null for "none") rather than
@@ -1637,7 +1634,6 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
   form.output.service_provider = (output.service_provider as string) ?? form.output.service_provider
   form.output.service_name = (output.service_name as string) ?? form.output.service_name
   form.renditions = ((output.renditions as RenditionForm[]) ?? []).map((r) => ({ ...r }))
-  form.normalize = Boolean(data.normalize)
   form.enforce_scte35_marker_semantics = data.enforce_scte35_marker_semantics !== false
   form.scte35_numbering_scheme = (data.scte35_numbering_scheme as NumberingScheme) ?? 'SCTE35_2023R1'
   form.break_numbering_supported = data.break_numbering_supported === true
@@ -2087,10 +2083,6 @@ function applyHexPopover() {
 
 
             <Divider align="left"><span class="font-bold">Options</span></Divider>
-            <div class="flex align-items-center gap-2">
-              <Checkbox v-model="form.normalize" binary input-id="normalize" />
-              <label for="normalize">Normalize (auto-fix mismatched inputs)</label>
-            </div>
             <div class="flex flex-column gap-1">
               <label>Global slate image (optional, used by fade_in/fade_out cross-dissolves)</label>
               <AssetFileField v-model="form.slate_image" placeholder="/path/to/slate.png" />

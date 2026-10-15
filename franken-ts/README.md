@@ -76,7 +76,6 @@ output:
   service_provider: "broadpeak"
   service_name: "broadpeak.io"
 
-normalize: false               # set true to auto-fix mismatched inputs
 slate_image: /path/to/slate.png  # optional — global cross-dissolve image for all fades
 
 osd:                            # optional — on-screen display, see "On-screen display (OSD)" below
@@ -430,7 +429,6 @@ Usage: franken-ts [OPTIONS] CONFIG
 Options:
   -o, --output FILE     Override output file path from config.
   --temp-dir DIRECTORY  Directory for temporary files (default: system temp).
-  --normalize           Pre-transcode non-conforming inputs to match output spec.
   --stream-concurrency N  Parallel fragment downloads per HLS/DASH stream asset (default: 4).
   --debug               Keep all temporary files; enable verbose logging.
   --dry-run             Print commands without executing them.

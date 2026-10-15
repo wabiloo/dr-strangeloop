@@ -145,7 +145,7 @@ def resolve_markers_preview(name: str, data: dict | None = None) -> dict:
     """
     cfg = Config.model_validate(data if data is not None else get_playlist(name))
 
-    report, infos = validate_inputs(cfg.assets, cfg.output, normalize=True)
+    report, infos = validate_inputs(cfg.assets, cfg.output)
     if report.has_errors:
         raise ValueError("; ".join(report.errors))
 

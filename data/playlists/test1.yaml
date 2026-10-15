@@ -6,7 +6,6 @@ output:
   gop: 50
   service_provider: broadpeak
   service_name: broadpeak.io
-normalize: true
 assets:
 - file: /Users/fabrelambeau/Broadpeak/Code/prepare-asset-ts-scte35/example/asset1.mp4
   duration: 1 min
