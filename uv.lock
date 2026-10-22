@@ -95,7 +95,7 @@ wheels = [
 
 [[package]]
 name = "dr-strangeloop"
-version = "1.0.0"
+version = "1.0.1"
 source = { virtual = "." }
 
 [[package]]
@@ -133,7 +133,7 @@ wheels = [
 
 [[package]]
 name = "franken-ts"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "franken-ts" }
 dependencies = [
     { name = "click" },
@@ -158,7 +158,7 @@ requires-dist = [
 
 [[package]]
 name = "grave-robber"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "grave-robber" }
 dependencies = [
     { name = "m3u8" },
@@ -317,7 +317,7 @@ wheels = [
 
 [[package]]
 name = "igor"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "igor" }
 dependencies = [
     { name = "fastapi" },
@@ -361,7 +361,7 @@ wheels = [
 
 [[package]]
 name = "inspector-krogh"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "inspector-krogh" }
 dependencies = [
     { name = "pillow" },
@@ -436,7 +436,7 @@ wheels = [
 
 [[package]]
 name = "loop-dee-loop"
-version = "1.0.0"
+version = "1.0.1"
 source = { virtual = "loop-dee-loop" }
 dependencies = [
     { name = "flask" },
@@ -896,7 +896,7 @@ wheels = [
 
 [[package]]
 name = "player-lab"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "player-lab" }
 dependencies = [
     { name = "playwright" },
@@ -1466,7 +1466,7 @@ wheels = [
 
 [[package]]
 name = "scte35-table23"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "scte35-table23" }
 
 [[package]]
