@@ -141,7 +141,9 @@ RUN UV_PROJECT_ENVIRONMENT=/opt/venv-its-a-live uv sync --project "${REPO_ROOT}/
 
 # Frontend: built once here; the container serves the static bundle, it
 # never runs `vite dev` in this shape.
-COPY --from=frontend-build /build/igor/frontend/dist ${REPO_ROOT}/igor/frontend/dist
+# Outside $REPO_ROOT for the same reason as the venvs: the bind mount shadows
+# it, so docker-entrypoint.sh symlinks it back to igor/frontend/dist.
+COPY --from=frontend-build /build/igor/frontend/dist /opt/igor-frontend-dist
 
 COPY igor/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
