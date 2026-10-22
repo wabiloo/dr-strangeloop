@@ -82,7 +82,11 @@ ARG REPO_ROOT=/repo
 # pin the last release that has a debian12 asset. Override with --build-arg
 # if you move the base image. To go newer, build tsduck from source instead
 # (same pattern as the gpac-build stage above).
-ARG TSDUCK_DEB_URL=https://github.com/tsduck/tsduck/releases/download/v3.39-3956/tsduck_3.39-3956.debian12_amd64.deb
+# The package is picked for the build's own architecture (amd64 or arm64, both
+# published for this release), so Apple Silicon builds natively. Set
+# TSDUCK_DEB_URL to override the whole URL.
+ARG TSDUCK_VERSION=3.39-3956
+ARG TSDUCK_DEB_URL=
 
 # docker.io gives us the `docker` CLI to talk to the *host* daemon via the
 # mounted socket (docker-compose.yml) -- dockerd itself is never started,
@@ -92,7 +96,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 ffmpeg \
         docker.io \
         nodejs npm \
-    && curl -fsSL -o /tmp/tsduck.deb "${TSDUCK_DEB_URL}" \
+    && curl -fsSL -o /tmp/tsduck.deb "${TSDUCK_DEB_URL:-https://github.com/tsduck/tsduck/releases/download/v${TSDUCK_VERSION}/tsduck_${TSDUCK_VERSION}.debian12_$(dpkg --print-architecture).deb}" \
     && apt-get install -y --no-install-recommends /tmp/tsduck.deb \
     && rm -f /tmp/tsduck.deb \
     && rm -rf /var/lib/apt/lists/*
@@ -103,7 +107,7 @@ RUN ldconfig
 
 # aws CLI v2 (Debian only packages v1) -- required for its-a-live's
 # aws-media/ecs-express backends (S3 sync, `cdk bootstrap`'s own checks).
-RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip \
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
     && unzip -q /tmp/awscliv2.zip -d /tmp \
     && /tmp/aws/install \
     && rm -rf /tmp/awscliv2.zip /tmp/aws
