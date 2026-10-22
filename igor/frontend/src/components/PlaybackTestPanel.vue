@@ -90,10 +90,10 @@ const effectiveDurationS = computed(() =>
 // Hard cap: the run must be allowed to last as long as the boundaries / loops / duration need.
 const maxSecondsParam = computed(() => Math.min(3600, Math.max(600, effectiveDurationS.value + 180, stopBy.value === 'boundaries' && props.loopDurationS ? Math.ceil((boundaries.value + 1) * props.loopDurationS + 120) : 0)))
 // Default: loops (health, hence the loop length, may arrive after the panel); never override a choice the user made.
-let stopByChosen = false
+const stopByChosen = ref(false)
 watch([canStopByBoundaries, canStopByLoops], () => {
   const usable = (v: typeof stopBy.value) => v === 'duration' || (v === 'loops' ? canStopByLoops.value : canStopByBoundaries.value)
-  if (!stopByChosen && canStopByLoops.value) stopBy.value = 'loops'
+  if (!stopByChosen.value && canStopByLoops.value) stopBy.value = 'loops'
   else if (!usable(stopBy.value)) stopBy.value = canStopByLoops.value ? 'loops' : canStopByBoundaries.value ? 'boundaries' : 'duration'
 }, { immediate: true })
 const durationS = ref(120)

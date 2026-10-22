@@ -659,7 +659,7 @@ export interface PlaybackReport {
   durationS: number
   pass: boolean
   target: { name: string; hls: string | null; dash: string | null; timeline: string | null }
-  boundaries: { requested: number; source: string; newPeriods: number | null; newDiscontinuities: number | null }
+  boundaries: { requested: number; source: string; continuous?: boolean; newPeriods: number | null; newDiscontinuities: number | null }
   cases: PlaybackCase[]
   ffmpeg?: { url: string; pass?: boolean; skipped?: string; problems?: string[]; exitCode?: number }[]
 }

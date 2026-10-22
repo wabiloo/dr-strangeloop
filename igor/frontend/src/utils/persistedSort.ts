@@ -25,8 +25,8 @@ function load(key: string): StoredSort {
 /** v-model:sortField / v-model:sortOrder pair for a DataTable, remembered per list in localStorage. */
 export function usePersistedSort(key: string) {
   const initial = load(key)
-  const sortField = ref<string | null>(initial.field)
-  const sortOrder = ref<number | null>(initial.order)
+  const sortField = ref<string | undefined>(initial.field ?? undefined)
+  const sortOrder = ref<number | undefined>(initial.order ?? undefined)
 
   watch([sortField, sortOrder], ([field, order]) => {
     try {

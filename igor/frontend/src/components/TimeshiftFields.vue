@@ -53,7 +53,7 @@ const maxRangeReadable = computed(() => {
       <div class="col-12 flex flex-column gap-1">
         <label :for="`${idPrefix}-ts-span`">{{ L.timeshift_max_span_seconds }}</label>
         <div class="flex align-items-center gap-2">
-          <InputNumber :input-id="`${idPrefix}-ts-span`" v-model="form.timeshift_max_span_seconds" :min="1" :use-grouping="false" input-style="width: 10rem" />
+          <InputNumber :input-id="`${idPrefix}-ts-span`" v-model="form.timeshift_max_span_seconds" :min="1" :use-grouping="false" :input-style="{ width: '10rem' }" />
           <span v-if="maxRangeReadable" class="text-color-secondary">= {{ maxRangeReadable }}</span>
         </div>
         <div class="flex flex-wrap align-items-center gap-2">
