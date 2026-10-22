@@ -93,6 +93,14 @@ use the **same names, one group per table, same keys in each**. Never add,
 rename or move a table/key in one place only -- see
 [`igor/AGENTS.md`](./igor/AGENTS.md) "Channel config sections".
 
+## Versioning
+
+All packages share one version number (every `pyproject.toml`, `igor/frontend/package.json`
++ `package-lock.json`, and both `uv.lock` files; shown by `/api/v1/version`). After
+completing a change or fix, **always propose bumping it** (patch for fixes, minor for
+features) and ask before doing so. If the user agrees, bump them all together and
+regenerate the lockfiles (`uv lock` at the root and in `its-a-live/`).
+
 ## Environments
 
 - Repo-root `.venv` (`uv sync --all-packages`): `franken-ts`,
