@@ -663,3 +663,29 @@ export interface PlaybackReport {
   cases: PlaybackCase[]
   ffmpeg?: { url: string; pass?: boolean; skipped?: string; problems?: string[]; exitCode?: number }[]
 }
+
+export interface OutputProfileRendition {
+  name: string
+  resolution: string
+  bitrate_kbps: number
+  /** H.264 overrides; unset inherits the profile-level value. */
+  profile?: string
+  level?: string
+}
+
+/** Reusable Output settings (see igor/src/igor/integrations/profiles.py). */
+export interface OutputProfile {
+  name: string
+  builtin: boolean
+  mode: 'single' | 'ladder'
+  resolution?: string
+  bitrate_kbps?: number
+  renditions?: OutputProfileRendition[]
+  framerate: number
+  gop?: number | null
+  /** H.264 profile (baseline/main/high) and level (e.g. "4.0"). */
+  profile?: string
+  level?: string
+  service_provider?: string
+  service_name?: string
+}

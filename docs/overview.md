@@ -68,6 +68,7 @@ channel TOML. There is a single CLI regardless of backend.
 | `data/channels/*.toml` | its-a-live channel configs |
 | `outputs/` | builds: `.ts`, `.markers.json`, HTML reports, frame timelines |
 | `data/archives/`, `data/manifests/` | captured HAR/Proxyman files and saved VOD manifest URLs |
+| `data/profiles/` | user-saved Igor output profiles (encoding settings / ABR ladders) |
 
 All of these locations can be relocated with an optional
 `~/.dr-strangeloop/config.toml` (or the file `$DR_STRANGELOOP_CONFIG` points

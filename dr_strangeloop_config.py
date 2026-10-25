@@ -31,7 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 
 _PATH_KEYS = (
     "data_dir", "outputs_dir", "playlists_dir", "channels_dir", "assets_dir",
-    "archives_dir", "manifests_dir", "local_package_dir",
+    "archives_dir", "manifests_dir", "profiles_dir", "local_package_dir",
 )
 
 
@@ -45,6 +45,7 @@ class Paths:
     assets_dir: Path
     archives_dir: Path
     manifests_dir: Path
+    profiles_dir: Path
     archive_imports_dir: Path
     manifest_imports_dir: Path
     local_package_dir: Path
@@ -101,6 +102,7 @@ def load_paths(config_file: Path | None) -> Paths:
         assets_dir=pick("assets_dir", data_dir / "assets"),
         archives_dir=pick("archives_dir", data_dir / "archives"),
         manifests_dir=pick("manifests_dir", data_dir / "manifests"),
+        profiles_dir=pick("profiles_dir", data_dir / "profiles"),
         archive_imports_dir=outputs_dir / "archives",
         manifest_imports_dir=outputs_dir / "manifests",
         local_package_dir=pick("local_package_dir", default_packages),

@@ -69,8 +69,9 @@ def assemble_ts(
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-c:v", "libx264",
-        "-profile:v", "high",
-        "-level:v", "4.0",
+        "-pix_fmt", "yuv420p",  # baseline/main only allow 4:2:0
+        "-profile:v", output_cfg.profile,
+        "-level:v", output_cfg.level,
         # bframes=0: no reorder buffer → DTS never negative → muxer adds no PTS
         # offset beyond the small AAC one (handled by pts.find_idr_pts).
         # no-open-gop: every GOP keyframe is a true IDR, required for clean-cut

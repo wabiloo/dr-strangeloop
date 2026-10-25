@@ -41,7 +41,10 @@ uv run franken-ts <config.yaml> [--verify] [--dry-run]
 Shared `output` fields (either mode): `resolution` (default `1920x1080`,
 single-rendition only — renditions set their own), `framerate` (default
 25), `bitrate_kbps` (default 10000, single-rendition only), `gop`
-(default `framerate * 2`), `service_provider`, `service_name`.
+(default `framerate * 2`), `profile` (H.264 `baseline`/`main`/`high`,
+default `high`), `level` (H.264 level such as `4.0`, `3.1`; default `4.0`),
+`service_provider`, `service_name`. In a ladder each rendition may set its own
+`profile`/`level`, otherwise it inherits the `output` ones.
 
 ### `slate_image` (optional, top-level)
 

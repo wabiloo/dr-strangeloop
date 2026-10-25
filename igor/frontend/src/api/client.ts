@@ -238,6 +238,31 @@ export function getArchiveImportStatus(name: string): Promise<ArchiveImportStatu
 }
 
 // ---------------------------------------------------------------------------
+// Output profiles (encoding settings / ABR ladders)
+// ---------------------------------------------------------------------------
+
+const PROFILES_BASE = '/api/v1/profiles'
+
+export function listProfiles(): Promise<OutputProfile[]> {
+  return getJson(`${PROFILES_BASE}/`)
+}
+
+export async function saveProfile(name: string, profile: Omit<OutputProfile, 'name' | 'builtin'>): Promise<OutputProfile> {
+  const res = await handle(
+    await fetch(`${PROFILES_BASE}/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profile),
+    }),
+  )
+  return res.json()
+}
+
+export async function deleteProfile(name: string): Promise<void> {
+  await handle(await fetch(`${PROFILES_BASE}/${encodeURIComponent(name)}`, { method: 'DELETE' }))
+}
+
+// ---------------------------------------------------------------------------
 // VOD manifest-URL sources (grave-robber ingest-url)
 // ---------------------------------------------------------------------------
 

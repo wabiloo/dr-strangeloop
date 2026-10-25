@@ -73,6 +73,8 @@ output:
   framerate: 25                # default: 25
   bitrate_kbps: 10000          # default: 10000 (CBR)
   gop: 50                      # default: framerate × 2
+  profile: high                # H.264 profile: baseline | main | high (default high)
+  level: "4.0"                 # H.264 level (default 4.0)
   service_provider: "broadpeak"
   service_name: "broadpeak.io"
 
@@ -247,6 +249,8 @@ output:
     - name: "1080p"              # becomes <dir>/1080p.ts
       resolution: "1920x1080"
       bitrate_kbps: 10000
+      profile: high              # optional per-rendition override of output.profile/level
+      level: "4.0"
     - name: "720p"
       resolution: "1280x720"
       bitrate_kbps: 4500

@@ -37,6 +37,9 @@ ARCHIVE_IMPORTS_DIR = _cfg.archive_imports_dir
 MANIFESTS_DIR = _cfg.manifests_dir
 MANIFEST_IMPORTS_DIR = _cfg.manifest_imports_dir
 
+# User-saved output profiles (encoding ladders/settings); built-ins live in code.
+PROFILES_DIR = _cfg.profiles_dir
+
 
 def its_a_live_python() -> list[str]:
     """Resolution order mirrors loop-dee-loop's ops modules: its-a-live

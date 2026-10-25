@@ -23,8 +23,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
-import { buildPlaylist, buildScteVerify, getOutputStatus, getPlaylist, getPreviewStatus, getScteVerifyStatus, playlistPreviewUrl, probeMedia, resolveMarkers, savePlaylist, scteVerifyReportUrl, validateMarkersNumbering } from '../api/client'
-import type { Job, ResolvedMarker } from '../api/types'
+import { buildPlaylist, buildScteVerify, deleteProfile, getOutputStatus, getPlaylist, getPreviewStatus, getScteVerifyStatus, listProfiles, playlistPreviewUrl, probeMedia, resolveMarkers, savePlaylist, saveProfile, scteVerifyReportUrl, validateMarkersNumbering } from '../api/client'
+import type { Job, OutputProfile, ResolvedMarker } from '../api/types'
 import AssetTimeline from '../components/AssetTimeline.vue'
 import AssetFileField from '../components/AssetFileField.vue'
 import JobPanel from '../components/JobPanel.vue'
@@ -58,7 +58,16 @@ interface RenditionForm {
   name: string
   resolution: string
   bitrate_kbps: number
+  /** H.264 overrides; empty inherits the Output-level setting. */
+  profile?: string | null
+  level?: string | null
 }
+
+const H264_PROFILE_OPTIONS = ['baseline', 'main', 'high']
+const H264_LEVEL_OPTIONS = [
+  '1.0', '1.1', '1.2', '1.3', '2.0', '2.1', '2.2', '3.0', '3.1', '3.2',
+  '4.0', '4.1', '4.2', '5.0', '5.1', '5.2', '6.0', '6.1', '6.2',
+]
 
 interface SegmentationForm {
   type_id: string
@@ -254,6 +263,8 @@ function defaultOutput() {
     framerate: 25,
     bitrate_kbps: 10000,
     gop: null as number | null,
+    profile: 'high',
+    level: '4.0',
     service_provider: '',
     service_name: '',
   }
@@ -1532,6 +1543,11 @@ function timeOrUndefined(v: string): string | number | undefined {
   return Number.isFinite(n) && v.trim() === String(n) ? n : v
 }
 
+/** YAML may hand back `4` or `4.1` as numbers; the selects use "4.0"-style strings. */
+function normalizeLevel(v: unknown): string {
+  return typeof v === 'number' ? v.toFixed(1) : String(v)
+}
+
 /** Converts the form's local shape into the franken-ts YAML shape
  * (franken_ts.config.Config) -- server re-validates against the real
  * Pydantic model on save regardless. */
@@ -1539,6 +1555,8 @@ function toYamlPlaylist(): Record<string, unknown> {
   const output: Record<string, unknown> = {
     framerate: form.output.framerate,
     bitrate_kbps: form.output.bitrate_kbps,
+    profile: form.output.profile,
+    level: form.output.level,
     service_provider: form.output.service_provider,
     service_name: form.output.service_name,
   }
@@ -1548,7 +1566,11 @@ function toYamlPlaylist(): Record<string, unknown> {
     output.resolution = form.output.resolution
   } else {
     output.dir = form.output.dir
-    output.renditions = form.renditions.map((r) => ({ ...r }))
+    output.renditions = form.renditions.map(({ profile, level, ...r }) => ({
+      ...r,
+      ...(profile ? { profile } : {}),
+      ...(level ? { level } : {}),
+    }))
   }
 
   const assets = form.assets
@@ -1631,9 +1653,14 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
   form.output.framerate = (output.framerate as number) ?? form.output.framerate
   form.output.bitrate_kbps = (output.bitrate_kbps as number) ?? form.output.bitrate_kbps
   form.output.gop = (output.gop as number) ?? null
+  form.output.profile = (output.profile as string) ?? 'high'
+  form.output.level = output.level != null ? normalizeLevel(output.level) : '4.0'
   form.output.service_provider = (output.service_provider as string) ?? form.output.service_provider
   form.output.service_name = (output.service_name as string) ?? form.output.service_name
-  form.renditions = ((output.renditions as RenditionForm[]) ?? []).map((r) => ({ ...r }))
+  form.renditions = ((output.renditions as RenditionForm[]) ?? []).map((r) => ({
+    ...r,
+    level: r.level != null ? normalizeLevel(r.level) : null,
+  }))
   form.enforce_scte35_marker_semantics = data.enforce_scte35_marker_semantics !== false
   form.scte35_numbering_scheme = (data.scte35_numbering_scheme as NumberingScheme) ?? 'SCTE35_2023R1'
   form.break_numbering_supported = data.break_numbering_supported === true
@@ -1790,6 +1817,99 @@ async function save() {
     saving.value = false
   }
 }
+
+// --- Output profiles: reusable encoding settings (mode, resolution/bitrate or --
+// renditions, framerate, GOP, service). Applying copies values into the form; ---
+// the playlist never references the profile. -----------------------------------
+const profiles = ref<OutputProfile[]>([])
+const selectedProfileName = ref<string | null>(null)
+const selectedProfile = computed(() => profiles.value.find((p) => p.name === selectedProfileName.value) ?? null)
+const saveProfileDialog = ref(false)
+const saveProfileName = ref('')
+const deleteProfileDialog = ref(false)
+const savingProfile = ref(false)
+
+async function loadProfiles() {
+  try {
+    profiles.value = await listProfiles()
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Could not load profiles', detail: (e as Error).message, life: 5000 })
+  }
+}
+
+function applyProfile(name: string | null) {
+  const profile = profiles.value.find((p) => p.name === name)
+  if (!profile) return
+  outputMode.value = profile.mode
+  form.output.framerate = profile.framerate
+  form.output.gop = profile.gop ?? null
+  form.output.profile = profile.profile ?? 'high'
+  form.output.level = profile.level ?? '4.0'
+  form.output.service_provider = profile.service_provider ?? ''
+  form.output.service_name = profile.service_name ?? ''
+  if (profile.mode === 'single') {
+    form.output.resolution = profile.resolution ?? form.output.resolution
+    form.output.bitrate_kbps = profile.bitrate_kbps ?? form.output.bitrate_kbps
+  } else {
+    form.renditions = (profile.renditions ?? []).map((r) => ({ ...r, profile: r.profile ?? null, level: r.level ?? null }))
+  }
+}
+
+function openSaveProfile() {
+  saveProfileName.value = selectedProfile.value && !selectedProfile.value.builtin ? selectedProfile.value.name : ''
+  saveProfileDialog.value = true
+}
+
+async function confirmSaveProfile() {
+  const name = saveProfileName.value.trim()
+  if (!name) return
+  const single = outputMode.value === 'single'
+  savingProfile.value = true
+  try {
+    const saved = await saveProfile(name, {
+      mode: outputMode.value,
+      ...(single
+        ? { resolution: form.output.resolution, bitrate_kbps: form.output.bitrate_kbps }
+        : {
+            renditions: form.renditions.map(({ profile, level, ...r }) => ({
+              ...r,
+              ...(profile ? { profile } : {}),
+              ...(level ? { level } : {}),
+            })),
+          }),
+      framerate: form.output.framerate,
+      gop: form.output.gop,
+      profile: form.output.profile,
+      level: form.output.level,
+      service_provider: form.output.service_provider || undefined,
+      service_name: form.output.service_name || undefined,
+    })
+    await loadProfiles()
+    selectedProfileName.value = saved.name
+    saveProfileDialog.value = false
+    toast.add({ severity: 'success', summary: `Profile "${saved.name}" saved`, life: 3000 })
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Could not save profile', detail: (e as Error).message, life: 5000 })
+  } finally {
+    savingProfile.value = false
+  }
+}
+
+async function confirmDeleteProfile() {
+  const profile = selectedProfile.value
+  if (!profile || profile.builtin) return
+  try {
+    await deleteProfile(profile.name)
+    selectedProfileName.value = null
+    deleteProfileDialog.value = false
+    await loadProfiles()
+    toast.add({ severity: 'success', summary: `Profile "${profile.name}" deleted`, life: 3000 })
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Could not delete profile', detail: (e as Error).message, life: 5000 })
+  }
+}
+
+onMounted(loadProfiles)
 
 onMounted(load)
 watch(() => props.name, load)
@@ -1996,13 +2116,45 @@ function applyHexPopover() {
 
       <TabPanels>
         <TabPanel value="settings">
-          <div class="flex flex-column gap-4" style="max-width: 56rem">
+          <div class="flex flex-column gap-4">
             <div class="flex flex-column gap-1">
               <label for="playlist-name">Playlist name</label>
               <InputText id="playlist-name" v-model="nameInput" :disabled="!isNew" placeholder="my-stream" class="field-medium" />
             </div>
 
             <Divider align="left"><span class="font-bold">Output</span></Divider>
+
+            <div class="flex gap-2 align-items-end flex-wrap">
+              <div class="flex flex-column gap-1">
+                <label for="output-profile">Saved profile</label>
+                <Select
+                  id="output-profile"
+                  v-model="selectedProfileName"
+                  :options="profiles"
+                  option-label="name"
+                  option-value="name"
+                  placeholder="Apply a saved profile..."
+                  show-clear
+                  class="field-medium"
+                  @update:model-value="applyProfile"
+                >
+                  <template #option="{ option }">
+                    <span>{{ option.name }}</span>
+                    <span v-if="option.builtin" class="text-color-secondary text-sm ml-2">built-in</span>
+                  </template>
+                </Select>
+              </div>
+              <Button label="Save as profile..." icon="pi pi-save" size="small" text @click="openSaveProfile" />
+              <Button
+                v-if="selectedProfile && !selectedProfile.builtin"
+                label="Delete profile"
+                icon="pi pi-trash"
+                size="small"
+                severity="danger"
+                text
+                @click="deleteProfileDialog = true"
+              />
+            </div>
 
             <div class="flex gap-4 flex-wrap">
               <div class="flex flex-column gap-1">
@@ -2059,9 +2211,25 @@ function applyHexPopover() {
                 <label>Bitrate (kbps)</label>
                 <InputNumber v-model="form.output.bitrate_kbps" :use-grouping="false" :min-fraction-digits="0" :max-fraction-digits="0" class="field-small" />
               </div>
+              <div v-if="outputMode === 'single'" class="flex flex-column gap-1">
+                <label>H.264 profile</label>
+                <Select v-model="form.output.profile" :options="H264_PROFILE_OPTIONS" class="field-select" />
+              </div>
+              <div v-if="outputMode === 'single'" class="flex flex-column gap-1">
+                <label>H.264 level</label>
+                <Select v-model="form.output.level" :options="H264_LEVEL_OPTIONS" class="field-select" />
+              </div>
               <div v-if="outputMode === 'ladder'" class="flex flex-column gap-1">
                 <label>Output directory</label>
                 <InputText v-model="form.output.dir" class="field-medium" />
+              </div>
+              <div v-if="outputMode === 'ladder'" class="flex flex-column gap-1">
+                <label>Default H.264 profile</label>
+                <Select v-model="form.output.profile" :options="H264_PROFILE_OPTIONS" class="field-select" />
+              </div>
+              <div v-if="outputMode === 'ladder'" class="flex flex-column gap-1">
+                <label>Default H.264 level</label>
+                <Select v-model="form.output.level" :options="H264_LEVEL_OPTIONS" class="field-select" />
               </div>
             </div>
 
@@ -2070,12 +2238,20 @@ function applyHexPopover() {
                 <span class="font-bold">Renditions</span>
                 <Button label="Add rendition" icon="pi pi-plus" size="small" text @click="addRendition" />
               </div>
-              <div v-for="(r, i) in form.renditions" :key="i" class="flex gap-4 align-items-end flex-wrap">
-                <div class="flex flex-column gap-1"><label>Name</label><InputText v-model="r.name" class="field-medium" /></div>
+              <div v-for="(r, i) in form.renditions" :key="i" class="flex gap-3 align-items-end rendition-row">
+                <div class="flex flex-column gap-1"><label>Name</label><InputText v-model="r.name" class="field-small" /></div>
                 <div class="flex flex-column gap-1"><label>Resolution</label><InputText v-model="r.resolution" class="field-small" /></div>
                 <div class="flex flex-column gap-1">
                   <label>Bitrate (kbps)</label>
                   <InputNumber v-model="r.bitrate_kbps" :use-grouping="false" :min-fraction-digits="0" :max-fraction-digits="0" class="field-small" />
+                </div>
+                <div class="flex flex-column gap-1">
+                  <label>H.264 profile</label>
+                  <Select v-model="r.profile" :options="H264_PROFILE_OPTIONS" :placeholder="`${form.output.profile} (default)`" show-clear class="field-select" />
+                </div>
+                <div class="flex flex-column gap-1">
+                  <label>H.264 level</label>
+                  <Select v-model="r.level" :options="H264_LEVEL_OPTIONS" :placeholder="`${form.output.level} (default)`" show-clear class="field-select" />
                 </div>
                 <Button icon="pi pi-trash" severity="danger" text @click="removeRendition(i)" />
               </div>
@@ -2665,6 +2841,28 @@ function applyHexPopover() {
       </div>
     </Popover>
 
+    <Dialog v-model:visible="saveProfileDialog" modal header="Save output profile" :style="{ width: '28rem' }">
+      <div class="flex flex-column gap-2">
+        <p class="text-sm text-color-secondary m-0">
+          Saves the current mode, {{ outputMode === 'single' ? 'resolution, bitrate' : 'renditions' }}, framerate, GOP, H.264 profile/level and
+          service provider/name. Saving under an existing name overwrites that profile.
+        </p>
+        <InputText v-model="saveProfileName" placeholder="Profile name" autofocus @keydown.enter="confirmSaveProfile" />
+      </div>
+      <template #footer>
+        <Button label="Cancel" text @click="saveProfileDialog = false" />
+        <Button label="Save" :loading="savingProfile" :disabled="!saveProfileName.trim()" @click="confirmSaveProfile" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="deleteProfileDialog" modal header="Delete profile" :style="{ width: '28rem' }">
+      <p class="m-0">Delete the profile "{{ selectedProfile?.name }}"? Playlists that used it are not affected.</p>
+      <template #footer>
+        <Button label="Cancel" text @click="deleteProfileDialog = false" />
+        <Button label="Delete" severity="danger" @click="confirmDeleteProfile" />
+      </template>
+    </Dialog>
+
     <Dialog
       :visible="pendingAssetMove !== null"
       modal
@@ -3026,6 +3224,17 @@ function applyHexPopover() {
 .field-medium {
   width: 16rem;
 }
+
+/* Selects with a clear button need room for the value plus both icons. */
+.field-select {
+  width: 11rem;
+}
+
+/* One rendition per line, every field a fixed width. */
+.rendition-row {
+  flex-wrap: nowrap;
+}
+
 
 .field-medium :deep(input) {
   width: 100%;
