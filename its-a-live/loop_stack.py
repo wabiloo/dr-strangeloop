@@ -3,6 +3,7 @@ import aws_cdk as cdk
 from aws_cdk import (
     Stack,
     Duration,
+    Fn,
     aws_s3 as s3,
     aws_ecr_assets as ecr_assets,
     aws_iam as iam,
@@ -228,7 +229,15 @@ class LoopStack(Stack):
             ),
         )
 
-        playback_host = service.attr_endpoint
+        # The service's Endpoint attribute is "https://<host>" (it used to be a
+        # bare host). CloudFront origins and our https:// URLs need the bare
+        # host, so strip any scheme -- in CloudFormation, since it's a token:
+        # "<ep>//<ep>" split on "//" has the host at index 1 whether or not
+        # <ep> starts with "https:".
+        service_host = Fn.select(
+            1, Fn.split("//", Fn.join("", [service.attr_endpoint, "//", service.attr_endpoint]))
+        )
+        playback_host = service_host
         if use_cdn:
             # ── CloudFront: public entrypoint, caches /seg/* aggressively ────────
             # Manifests are dynamic (sliding window) -- never cached. Segments are
@@ -267,7 +276,7 @@ class LoopStack(Stack):
             )
 
             origin = origins.HttpOrigin(
-                service.attr_endpoint,
+                service_host,
                 protocol_policy=cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
             )
 
@@ -299,7 +308,7 @@ class LoopStack(Stack):
         cdk.CfnOutput(self, "S3BucketName", value=bucket_name)
         cdk.CfnOutput(self, "LoopPackageS3Uri", value=loop_package_s3_uri)
         cdk.CfnOutput(self, "ExpressServiceArn", value=service.attr_service_arn)
-        cdk.CfnOutput(self, "ExpressServiceEndpoint", value=f"https://{service.attr_endpoint}")
+        cdk.CfnOutput(self, "ExpressServiceEndpoint", value=f"https://{service_host}")
         if use_cdn:
             cdk.CfnOutput(self, "CloudFrontDomainName", value=distribution.distribution_domain_name)
         cdk.CfnOutput(self, "HlsPlaybackUrl", value=f"https://{playback_host}/index.m3u8")
