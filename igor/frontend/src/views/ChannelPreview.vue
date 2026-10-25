@@ -238,6 +238,8 @@ watch(() => props.name, reload)
       :health-error="status?.backend === 'ecs-express' || status?.backend === 'local-docker' ? healthError : ''"
     />
 
+    <WindowPanel v-if="windowAvailable" :name="name" :query="windowQuery" />
+
     <UrlRequestPanels
       v-if="showPlayback && timeshiftAvailable"
       :hls-url="playbackHlsUrl"
@@ -251,8 +253,6 @@ watch(() => props.name, reload)
     />
 
     <ManifestsPanel v-if="showPlayback" :capture="manifestCapture" />
-
-    <WindowPanel v-if="windowAvailable" :name="name" :query="windowQuery" />
 
     <PlaybackTestPanel
       v-if="showPlayback"

@@ -184,12 +184,12 @@ export class ManifestStore {
     return i > 0 ? same[i - 1] : undefined
   }
 
-  slots(): { slot: string; label: string; order: number; count: number }[] {
-    const seen = new Map<string, { slot: string; label: string; order: number; count: number }>()
+  slots(): { slot: string; label: string; kind: ManifestKind; order: number; count: number }[] {
+    const seen = new Map<string, { slot: string; label: string; kind: ManifestKind; order: number; count: number }>()
     for (const e of this.entries) {
       const s = seen.get(e.slot)
       if (s) s.count += 1
-      else seen.set(e.slot, { slot: e.slot, label: e.label, order: e.order, count: 1 })
+      else seen.set(e.slot, { slot: e.slot, label: e.label, kind: e.kind, order: e.order, count: 1 })
     }
     return [...seen.values()].sort((a, b) => a.order - b.order)
   }
@@ -266,4 +266,76 @@ export function lineKind(line: string, format: 'hls' | 'dash'): LineKind {
   if (/scte35|<(?:[\w-]+:)?(?:EventStream|Event|Signal)\b/i.test(line)) return 'marker'
   if (/<(?:[\w-]+:)?Period\b/.test(line)) return 'discontinuity'
   return 'plain'
+}
+
+export interface ManifestSummary {
+  /** Media segments listed (HLS: EXTINF entries; DASH: S entries incl. @r repeats of the video set). */
+  segments: number | null
+  durationS: number | null
+  /** Wall-clock start of the first segment (ISO), when the manifest says it. */
+  firstStart: string | null
+  /** Why firstStart is missing, or other context. */
+  note?: string
+}
+
+const attr = (tag: string, name: string): string | undefined => new RegExp(`\\b${name}="([^"]*)"`).exec(tag)?.[1]
+
+function isoDurationSeconds(v: string | undefined): number {
+  const m = v ? /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(v) : null
+  return m ? Number(m[1] ?? 0) * 86400 + Number(m[2] ?? 0) * 3600 + Number(m[3] ?? 0) * 60 + Number(m[4] ?? 0) : 0
+}
+
+/** Segment count, total duration and first segment start, read from the manifest text. */
+export function summarizeManifest(body: string, kind: ManifestKind): ManifestSummary | null {
+  if (kind === 'master') return null
+  if (kind === 'media') {
+    const lines = body.split(/\r?\n/)
+    let segments = 0, durationS = 0, pdt: string | null = null, seenFirst = false
+    for (const line of lines) {
+      if (line.startsWith('#EXT-X-PROGRAM-DATE-TIME:') && !seenFirst && pdt === null) pdt = line.slice(line.indexOf(':') + 1).trim()
+      else if (line.startsWith('#EXTINF:')) {
+        segments += 1
+        durationS += parseFloat(line.slice(8)) || 0
+        seenFirst = true
+      }
+    }
+    return { segments, durationS, firstStart: pdt, note: pdt ? undefined : 'no PROGRAM-DATE-TIME' }
+  }
+  // MPD: the first video AdaptationSet of every Period.
+  const ast = attr(/<(?:[\w-]+:)?MPD\b[^>]*>/.exec(body)?.[0] ?? '', 'availabilityStartTime')
+  const astMs = ast ? Date.parse(ast) : NaN
+  const periods = body.split(/<(?:[\w-]+:)?Period\b/).slice(1)
+  let segments = 0, durationS = 0, first: number | null = null, unknown = false
+  for (const chunk of periods) {
+    const periodStart = isoDurationSeconds(attr(chunk.split('>')[0], 'start'))
+    const sets = chunk.split(/<(?:[\w-]+:)?AdaptationSet\b/).slice(1)
+    const set = sets.find((s) => /contentType="video"|mimeType="video\//.test(s.split('>')[0])) ?? sets[0]
+    if (!set) continue
+    const template = /<(?:[\w-]+:)?SegmentTemplate\b[^>]*>/.exec(set)?.[0]
+    const timeline = /<(?:[\w-]+:)?SegmentTimeline\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?SegmentTimeline>/.exec(set)?.[1]
+    if (!template || timeline === undefined) {
+      unknown = true
+      continue
+    }
+    const timescale = Number(attr(template, 'timescale') ?? 1) || 1
+    const pto = Number(attr(template, 'presentationTimeOffset') ?? 0) || 0
+    let t: number | null = null
+    for (const s of timeline.matchAll(/<(?:[\w-]+:)?S\b[^>]*>/g)) {
+      const d = Number(attr(s[0], 'd') ?? 0)
+      const r = Number(attr(s[0], 'r') ?? 0)
+      const st = attr(s[0], 't')
+      if (st !== undefined && t === null) t = Number(st)
+      segments += 1 + Math.max(0, r)
+      durationS += (d * (1 + Math.max(0, r))) / timescale
+    }
+    if (first === null && t !== null) first = periodStart + (t - pto) / timescale
+  }
+  if (!periods.length) return null
+  const firstStart = first !== null && Number.isFinite(astMs) ? new Date(astMs + first * 1000).toISOString() : null
+  return {
+    segments: unknown && !segments ? null : segments,
+    durationS: unknown && !segments ? null : durationS,
+    firstStart,
+    note: firstStart ? undefined : unknown ? 'no SegmentTimeline' : 'no availabilityStartTime',
+  }
 }

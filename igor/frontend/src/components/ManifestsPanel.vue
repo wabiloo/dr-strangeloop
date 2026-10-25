@@ -4,7 +4,7 @@ import Checkbox from 'primevue/checkbox'
 import Select from 'primevue/select'
 import { computed, ref, watch } from 'vue'
 import type { ManifestCapture } from '../composables/useManifestCapture'
-import { changedLines, lineKind, type ManifestEntry } from '../utils/manifestCapture'
+import { changedLines, lineKind, summarizeManifest, type ManifestEntry } from '../utils/manifestCapture'
 import FieldHelp from './FieldHelp.vue'
 
 // The manifests the players above actually polled: HLS master / media playlists and the DASH
@@ -50,8 +50,8 @@ const slots = computed(() => {
 })
 const pinned = computed(() => entries.value.filter((e) => e.pinned))
 const tabs = computed(() => [
-  ...slots.value.map((s) => ({ key: s.slot, label: s.label, count: s.count })),
-  ...(pinned.value.length ? [{ key: PINNED, label: 'Pinned', count: pinned.value.length }] : []),
+  ...slots.value.map((s) => ({ key: s.slot, label: `${s.kind === 'mpd' ? 'DASH' : 'HLS'} · ${s.label}` })),
+  ...(pinned.value.length ? [{ key: PINNED, label: 'Pinned' }] : []),
 ])
 const versions = computed<ManifestEntry[]>(() => {
   const list = tab.value === PINNED ? pinned.value : entries.value.filter((e) => e.slot === tab.value)
@@ -92,6 +92,14 @@ const lines = computed(() => {
 const lineCount = computed(() => (selected.value ? selected.value.body.split(/\r?\n/).length : 0))
 const hasPrevious = computed(() => (selected.value ? !!store.previous(selected.value) : false))
 const unseen = computed(() => (follow.value ? 0 : (versions.value[0]?.id ?? 0) !== selectedId.value ? versions.value.findIndex((e) => e.id === selectedId.value) : 0))
+
+const summary = computed(() => (selected.value ? summarizeManifest(selected.value.body, selected.value.kind) : null))
+const fmtStart = (iso: string) => iso.replace('T', ' ').replace(/(\.\d{1,3})\d*Z$/, '$1').replace(/Z$/, '') + ' UTC'
+function fmtDuration(s: number): string {
+  if (s < 120) return `${Number(s.toFixed(2))} s`
+  const m = Math.floor(s / 60)
+  return `${m} min ${Math.round(s - m * 60)} s`
+}
 
 const time = (iso: string) => iso.slice(11, 23)
 const copied = ref('')
@@ -175,36 +183,11 @@ async function copy() {
             @click="pickTab(t.key)"
           >
             <i v-if="t.key === PINNED" class="pi pi-bookmark-fill text-xs" />
-            {{ t.label }} <span class="text-color-secondary">{{ t.count }}</span>
+            {{ t.label }}
           </button>
         </div>
 
         <div class="mp-body">
-          <ul class="mp-versions" aria-label="Versions">
-            <li
-              v-for="(e, i) in versions"
-              :key="e.id"
-              class="mp-version"
-              :class="{ 'mp-version-on': e.id === selectedId }"
-              @click="pick(e.id)"
-            >
-              <span class="font-mono text-xs">{{ time(e.at) }}</span>
-              <span v-if="i === 0" class="mp-badge">latest</span>
-              <span v-if="tab === PINNED" class="text-xs text-color-secondary">{{ e.label }}</span>
-              <span v-if="e.hits > 1" class="text-xs text-color-secondary" :title="`Returned the same text ${e.hits} times (last ${time(e.lastAt)})`">×{{ e.hits }}</span>
-              <span class="text-xs text-color-secondary ml-auto">{{ (e.bytes / 1024).toFixed(1) }} kB</span>
-              <button
-                type="button"
-                class="mp-pin"
-                :class="{ 'mp-pin-on': e.pinned }"
-                :title="e.pinned ? 'Unpin' : 'Pin this version (kept until unpinned)'"
-                :aria-pressed="e.pinned"
-                @click.stop="capture.togglePin(e.id)"
-              >
-                <i :class="e.pinned ? 'pi pi-bookmark-fill' : 'pi pi-bookmark'" />
-              </button>
-            </li>
-          </ul>
 
           <div class="mp-viewer flex flex-column gap-2">
             <template v-if="selected">
@@ -222,6 +205,15 @@ async function copy() {
                   @click="capture.togglePin(selected.id)"
                 />
               </div>
+              <div v-if="summary" class="mp-summary" data-testid="mp-summary">
+                <span><strong>{{ summary.segments ?? '?' }}</strong> segments</span>
+                <span><strong>{{ summary.durationS != null ? fmtDuration(summary.durationS) : '?' }}</strong> total</span>
+                <span>
+                  first segment starts
+                  <strong v-if="summary.firstStart">{{ fmtStart(summary.firstStart) }}</strong>
+                  <span v-else class="text-color-secondary">(unknown: {{ summary.note }})</span>
+                </span>
+              </div>
               <div class="mp-code" :data-wrap="wrap" role="tabpanel" aria-label="Manifest text">
                 <div v-for="l in lines" :key="l.n" class="mp-line" :class="[`mp-${l.kind}`, { 'mp-changed': l.changed }]">
                   <span class="mp-n">{{ l.n }}</span><span class="mp-t">{{ l.text }}</span>
@@ -231,6 +223,30 @@ async function copy() {
               <div v-if="showChanges && !hasPrevious" class="text-xs text-color-secondary">First version kept: nothing to compare with.</div>
             </template>
           </div>
+          <ul class="mp-versions" aria-label="Versions">
+            <li
+              v-for="(e, i) in versions"
+              :key="e.id"
+              class="mp-version"
+              :class="{ 'mp-version-on': e.id === selectedId }"
+              @click="pick(e.id)"
+            >
+              <span class="font-mono text-xs">{{ time(e.at) }}</span>
+              <span v-if="i === 0" class="mp-badge">latest</span>
+              <span v-if="tab === PINNED" class="text-xs text-color-secondary">{{ e.label }}</span>
+              <span v-if="e.hits > 1" class="text-xs text-color-secondary" :title="`Returned the same text ${e.hits} times (last ${time(e.lastAt)})`">×{{ e.hits }}</span>
+              <button
+                type="button"
+                class="mp-pin ml-auto"
+                :class="{ 'mp-pin-on': e.pinned }"
+                :title="e.pinned ? 'Unpin' : 'Pin this version (kept until unpinned)'"
+                :aria-pressed="e.pinned"
+                @click.stop="capture.togglePin(e.id)"
+              >
+                <i :class="e.pinned ? 'pi pi-bookmark-fill' : 'pi pi-bookmark'" />
+              </button>
+            </li>
+          </ul>
         </div>
       </template>
     </div>
@@ -269,7 +285,7 @@ async function copy() {
 }
 .mp-body {
   display: grid;
-  grid-template-columns: minmax(12rem, 18rem) 1fr;
+  grid-template-columns: 1fr minmax(12rem, 18rem);
   gap: 1rem;
   align-items: start;
 }
@@ -328,6 +344,12 @@ async function copy() {
 }
 .mp-behind {
   color: var(--p-primary-color, #c0392b);
+}
+.mp-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+  font-size: 0.875rem;
 }
 .mp-code {
   max-height: 32rem;
