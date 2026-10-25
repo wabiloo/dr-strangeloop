@@ -48,8 +48,8 @@ from scte35_signaling import (
     DASH_DESCRIPTOR_MODE_DEFAULT,
     DASH_SIGNAL_FORMAT_DEFAULT,
     DATERANGE_ID_FORMAT_DEFAULT,
-    SCTE35_EVENT_ID_MAX,
-    compute_event_id_step,
+    event_id_increment_problem,
+    non_splice_insert_event_ids,
     validate_daterange_id_format,
     validate_dash_descriptor_mode,
     validate_dash_signal_format,
@@ -58,6 +58,8 @@ from scte35_signaling import (
 logger = logging.getLogger(__name__)
 
 TIMESCALE = 90_000
+# loop_descriptor.json "scte35_payloads": every marker holds the shared AND the narrowed message.
+SCTE35_PAYLOADS_BOTH = "shared+narrowed"
 
 
 class ValidationError(RuntimeError):
@@ -290,9 +292,7 @@ def validate_cue_tags_only(raw_markers: list[dict]) -> None:
     how to derive a duration/pairing for without a segmentation
     descriptor). Hard-fails otherwise, same style as
     `validate_markers_against_ts`."""
-    non_splice_insert = sorted(
-        m["event_id"] for m in raw_markers if m.get("splice_type") != "splice_insert"
-    )
+    non_splice_insert = non_splice_insert_event_ids(raw_markers)
     if non_splice_insert:
         raise ValidationError(
             f"cue_tags='only' requires every marker to be a bare "
@@ -317,23 +317,9 @@ def validate_increment_event_ids(raw_markers: list[dict]) -> None:
     exact same id as loop 0 -- i.e. the setting would quietly do nothing.
     Hard-fail instead of shipping a loop package where that's the case,
     same style as `validate_cue_tags_only`."""
-    event_ids = [m["event_id"] for m in raw_markers]
-    if not event_ids:
-        return
-    step = compute_event_id_step(event_ids)
-    max_base_id = max(int(eid, 16) for eid in event_ids)
-    if step > SCTE35_EVENT_ID_MAX - max_base_id:
-        raise ValidationError(
-            f"increment_event_ids=true derives step={step} (smallest power "
-            f"of 10 above the largest base event id, "
-            f"0x{max_base_id:08X}={max_base_id}), which leaves no room "
-            f"under the 32-bit SCTE-35 ceiling "
-            f"(0x{SCTE35_EVENT_ID_MAX:08X}={SCTE35_EVENT_ID_MAX}) for even "
-            f"one real increment -- every loop would silently emit the "
-            f"exact same id as loop 0. Base event ids are too close to the "
-            f"32-bit ceiling for this feature. Hard failure -- not "
-            f"silently ignored."
-        )
+    problem = event_id_increment_problem(raw_markers)
+    if problem:
+        raise ValidationError(f"{problem} Hard failure -- not silently ignored.")
 
 
 def validate_markers_against_ts(
@@ -1735,7 +1721,11 @@ def bake_one_rendition(
     """
     logger.info("── Rendition '%s' (%s) ──", name, ts_file)
 
-    decoded = decode_embedded_scte35(ts_file, narrow_descriptors=(daterange_mode == "narrowed"))
+    # `splice_command_b64` stays the shared (whole-message) payload and
+    # `splice_command_b64_narrowed` the single-descriptor one, whatever
+    # `daterange_mode` is: serve.py picks per format -- and per request, via
+    # the `descriptor_grouping` query parameter -- so both must be baked.
+    decoded = decode_embedded_scte35(ts_file)
     validated_markers = validate_markers_against_ts(raw_markers, decoded)
 
     video_track_id, audio_track_id, audio_params = read_actual_track_params(ts_file)
@@ -1972,6 +1962,11 @@ def bake(
         "segment_duration_seconds": segment_duration_seconds,
         "hls_format": hls_format,
         "hls_ts_mux_audio": hls_ts_mux_audio,
+        # Every marker carries BOTH the shared (`splice_command_b64`) and the narrowed
+        # (`splice_command_b64_narrowed`) SCTE-35 message, so serve.py can choose per
+        # format and per request (the `descriptor_grouping` query parameter). Packages
+        # baked earlier lack this marker; serve.py refuses to switch their payload.
+        "scte35_payloads": SCTE35_PAYLOADS_BOTH,
         "daterange_mode": daterange_mode,
         "cue_tags": cue_tags,
         "increment_event_ids": increment_event_ids,

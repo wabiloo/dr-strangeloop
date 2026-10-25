@@ -86,6 +86,8 @@ def _repo_root() -> str:
 # ---------------------------------------------------------------------------
 
 _AWS_MEDIA_TOML_TEMPLATE = """\
+config_version = 2
+
 [deploy]
 name = "{name}"
 backend = "aws-media"
@@ -102,6 +104,8 @@ source_path = "{ts_file}"
 """
 
 _ECS_EXPRESS_TOML_TEMPLATE = """\
+config_version = 2
+
 [deploy]
 name = "{name}"
 backend = "ecs-express"
@@ -118,7 +122,7 @@ source_path = "{ts_file}"
 
 [packaging]
 segment_duration   = 4.0
-dvr_window_seconds = 30
+dvr_window       = 30
 
 [infrastructure.express]
 port   = 8080

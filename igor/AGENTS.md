@@ -62,34 +62,60 @@ backend restarts). A new job adds a tab but does **not** open the drawer.
 `jobId` with the drawer and still emits `finished`. To surface a job from new
 code, call `trackJob(job)` (or render `JobPanel`).
 
-## Startover & catchup (channel detail page)
+## Startover, catchup & query-parameter overrides (channel detail page)
 
-For `ecs-express` / `local-docker` channels with `[timeshift]` enabled (the
+For `ecs-express` / `local-docker` channels with `[query] timeshift` on (the
 default), a running channel's page shows a **Startover & catchup** panel under
 the players (**collapsed by default**, open/closed remembered in the browser; while a
 preview is active the collapsed header summarises it and offers *Back to live*): pick a start (and optional end) in UTC or local time, presets
 (last N minutes, previous/current loop), *whole loops only*, and a timeline
-override (`timeline=default|continuous|periodic`, fixed name, also usable on
+override (`timeline_mode=default|continuous|periodic`, fixed name, also usable on
 live URLs by leaving the start empty), and *Pretend “now” is…* (`offset=-PT1H` /
 `-3600`, fixed name, negative or positive, with presets; plays the live edge as it
 was/will be, and start/end are judged against that moment). The offset can also be
 given as the **datetime “now” should pretend to be**: Igor computes `offset =
 datetime − moment of Preview/Copy` (whole seconds) and freezes it in the URL, so the
 stream then advances in real time from that instant; it builds the HLS and DASH URLs (param names from the channel's
-`[timeshift]` config, values as ISO 8601 / epoch s / epoch ms), validates them
+`[query]` config -- `start_param`/`end_param`, and the optional `prefix` put in front of every name -- values as ISO 8601 / epoch s / epoch ms), validates them
 the way `serve.py` will, lets you copy them, and **Preview** swaps them into
 the HLS/DASH players (which then start from the beginning of the range rather
 than the live edge; *Back to live* restores). URL building/validation lives
 in `frontend/src/utils/timeshift.ts` (tests: `node --test
 --experimental-strip-types src/utils/timeshift.test.ts`). The per-channel
-settings are in the New/Edit forms' "Timeshift" group
-(`timeshift_*` fields → `[timeshift]`). The DASH playhead clock shown during
+settings are in the New/Edit forms' "Query" group (`timeshift_enabled`,
+`query_prefix`, `timeshift_start_param`, `timeshift_end_param` → `[query]`) and
+"Timeshift" group (`timeshift_max_span_seconds` → `[timeshift] max_span_seconds`).
+The panel is one form for every query parameter of the channel: below the startover
+controls (shown while `[query] timeshift` is on) a **Rendering overrides** block (shown while
+`[query] overrides` is on; each switch shows only its own kind, with a message when it is off)
+is **opt-in, to keep the form short**: it starts empty, and an **Add override…** picker (grouped
+**HLS and DASH** / **HLS** / **DASH**) adds the ones you want -- timeline mode, epoch, DVR window,
+descriptor grouping, event ids, `split_on`, ladder limits; `cue_tags` and the ID template; DASH
+style, addressing and signal format. Each added override is a row under its subheading with a
+remove button (removing clears its value); an added row with no value is left off the URLs.
+One **Preview**
+sends the result to the existing HLS and DASH players (not a player per combination): each
+player's URL carries only the parameters its format reads (`queryParams.ts`:
+`appliesTo`/`overridePairs`; `descriptor_grouping=grouped` is HLS only), all behind the
+channel's `prefix`. An empty field keeps the channel's own value, shown as "channel: X". Values are
+validated up front like the server does (`validateOverrides`), and an `epoch` override moves what
+"before the channel epoch" means. The registry of overridable parameters -- name, label, kind,
+formats, help -- is `frontend/src/utils/queryParams.ts` (tests: `queryParams.test.ts`); it must
+list the same names as `loop-dee-loop/timeshift.py` `OVERRIDE_PARAMS`.
+
+**Override badge.** Next to every channel setting a request can override, in the New and
+Edit forms and the read-only Configuration panel, a small grey ampersand-in-a-circle mark (`QpBadge.vue`) opens a
+popup with the query parameter's name (prefix applied, following what is typed in the form),
+the formats that read it and a one-line explanation; it is dimmed, with a warning, when
+`[query] overrides` is off. Settings fixed at bake time (segment duration, HLS container,
+audio muxing) get none. The field-to-parameter map is `FIELD_OVERRIDES` in `queryParams.ts`;
+add a setting there when it gains a query parameter. The DASH playhead clock shown during
 a preview is approximate. Design: `loop-dee-loop/SCOPE.md` §13.
 
 ## Channel epoch (New/Edit forms, "Timeline" group)
 
 `ecs-express` / `local-docker` channels have a **Channel epoch (UTC)**
-(`[timeline] epoch_utc`, API field `epoch_utc`): loop 0's start and the DASH
+(`[timeline] epoch`, API field `epoch_utc`): loop 0's start and the DASH
 `availabilityStartTime`. A UTC date-time picker with three presets -- **Unix
 epoch (1970)**, **1 Jan 2026** (the default) and **Now** (fills in the current
 UTC time as a fixed value, not a moving one) -- stored as
@@ -115,10 +141,38 @@ exactly one its-a-live TOML table, named after it**:
 | `[infrastructure.aws]` | Infrastructure · AWS | `region` (not local-docker) |
 | `[infrastructure.s3]` | Infrastructure · S3 | `bucket_name`, `content_folder` (not local-docker) |
 | `[infrastructure.express]` / `[infrastructure.docker]` | Infrastructure · Express / Docker | `port` (+ `cpu`, `memory`, `cdn` for express) |
-| `[timeline]` | Timeline | `epoch_utc`, `continuous` |
-| `[packaging]` | Packaging | `segment_duration`, `dvr_window_seconds`, `hls_format`, `hls_ts_mux_audio`, `dash_addressing`, `dash_timeline` |
-| `[timeshift]` | Timeshift | `enabled`, `start_param`, `end_param`, `max_span_seconds` |
-| `[markers]` | Markers | `daterange_mode`, `cue_tags`, `dash_*`, `increment_event_ids`, `daterange_id_format`, `period_on_segmentation(_apply)` |
+| `[timeline]` | Timeline | `epoch`, `continuous` |
+| `[packaging]` | Packaging | `segment_duration`, `dvr_window` |
+| `[packaging.hls]` | Packaging · HLS | `container`, `mux_audio` |
+| `[packaging.dash]` | Packaging · DASH | `timeline_style`, `addressing` |
+| `[query]` | Query | `timeshift`, `overrides`, `prefix`, `start_param`, `end_param` |
+| `[timeshift]` | Timeshift | `max_span_seconds` |
+| `[markers]` | Markers | `increment_event_ids`, `split_on` |
+| `[markers.hls]` | Markers · HLS | `descriptor_grouping`, `cue_tags`, `id_template` |
+| `[markers.dash]` | Markers · DASH | `descriptor_grouping`, `signal_format` |
+
+**Interim naming gap.** The *groups* above follow the TOML tables exactly, but the
+API payload (`ChannelCreatePayload`) and the form fields still use their older flat
+names; `formFieldsFromConfig` (`channelConfigLayout.ts`) and
+`its_a_live.generate_toml` are the only two places that map between the two:
+
+| TOML | API / form field |
+|---|---|
+| `[packaging] dvr_window` | `dvr_window_seconds` |
+| `[packaging.hls] container`, `mux_audio` | `hls_format`, `hls_ts_mux_audio` |
+| `[packaging.dash] timeline_style`, `addressing` | `dash_timeline`, `dash_addressing` |
+| `[timeline] epoch` | `epoch_utc` |
+| `[markers] split_on` | `period_on_segmentation` (the old `period_on_segmentation_apply` is gone) |
+| `[markers.hls] descriptor_grouping`, `cue_tags`, `id_template` | `daterange_mode`, `cue_tags`, `daterange_id_format` |
+| `[markers.dash] descriptor_grouping`, `signal_format` | `dash_descriptor_mode`, `dash_signal_format` |
+| `[query] timeshift`, `overrides`, `prefix`, `start_param`, `end_param` | `timeshift_enabled`, `query_overrides`, `query_prefix`, `timeshift_start_param`, `timeshift_end_param` |
+
+Harmonising the API and UI field names with the TOML (one `descriptor_grouping`
+per format, no `hls_`/`dash_` prefixes) is deliberately left for a later change.
+Old channel TOML files are migrated with `its-a-live/migrate_config.py` (see
+`its-a-live/AGENTS.md`, "`config_version`"); Igor writes `config_version = 2` in every file it
+generates, and a channel whose file is older shows a warning with the migration command on its
+detail page (its settings are shown as defaults until it is migrated).
 
 Rules, for any change that touches channel config:
 

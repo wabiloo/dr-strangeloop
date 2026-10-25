@@ -4,6 +4,11 @@
 # [deploy].backend together drive the CloudFormation stack name
 # (ItsALiveStack-<name>-<backend>) and every AWS resource name, so
 # multiple config files == multiple independent channel deployments.
+#
+# config_version is the layout of this file (absent = 1, i.e. written before 2.0).
+# A file with an older version is refused with the exact changes; rewrite it with
+#   uv run --project its-a-live python its-a-live/migrate_config.py <file>
+config_version = 2
 
 [deploy]
 name = "default"
@@ -50,22 +55,53 @@ source_path = "../outputs/mychannel"
 
 [markers]
 # Shape of the HLS/DASH SCTE-35 signaling loop-dee-loop's bake.py renders
-# (see loop-dee-loop/README.md "SCTE-35 signaling shape"). Fixed per bake,
-# read back by serve.py -- not re-decided per request.
-daterange_mode      = "shared"  # "shared" | "narrowed" | "grouped"
-cue_tags            = "none"    # "none" | "alongside" | "only"
-increment_event_ids = false     # bump each event id by loop_number * step (step = a shared power of 10 above the channel's largest base id) instead of repeating it every loop -- see AGENTS.md
-daterange_id_format = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template; ecs-express/local-docker only
-# period_on_segmentation = [0x22, 0x30]  # optional (a Start implies its End): force a new DASH Period / #EXT-X-DISCONTINUITY at markers with these SCTE-35 segmentation_type_ids (signal only -- timestamps stay continuous when continuous = true; loop-dee-loop/SCOPE.md §14)
-# period_on_segmentation_apply = "both"  # "both" (default) | "dash" (Periods only) | "hls" (discontinuities only)
+# (see loop-dee-loop/README.md "SCTE-35 signaling shape"). These are the
+# channel's defaults; every setting below that also exists as a query parameter
+# of the same name (see [query]) can be overridden per request.
+increment_event_ids = false  # bump each event id by loop_number * step (step = a shared power of 10 above the channel's largest base id) instead of repeating it every loop -- see AGENTS.md
+# split_on = [0x22, 0x30]    # optional (a Start implies its End): force a new DASH Period / HLS #EXT-X-DISCONTINUITY at markers with these SCTE-35 segmentation_type_ids (signal only -- timestamps stay continuous when continuous = true; loop-dee-loop/SCOPE.md §14)
+
+[markers.hls]
+descriptor_grouping = "shared"  # "shared" | "narrowed" | "grouped" -- one DATERANGE per descriptor with the full shared payload, narrowed to just that event, or one per group of coincident descriptors
+cue_tags            = "none"    # "none" | "alongside" | "only" -- also emit EXT-X-CUE-OUT/-CONT/-IN next to DATERANGE, or instead of it
+id_template         = "{segcode}-{eventid}-{loop}"  # DATERANGE ID template; ecs-express/local-docker only
+
+[markers.dash]
+descriptor_grouping = "shared"  # "shared" | "narrowed"
+signal_format       = "binary"  # "binary" | "xml" -- EventStream encoding of the SCTE-35 message
 
 [packaging]
-segment_duration   = 4.0   # nominal bake segment duration, seconds
-dvr_window_seconds = 30    # serve.py sliding-window size, seconds
+segment_duration = 4.0   # nominal bake segment duration, seconds
+dvr_window       = 30    # serve.py sliding-window size, seconds (also a query parameter)
+
+# [packaging.hls]        # decided at bake time -- no query parameter
+# container = "cmaf"     # "cmaf" | "ts" (DASH is always CMAF)
+# mux_audio = true       # TS only: mux audio into each video rendition, or a separate audio playlist
+
+# [packaging.dash]       # also query parameters of the same name
+# timeline_style = "full"  # "full" (every <S> has @t and @d) | "compact" (implicit @t, @r runs)
+# addressing     = "number"  # "number" ($Number$) | "time" ($Time$)
 
 [timeline]                 # ecs-express/local-docker only
-epoch_utc = "2026-01-01T00:00:00Z"  # optional, this is the default -- loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
+epoch = "2026-01-01T00:00:00Z"  # optional, this is the default -- loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
 continuous = true # default -- no discontinuity/Period restart at the loop wrap (loop-dee-loop/SCOPE.md §12); false reverts to the signaled-discontinuity default
+
+# Query parameters on the manifest URLs: startover/catchup (start, end,
+# full_loops, offset) and per-request overrides (timeline_mode, epoch,
+# dvr_window, split_on, timeline_style, addressing, cue_tags,
+# descriptor_grouping, increment_event_ids, signal_format, id_template,
+# max_height, max_bitrate). ecs-express/local-docker only.
+# [query]
+# timeshift = true    # startover/catchup: start, end, full_loops, offset. false: those are ignored (live only)
+# overrides = true    # per-request overrides of how a manifest is rendered (every other parameter).
+#                     # false: ignored, the channel's own settings always apply
+#                     # (both switches are TOML only -- they are not query parameters themselves)
+# prefix  = ""        # prepended to EVERY parameter name (e.g. "dsl_" -> dsl_start, dsl_cue_tags) so
+#                     # they cannot clash with a caller's own parameters, e.g. an SSAI service
+# start_param = "start"   # the two names you can change; also CloudFront's manifest cache key
+# end_param   = "end"
+# [timeshift]
+# max_span_seconds = 21600  # longest startover/catchup range (also caps dvr_window)
 
 [infrastructure.express]
 # ecs-express only -- local-docker gets [infrastructure.docker] instead (`port`, `bundle_content`).

@@ -18,6 +18,8 @@ from igor.integrations.its_a_live import (
     DEFAULT_EPOCH_UTC,
     validate_daterange_id_format,
     validate_epoch_utc,
+    validate_query_names,
+    validate_query_prefix,
 )
 from igor.store import channels as channel_store
 
@@ -73,13 +75,18 @@ class ChannelCreatePayload(BaseModel):
     # loop-dee-loop/SCOPE.md §14: SCTE-35 segmentation_type_ids (hex strings,
     # e.g. "0x22") whose markers force a new DASH Period / HLS discontinuity,
     # signal-only (timestamps stay continuous). A Start implies its End.
-    # `period_on_segmentation_apply` picks the formats: both | dash | hls.
+    # Written as [markers] split_on; applies to HLS and DASH alike.
     period_on_segmentation: list[str] = []
-    period_on_segmentation_apply: Literal["both", "dash", "hls"] = "both"
-    # loop-dee-loop/SCOPE.md §13: startover/catchup via query parameters on
-    # the normal manifest URLs. Names are configurable per channel and
-    # also drive CloudFront's manifest cache key (its-a-live/loop_stack.py).
+    # loop-dee-loop/SCOPE.md §13: startover/catchup and per-request overrides
+    # via query parameters on the normal manifest URLs ([query] + [timeshift]
+    # max_span_seconds). The start/end names are configurable per channel,
+    # `query_prefix` goes in front of EVERY parameter name, and all of them
+    # drive CloudFront's manifest cache key (its-a-live/loop_stack.py).
     timeshift_enabled: bool = True
+    # [query] overrides: false keeps only startover/catchup (start, end,
+    # full_loops, offset) and ignores the per-request rendering overrides.
+    query_overrides: bool = True
+    query_prefix: str = ""
     timeshift_start_param: str = "start"
     timeshift_end_param: str = "end"
     timeshift_max_span_seconds: int = 21600
@@ -190,6 +197,11 @@ class ChannelCreatePayload(BaseModel):
             raise ValueError("dash_descriptor_mode must be 'shared' or 'narrowed'")
         return v
 
+    @field_validator("query_prefix")
+    @classmethod
+    def _validate_query_prefix(cls, v: str) -> str:
+        return validate_query_prefix(v)
+
     @field_validator(
         "timeshift_start_param", "timeshift_end_param",
     )
@@ -211,13 +223,9 @@ class ChannelCreatePayload(BaseModel):
 
     @model_validator(mode="after")
     def _validate_timeshift_names_distinct(self) -> "ChannelCreatePayload":
-        # "full-loops", "timeline" and "offset" are fixed, non-configurable query params.
-        names = [
-            self.timeshift_start_param, self.timeshift_end_param,
-            "full-loops", "timeline", "offset",
-        ]
-        if len(set(names)) != len(names):
-            raise ValueError(f"timeshift parameter names must be distinct, got {names}")
+        # Every other query parameter has a fixed name; with the prefix applied
+        # to all of them, every on-the-wire name must still be distinct.
+        validate_query_names(self.timeshift_start_param, self.timeshift_end_param, self.query_prefix)
         return self
 
     @model_validator(mode="after")

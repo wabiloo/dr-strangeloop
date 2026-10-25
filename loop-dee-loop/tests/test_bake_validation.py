@@ -406,3 +406,30 @@ def test_validate_increment_event_ids_fails_when_base_id_leaves_no_room_for_a_st
 
     with pytest.raises(ValidationError, match="increment_event_ids=true"):
         validate_increment_event_ids(markers)
+
+
+def test_franken_ts_bake_records_that_both_scte35_payloads_are_stored():
+    """The real bake (needs GPAC, so checked on the source) writes `scte35_payloads`
+    into loop_descriptor.json -- serve.py may then switch descriptor_grouping per
+    request. The archive segment-list bake has no SCTE-35 message to switch, so it must not."""
+    import ast
+    from pathlib import Path
+
+    import bake
+
+    tree = ast.parse((Path(bake.__file__)).read_text())
+    found: dict[str, bool] = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        for node in ast.walk(fn):
+            if (
+                isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "loop_descriptor" for t in node.targets)
+                and isinstance(node.value, ast.Dict)
+            ):
+                keys = {k.value for k in node.value.keys if isinstance(k, ast.Constant)}
+                found[fn.name] = "scte35_payloads" in keys
+    assert found.get("bake_segment_list") is False
+    assert any(has for name, has in found.items() if name != "bake_segment_list"), found
+    assert bake.SCTE35_PAYLOADS_BOTH == "shared+narrowed"

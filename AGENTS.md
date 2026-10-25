@@ -25,7 +25,7 @@ names or CLI flags from this file alone.
 | Inspect/verify a built `.ts` | `inspector-krogh/` (`frame-extractor` CLI: every frame + GOP/I-P-B timeline; `krogh` CLI: scans the file's *actual* SCTE-35 markers, independent of franken-ts, optionally compared against `markers.json`) | [`inspector-krogh/README.md`](./inspector-krogh/README.md) |
 | Validate playback of a running channel in several players (hls.js, dash.js, Shaka, Video.js): startup, stalls, errors, Period/discontinuity counts vs `/timeline.json` | `player-lab/` (`player-lab run --channel <name>`) | [`player-lab/AGENTS.md`](./player-lab/AGENTS.md), [`player-lab/DESIGN.md`](./player-lab/DESIGN.md) |
 | (alt. source) Derive a loop from a captured HAR/Proxyman session, or from a VOD HLS/DASH manifest URL (`ingest-url`, multi-rendition ladder), instead of authoring one | `grave-robber/` (feeds `loop-dee-loop`'s sparse segment-list `bake.py` mode, not `franken-ts`) | [`grave-robber/AGENTS.md`](./grave-robber/AGENTS.md) |
-| Startover / catchup (past-range playback via `?start=&end=` on the normal manifest URLs) | `loop-dee-loop/` (`serve.py --timeshift`; on by default via `[timeshift]` in the its-a-live TOML) | [`loop-dee-loop/README.md`](./loop-dee-loop/README.md) "Startover & catchup", `loop-dee-loop/SCOPE.md` §13 |
+| Startover / catchup (past-range playback via `?start=&end=` on the normal manifest URLs) | `loop-dee-loop/` (`serve.py --timeshift`; on by default via `[query]` in the its-a-live TOML) | [`loop-dee-loop/README.md`](./loop-dee-loop/README.md) "Startover & catchup", `loop-dee-loop/SCOPE.md` §13 |
 | Web UI over all of the above (playlists, archive imports, VOD manifest imports, channels); its **Docs** menu browses all the documentation and API docs | `igor/` | [`igor/AGENTS.md`](./igor/AGENTS.md) |
 | Overview, Igor tour, CLI & API cheatsheet | `docs/` | [`docs/overview.md`](./docs/overview.md), [`docs/igor-guide.md`](./docs/igor-guide.md), [`docs/cli-reference.md`](./docs/cli-reference.md) |
 
@@ -88,10 +88,13 @@ commands at the end of its run.
 
 The its-a-live channel TOML tables (`[deploy]`, `[input]`, `[infrastructure.aws]`,
 `[infrastructure.s3]`, `[infrastructure.express]`/`[infrastructure.docker]`,
-`[timeline]`, `[timeshift]`, `[packaging]`, `[markers]`) and Igor's config groups (create form, read-only panel, edit form)
-use the **same names, one group per table, same keys in each**. Never add,
+`[timeline]`, `[query]`, `[timeshift]`, `[packaging]`, `[markers]`, with their `.hls`/`.dash` sub-tables) and Igor's config groups (create form, read-only panel, edit form)
+use the **same table names, one group per table**, with the same keys in each
+(the API/form field names of a few keys still differ from the TOML -- an interim
+gap documented, with its mapping, in [`igor/AGENTS.md`](./igor/AGENTS.md)). Never add,
 rename or move a table/key in one place only -- see
-[`igor/AGENTS.md`](./igor/AGENTS.md) "Channel config sections".
+"Channel config sections" there. Renamed keys are migrated in old files with
+`its-a-live/migrate_config.py` ([`its-a-live/AGENTS.md`](./its-a-live/AGENTS.md)).
 
 ## Versioning
 

@@ -1,3 +1,5 @@
+config_version = 2
+
 [deploy]
 name = "test-from-manifest"
 backend = "local-docker"
@@ -15,28 +17,37 @@ source_kind = "manifest"
 allow_missing_segments = false
 
 [markers]
-daterange_mode      = "shared"
-cue_tags            = "none"
 increment_event_ids = true
-daterange_id_format = "{segcode}-{eventid}-{loop}"
-dash_signal_format  = "binary"
-dash_descriptor_mode = "shared"
+
+[markers.hls]
+descriptor_grouping      = "shared"
+cue_tags            = "none"
+id_template = "{segcode}-{eventid}-{loop}"
+
+[markers.dash]
+signal_format  = "binary"
+descriptor_grouping = "shared"
 
 [packaging]
 segment_duration   = 4.0
-dvr_window_seconds = 120.0
-hls_format = "cmaf"
-hls_ts_mux_audio = true
+dvr_window = 120.0
+
+[packaging.hls]
+container = "cmaf"
+mux_audio = true
 
 [timeline]
-epoch_utc = "2026-01-01T00:00:00Z"
 continuous = true
+epoch = "2026-01-01T00:00:00Z"
 
 [infrastructure.docker]
 port = "auto"
 
-[timeshift]
-enabled          = true
+[query]
 start_param      = "start"
 end_param        = "end"
+timeshift          = true
+overrides          = true
+
+[timeshift]
 max_span_seconds = 1800

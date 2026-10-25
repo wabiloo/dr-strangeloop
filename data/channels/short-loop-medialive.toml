@@ -1,3 +1,5 @@
+config_version = 2
+
 [deploy]
 name = "short-loop-medialive"
 backend = "aws-media"

@@ -82,7 +82,7 @@ def test_production_entrypoint_forwards_timeshift_options(tmp_path: Path):
     (bin_dir / "aws").chmod(0o755)
     keys = [
         "TIMESHIFT", "TIMESHIFT_START_PARAM", "TIMESHIFT_END_PARAM",
-        "TIMESHIFT_MAX_SPAN_SECONDS",
+        "TIMESHIFT_MAX_SPAN_SECONDS", "QUERY_PREFIX", "QUERY_OVERRIDES",
     ]
     (bin_dir / "gunicorn").write_text(
         "#!/usr/bin/env python3\nimport json, os, sys\n"
@@ -104,7 +104,7 @@ def test_production_entrypoint_forwards_timeshift_options(tmp_path: Path):
         [
             "bash", str(ENTRYPOINT), "serve.py", "--epoch-utc", "2026-01-01T00:00:00Z",
             "--timeshift", "--timeshift-start-param", "from", "--timeshift-end-param", "to",
-            "--timeshift-max-span-seconds", "600",
+            "--timeshift-max-span-seconds", "600", "--query-prefix", "dsl_", "--query-overrides",
         ],
         env=env, capture_output=True, text=True, check=False,
     )
@@ -114,6 +114,8 @@ def test_production_entrypoint_forwards_timeshift_options(tmp_path: Path):
         "TIMESHIFT_START_PARAM": "from",
         "TIMESHIFT_END_PARAM": "to",
         "TIMESHIFT_MAX_SPAN_SECONDS": "600",
+        "QUERY_PREFIX": "dsl_",
+        "QUERY_OVERRIDES": "true",
     }
 
 

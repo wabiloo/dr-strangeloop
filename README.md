@@ -91,7 +91,7 @@ The three sources:
    https://.../master.m3u8 → grave-robber ingest-url → outputs/x/manifest.json
    ```
 
-Signalling and timeline options are set per channel in the its-a-live TOML config (`[markers]`, `[packaging]`, `[timeline]`) and fixed at bake time. They include:
+Signalling and timeline options are set per channel in the its-a-live TOML config (`[markers]` and `[packaging]` with their `.hls`/`.dash` sub-tables, `[timeline]`) and fixed at bake time; most of them can also be overridden per request with a query parameter on the manifest URL (see [`loop-dee-loop/README.md`](./loop-dee-loop/README.md), "Query parameters"). They include:
 - The HLS marker shape (`EXT-X-DATERANGE` layout, optionally `EXT-X-CUE-OUT/-IN` alongside or instead).
 - Event ID behaviour across loops, and the DATERANGE ID format.
 - HLS as CMAF or TS.

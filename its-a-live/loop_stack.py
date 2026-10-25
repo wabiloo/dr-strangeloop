@@ -16,9 +16,9 @@ from loop_shared_stack import CLUSTER_NAME
 from _host_paths import to_host_path
 from _epoch_cfg import config_epoch_utc
 from _infra_cfg import infra_table
-from _markers_cfg import period_on_segmentation_serve_args
-from _packaging_cfg import dash_addressing_serve_args
-from _timeshift_cfg import timeshift_param_names, timeshift_serve_args
+from _markers_cfg import split_on_serve_args
+from _packaging_cfg import dash_serve_args, dvr_window_seconds as config_dvr_window_seconds
+from _query_cfg import CLOUDFRONT_MAX_ALLOW_LIST, query_param_names, query_serve_args
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 
@@ -74,8 +74,7 @@ class LoopStack(Stack):
 
         loop_package_folder = infra_table(config, "s3").get("content_folder", "its-a-live/content").strip("/")
 
-        packaging_cfg = config.get("packaging", {})
-        dvr_window_seconds = str(packaging_cfg.get("dvr_window_seconds", 30))
+        dvr_window_seconds = config_dvr_window_seconds(config)
         # loop-dee-loop/SCOPE.md §12: default on -- rewrites each segment's
         # own timestamps per request (header patch only, never a re-mux) so
         # the channel has no #EXT-X-DISCONTINUITY / DASH Period restart at
@@ -179,7 +178,7 @@ class LoopStack(Stack):
         # other channel.
 
         # ── Express service (long-running, auto-scaling `serve.py`) ──────────
-        # --epoch-utc comes from [timeline] epoch_utc (default
+        # --epoch-utc comes from [timeline] epoch (default
         # 2026-01-01T00:00:00Z -- recent enough to keep loop numbers small;
         # the Unix epoch gave ~1.8e9-sized ones) and is then left alone --
         # this is looping content simulating live, not a real broadcast start
@@ -217,9 +216,9 @@ class LoopStack(Stack):
                     "--epoch-utc", config_epoch_utc(config),
                     "--channel-name", config.get("deploy", {}).get("name", "default"),
                     *(["--continuous-timeline"] if continuous else []),
-                    *period_on_segmentation_serve_args(config),
-                    *dash_addressing_serve_args(config),
-                    *timeshift_serve_args(config),
+                    *split_on_serve_args(config),
+                    *dash_serve_args(config),
+                    *query_serve_args(config),
                 ],
                 environment=[
                     ecs.CfnExpressGatewayService.KeyValuePairProperty(
@@ -242,17 +241,21 @@ class LoopStack(Stack):
             # ── CloudFront: public entrypoint, caches /seg/* aggressively ────────
             # Manifests are dynamic (sliding window) -- never cached. Segments are
             # immutable within a loop package version -- cache them (SCOPE.md §8).
-            # Startover/catchup (loop-dee-loop/SCOPE.md §13) selects the range via
-            # query parameters on the manifest URLs, so manifests MUST be cached
-            # per value of exactly those parameters -- CloudFront's default is to
-            # drop the query string entirely, which would serve one viewer's range
-            # to everyone. Nothing else in the query string is keyed or forwarded.
-            timeshift_params = timeshift_param_names(config)
-            manifest_query_strings = (
-                cloudfront.CacheQueryStringBehavior.allow_list(*timeshift_params)
-                if timeshift_params
-                else cloudfront.CacheQueryStringBehavior.none()
-            )
+            # Startover/catchup and the per-request overrides (loop-dee-loop/
+            # SCOPE.md §13) select what a manifest contains via query parameters
+            # on its URL, so manifests MUST be cached per value of exactly those
+            # parameters -- CloudFront's default is to drop the query string
+            # entirely, which would serve one viewer's range to everyone. Nothing
+            # else in the query string is keyed or forwarded -- unless there are
+            # more names than a cache policy's allow-list can hold, in which case
+            # the whole query string is keyed (manifests live a second at most).
+            query_params = query_param_names(config)
+            if not query_params:
+                manifest_query_strings = cloudfront.CacheQueryStringBehavior.none()
+            elif len(query_params) > CLOUDFRONT_MAX_ALLOW_LIST:
+                manifest_query_strings = cloudfront.CacheQueryStringBehavior.all()
+            else:
+                manifest_query_strings = cloudfront.CacheQueryStringBehavior.allow_list(*query_params)
             manifest_cache_policy = cloudfront.CachePolicy(
                 self,
                 "ManifestCachePolicy",

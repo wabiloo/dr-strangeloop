@@ -1,3 +1,5 @@
+config_version = 2
+
 [deploy]
 name = "testlocal"
 backend = "local-docker"
@@ -14,7 +16,7 @@ source_path = "../outputs/short-loop-1min.ts"
 
 [packaging]
 segment_duration   = 4.0
-dvr_window_seconds = 30.0
+dvr_window = 30.0
 
 [infrastructure.docker]
 port = 8090

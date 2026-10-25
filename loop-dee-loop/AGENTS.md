@@ -62,7 +62,7 @@ match, fix the upstream franken-ts input instead.
 | `loop_math.py` | Integer epoch/loop_number/position_in_loop arithmetic — the drift-freedom guarantee (`SCOPE.md` §4.2/§5). No floats in persisted timing state, ever. |
 | `serve.py` | Stateless HTTP serving of manifests + segments per request. |
 | `continuity.py` | Opt-in `--continuous-timeline` mode (`SCOPE.md` §12): per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite so the channel has no discontinuity/Period-restart at the loop wrap — header patch only, never a re-mux. |
-| `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig`, and integer-tick `resolve_window` (segment snapping, `full-loops` widening, max-span cap). Pure ints, no Flask. |
+| `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig` (the parameter names + prefix), the per-request override parsers (`parse_choice`, `parse_duration_seconds`, `parse_split_on`, ...) and integer-tick `resolve_window` (segment snapping, `full_loops` widening, max-span cap). Pure ints, no Flask. |
 | `Dockerfile` / `Dockerfile.baked` / `docker-entrypoint.sh` | `Dockerfile`: code-only image shared by every channel (content comes from S3 or a bind mount). `Dockerfile.baked`: layers one channel's loop package on top for a self-contained, shareable image (`LOOP_PACKAGE_BAKED=1`, local-docker `bundle_content` only — see `its-a-live/AGENTS.md`). The entrypoint picks S3 / baked / passthrough mode from env vars. |
 | `load_test.py` | Concurrent-viewer load generator (see `PERFS.md`). |
 
@@ -84,15 +84,15 @@ change) guard it. Igor's Timeline panel draws it. Design/glossary: `SCOPE.md` §
 ## Forced Periods on SCTE-35 types
 
 `serve.py --period-on-segmentation 0x22,0x30,...` (its-a-live `[markers]
-period_on_segmentation`) opens a new Period / `#EXT-X-DISCONTINUITY` at
-markers with those `segmentation_type_id`s, signal-only (timestamps stay
-continuous under `--continuous-timeline`). Design: `SCOPE.md` §14; tests:
+split_on`; query parameter `split_on`) opens a new Period / `#EXT-X-DISCONTINUITY`
+at markers with those `segmentation_type_id`s in HLS and DASH alike,
+signal-only (timestamps stay continuous under `--continuous-timeline`). Design: `SCOPE.md` §14; tests:
 `tests/test_serve_signal_periods.py`.
 
 ## DASH `$Time$` addressing
 
-`serve.py --dash-addressing time` (its-a-live `[packaging] dash_addressing =
-"time"`; default `number`) makes every DASH `SegmentTemplate` use `$Time$`
+`serve.py --dash-addressing time` (its-a-live `[packaging.dash] addressing =
+"time"`; query parameter `addressing`; default `number`) makes every DASH `SegmentTemplate` use `$Time$`
 (each `<S t>`) instead of `$Number$` + `startNumber`. HLS is unaffected.
 URL forms (nested under `/seg/` and `/cseg/` so CDN cache rules still match):
 `/<track>/seg/t/<real span>/<t>.m4s` (default mode; `t` is span-relative, the
@@ -103,20 +103,27 @@ boundaries); an unknown `t` is a 404. Tests: `tests/test_serve_dash_time.py`.
 
 ## DASH SegmentTimeline style
 
-`serve.py --dash-timeline compact` (its-a-live `[packaging] dash_timeline =
-"compact"`; default `full`) omits `@t` where a segment starts where the
+`serve.py --dash-timeline compact` (its-a-live `[packaging.dash] timeline_style =
+"compact"`; query parameter `timeline_style`; default `full`) omits `@t` where a segment starts where the
 previous one ended and folds runs of equal `@d` into `@r`. The first `<S>` of a
 Period always keeps `@t` (a front-trimmed window must not change anyone's t),
 `@t` returns after a gap, and a loop/asset comment ends a run. Independent of
 `--dash-addressing`; HLS unaffected. Tests: `tests/test_serve_dash_timeline.py`.
 
-## Startover & catchup
+## Startover, catchup and per-request overrides (query parameters)
 
-`serve.py --timeshift` (its-a-live: `[timeshift]`, on by default) makes the
-normal `index.m3u8` / `stream.mpd` accept `start`, `end`, `full-loops`, `offset` (pretend "now" is earlier/later; `SCOPE.md` §13.7) and
-`continuous_timeline` query params (names configurable) — catchup = VOD of a
-past range, startover = live-style from a past point. Full reference and
-examples: [`README.md`](./README.md) "Startover & catchup"; design:
+`serve.py --timeshift` (its-a-live: `[query]`, on by default) makes the
+normal `index.m3u8` / `stream.mpd` accept `start`, `end`, `full_loops`, `offset` (pretend "now" is earlier/later; `SCOPE.md` §13.7) and
+`timeline_mode` query params (only `start`/`end` configurable) — catchup = VOD of a
+past range, startover = live-style from a past point — plus per-request overrides of
+the rendering (`epoch`, `dvr_window`, `split_on`, `timeline_style`, `addressing`,
+`signal_format`, `descriptor_grouping`, `cue_tags`, `increment_event_ids`,
+`id_template`, `max_height`, `max_bitrate`; `SCOPE.md` §13.8), all behind an optional
+`--query-prefix`. Adding one means: a name in `timeshift.FIXED_PARAMS`, its parsing
+and a `Channel.with_*` variant in `resolve_request_channel` (`serve.py`), an entry in
+`openapi.yaml`, and the same name in its-a-live's `_query_cfg.FIXED_PARAMS` and Igor's
+`QUERY_FIXED_PARAMS` (tests keep the three lists in lockstep). Full reference and
+examples: [`README.md`](./README.md) "Query parameters"; design:
 `SCOPE.md` §13. Things an agent must not get wrong:
 
 - **Segment URL forms are part of the contract**: `/seg/<local>` (loop-local),
@@ -127,7 +134,9 @@ examples: [`README.md`](./README.md) "Startover & catchup"; design:
   (its-a-live's `loop_stack.py` does), or viewers share each other's ranges.
 - History is re-derived from the epoch + baked package, never recorded; a new
   `--epoch-utc` or a re-bake changes what past times contain.
-- `tests/test_timeshift.py` covers parsing, range math and served manifests.
+- `tests/test_timeshift.py` covers parsing, range math and served manifests;
+  `tests/test_query_overrides.py` every per-request override, the prefix and the
+  OpenAPI parameter list.
 
 ## Requirements
 

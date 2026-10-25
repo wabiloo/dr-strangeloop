@@ -750,14 +750,18 @@ file; continuous mode: a pure function of the global index, §12.2).
 
 ### 13.3 Parameters
 
-Names are configurable per channel; values accept epoch (seconds, or
-milliseconds when > 1e11) or ISO8601 (`Z` or numeric offset).
+Only `start`/`end` are configurable per channel (and every name can carry a
+common prefix, §13.8); values accept epoch (seconds, or milliseconds when >
+1e11) or ISO8601 (`Z` or numeric offset).
 
 ```toml
-[timeshift]
+[query]
 enabled            = true
+prefix             = ""
 start_param        = "start"
 end_param          = "end"
+
+[timeshift]
 max_span_seconds   = 21600
 ```
 
@@ -810,12 +814,13 @@ defined (a preview of what goes on air).
 - Implementation: `Channel.with_offset` returns a per-request copy whose
   `now_ticks()` is shifted; nothing else knows about the offset.
 
-### 13.5 DECIDED: per-request `timeline` override
+### 13.5 DECIDED: per-request `timeline_mode` override
 
 `--continuous-timeline` (§12) is a startup flag today. It becomes the
 *default* for a new per-request query parameter with a **fixed name,
-`timeline`** (deliberately not configurable, unlike `start`/`end`;
-a configured name equal to it or to `full-loops` is rejected), with values:
+`timeline_mode`** (deliberately not configurable, unlike `start`/`end`;
+a configured name equal to it or to any other fixed name is rejected; it was
+`timeline` before the §13.8 renames), with values:
 
 - `default` (or the param absent) -- follow the server's `--continuous-timeline`;
 - `continuous` -- §12 continuity for this request;
@@ -850,7 +855,7 @@ and one server must serve both:
 Non-continuous ranges spanning several loop wraps emit one
 `#EXT-X-DISCONTINUITY` (HLS) / one `<Period>` (DASH) per wrap. A 6h span
 over a 10-minute loop is ~36. This is accepted (see interview); players
-that dislike it can request `timeline=continuous`.
+that dislike it can request `timeline_mode=continuous`.
 
 Existing limit that catchup makes reachable: MPEG-TS PTS/DTS/PCR wrap at
 33 bits (~26.5h), and continuous mode's shift of `loop_number *
@@ -871,7 +876,7 @@ path:
 
 Open-ended startover (`start` only): capped at `start + max_span_seconds`;
 the manifest becomes an ended VOD after that. An explicit `end` further than
-`max_span_seconds` from `start` (measured after any `full-loops` snapping) is
+`max_span_seconds` from `start` (measured after any `full_loops` snapping) is
 a 400.
 
 Time-shifted DASH: `availabilityStartTime` = wall clock of the snapped range
@@ -880,10 +885,11 @@ start, Period/timeline rebased so the range begins at presentation time 0
 Ended ranges are `type="static"` with `mediaPresentationDuration` and no
 `availabilityStartTime`.
 
-### 13.5b DECIDED: `full-loops` (whole-loop snapping)
+### 13.5b DECIDED: `full_loops` (whole-loop snapping)
 
-A boolean parameter with a **fixed name, `full-loops`** (like `timeline`, not
-configurable; `start`/`end` remain configurable and may not collide with it).
+A boolean parameter with a **fixed name, `full_loops`** (like `timeline_mode`,
+not configurable; `start`/`end` remain configurable and may not collide with
+it; it was `full-loops` before the §13.8 renames).
 When true, the range is widened to whole loop iterations
 *before* segment snapping:
 
@@ -896,7 +902,7 @@ When true, the range is widened to whole loop iterations
   to whole loops (minimum one loop; a single loop longer than
   `max_span_seconds` -> 400).
 
-`max_span_seconds` is enforced on the widened range. `full-loops` without
+`max_span_seconds` is enforced on the widened range. `full_loops` without
 `start` is ignored (live is unaffected).
 
 ### 13.6 Implementation notes (serve.py / scte35_signaling.py)
@@ -941,6 +947,86 @@ When true, the range is widened to whole loop iterations
       includes them (verify in `loop_stack.py` synth output).
 - [ ] `tests/test_loop_math.py` still passes; no float tick state introduced.
 
+### 13.8 DECIDED: per-request overrides, renames and the parameter prefix
+
+Everything the JIT packager computes from data the package already carries can
+be chosen per request instead of per bake or per server. Each kind sits
+behind its own TOML-only switch -- `--timeshift` (`[query] timeshift`: `start`, `end`,
+`full_loops`, `offset`) and `--query-overrides` (`[query] overrides`: everything else),
+independent of each other; the switches are not query parameters themselves. Absent parameters keep the
+channel's own setting, a bad value is a plain-text `400` naming the (prefixed)
+parameter, and only manifests change -- segment bytes never do. The full list
+with values is in `README.md` ("Query parameters") and `openapi.yaml`.
+
+| Group | Parameters |
+|---|---|
+| Range / clock | `start`, `end` (configurable names), `full_loops`, `offset`, `epoch` |
+| Timeline / window | `timeline_mode`, `dvr_window`, `split_on` |
+| DASH style | `timeline_style`, `addressing`, `signal_format` |
+| SCTE-35 signaling | `descriptor_grouping`, `cue_tags`, `increment_event_ids`, `id_template` |
+| Ladder | `max_height`, `max_bitrate` |
+
+- **Renames.** The names follow the its-a-live TOML keys, which lost their
+  `hls_`/`dash_` prefixes where the format of a request is obvious
+  (`full-loops` -> `full_loops`, `timeline` -> `timeline_mode`;
+  `dash_timeline` -> `timeline_style`, `dash_addressing` -> `addressing`,
+  `dash_signal_format` -> `signal_format`, `daterange_id_format` -> `id_template`,
+  `dvr_window_seconds` -> `dvr_window`, `period_on_segmentation` -> `split_on`,
+  `daterange_mode`/`dash_descriptor_mode` -> `descriptor_grouping`). No
+  backward compatibility: the old query names are not read.
+- **`descriptor_grouping`** has per-format values (HLS: `shared`/`narrowed`/
+  `grouped`; DASH: `shared`/`narrowed`), validated against the format being
+  answered. bake.py therefore stores *both* the shared (`splice_command_b64`)
+  and the narrowed (`splice_command_b64_narrowed`) message for every marker,
+  whatever `--daterange-mode` is, and marks the package with
+  `"scte35_payloads": "shared+narrowed"` in `loop_descriptor.json`. A package
+  without that marker (baked earlier, or an archive segment-list bake) holds only
+  the one message its `--daterange-mode` chose, so a `descriptor_grouping` that
+  would change the payload (HLS `narrowed` vs `shared`/`grouped`, any DASH change)
+  is a `400` asking for a re-bake; before the guard it was a `500` (DASH) or a silent
+  no-op (HLS). Where a marker has a single descriptor (every `splice_insert`, or a
+  `time_signal` with one) the shared and narrowed messages are identical, so the
+  switch changes nothing visible.
+- **`epoch`** replaces the channel epoch (`Channel.with_epoch`); loop numbering,
+  PDT, Period starts, `availabilityStartTime` and global segment numbers all
+  derive from it. `epoch=now` was rejected: every request would carry a new
+  epoch, so a player's timeline would jump on each manifest refresh (and nothing
+  could be cached). Use a fixed value.
+- **`dvr_window`** is rounded up to whole segments of the package's nominal
+  segment duration and capped at `max_span_seconds`.
+- **Ladder filter** keeps the original media-playlist numbering
+  (`LoopPackage.all_video_renditions`), so `video_2.m3u8` stays `video_2.m3u8`
+  when `video_1` is filtered out; an empty result is a `400` listing the ladder.
+- **Markers.** Filtering markers by type, or switching them off, was considered
+  and deferred (interaction with `split_on`, Start/End pairing, markers already
+  embedded in baked TS bytes). `audio=false` was dropped (TS segments with muxed
+  audio cannot drop it). The baked-in `container` / `mux_audio` choices have no
+  query parameter either: they decide the segment bytes.
+- **Prefix.** `--query-prefix` (its-a-live `[query] prefix`) is prepended to
+  *every* name, the configurable `start`/`end` included, so a system that takes
+  the channel as its source and has parameters of its own cannot clash. Unprefixed
+  names are then ignored (not rejected), and child playlists inherit only
+  prefixed ones. `scope` of `/timeline.json` is prefixed too. `/health`
+  reports the effective names (`timeshift.params`).
+- **Two switches, no master.** `--timeshift` / `[query] timeshift` and
+  `--query-overrides` / `[query] overrides` (both default on in its-a-live, both
+  opt-in flags on `serve.py`) gate their own parameters independently; a switch that
+  is off means its names are ignored (not rejected), are not forwarded to child
+  playlists and are not part of the CDN cache key (with only `timeshift` on, 4 names
+  remain and the cache policy can use a plain allow-list). With both off the query
+  string is inert. An earlier single `enabled` switch was removed: it could not say
+  "live only but allow overrides" or the reverse, and `overrides` was only meaningful
+  while it was on. A channel config with the old `enabled` is migrated (its value goes
+  to both new switches) -- see `config_version` in `its-a-live/AGENTS.md`.
+- **CDN.** Manifests must be cached per value of every parameter above, so the
+  CloudFront manifest cache policy keys on exactly those (prefixed) names. A
+  cache-policy allow-list holds at most 10 query-string names (CloudFront's
+  default quota) and there are 17, so its-a-live keys manifests on the whole
+  query string instead (`CLOUDFRONT_MAX_ALLOW_LIST` in `_query_cfg.py`; with the
+  overrides off only 4 names remain and the allow-list is used);
+  manifests are cached for a second at most, so the extra cache keys are harmless.
+  Segments never carry a query.
+
 ## 14. Extension: forced Periods on chosen SCTE-35 segmentations (`--period-on-segmentation`)
 
 **DECIDED.** A channel-level list of `segmentation_type_id` values
@@ -973,13 +1059,14 @@ the media changes: timestamps stay continuous across a forced break.
 - Startover/catchup ranges honour it in both modes (first Period rebased to 0
   as before).
 
-**Per-format control.** `--period-on-segmentation-apply dash|hls|both`
-(default `both`) picks which manifest format gets the forced break: `dash`
-= Periods only, `hls` = discontinuities only. The type-id selection is shared;
-real loop-wrap / asset-boundary signalling is unaffected by it.
+**Both formats.** The forced break applies to HLS (`#EXT-X-DISCONTINUITY`) and
+DASH (Period) alike; there is no per-format switch (a per-request format is
+always known, and the earlier `--period-on-segmentation-apply dash|hls|both`
+was dropped in the §13.8 renames). The type-id selection is also a per-request
+override (`split_on=0x22,0x30`, `none` to clear). Real loop-wrap /
+asset-boundary signalling is unaffected by it.
 
-Channel config: `[markers] period_on_segmentation = [0x22, 0x30]` (+
-`period_on_segmentation_apply = "dash"|"hls"|"both"`) in its-a-live; env `PERIOD_ON_SEGMENTATION` for gunicorn.
+Channel config: `[markers] split_on = [0x22, 0x30]` in its-a-live; env `PERIOD_ON_SEGMENTATION` for gunicorn.
 Tests: `tests/test_serve_signal_periods.py`.
 
 ---

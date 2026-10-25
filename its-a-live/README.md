@@ -141,24 +141,30 @@ source_path = "../outputs/mychannel"   # franken-ts output
 
 # ecs-express-only:
 [packaging]
-segment_duration   = 4.0
-dvr_window_seconds = 30
+segment_duration = 4.0
+dvr_window = 30              # seconds (also a query parameter of the same name)
 
 [timeline]                  # ecs-express/local-docker only
-epoch_utc          = "2026-01-01T00:00:00Z"  # optional, this is the default; loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
+epoch = "2026-01-01T00:00:00Z"  # optional, this is the default; loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
 continuous = true  # default -- see loop-dee-loop/SCOPE.md §12; false reverts to signaled discontinuities/Period restarts at the loop wrap
 
-[timeshift]                  # optional; startover/catchup (loop-dee-loop/SCOPE.md §13), on by default
-enabled = true
+[query]                      # optional; startover/catchup and per-request overrides (loop-dee-loop/SCOPE.md §13), on by default
+timeshift = true             # startover/catchup (start, end, full_loops, offset); false = live only
+overrides = true             # per-request overrides (every other parameter); false = ignored. Both are TOML only
+prefix = ""                  # put in front of EVERY query parameter name, e.g. "dsl_" -> dsl_start, dsl_cue_tags
 start_param = "start"        # e.g. https://<cdn>/index.m3u8?start=2026-09-30T08:00:00Z&end=2026-09-30T08:10:00Z
 end_param = "end"
-# `full-loops` (bool), `timeline` (default|continuous|periodic) and `offset` (e.g. -PT1H) are fixed query params, not configurable
-max_span_seconds = 21600
-# These names are also the only query params CloudFront keys manifest caching on --
+# The other parameters have fixed names: full_loops (bool), timeline_mode (default|continuous|periodic), offset
+# (e.g. -PT1H), epoch, dvr_window, split_on, timeline_style, addressing, cue_tags, descriptor_grouping,
+# increment_event_ids, signal_format, id_template, max_height, max_bitrate.
+# All these names (prefixed) are also what CloudFront keys manifest caching on --
 # redeploy (`channel.py redeploy`) after changing them.
 
+[timeshift]
+max_span_seconds = 21600     # longest startover/catchup range
+
 [markers]
-# period_on_segmentation = [0x22, 0x30]  # optional: force a Period/discontinuity at these SCTE-35 segmentation_type_ids, even with continuous (loop-dee-loop/SCOPE.md §14)
+# split_on = [0x22, 0x30]    # optional: force a Period/discontinuity at these SCTE-35 segmentation_type_ids, even with continuous (loop-dee-loop/SCOPE.md §14)
 
 [infrastructure.express]
 port   = 8080
@@ -167,12 +173,16 @@ memory = 512
 cdn    = true   # false: no CloudFront (faster deploy, no edge caching, URLs use the service endpoint)
 ```
 
+A config written before the key renames (HLS/DASH sub-tables, `[query]`, ...)
+is rejected with the exact renames; `migrate_config.py` rewrites it (see
+`AGENTS.md`, "Renamed config keys and migrating old files").
+
 See `AGENTS.md`'s config reference for the full schema, including the
-`[markers]` section controlling the shape of the HLS/DASH SCTE-35
-signaling `loop-dee-loop` renders, and `local-docker`'s `[infrastructure.docker]`
+`[markers]` section (with its `[markers.hls]` / `[markers.dash]` sub-tables)
+controlling the shape of the HLS/DASH SCTE-35 signaling `loop-dee-loop` renders, and `local-docker`'s `[infrastructure.docker]`
 section (in place of `[infrastructure.express]`, holding `port` and `bundle_content`).
 
-For `ecs-express` and `local-docker`, `[markers].daterange_id_format`
+For `ecs-express` and `local-docker`, `[markers.hls] id_template`
 controls HLS DATERANGE IDs. Its default is
 `"{segcode}-{eventid}-{loop}"`; supported fields are `{loop}`, `{eventid}`,
 `{segid}`, `{seghex}`, `{segcode}`, `{segname}` (e.g.
@@ -245,7 +255,7 @@ groups: **Infrastructure** (does the stack/container exist at all) and
 | Command | `ecs-express` | `aws-media` | `local-docker` |
 |---|---|---|---|
 | `spark` | Bake locally (GPAC via `bake.py`), push loop package to S3 | Upload the raw `.ts` to S3 as-is | Bake locally (GPAC via `bake.py`), no upload — package stays on disk |
-| `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Start the MediaLive channel, wait for `RUNNING` | `docker run` a container bind-mounting the baked package (building the image on first use) — or, with `bundle_content = true`, build the per-channel image with the package inside and run it with no mount; epoch is `[timeline] epoch_utc` (default 2026-01-01T00:00:00Z), `--epoch-utc` works the same as `ecs-express` |
+| `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Start the MediaLive channel, wait for `RUNNING` | `docker run` a container bind-mounting the baked package (building the image on first use) — or, with `bundle_content = true`, build the per-channel image with the package inside and run it with no mount; epoch is `[timeline] epoch` (default 2026-01-01T00:00:00Z), `--epoch-utc` works the same as `ecs-express` |
 | `stop` | Scale ECS to 0 tasks (shared ALB keeps running for other channels) | Stop the MediaLive channel, wait for `IDLE` | `docker rm -f` the container |
 | `refresh` | Force a new ECS task launch to re-sync S3 content | Full stop→start cycle (no hot-reload exists) | Recreate the container (seconds, no canary) |
 | `update` | `spark` then `refresh` in one step — the routine "ship new content to a running channel" combo | (same) | (same) |
@@ -299,7 +309,7 @@ always `http://localhost:<channel.port>/...`.
 
 ## Notes / gotchas
 
-- **Epoch (`ecs-express` / `local-docker`)** is `[timeline] epoch_utc`,
+- **Epoch (`ecs-express` / `local-docker`)** is `[timeline] epoch`,
   default `2026-01-01T00:00:00Z` (set it in igor's channel form, which offers
   1970, 2026 and "now" presets, or in the TOML). It is loop 0's start and the
   DASH `availabilityStartTime`, so a recent one keeps loop numbers, media

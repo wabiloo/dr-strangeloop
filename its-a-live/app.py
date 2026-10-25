@@ -3,6 +3,7 @@ import os
 import tomllib
 import aws_cdk as cdk
 from _infra_cfg import infra_table, reject_legacy_tables
+from _legacy_cfg import check_config_version
 from _paths_cfg import resolve_source_path
 from media_stack import MediaStack
 from loop_stack import LoopStack
@@ -18,6 +19,7 @@ config_path = app.node.try_get_context("config") or os.path.join(
 with open(config_path, "rb") as f:
     config = tomllib.load(f)
 reject_legacy_tables(config, config_path)
+check_config_version(config, config_path)
 if config.get("input", {}).get("source_path"):
     config["input"]["source_path"] = resolve_source_path(config["input"]["source_path"], config_path)
 

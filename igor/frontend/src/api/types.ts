@@ -471,12 +471,19 @@ export interface ChannelHealth {
   /** Newer serve.py only (loop-dee-loop/SCOPE.md §13). */
   epoch_utc?: string
   continuous?: boolean
-  timeshift?: {
-    enabled: boolean
+  /** The channel's [query] configuration (newer serve.py only). */
+  query?: {
+    timeshift: boolean
+    overrides: boolean
+    /** Effective on-the-wire names (the channel's [query] prefix already applied). */
     start_param?: string
     end_param?: string
     timeline_param?: string
+    offset_param?: string
     full_loops_param?: string
+    prefix?: string
+    /** Every query parameter name the channel's manifests accept. */
+    params?: string[]
     max_span_seconds?: number
     continuous_supported?: boolean
   }
@@ -496,28 +503,32 @@ export interface ChannelCreatePayload {
   allow_missing_segments?: boolean
   segment_duration?: number
   dvr_window_seconds?: number
-  /** [timeline].epoch_utc -- loop 0's start / DASH availabilityStartTime,
+  /** [timeline].epoch -- loop 0's start / DASH availabilityStartTime,
    * UTC `YYYY-MM-DDTHH:MM:SSZ` (ecs-express/local-docker). */
   epoch_utc?: string
   hls_format?: 'cmaf' | 'ts'
   hls_ts_mux_audio?: boolean
-  /** [packaging].dash_addressing -- DASH SegmentTemplate `$Number$` (default) or `$Time$`. */
+  /** [packaging.dash].addressing -- DASH SegmentTemplate `$Number$` (default) or `$Time$`. */
   dash_addressing?: 'number' | 'time'
-  /** [packaging].dash_timeline -- SegmentTimeline `full` (@t and @d on every S) or `compact` (implicit @t + @r). */
+  /** [packaging.dash].timeline_style -- SegmentTimeline `full` (@t and @d on every S) or `compact` (implicit @t + @r). */
   dash_timeline?: 'full' | 'compact'
   /** loop-dee-loop/SCOPE.md §12: default true -- no #EXT-X-DISCONTINUITY /
    * DASH Period restart at the loop wrap (serve.py rewrites each segment's
    * own timestamps per request instead). ecs-express/local-docker only. */
   continuous?: boolean
-  /** loop-dee-loop/SCOPE.md §14: segmentation_type_ids (hex, e.g. "0x22";
-   * a Start implies its End) whose markers force a new DASH Period / HLS
-   * discontinuity, signal-only. `apply` picks the formats. */
+  /** loop-dee-loop/SCOPE.md §14: [markers].split_on -- segmentation_type_ids
+   * (hex, e.g. "0x22"; a Start implies its End) whose markers force a new
+   * DASH Period / HLS discontinuity, signal-only. Applies to both formats. */
   period_on_segmentation?: string[]
-  period_on_segmentation_apply?: 'both' | 'dash' | 'hls'
-  /** loop-dee-loop/SCOPE.md §13: startover/catchup via query parameters on
-   * the normal manifest URLs. The names are per-channel and also become the
-   * CDN's manifest cache-key allow-list. ecs-express/local-docker only. */
+  /** loop-dee-loop/SCOPE.md §13: [query] -- startover/catchup and per-request
+   * overrides via query parameters on the normal manifest URLs. The names are
+   * per-channel and also become the CDN's manifest cache key. ecs-express/
+   * local-docker only. `query_prefix` is put in front of EVERY parameter name. */
   timeshift_enabled?: boolean
+  /** [query] overrides -- false: only startover/catchup parameters are read,
+   * the per-request rendering overrides are ignored. */
+  query_overrides?: boolean
+  query_prefix?: string
   timeshift_start_param?: string
   timeshift_end_param?: string
   timeshift_max_span_seconds?: number

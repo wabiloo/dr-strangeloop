@@ -172,7 +172,7 @@ Resources per release:
 
 Values file covers: image repository/tag (set by `channel.py`, not
 hand-edited), replica count, resource requests/limits, port,
-`dvr_window_seconds`, `epoch_utc`, ingress host/enabled, namespace.
+`dvr_window`, `epoch`, ingress host/enabled, namespace.
 
 ## 7. One small required change: `docker-entrypoint.sh`
 

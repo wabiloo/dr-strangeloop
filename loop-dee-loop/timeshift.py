@@ -18,41 +18,128 @@ from loop_math import compute_loop_position, global_segment_number, segment_inde
 # (1e11 s is year 5138; 1e11 ms is 1973).
 _MS_THRESHOLD = 10**11
 _NUMERIC = re.compile(r"^\d+(\.\d+)?$")
-# Fixed (not configurable) name and values of the per-request timeline-mode
-# override: `default` = the server's --continuous-timeline setting.
-TIMELINE_PARAM = "timeline"
-# Also fixed: `full-loops=true` widens the range to whole loops.
-FULL_LOOPS_PARAM = "full-loops"
-# Also fixed: `offset=` pretends "now" is earlier (negative) or later (positive).
+# Fixed (not configurable) names of the per-request query parameters. Only
+# `start`/`end` are configurable (TimeshiftConfig); every name can be given a
+# common prefix (TimeshiftConfig.prefix) so a caller that already uses some of
+# these names for its own purposes (an SSAI service, say) cannot clash.
+# `timeline_mode`: `default` = the server's --continuous-timeline setting.
+TIMELINE_PARAM = "timeline_mode"
+# `full_loops=true` widens the range to whole loops.
+FULL_LOOPS_PARAM = "full_loops"
+# `offset=` pretends "now" is earlier (negative) or later (positive).
 OFFSET_PARAM = "offset"
+# `epoch=` replaces the channel epoch (loop 0's start) for this request.
+EPOCH_PARAM = "epoch"
+# `dvr_window=` sets the size of the sliding window (seconds or ISO 8601 duration).
+DVR_WINDOW_PARAM = "dvr_window"
+# DASH manifest style.
+TIMELINE_STYLE_PARAM = "timeline_style"
+ADDRESSING_PARAM = "addressing"
+# SCTE-35 signaling.
+CUE_TAGS_PARAM = "cue_tags"
+DESCRIPTOR_GROUPING_PARAM = "descriptor_grouping"
+INCREMENT_EVENT_IDS_PARAM = "increment_event_ids"
+SIGNAL_FORMAT_PARAM = "signal_format"
+ID_TEMPLATE_PARAM = "id_template"
+SPLIT_ON_PARAM = "split_on"
+# Ladder filtering.
+MAX_HEIGHT_PARAM = "max_height"
+MAX_BITRATE_PARAM = "max_bitrate"
+# Every fixed-name parameter, in documentation order.
+FIXED_PARAMS = (
+    FULL_LOOPS_PARAM, TIMELINE_PARAM, OFFSET_PARAM, EPOCH_PARAM, DVR_WINDOW_PARAM,
+    TIMELINE_STYLE_PARAM, ADDRESSING_PARAM, CUE_TAGS_PARAM, DESCRIPTOR_GROUPING_PARAM,
+    INCREMENT_EVENT_IDS_PARAM, SIGNAL_FORMAT_PARAM, ID_TEMPLATE_PARAM, SPLIT_ON_PARAM,
+    MAX_HEIGHT_PARAM, MAX_BITRATE_PARAM,
+)
+# The two kinds, each behind its own TOML-only switch: startover/catchup
+# (`start`/`end` plus these two) behind `timeshift`, and the overrides of how a
+# manifest is rendered (everything else) behind `overrides`.
+TIMESHIFT_FIXED_PARAMS = (FULL_LOOPS_PARAM, OFFSET_PARAM)
+OVERRIDE_PARAMS = tuple(p for p in FIXED_PARAMS if p not in TIMESHIFT_FIXED_PARAMS)
 # Sanity bound so absurd values fail cleanly instead of overflowing datetimes.
 MAX_ABS_OFFSET_SECONDS = 10 * 365 * 86400
 TIMELINE_VALUES = ("default", "continuous", "periodic")
+TIMELINE_STYLE_VALUES = ("full", "compact")
+ADDRESSING_VALUES = ("number", "time")
+CUE_TAGS_VALUES = ("none", "alongside", "only")
+HLS_DESCRIPTOR_GROUPING_VALUES = ("shared", "narrowed", "grouped")
+DASH_DESCRIPTOR_GROUPING_VALUES = ("shared", "narrowed")
+SIGNAL_FORMAT_VALUES = ("binary", "xml")
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off", ""}
+_PREFIX = re.compile(r"^[A-Za-z0-9_.~-]*$")
 
 
 class TimeshiftError(ValueError):
-    """A bad startover/catchup request (maps to HTTP 400)."""
+    """A bad startover/catchup/override request (maps to HTTP 400)."""
 
 
 @dataclass(frozen=True)
 class TimeshiftConfig:
-    enabled: bool = False
+    """Which query parameters are honoured and how they are named.
+
+    Two independent switches (TOML only -- they gate the parameters, so they
+    are not parameters themselves):
+
+    - `timeshift`: startover/catchup (time-shifted playback) -- `start`, `end`,
+      `full_loops`, `offset`;
+    - `overrides`: the per-request overrides of how a manifest is rendered
+      (`OVERRIDE_PARAMS`).
+
+    A switch that is off means its parameters are ignored (not rejected) and
+    not forwarded to child playlists; with both off the query string is inert.
+    `prefix` is prepended to every name -- including the configurable
+    `start_param`/`end_param`."""
+
+    timeshift: bool = False
+    overrides: bool = False
     start_param: str = "start"
     end_param: str = "end"
     max_span_seconds: int = 21600
+    prefix: str = ""
 
     def __post_init__(self):
-        names = [self.start_param, self.end_param, FULL_LOOPS_PARAM, TIMELINE_PARAM, OFFSET_PARAM]
-        if any(not n for n in names) or len(set(names)) != len(names):
-            raise ValueError(f"timeshift parameter names must be non-empty and distinct: {names}")
+        if not _PREFIX.match(self.prefix):
+            raise ValueError(f"query parameter prefix must be URL-safe (letters, digits, _ . ~ -), got {self.prefix!r}")
+        names = self.all_param_names
+        if any(not n for n in (self.start_param, self.end_param)) or len(set(names)) != len(names):
+            raise ValueError(f"query parameter names must be non-empty and distinct: {names}")
         if self.max_span_seconds < 1:
             raise ValueError("max_span_seconds must be >= 1")
 
+    def name(self, base: str) -> str:
+        """The on-the-wire name of the parameter `base` (prefix applied)."""
+        return f"{self.prefix}{base}"
+
+    @property
+    def start_name(self) -> str:
+        return self.name(self.start_param)
+
+    @property
+    def end_name(self) -> str:
+        return self.name(self.end_param)
+
+    @property
+    def active(self) -> bool:
+        """Whether any query parameter is honoured at all (either switch on)."""
+        return self.timeshift or self.overrides
+
+    @property
+    def all_param_names(self) -> tuple[str, ...]:
+        """Every name, whether or not the overrides are enabled (used to check they are distinct)."""
+        return tuple(self.name(n) for n in (self.start_param, self.end_param, *FIXED_PARAMS))
+
     @property
     def param_names(self) -> tuple[str, ...]:
-        return (self.start_param, self.end_param, FULL_LOOPS_PARAM, TIMELINE_PARAM, OFFSET_PARAM)
+        """Every on-the-wire name a manifest request may carry, i.e. what a
+        CDN must key manifest caching on and what child playlists inherit."""
+        names = [self.start_param, self.end_param] if self.timeshift else []
+        names += [
+            p for p in FIXED_PARAMS
+            if (self.timeshift if p in TIMESHIFT_FIXED_PARAMS else self.overrides)
+        ]
+        return tuple(self.name(n) for n in names)
 
 
 def parse_bool(value: str, name: str) -> bool:
@@ -64,7 +151,7 @@ def parse_bool(value: str, name: str) -> bool:
     raise TimeshiftError(f"'{name}' must be a boolean (true/false/1/0), got {value!r}")
 
 
-def parse_timeline(value: str) -> bool | None:
+def parse_timeline(value: str, name: str = TIMELINE_PARAM) -> bool | None:
     """`timeline=` -> True (continuous), False (periodic) or None (use the
     server default). Case-insensitive; anything else is a 400."""
     v = value.strip().lower()
@@ -74,7 +161,7 @@ def parse_timeline(value: str) -> bool | None:
         return True
     if v == "periodic":
         return False
-    raise TimeshiftError(f"'{TIMELINE_PARAM}' must be one of {', '.join(TIMELINE_VALUES)}, got {value!r}")
+    raise TimeshiftError(f"'{name}' must be one of {', '.join(TIMELINE_VALUES)}, got {value!r}")
 
 
 _SIGNED_SECONDS = re.compile(r"^[+-]?\d+(\.\d+)?$")
@@ -83,7 +170,7 @@ _ISO_DURATION = re.compile(
 )
 
 
-def parse_offset_ticks(value: str, timescale: int) -> int:
+def parse_offset_ticks(value: str, timescale: int, name: str = OFFSET_PARAM) -> int:
     """`offset=` -> signed integer ticks. Signed seconds (`-3600`, `90.5`) or
     an ISO 8601 duration with optional sign (`-PT1H`, `P1DT2H30M`; days and
     below only -- months/years have no fixed length). A leading `+` may
@@ -96,14 +183,65 @@ def parse_offset_ticks(value: str, timescale: int) -> int:
         m = _ISO_DURATION.match(raw)
         if not m or not any(m.group(i) for i in range(2, 6)):
             raise TimeshiftError(
-                f"'{OFFSET_PARAM}' must be signed seconds (-3600) or an ISO 8601 duration (-PT1H), got {value!r}"
+                f"'{name}' must be signed seconds (-3600) or an ISO 8601 duration (-PT1H), got {value!r}"
             )
         sign = -1 if m.group(1) == "-" else 1
         d, h, mi, s = (Decimal(g) if g else Decimal(0) for g in m.groups()[1:])
         seconds = sign * (d * 86400 + h * 3600 + mi * 60 + s)
     if abs(seconds) > MAX_ABS_OFFSET_SECONDS:
-        raise TimeshiftError(f"'{OFFSET_PARAM}' is limited to +/-{MAX_ABS_OFFSET_SECONDS} seconds")
+        raise TimeshiftError(f"'{name}' is limited to +/-{MAX_ABS_OFFSET_SECONDS} seconds")
     return int((seconds * timescale).to_integral_value())
+
+
+def parse_choice(value: str, name: str, choices: tuple[str, ...]) -> str:
+    """One of `choices`, case-insensitive; anything else is a 400."""
+    v = value.strip().lower()
+    if v not in choices:
+        raise TimeshiftError(f"'{name}' must be one of {', '.join(choices)}, got {value!r}")
+    return v
+
+
+def parse_positive_int(value: str, name: str) -> int:
+    raw = value.strip()
+    if not raw.isdigit() or int(raw) < 1:
+        raise TimeshiftError(f"'{name}' must be a positive integer, got {value!r}")
+    return int(raw)
+
+
+def parse_duration_seconds(value: str, name: str) -> Decimal:
+    """A positive length of time: plain seconds (`30`, `7.5`) or an ISO 8601
+    duration (`PT30S`, `PT1H30M`, `P1D`; days and below only)."""
+    raw = value.strip()
+    if _NUMERIC.match(raw):
+        seconds = Decimal(raw)
+    else:
+        m = _ISO_DURATION.match(raw)
+        if not m or m.group(1) or not any(m.group(i) for i in range(2, 6)):
+            raise TimeshiftError(
+                f"'{name}' must be a number of seconds (30) or an ISO 8601 duration (PT30S), got {value!r}"
+            )
+        d, h, mi, s = (Decimal(g) if g else Decimal(0) for g in m.groups()[1:])
+        seconds = d * 86400 + h * 3600 + mi * 60 + s
+    if seconds <= 0:
+        raise TimeshiftError(f"'{name}' must be greater than zero, got {value!r}")
+    return seconds
+
+
+def parse_split_on(value: str, name: str) -> frozenset[int]:
+    """`split_on=0x22,0x30` -> segmentation_type_ids; empty or `none` -> none."""
+    ids = set()
+    for token in value.split(","):
+        token = token.strip()
+        if not token or token.lower() == "none":
+            continue
+        try:
+            type_id = int(token, 0)
+        except ValueError:
+            raise TimeshiftError(f"'{name}' must be a comma-separated list of segmentation_type_ids (e.g. 0x22,0x30) or none, got {value!r}") from None
+        if not 0 <= type_id <= 0xFF:
+            raise TimeshiftError(f"'{name}': segmentation_type_id {token!r} is out of range 0..255")
+        ids.add(type_id)
+    return frozenset(ids)
 
 
 def parse_instant_ticks(value: str, timescale: int, name: str = "time") -> int:

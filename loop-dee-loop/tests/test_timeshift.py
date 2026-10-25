@@ -105,17 +105,17 @@ def test_parse_timeline():
             parse_timeline(bad)
 
 
-@pytest.mark.parametrize("reserved", ["timeline", "full-loops", "offset"])
+@pytest.mark.parametrize("reserved", ["timeline_mode", "full_loops", "offset", "epoch", "dvr_window", "split_on", "cue_tags", "max_height"])
 def test_config_rejects_a_param_named_like_a_fixed_param(reserved):
     with pytest.raises(ValueError):
-        TimeshiftConfig(enabled=True, start_param=reserved)
+        TimeshiftConfig(timeshift=True, overrides=True, start_param=reserved)
     with pytest.raises(ValueError):
-        TimeshiftConfig(enabled=True, end_param=reserved)
+        TimeshiftConfig(timeshift=True, overrides=True, end_param=reserved)
 
 
 def test_config_rejects_duplicate_param_names():
     with pytest.raises(ValueError):
-        TimeshiftConfig(enabled=True, start_param="t", end_param="t")
+        TimeshiftConfig(timeshift=True, overrides=True, start_param="t", end_param="t")
 
 
 # ── resolve_window (pure integer math) ──────────────────────────────────────
@@ -198,6 +198,10 @@ ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not i
 
 
 def _app(tmp_path, *, continuous=False, enabled=True, **cfg):
+    """`enabled` switches both startover and the overrides (each can also be
+    given on its own through `timeshift=` / `overrides=`)."""
+    cfg.setdefault("timeshift", enabled)
+    cfg.setdefault("overrides", enabled)
     _write_continuous_package(tmp_path)
     # epoch 60 loops (seconds) in the past, so `now` is loop ~60
     epoch = round(time.time() * TS) - 60 * D
@@ -206,7 +210,7 @@ def _app(tmp_path, *, continuous=False, enabled=True, **cfg):
         epoch_ticks=epoch,
         window_segments=4,
         continuous=continuous,
-        timeshift=TimeshiftConfig(enabled=enabled, **cfg),
+        timeshift=TimeshiftConfig(**cfg),
     )
     return app.test_client(), epoch / TS
 
@@ -248,7 +252,7 @@ def test_catchup_hls_non_continuous_is_vod_with_one_discontinuity_per_wrap(tmp_p
 @ffmpeg
 def test_catchup_hls_continuous_uses_cseg_and_no_discontinuity(tmp_path):
     client, epoch = _app(tmp_path)
-    body = client.get(f"/video.m3u8?start={epoch + 5}&end={epoch + 8}&timeline=continuous").get_data(
+    body = client.get(f"/video.m3u8?start={epoch + 5}&end={epoch + 8}&timeline_mode=continuous").get_data(
         as_text=True
     )
     uris = _seg_lines(body)
@@ -262,7 +266,7 @@ def test_continuous_server_can_opt_out_per_request(tmp_path):
     client, epoch = _app(tmp_path, continuous=True)
     live = client.get("/video.m3u8").get_data(as_text=True)
     assert "cseg/" in live and "DISCONTINUITY\n" not in live
-    body = client.get(f"/video.m3u8?start={epoch + 5}&end={epoch + 7}&timeline=periodic").get_data(
+    body = client.get(f"/video.m3u8?start={epoch + 5}&end={epoch + 7}&timeline_mode=periodic").get_data(
         as_text=True
     )
     assert "cseg/" not in body and "1080p/seg/0.m4s" in body
@@ -291,7 +295,7 @@ def test_open_ended_startover_grows_and_respects_max_span(tmp_path):
 @ffmpeg
 def test_full_loop_widens_start_and_end_to_loop_boundaries(tmp_path):
     client, epoch = _app(tmp_path)
-    body = client.get(f"/video.m3u8?start={epoch + 5.6}&end={epoch + 7.2}&full-loops=true").get_data(as_text=True)
+    body = client.get(f"/video.m3u8?start={epoch + 5.6}&end={epoch + 7.2}&full_loops=true").get_data(as_text=True)
     uris = _seg_lines(body)
     # loops 5, 6 and 7 in full: start floored to 5.0, end 7.2 ceiled to 8.0
     assert len(uris) == 6
@@ -303,10 +307,10 @@ def test_full_loop_widens_start_and_end_to_loop_boundaries(tmp_path):
 @ffmpeg
 def test_master_playlist_propagates_timeshift_params(tmp_path):
     client, epoch = _app(tmp_path)
-    q = f"start={epoch + 5}&end={epoch + 8}&full-loops=true&unrelated=1"
+    q = f"start={epoch + 5}&end={epoch + 8}&full_loops=true&unrelated=1"
     body = client.get(f"/index.m3u8?{q}").get_data(as_text=True)
     variant = next(l for l in body.splitlines() if "m3u8?" in l)
-    assert "start=" in variant and "end=" in variant and "full-loops=true" in variant
+    assert "start=" in variant and "end=" in variant and "full_loops=true" in variant
     assert "unrelated" not in variant  # only configured params are forwarded
     assert "?" not in client.get("/index.m3u8").get_data(as_text=True)
 
@@ -329,8 +333,8 @@ def test_custom_param_names(tmp_path):
         "start=99999999999999",  # future
         "start=1&end=2",  # before epoch
         "start=$S&end=$S1",  # malformed end
-        "start=$S&timeline=sometimes",
-        "start=$S&full-loops=2",
+        "start=$S&timeline_mode=sometimes",
+        "start=$S&full_loops=2",
     ],
 )
 def test_bad_requests_are_400_with_a_message(tmp_path, query):
@@ -364,7 +368,7 @@ def test_catchup_dash_non_continuous_is_static_with_a_period_per_loop(tmp_path):
 @ffmpeg
 def test_catchup_dash_continuous_is_one_period_with_rebased_timeline(tmp_path):
     client, epoch = _app(tmp_path)
-    mpd = client.get(f"/stream.mpd?start={epoch + 5}&end={epoch + 8}&timeline=continuous").get_data(
+    mpd = client.get(f"/stream.mpd?start={epoch + 5}&end={epoch + 8}&timeline_mode=continuous").get_data(
         as_text=True
     )
     assert 'type="static"' in mpd and mpd.count("<Period ") == 1
@@ -407,22 +411,24 @@ def test_cseg_404s_when_package_cannot_be_continuous(tmp_path, monkeypatch):
     monkeypatch.setattr(
         Channel, "_validate_continuous", staticmethod(lambda pkg: (_ for _ in ()).throw(RuntimeError("nope")))
     )
-    app = create_app(tmp_path, epoch_ticks=0, timeshift=TimeshiftConfig(enabled=True))
+    app = create_app(tmp_path, epoch_ticks=0, timeshift=TimeshiftConfig(timeshift=True, overrides=True))
     client = app.test_client()
     assert client.get("/1080p/cseg/3.m4s").status_code == 404
-    resp = client.get("/video.m3u8?start=1&timeline=continuous")
+    resp = client.get("/video.m3u8?start=1&timeline_mode=continuous")
     assert resp.status_code == 400 and "nope" in resp.get_data(as_text=True)
 
 
 @ffmpeg
 def test_health_reports_timeshift_config(tmp_path):
     client, _ = _app(tmp_path, max_span_seconds=123)
-    ts = client.get("/health").get_json()["timeshift"]
-    assert ts["enabled"] and ts["max_span_seconds"] == 123 and ts["continuous_supported"]
-    assert ts["start_param"] == "start" and ts["full_loops_param"] == "full-loops"
-    assert ts["timeline_param"] == "timeline"
+    ts = client.get("/health").get_json()["query"]
+    assert ts["timeshift"] and ts["overrides"] and ts["max_span_seconds"] == 123 and ts["continuous_supported"]
+    assert "enabled" not in ts
+    assert ts["start_param"] == "start" and ts["full_loops_param"] == "full_loops"
+    assert ts["timeline_param"] == "timeline_mode"
     off, _ = _app(tmp_path / "off" if (tmp_path / "off").mkdir() is None else tmp_path, enabled=False)
-    assert off.get("/health").get_json()["timeshift"] == {"enabled": False}
+    inert = off.get("/health").get_json()["query"]
+    assert (inert["timeshift"], inert["overrides"], inert["params"]) == (False, False, [])
 
 
 def test_segment_uri_forms():
@@ -456,7 +462,7 @@ def test_rseg_shifts_ts_timestamps_relative_to_range_origin(tmp_path):
     (tmp_path / "loop_descriptor.json").write_text(json.dumps(desc))
 
     epoch = round(time.time() * TS) - 100_000 * total  # range is ~28h after the epoch
-    app = create_app(tmp_path, epoch_ticks=epoch, continuous=True, timeshift=TimeshiftConfig(enabled=True))
+    app = create_app(tmp_path, epoch_ticks=epoch, continuous=True, timeshift=TimeshiftConfig(timeshift=True, overrides=True))
     client = app.test_client()
     start = epoch / TS + 99_990 * total / TS
     body = client.get(f"/video.m3u8?start={start}&end={start + 4 * total / TS}").get_data(as_text=True)
@@ -488,16 +494,16 @@ def test_continuous_override_works_on_plain_live(tmp_path, server_continuous):
     """The per-request override needs no start/end: it flips the live
     stream's mode either way, in HLS, DASH and the master's child URIs."""
     client, _ = _app(tmp_path, continuous=server_continuous)
-    on = client.get("/video.m3u8?timeline=continuous").get_data(as_text=True)
-    off = client.get("/video.m3u8?timeline=periodic").get_data(as_text=True)
+    on = client.get("/video.m3u8?timeline_mode=continuous").get_data(as_text=True)
+    off = client.get("/video.m3u8?timeline_mode=periodic").get_data(as_text=True)
     assert "cseg/" in on and "#EXT-X-DISCONTINUITY\n" not in on and "PLAYLIST-TYPE" not in on
     assert "cseg/" not in off and "#EXT-X-DISCONTINUITY\n" in off
-    assert 'id="continuous"' in client.get("/stream.mpd?timeline=continuous").get_data(as_text=True)
-    assert 'id="continuous"' not in client.get("/stream.mpd?timeline=periodic").get_data(as_text=True)
-    master = client.get("/index.m3u8?timeline=continuous").get_data(as_text=True)
-    assert "video.m3u8?timeline=continuous" in master
-    # no param, or an explicit timeline=default: the server default still applies
-    for query in ("", "?timeline=default", "?timeline=DEFAULT"):
+    assert 'id="continuous"' in client.get("/stream.mpd?timeline_mode=continuous").get_data(as_text=True)
+    assert 'id="continuous"' not in client.get("/stream.mpd?timeline_mode=periodic").get_data(as_text=True)
+    master = client.get("/index.m3u8?timeline_mode=continuous").get_data(as_text=True)
+    assert "video.m3u8?timeline_mode=continuous" in master
+    # no param, or an explicit timeline_mode=default: the server default still applies
+    for query in ("", "?timeline_mode=default", "?timeline_mode=DEFAULT"):
         default = client.get("/video.m3u8" + query).get_data(as_text=True)
         assert ("cseg/" in default) is server_continuous, query
 
@@ -602,7 +608,7 @@ def test_dash_offset_adds_utc_timing_with_the_pretend_now(tmp_path):
     done = client.get(f"/stream.mpd?start={epoch + 5}&end={epoch + 8}&offset=-30").get_data(as_text=True)
     assert 'type="static"' in done and "UTCTiming" not in done
     # also in continuous mode
-    cont = client.get("/stream.mpd?offset=-30&timeline=continuous").get_data(as_text=True)
+    cont = client.get("/stream.mpd?offset=-30&timeline_mode=continuous").get_data(as_text=True)
     assert "UTCTiming" in cont and 'id="continuous"' in cont
 
 

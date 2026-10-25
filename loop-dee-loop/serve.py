@@ -32,6 +32,7 @@ import logging
 import math
 import time
 from collections.abc import Callable
+from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
 
@@ -42,16 +43,38 @@ from flask import Flask, Response, abort, jsonify, request, send_file
 import cmaf
 import continuity
 from timeshift import (
+    ADDRESSING_PARAM,
+    ADDRESSING_VALUES,
+    CUE_TAGS_PARAM,
+    CUE_TAGS_VALUES,
+    DASH_DESCRIPTOR_GROUPING_VALUES,
+    DESCRIPTOR_GROUPING_PARAM,
+    DVR_WINDOW_PARAM,
+    EPOCH_PARAM,
     FULL_LOOPS_PARAM,
+    HLS_DESCRIPTOR_GROUPING_VALUES,
+    ID_TEMPLATE_PARAM,
+    INCREMENT_EVENT_IDS_PARAM,
+    MAX_BITRATE_PARAM,
+    MAX_HEIGHT_PARAM,
     OFFSET_PARAM,
+    SIGNAL_FORMAT_PARAM,
+    SIGNAL_FORMAT_VALUES,
+    SPLIT_ON_PARAM,
     TIMELINE_PARAM,
+    TIMELINE_STYLE_PARAM,
+    TIMELINE_STYLE_VALUES,
     TimeWindow,
     TimeshiftConfig,
     TimeshiftError,
     global_index_at,
     parse_bool,
+    parse_choice,
+    parse_duration_seconds,
     parse_instant_ticks,
     parse_offset_ticks,
+    parse_positive_int,
+    parse_split_on,
     parse_timeline,
     resolve_window,
 )
@@ -76,10 +99,13 @@ from scte35_signaling import (
     build_event_id_map,
     build_grouped_daterange_tags,
     build_scte35_full_xml,
+    event_id_increment_problem,
     is_instant_segmentation,
     is_out_marker,
     markers_to_signaling,
+    non_splice_insert_event_ids,
     reencode_event_ids,
+    validate_daterange_id_format,
 )
 
 
@@ -164,6 +190,18 @@ class WindowRange:
     live_edge: int
     ended: bool
     position: LoopPosition
+
+
+def _hls_payload_markers(markers: list[dict], daterange_mode: str) -> list[dict]:
+    """The markers as HLS should carry them: with `narrowed` descriptor
+    grouping each marker's own single-descriptor payload replaces the shared
+    whole-message one (bake.py stores both, so this is a per-request choice)."""
+    if daterange_mode != "narrowed":
+        return markers
+    return [
+        {**m, "splice_command_b64": m["splice_command_b64_narrowed"]} if m.get("splice_command_b64_narrowed") else m
+        for m in markers
+    ]
 
 
 def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: int) -> bool:
@@ -355,18 +393,6 @@ def render_segment_timeline(items: list[tuple], compact: bool) -> str:
         expected = t + d
     flush()
     return "\n".join(out)
-PERIOD_APPLY_CHOICES = ("both", "dash", "hls")
-
-
-def parse_period_apply(value: str | None) -> str:
-    """`--period-on-segmentation-apply`: which manifest formats get the forced
-    break -- `dash` (Periods), `hls` (discontinuities) or `both` (default)."""
-    value = (value or "both").strip().lower()
-    if value not in PERIOD_APPLY_CHOICES:
-        raise ValueError(f"period-on-segmentation apply must be one of {PERIOD_APPLY_CHOICES}, got {value!r}")
-    return value
-
-
 def expand_segmentation_pairs(type_ids: frozenset[int]) -> frozenset[int]:
     """A Start implies its End and vice versa (SCTE-35 Table 23: 0x22 Break
     Start <-> 0x23 Break End), so listing one is enough. An End shared by
@@ -671,6 +697,9 @@ class LoopPackage:
         # package's HLS/DASH SCTE-35 signaling, recorded once at bake time
         # (bake.py) and simply read back here; defaults match bake.py's own
         # defaults, for loop packages baked before these settings existed.
+        # bake.py (>= 2.0) stores both SCTE-35 messages per marker; an older package has
+        # only the one its --daterange-mode chose, so its payload cannot be switched.
+        self.has_both_scte35_payloads: bool = self.descriptor.get("scte35_payloads") == "shared+narrowed"
         self.daterange_mode: str = self.descriptor.get("daterange_mode", "shared")
         self.cue_tags: str = self.descriptor.get("cue_tags", "none")
         self.increment_event_ids: bool = self.descriptor.get("increment_event_ids", False)
@@ -705,6 +734,11 @@ class LoopPackage:
         self.video_renditions.sort(
             key=lambda r: r.video_variant["bandwidth"], reverse=True
         )
+
+        # The full ladder, in master-playlist order: media playlist names
+        # (video_N.m3u8) are positions in it, so a per-request rendition
+        # filter (Channel.with_rendition_filter) must not renumber them.
+        self.all_video_renditions: list[VideoRendition] = list(self.video_renditions)
 
         segment_counts = {len(r.segment_files) for r in self.video_renditions}
         if len(segment_counts) != 1:
@@ -809,8 +843,8 @@ class LoopPackage:
 
     def video_playlist_name(self, rendition: VideoRendition) -> str:
         base = "video_audio" if self.audio_muxed_in_video else "video"
-        position = self.video_renditions.index(rendition) + 1
-        suffix = f"_{position}" if len(self.video_renditions) > 1 else ""
+        position = self.all_video_renditions.index(rendition) + 1
+        suffix = f"_{position}" if len(self.all_video_renditions) > 1 else ""
         return f"{base}{suffix}.m3u8"
 
     def rendition_by_name(self, name: str) -> VideoRendition:
@@ -875,7 +909,6 @@ class Channel:
         window_segments: int = 6,
         continuous: bool = False,
         period_on_segmentation: frozenset[int] = frozenset(),
-        period_apply: str = "both",
         channel_name: str = "",
         dash_addressing: str = "number",
         dash_timeline: str = "full",
@@ -917,15 +950,6 @@ class Channel:
         self.signal_breaks: frozenset[int] = compute_signal_breaks(
             package.markers, package.segment_boundary_ticks, self.period_on_segmentation
         )
-        # Which formats the forced breaks are applied to (the real loop-wrap /
-        # asset-boundary signalling is never affected by this).
-        self.period_apply = parse_period_apply(period_apply)
-        self.hls_signal_breaks: frozenset[int] = (
-            self.signal_breaks if self.period_apply in ("both", "hls") else frozenset()
-        )
-        self.dash_signal_breaks: frozenset[int] = (
-            self.signal_breaks if self.period_apply in ("both", "dash") else frozenset()
-        )
         # Controls the DVR window / manifest size: how many segments ahead
         # of the live edge are advertised in each manifest response (HLS
         # sliding window, DASH SegmentTimeline + timeShiftBufferDepth).
@@ -949,11 +973,11 @@ class Channel:
 
     @property
     def hls_period_starts(self) -> frozenset[int]:
-        return self._period_starts(self.hls_signal_breaks)
+        return self._period_starts(self.signal_breaks)
 
     @property
     def dash_period_starts(self) -> frozenset[int]:
-        return self._period_starts(self.dash_signal_breaks)
+        return self._period_starts(self.signal_breaks)
 
     @staticmethod
     def _validate_continuous(package: "LoopPackage") -> None:
@@ -1128,6 +1152,146 @@ class Channel:
             full_loop=full_loop,
         )
 
+    def with_epoch(self, epoch_ticks: int) -> "Channel":
+        """This channel as if its epoch (loop 0's start) were `epoch_ticks`:
+        loop numbers, PROGRAM-DATE-TIME, Period starts, availabilityStartTime
+        and global segment numbers all derive from it. Unlike `with_offset`
+        (which only moves "now"), the whole timeline moves. Segment bytes are
+        a function of the segment URL alone, so nothing else changes. Call
+        `check_clock` once every clock override has been applied."""
+        if epoch_ticks == self.epoch_ticks:
+            return self
+        variant = copy.copy(self)
+        variant.epoch_ticks = epoch_ticks
+        return variant
+
+    def check_clock(self) -> None:
+        """Raises TimeshiftError when "now" (offset included) is before the
+        epoch -- nothing existed yet."""
+        if self.now_ticks() < self.epoch_ticks:
+            raise TimeshiftError("epoch is in the future (nothing existed yet)")
+
+    def with_window_segments(self, window_segments: int) -> "Channel":
+        if window_segments < 1:
+            raise TimeshiftError("the DVR window must cover at least one segment")
+        if window_segments == self.window_segments:
+            return self
+        variant = copy.copy(self)
+        variant.window_segments = window_segments
+        return variant
+
+    def with_dash_style(self, addressing: str | None = None, timeline_style: str | None = None) -> "Channel":
+        """DASH SegmentTemplate addressing (`number` | `time`) and
+        SegmentTimeline style (`full` | `compact`) for this request."""
+        addressing = addressing or self.dash_addressing
+        timeline_style = timeline_style or self.dash_timeline
+        if (addressing, timeline_style) == (self.dash_addressing, self.dash_timeline):
+            return self
+        variant = copy.copy(self)
+        variant.dash_addressing = addressing
+        variant.dash_timeline = timeline_style
+        return variant
+
+    def with_split_on(self, type_ids: frozenset[int]) -> "Channel":
+        """Force a Period / #EXT-X-DISCONTINUITY at markers of these
+        segmentation_type_ids for this request (replaces the channel's
+        configured set; empty = none)."""
+        expanded = expand_segmentation_pairs(frozenset(type_ids))
+        if expanded == self.period_on_segmentation:
+            return self
+        variant = copy.copy(self)
+        variant.period_on_segmentation = expanded
+        variant.signal_breaks = compute_signal_breaks(
+            self.package.markers, self.package.segment_boundary_ticks, expanded
+        )
+        return variant
+
+    def _require_both_scte35_payloads(self, fmt: str) -> None:
+        """`descriptor_grouping` can only switch between the shared and the narrowed
+        message when the package stores both (bake.py >= 2.0); otherwise honoring it
+        would silently serve the wrong payload, or fail on a missing one."""
+        if not getattr(self.package, "has_both_scte35_payloads", True):
+            raise TimeshiftError(
+                f"this package was baked before it stored both SCTE-35 message forms, so "
+                f"descriptor_grouping cannot change the {fmt} payload; re-bake the channel"
+            )
+
+    def with_package_overrides(
+        self,
+        *,
+        cue_tags: str | None = None,
+        increment_event_ids: bool | None = None,
+        id_template: str | None = None,
+        hls_grouping: str | None = None,
+        dash_grouping: str | None = None,
+        signal_format: str | None = None,
+        max_height: int | None = None,
+        max_bitrate: int | None = None,
+    ) -> "Channel":
+        """This channel with per-request SCTE-35 signaling / ladder settings
+        replacing the package's baked defaults. Everything here is derived
+        from data the package already carries (markers.json plus both the
+        shared and narrowed SCTE-35 payloads), so no bytes change -- only the
+        manifests. Raises TimeshiftError for a combination the markers cannot
+        support (e.g. `cue_tags=only` with a non-splice_insert marker)."""
+        pkg = self.package
+        changes: dict = {}
+        if cue_tags is not None and cue_tags != pkg.cue_tags:
+            if cue_tags == "only":
+                bad = non_splice_insert_event_ids(pkg.markers)
+                if bad:
+                    raise TimeshiftError(
+                        f"cue_tags=only requires every marker to be a bare splice_insert, but {bad} are not"
+                    )
+            changes["cue_tags"] = cue_tags
+            changes["cue_breaks"] = build_cue_breaks(pkg.markers) if cue_tags in ("alongside", "only") else []
+        if increment_event_ids is not None and increment_event_ids != pkg.increment_event_ids:
+            if increment_event_ids:
+                problem = event_id_increment_problem(pkg.markers)
+                if problem:
+                    raise TimeshiftError(problem)
+            changes["increment_event_ids"] = increment_event_ids
+        if id_template is not None and id_template != pkg.daterange_id_format:
+            try:
+                validate_daterange_id_format(id_template)
+            except ValueError as exc:
+                raise TimeshiftError(str(exc)) from None
+            changes["daterange_id_format"] = id_template
+        if hls_grouping is not None and hls_grouping != pkg.daterange_mode:
+            # `shared` and `grouped` carry the same (whole-message) payload, `narrowed` another
+            if (hls_grouping == "narrowed") != (pkg.daterange_mode == "narrowed"):
+                self._require_both_scte35_payloads("HLS")
+            changes["daterange_mode"] = hls_grouping
+        if dash_grouping is not None and dash_grouping != pkg.dash_descriptor_mode:
+            self._require_both_scte35_payloads("DASH")
+            changes["dash_descriptor_mode"] = dash_grouping
+        if signal_format is not None and signal_format != pkg.dash_signal_format:
+            changes["dash_signal_format"] = signal_format
+        if max_height is not None or max_bitrate is not None:
+            kept = [
+                r for r in pkg.video_renditions
+                if (max_height is None or int(r.video_variant["height"]) <= max_height)
+                and (max_bitrate is None or int(r.video_variant["bandwidth"]) <= max_bitrate)
+            ]
+            if not kept:
+                raise TimeshiftError(
+                    "no rendition satisfies the requested limits; the ladder is "
+                    + ", ".join(
+                        f"{r.name} ({r.video_variant['height']}p, {r.video_variant['bandwidth']} bps)"
+                        for r in pkg.video_renditions
+                    )
+                )
+            if len(kept) != len(pkg.video_renditions):
+                changes["video_renditions"] = kept
+        if not changes:
+            return self
+        package = copy.copy(pkg)
+        for key, value in changes.items():
+            setattr(package, key, value)
+        variant = copy.copy(self)
+        variant.package = package
+        return variant
+
     def loop_number_and_local_index(self, global_index: int) -> tuple[int, int]:
         """(loop_number, local_index) decoded from a continuity-mode
         segment URL's index, which -- unlike the default mode's plain
@@ -1249,7 +1413,7 @@ class Channel:
     def dash_governing_break(self, global_index: int) -> int | None:
         """Continuous mode: global index of the forced break that opened the
         Period this segment belongs to (None: before the first one ever)."""
-        breaks = sorted(self.dash_signal_breaks)
+        breaks = sorted(self.signal_breaks)
         spl = self.package.segments_per_loop
         loop_number, local_index = divmod(global_index, spl)
         earlier = [b for b in breaks if b <= local_index]
@@ -1262,7 +1426,7 @@ class Channel:
     def dash_next_break(self, brk: int | None) -> int | None:
         """The forced break that closes the Period opened by `brk` (None: it
         stays open, or there are no breaks)."""
-        breaks = sorted(self.dash_signal_breaks)
+        breaks = sorted(self.signal_breaks)
         if not breaks:
             return None
         if brk is None:
@@ -1495,7 +1659,11 @@ class Channel:
                     continue
                 start_abs = loop_tick(loop, pts)
                 event_id = id_map.get(m["event_id"], m["event_id"])
-                b64 = m.get("splice_command_b64")
+                b64 = (
+                    m.get("splice_command_b64_narrowed") or m.get("splice_command_b64")
+                    if pkg.daterange_mode == "narrowed"
+                    else m.get("splice_command_b64")
+                )
                 if remapped and b64:
                     b64 = reencode_event_ids(b64, id_map)
                 entry = {
@@ -1901,7 +2069,10 @@ class Channel:
                         loop_start_ticks, pkg.timescale
                     )
                     loop_start_datetime = _dt.datetime.utcfromtimestamp(loop_start_seconds)
-                    signaling_markers = markers_to_signaling(matching_markers, all_markers=pkg.markers)
+                    signaling_markers = markers_to_signaling(
+                        _hls_payload_markers(matching_markers, pkg.daterange_mode),
+                        all_markers=_hls_payload_markers(pkg.markers, pkg.daterange_mode),
+                    )
                     # grave-robber/SCOPE.md §6.2: DATERANGE START-DATE is an
                     # absolute wall-clock value (unlike DASH's Period-relative
                     # <Event presentationTime>, which needs no adjustment --
@@ -2839,6 +3010,88 @@ class Channel:
         return path
 
 
+def resolve_request_channel(channel: "Channel", args, cfg: TimeshiftConfig, fmt: str = "hls") -> "Channel":
+    """The per-request `Channel` variant selected by the query parameters in
+    `args` (any mapping with `.get`). `fmt` is the format being answered --
+    `hls`, `dash` or `json` (/timeline.json) -- because some settings differ
+    per format (`descriptor_grouping` has no `grouped` value for DASH).
+    Every parameter is optional; an absent one keeps the channel's own
+    setting. Each kind is read only while its switch is on: `offset` (startover/
+    catchup's clock) with `cfg.timeshift`, every other parameter here with
+    `cfg.overrides`; the rest is ignored. Raises TimeshiftError (HTTP 400) on
+    any bad value."""
+    if fmt not in ("hls", "dash", "json"):
+        raise ValueError(f"unknown format {fmt!r}")
+
+    def arg(base: str) -> str | None:
+        return args.get(cfg.name(base))
+
+    def name(base: str) -> str:
+        return cfg.name(base)
+
+    ch = channel
+    ts = channel.package.timescale
+    overrides = cfg.overrides
+    raw = arg(TIMELINE_PARAM) if overrides else None
+    if raw is not None:
+        want_continuous = parse_timeline(raw, name(TIMELINE_PARAM))
+        if want_continuous is not None:
+            ch = ch.for_mode(want_continuous)
+    raw = arg(EPOCH_PARAM) if overrides else None
+    if raw is not None:
+        ch = ch.with_epoch(parse_instant_ticks(raw, ts, name(EPOCH_PARAM)))
+    raw = arg(OFFSET_PARAM) if cfg.timeshift else None  # startover/catchup's clock
+    if raw is not None:
+        ch = ch.with_offset(parse_offset_ticks(raw, ts, name(OFFSET_PARAM)))
+    ch.check_clock()
+    if not overrides:
+        return ch
+
+    raw = arg(DVR_WINDOW_PARAM)
+    if raw is not None:
+        seconds = parse_duration_seconds(raw, name(DVR_WINDOW_PARAM))
+        if seconds > cfg.max_span_seconds:
+            raise TimeshiftError(f"'{name(DVR_WINDOW_PARAM)}' is limited to {cfg.max_span_seconds} seconds")
+        nominal = Decimal(str(ch.package.segment_duration_seconds))
+        ch = ch.with_window_segments(max(1, math.ceil(seconds / nominal)))
+
+    raw_addressing, raw_style = arg(ADDRESSING_PARAM), arg(TIMELINE_STYLE_PARAM)
+    addressing = parse_choice(raw_addressing, name(ADDRESSING_PARAM), ADDRESSING_VALUES) if raw_addressing is not None else None
+    style = parse_choice(raw_style, name(TIMELINE_STYLE_PARAM), TIMELINE_STYLE_VALUES) if raw_style is not None else None
+    ch = ch.with_dash_style(addressing, style)
+
+    raw = arg(SPLIT_ON_PARAM)
+    if raw is not None:
+        ch = ch.with_split_on(parse_split_on(raw, name(SPLIT_ON_PARAM)))
+
+    overrides: dict = {}
+    raw = arg(CUE_TAGS_PARAM)
+    if raw is not None:
+        overrides["cue_tags"] = parse_choice(raw, name(CUE_TAGS_PARAM), CUE_TAGS_VALUES)
+    raw = arg(INCREMENT_EVENT_IDS_PARAM)
+    if raw is not None:
+        overrides["increment_event_ids"] = parse_bool(raw, name(INCREMENT_EVENT_IDS_PARAM))
+    raw = arg(ID_TEMPLATE_PARAM)
+    if raw is not None:
+        overrides["id_template"] = raw
+    raw = arg(SIGNAL_FORMAT_PARAM)
+    if raw is not None:
+        overrides["signal_format"] = parse_choice(raw, name(SIGNAL_FORMAT_PARAM), SIGNAL_FORMAT_VALUES)
+    raw = arg(DESCRIPTOR_GROUPING_PARAM)
+    if raw is not None:
+        if fmt == "dash":
+            overrides["dash_grouping"] = parse_choice(raw, name(DESCRIPTOR_GROUPING_PARAM), DASH_DESCRIPTOR_GROUPING_VALUES)
+        else:
+            overrides["hls_grouping"] = parse_choice(raw, name(DESCRIPTOR_GROUPING_PARAM), HLS_DESCRIPTOR_GROUPING_VALUES)
+    raw = arg(MAX_HEIGHT_PARAM)
+    if raw is not None:
+        overrides["max_height"] = parse_positive_int(raw, name(MAX_HEIGHT_PARAM))
+    raw = arg(MAX_BITRATE_PARAM)
+    if raw is not None:
+        overrides["max_bitrate"] = parse_positive_int(raw, name(MAX_BITRATE_PARAM))
+    return ch.with_package_overrides(**overrides)
+
+
 def create_app(
     package_dir: Path,
     epoch_ticks: int,
@@ -2846,7 +3099,6 @@ def create_app(
     continuous: bool = False,
     timeshift: TimeshiftConfig | None = None,
     period_on_segmentation: frozenset[int] = frozenset(),
-    period_apply: str = "both",
     channel_name: str = "",
     dash_addressing: str = "number",
     dash_timeline: str = "full",
@@ -2859,7 +3111,6 @@ def create_app(
         window_segments=window_segments,
         continuous=continuous,
         period_on_segmentation=period_on_segmentation,
-        period_apply=period_apply,
         channel_name=channel_name,
         dash_addressing=dash_addressing,
         dash_timeline=dash_timeline,
@@ -2897,33 +3148,27 @@ def create_app(
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
-    def _request_view() -> tuple[Channel, TimeWindow | None, str]:
+    def _request_view(fmt: str = "hls") -> tuple[Channel, TimeWindow | None, str]:
         """SCOPE.md §13: resolve this request's (channel variant, time-shift
         window, query string to propagate to child playlists). Without
         timeshift enabled -- or without the params -- this is (channel,
         None, "") and behavior is exactly the pre-§13 live stream."""
         ch, window = channel, None
-        if ts_cfg.enabled:
+        if ts_cfg.active:
             args = request.args
             try:
-                raw_timeline = args.get(TIMELINE_PARAM)
-                if raw_timeline is not None:
-                    want_continuous = parse_timeline(raw_timeline)
-                    if want_continuous is not None:
-                        ch = channel.for_mode(want_continuous)
-                raw_offset = args.get(OFFSET_PARAM)
-                if raw_offset is not None:
-                    ch = ch.with_offset(parse_offset_ticks(raw_offset, package.timescale))
-                raw_start, raw_end = args.get(ts_cfg.start_param), args.get(ts_cfg.end_param)
+                ch = resolve_request_channel(channel, args, ts_cfg, fmt)
+                raw_start = args.get(ts_cfg.start_name) if ts_cfg.timeshift else None
+                raw_end = args.get(ts_cfg.end_name) if ts_cfg.timeshift else None
                 if raw_start is None and raw_end is not None:
-                    raise TimeshiftError(f"'{ts_cfg.end_param}' requires '{ts_cfg.start_param}'")
+                    raise TimeshiftError(f"'{ts_cfg.end_name}' requires '{ts_cfg.start_name}'")
                 if raw_start is not None:
                     ts = package.timescale
                     window = ch.resolve_timeshift(
-                        parse_instant_ticks(raw_start, ts, ts_cfg.start_param),
-                        parse_instant_ticks(raw_end, ts, ts_cfg.end_param) if raw_end is not None else None,
+                        parse_instant_ticks(raw_start, ts, ts_cfg.start_name),
+                        parse_instant_ticks(raw_end, ts, ts_cfg.end_name) if raw_end is not None else None,
                         ts_cfg.max_span_seconds,
-                        parse_bool(args.get(FULL_LOOPS_PARAM, "false"), FULL_LOOPS_PARAM),
+                        parse_bool(args.get(ts_cfg.name(FULL_LOOPS_PARAM), "false"), ts_cfg.name(FULL_LOOPS_PARAM)),
                     )
             except TimeshiftError as exc:
                 abort(Response(f"{exc}\n", status=400, mimetype="text/plain"))
@@ -2988,20 +3233,21 @@ def create_app(
             "window_segments": channel.window_segments,
             "continuous_timeline": channel.continuous,
             "epoch_utc": channel._iso_ticks(epoch_ticks),
-            "timeshift": (
-                {
-                    "enabled": True,
-                    "start_param": ts_cfg.start_param,
-                    "end_param": ts_cfg.end_param,
-                    "timeline_param": TIMELINE_PARAM,
-                    "offset_param": OFFSET_PARAM,
-                    "full_loops_param": FULL_LOOPS_PARAM,
-                    "max_span_seconds": ts_cfg.max_span_seconds,
-                    "continuous_supported": channel.continuous or channel.continuous_error is None,
-                }
-                if ts_cfg.enabled
-                else {"enabled": False}
-            ),
+            # The query-parameter configuration (no master "enabled": each
+            # kind has its own switch; with both off `params` is empty).
+            "query": {
+                "timeshift": ts_cfg.timeshift,
+                "overrides": ts_cfg.overrides,
+                "prefix": ts_cfg.prefix,
+                "start_param": ts_cfg.start_name,
+                "end_param": ts_cfg.end_name,
+                "timeline_param": ts_cfg.name(TIMELINE_PARAM),
+                "offset_param": ts_cfg.name(OFFSET_PARAM),
+                "full_loops_param": ts_cfg.name(FULL_LOOPS_PARAM),
+                "params": list(ts_cfg.param_names),
+                "max_span_seconds": ts_cfg.max_span_seconds,
+                "continuous_supported": channel.continuous or channel.continuous_error is None,
+            },
         }
 
     @app.get("/timeline.json")
@@ -3009,10 +3255,10 @@ def create_app(
         """JSON view of the current window (periods, discontinuities, assets,
         markers); schema in openapi.yaml. Honours the same timeshift query
         params as the manifests."""
-        ch, window, _query = _request_view()
-        scope = request.args.get("scope", "window")
+        ch, window, _query = _request_view("json")
+        scope = request.args.get(ts_cfg.name("scope"), "window")
         if scope not in ("window", "loops"):
-            abort(Response("'scope' must be 'window' or 'loops'\n", status=400, mimetype="text/plain"))
+            abort(Response(f"'{ts_cfg.name('scope')}' must be 'window' or 'loops'\n", status=400, mimetype="text/plain"))
         resp = jsonify(ch.build_window_json(window, scope))
         resp.headers["Cache-Control"] = (
             "public, max-age=31536000, immutable" if window is not None and window.ended else "public, max-age=1"
@@ -3037,7 +3283,7 @@ def create_app(
 
     @app.get(f"/{LoopPackage.DASH_MANIFEST}")
     def dash_manifest():
-        ch, window, _query = _request_view()
+        ch, window, _query = _request_view("dash")
         return _manifest_response(ch.build_dash_manifest(window=window), "application/dash+xml", window)
 
     def _register_video_playlist(rendition):
@@ -3280,13 +3526,6 @@ def main() -> int:
         "SCOPE.md §14.",
     )
     parser.add_argument(
-        "--period-on-segmentation-apply",
-        choices=PERIOD_APPLY_CHOICES,
-        default="both",
-        help="Which formats --period-on-segmentation applies to: dash "
-        "(Periods only), hls (discontinuities only) or both (default).",
-    )
-    parser.add_argument(
         "--dash-addressing",
         choices=DASH_ADDRESSING_CHOICES,
         default="number",
@@ -3304,8 +3543,22 @@ def main() -> int:
     parser.add_argument(
         "--timeshift",
         action="store_true",
-        help="SCOPE.md §13: enable startover/catchup via query parameters on "
-        "the normal manifest URLs.",
+        help="SCOPE.md §13: honour the startover/catchup query parameters on the "
+        "normal manifest URLs (start, end, full_loops, offset).",
+    )
+    parser.add_argument(
+        "--query-overrides",
+        action="store_true",
+        help="SCOPE.md §13.8: honour the per-request override parameters "
+        "(timeline_mode, epoch, dvr_window, split_on, cue_tags, ...); without it "
+        "they are ignored and the channel's own settings always apply.",
+    )
+    parser.add_argument(
+        "--query-prefix",
+        default="",
+        metavar="PREFIX",
+        help="Prefix for every query parameter name (e.g. 'dsl_' -> dsl_start, "
+        "dsl_offset), so a caller that uses some of these names itself cannot clash.",
     )
     parser.add_argument("--timeshift-start-param", default="start")
     parser.add_argument("--timeshift-end-param", default="end")
@@ -3342,15 +3595,16 @@ def main() -> int:
         window_segments=window_segments,
         continuous=args.continuous_timeline,
         period_on_segmentation=parse_segmentation_type_ids(args.period_on_segmentation),
-        period_apply=args.period_on_segmentation_apply,
         channel_name=args.channel_name,
         dash_addressing=args.dash_addressing,
         dash_timeline=args.dash_timeline,
         timeshift=TimeshiftConfig(
-            enabled=args.timeshift,
+            timeshift=args.timeshift,
+            overrides=args.query_overrides,
             start_param=args.timeshift_start_param,
             end_param=args.timeshift_end_param,
             max_span_seconds=args.timeshift_max_span_seconds,
+            prefix=args.query_prefix,
         ),
     )
     app.run(host=args.host, port=args.port)

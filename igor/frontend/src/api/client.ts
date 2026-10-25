@@ -19,6 +19,7 @@ import type {
   Job,
   MarkersNumberingPreview,
   MarkersPreview,
+  OutputProfile,
   PlaybackInfo,
   PlaybackReport,
   PlaybackRuns,

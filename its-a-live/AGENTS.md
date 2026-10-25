@@ -53,15 +53,23 @@ allow_missing_segments = false # optional -- pass --allow-missing-segments to ba
 local_output_dir = "..."   # optional, defaults to <local_package_dir>/<name> (see root AGENTS.md; default its-a-live/.local-loop-package)
 
 # Shape of the HLS/DASH SCTE-35 signaling loop-dee-loop's bake.py renders
-# (see loop-dee-loop/scte35_signaling.py) -- fixed per bake, read back by
-# serve.py from loop_descriptor.json, not re-decided per request.
+# (see loop-dee-loop/scte35_signaling.py). These are the channel's defaults,
+# recorded in loop_descriptor.json at bake time and read back by serve.py;
+# every setting that is also a query parameter of the same name (see [query])
+# can be overridden per request. HLS- and DASH-only settings live in their own
+# sub-table.
 [markers]
-daterange_mode = "shared"        # "shared" (default) | "narrowed" | "grouped" -- one DATERANGE per descriptor with the full shared payload, per descriptor narrowed to just that event, or one per group of coincident descriptors
-cue_tags = "none"                # "none" (default) | "alongside" | "only" -- also emit EXT-X-CUE-OUT/-CONT/-IN next to DATERANGE, or instead of it entirely ("only" requires every marker to be a bare splice_insert). Both modes only ever build CUE-OUT/-CONT/-IN from bare splice_insert markers -- "alongside" still DATERANGE-tags every marker regardless of splice_type, but silently skips CUE-OUT/-IN for non-splice_insert ones, since nested/overlapping time_signal types (e.g. Break containing PPO containing Ad) have no well-formed single CUE-OUT/-IN pair the way a flat splice_insert avail does
 increment_event_ids = false      # bump every event id by (loop number * step) each iteration instead of repeating it every loop -- step is the smallest power of 10 above the channel's largest base event id (e.g. base ids 100-190 -> step 1000, so loop 1 emits 1100/1190, loop 2 emits 2100/2190, ...), so each id's original base stays recognizable as its low-order remainder, and the id at any moment is predictable purely from wall-clock time against the channel's epoch (no runtime counter). Wraps the loop-number component back to 0 at the 32-bit SCTE-35 ceiling.
-daterange_id_format = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template, ecs-express/local-docker only
-period_on_segmentation_apply = "both"  # which formats get it: "both" (default) | "dash" (Periods only) | "hls" (discontinuities only)
-period_on_segmentation = []   # optional list of SCTE-35 segmentation_type_ids (e.g. [0x22, 0x30]; a Start implies its End) that force a new DASH Period / #EXT-X-DISCONTINUITY at matching markers; signal only, so timestamps stay continuous when [timeline] continuous = true (loop-dee-loop/SCOPE.md §14)
+split_on = []   # optional list of SCTE-35 segmentation_type_ids (e.g. [0x22, 0x30]; a Start implies its End) that force a new DASH Period / #EXT-X-DISCONTINUITY at matching markers; signal only, so timestamps stay continuous when [timeline] continuous = true (loop-dee-loop/SCOPE.md §14) Applies to HLS and DASH alike (also the `split_on` query parameter).
+
+[markers.hls]
+descriptor_grouping = "shared"   # "shared" (default) | "narrowed" | "grouped" -- one DATERANGE per descriptor with the full shared payload, per descriptor narrowed to just that event, or one per group of coincident descriptors
+cue_tags = "none"                # "none" (default) | "alongside" | "only" -- also emit EXT-X-CUE-OUT/-CONT/-IN next to DATERANGE, or instead of it entirely ("only" requires every marker to be a bare splice_insert). Both modes only ever build CUE-OUT/-CONT/-IN from bare splice_insert markers -- "alongside" still DATERANGE-tags every marker regardless of splice_type, but silently skips CUE-OUT/-IN for non-splice_insert ones, since nested/overlapping time_signal types (e.g. Break containing PPO containing Ad) have no well-formed single CUE-OUT/-IN pair the way a flat splice_insert avail does
+id_template = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template, ecs-express/local-docker only
+
+[markers.dash]
+descriptor_grouping = "shared"   # "shared" (default) | "narrowed" -- the DASH counterpart of [markers.hls] descriptor_grouping (no "grouped" form); the two are independent
+signal_format = "binary"         # "binary" (default; <scte35:Binary> splice_info_section) | "xml" (full decoded SpliceInfoSection) -- EventStream encoding of the SCTE-35 message
 
 # Table names are shared vocabulary: igor's New/Edit forms and read-only config
 # panel show one group per table, titled with the table name (see igor/AGENTS.md
@@ -70,27 +78,38 @@ period_on_segmentation = []   # optional list of SCTE-35 segmentation_type_ids (
 
 [packaging]
 segment_duration = 4.0
-dvr_window_seconds = 30
-hls_format = "cmaf"          # "cmaf" (default) | "ts"; HLS only, DASH remains CMAF
-hls_ts_mux_audio = true      # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
-dash_timeline = "full"       # "full" (default; every <S> has @t and @d) | "compact" (implicit @t where contiguous + @r for equal @d); DASH only, ecs-express/local-docker; serve.py flag
-dash_addressing = "number"   # "number" (default; $Number$ + startNumber) | "time" ($Time$ = each <S t>); DASH only, ecs-express/local-docker; applied on create/redeploy (serve.py flag)
+dvr_window = 30              # seconds -- serve.py sliding-window size (also the `dvr_window` query parameter)
+
+[packaging.hls]              # decided at bake time: TOML only, no query parameter
+container = "cmaf"           # "cmaf" (default) | "ts"; HLS only, DASH remains CMAF
+mux_audio = true             # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
+
+[packaging.dash]             # also query parameters of the same name; ecs-express/local-docker, serve.py flags
+timeline_style = "full"      # "full" (default; every <S> has @t and @d) | "compact" (implicit @t where contiguous + @r for equal @d)
+addressing = "number"        # "number" (default; $Number$ + startNumber) | "time" ($Time$ = each <S t>); applied on create/redeploy
 
 [timeline]                  # ecs-express/local-docker only
-epoch_utc = "2026-01-01T00:00:00Z"   # optional (this is the default) -- loop 0's start and the DASH availabilityStartTime; UTC, exactly this form. A recent epoch keeps loop numbers small. ecs-express/local-docker only; applied on create/redeploy (local-docker: redeploy/refresh), not by a plain `start`. Changing it on a running channel restarts loop numbering.
+epoch = "2026-01-01T00:00:00Z"   # optional (this is the default) -- loop 0's start and the DASH availabilityStartTime; UTC, exactly this form. A recent epoch keeps loop numbers small. ecs-express/local-docker only; applied on create/redeploy (local-docker: redeploy/refresh), not by a plain `start`. Changing it on a running channel restarts loop numbering.
 continuous = true   # default true -- serve.py rewrites each segment's own timestamps per request (header patch, never a re-mux -- loop-dee-loop/SCOPE.md §12) so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the loop wrap. false falls back to the honestly-signaled discontinuity/Period-restart default (e.g. if a package's CMAF fragments have a 32-bit tfdt, which continuity mode's startup check refuses). ecs-express/local-docker only -- aws-media (MediaLive/MediaPackage) doesn't run loop-dee-loop at all.
 
-# Startover/catchup (loop-dee-loop/SCOPE.md §13) -- ecs-express/local-docker only. The
-# channel's normal HLS/DASH URLs accept start/end/full-loops/timeline query
-# params. Defaults shown; the whole table is optional (missing = enabled with these).
-[timeshift]
-enabled = true
-start_param = "start"                     # names are configurable; ALSO the CloudFront manifest cache-key allow-list (redeploy after changing)
+# Query parameters on the channel's normal HLS/DASH URLs (loop-dee-loop/SCOPE.md §13)
+# -- ecs-express/local-docker only. Startover/catchup: start, end, full_loops,
+# offset. Per-request overrides of how the manifest is rendered: timeline_mode
+# (default|continuous|periodic, overrides [timeline].continuous), epoch, dvr_window,
+# split_on, timeline_style, addressing, cue_tags, descriptor_grouping,
+# increment_event_ids, signal_format, id_template, max_height, max_bitrate. Only
+# manifests change, never segment bytes. Two independent, TOML-only switches (they gate
+# the parameters, so they are not parameters themselves): `timeshift` and `overrides`. The
+# whole table is optional (missing = both on, with these defaults).
+[query]
+timeshift = true                          # startover/catchup: start, end, full_loops, offset. false: those are ignored (the channel is live only)
+overrides = true                          # the per-request OVERRIDES (every parameter except start, end, full_loops, offset). false: ignored -- not rejected, not forwarded -- and the channel's own settings always apply. Independent of `timeshift`; with only one switch on, fewer names enter the CloudFront cache key
+prefix = ""                               # prepended to EVERY parameter name ("dsl_" -> dsl_start, dsl_cue_tags): keeps them from clashing with a caller's own, e.g. an SSAI service using the channel as its source
+start_param = "start"                     # the two names you can change; ALL names (prefixed) are also the CloudFront manifest cache key (redeploy after changing)
 end_param = "end"
-# Three more query params have FIXED names: `full-loops=true` (widen the range to whole loops),
-# `timeline=default|continuous|periodic` (overrides [timeline].continuous per request, live or ranged) and
-# `offset=-PT1H` / `offset=-3600` (pretend "now" is earlier/later; negative or positive)
-max_span_seconds = 21600                  # longest range (also caps an open-ended startover)
+
+[timeshift]
+max_span_seconds = 21600                  # longest startover/catchup range (also caps an open-ended startover and `dvr_window`)
 
 # `port` lives with whichever backend-specific section already exists for
 # that backend, not a shared section:
@@ -115,7 +134,7 @@ cdn = true     # ecs-express only: CloudFront in front of the service (default t
 #                # "local-docker: volume vs bundled content" below.
 ```
 
-`daterange_id_format` accepts static text and these `{placeholder}` fields.
+`[markers.hls] id_template` accepts static text and these `{placeholder}` fields.
 It defaults to `{segcode}-{eventid}-{loop}`. Loop packages baked before the
 setting existed continue to be served with their original DATERANGE ID format:
 `{loop}` (loop number), `{eventid}` (emitted SCTE-35 event ID in decimal,
@@ -136,6 +155,53 @@ Unknown placeholders fail validation. Double quotes and Unicode control
 characters are removed from the expanded ID per RFC 8216 quoted-string and
 playlist text constraints. MediaPackage's aws-media backend does not author
 these IDs, so this setting applies only to ecs-express and local-docker.
+
+### `config_version`, renamed keys and migrating old files
+
+Every channel config carries a top-level integer `config_version` (the layout of
+the file; **absent means 1**, i.e. written before 2.0; current is **2**). `channel.py` and `app.py` refuse a config
+of another version -- an older one with the exact changes and the migration command, a newer one as written by
+a newer release -- and also a "version 2" file that still has an old key. Igor writes the marker in every file it
+generates and warns on a channel page whose file is older. Migrations chain (`_legacy_cfg._MIGRATIONS[n]` upgrades
+n to n+1), so a file of any age is brought forward step by step; to add one, bump `CONFIG_VERSION` (here, in
+`igor/.../its_a_live.py` and `channelConfigLayout.ts` -- a test keeps the three equal), write the step and extend the
+text migrator if it moves keys between tables.
+
+Version 1 -> 2: several keys were renamed or moved (HLS/DASH-specific settings now sit in
+`.hls` / `.dash` sub-tables, the query-parameter settings in `[query]`).
+`channel.py` and `app.py` refuse a config that still has an old key (they would
+silently fall back to the new key's default) and print the exact renames.
+Rewrite a file -- keeping its comments -- with:
+
+```bash
+uv run --project its-a-live python its-a-live/migrate_config.py data/channels   # files or directories; only channel configs ([deploy]) older than the current version are touched
+uv run --project its-a-live python its-a-live/migrate_config.py --check FILE    # report only, exit 1 if the version is older
+uv run --project its-a-live python its-a-live/migrate_config.py --dry-run FILE  # show the diff
+```
+
+| Old | New |
+|---|---|
+| `[markers] daterange_mode` | `[markers.hls] descriptor_grouping` |
+| `[markers] dash_descriptor_mode` | `[markers.dash] descriptor_grouping` |
+| `[markers] cue_tags` | `[markers.hls] cue_tags` |
+| `[markers] daterange_id_format` | `[markers.hls] id_template` |
+| `[markers] dash_signal_format` | `[markers.dash] signal_format` |
+| `[markers] period_on_segmentation` | `[markers] split_on` |
+| `[markers] period_on_segmentation_apply` | removed (a forced Period/discontinuity applies to HLS and DASH alike; the migration warns if it was not `"both"`) |
+| `[packaging] dvr_window_seconds` | `[packaging] dvr_window` |
+| `[packaging] hls_format` / `hls_ts_mux_audio` | `[packaging.hls] container` / `mux_audio` |
+| `[packaging] dash_timeline` / `dash_addressing` | `[packaging.dash] timeline_style` / `addressing` |
+| `[timeline] epoch_utc` | `[timeline] epoch` |
+| `[timeshift] enabled` | `[query] timeshift` **and** `[query] overrides` (the old single switch gated every query parameter, so both new ones inherit its value; `[query] enabled` from 2.0 development builds migrates the same way) |
+| `[timeshift] start_param` / `end_param` | `[query] start_param` / `end_param` (`[timeshift] max_span_seconds` stays) |
+
+The query parameters were renamed too: `full-loops` -> `full_loops`,
+`timeline` -> `timeline_mode`. Nothing reads the old names. The code that maps
+TOML keys onto bake.py/serve.py flags is `_markers_cfg.py`, `_packaging_cfg.py`,
+`_query_cfg.py` and `_epoch_cfg.py`; the old-key list lives in `_legacy_cfg.py`
+(`tests/test_channel_config.py` covers both). bake.py/serve.py keep their own
+flag names (`--daterange-mode`, `--dash-timeline`, ...); the `[query]` names
+reach serve.py as `--timeshift`, `--timeshift-start-param`, `--query-prefix`, ....
 
 ## Questions to ask before deploying (if not already answered)
 

@@ -15,7 +15,6 @@ from pathlib import Path
 from serve import (
     TimeshiftConfig,
     create_app,
-    parse_period_apply,
     parse_segmentation_type_ids,
     read_package_descriptor,
     resolve_epoch_ticks,
@@ -37,10 +36,12 @@ window_segments = resolve_window_segments(
 continuous = os.environ.get("CONTINUOUS_TIMELINE", "").lower() in ("1", "true", "yes")
 
 timeshift = TimeshiftConfig(
-    enabled=os.environ.get("TIMESHIFT", "").lower() in ("1", "true", "yes"),
+    timeshift=os.environ.get("TIMESHIFT", "").lower() in ("1", "true", "yes"),
+    overrides=os.environ.get("QUERY_OVERRIDES", "").lower() in ("1", "true", "yes"),
     start_param=os.environ.get("TIMESHIFT_START_PARAM") or "start",
     end_param=os.environ.get("TIMESHIFT_END_PARAM") or "end",
     max_span_seconds=int(os.environ.get("TIMESHIFT_MAX_SPAN_SECONDS") or 21600),
+    prefix=os.environ.get("QUERY_PREFIX", ""),
 )
 
 period_on_segmentation = parse_segmentation_type_ids(os.environ.get("PERIOD_ON_SEGMENTATION"))
@@ -52,7 +53,6 @@ app = create_app(
     continuous=continuous,
     timeshift=timeshift,
     period_on_segmentation=period_on_segmentation,
-    period_apply=parse_period_apply(os.environ.get("PERIOD_ON_SEGMENTATION_APPLY")),
     channel_name=os.environ.get("CHANNEL_NAME", ""),
     dash_addressing=os.environ.get("DASH_ADDRESSING") or "number",
     dash_timeline=os.environ.get("DASH_TIMELINE") or "full",

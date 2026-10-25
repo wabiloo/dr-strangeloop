@@ -1,3 +1,5 @@
+config_version = 2
+
 [deploy]
 name = "ecs-short-loop"
 backend = "ecs-express"
@@ -13,13 +15,15 @@ content_folder = "its-a-live/content"
 source_path = "/Users/fabrelambeau/Broadpeak/Code/dr-strangeloop/outputs/short-loop.ts"
 
 [markers]
-daterange_mode      = "shared"
-cue_tags            = "none"
 increment_event_ids = false
+
+[markers.hls]
+descriptor_grouping      = "shared"
+cue_tags            = "none"
 
 [packaging]
 segment_duration   = 4.0
-dvr_window_seconds = 30.0
+dvr_window = 30.0
 
 [infrastructure.express]
 port   = 8080

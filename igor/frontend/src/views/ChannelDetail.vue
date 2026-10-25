@@ -27,11 +27,16 @@ import { timeshiftParamsFromConfig } from '../utils/timeshift'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import BundleContentField from '../components/BundleContentField.vue'
 import FieldHelp from '../components/FieldHelp.vue'
+import QpBadge from '../components/QpBadge.vue'
 import {
   CONFIG_FIELD_LABEL as L,
   CONFIG_SECTION_TITLE as T,
   buildConfigSections,
   deriveSourceKind,
+  CONFIG_VERSION,
+  channelDefaultsByParam,
+  configVersionOf,
+  formFieldsFromConfig,
   periodTypesFromConfig,
   usesChannelSection,
 } from '../utils/channelConfigLayout'
@@ -127,8 +132,9 @@ const editForm = reactive<ChannelCreatePayload>({
   dash_timeline: 'full',
   continuous: false,
   period_on_segmentation: [],
-  period_on_segmentation_apply: 'both',
   timeshift_enabled: true,
+  query_overrides: true,
+  query_prefix: '',
   timeshift_start_param: 'start',
   timeshift_end_param: 'end',
   timeshift_max_span_seconds: 21600,
@@ -205,6 +211,14 @@ const toast = useToast()
 const confirm = useConfirm()
 let healthTimer: ReturnType<typeof setInterval> | null = null
 
+// A channel TOML written before the 2.0 key renames (no `config_version`, or an
+// older one) is read with defaults here, and refused by its-a-live: say so.
+const configVersion = computed(() => configVersionOf(config.value))
+const configNeedsMigration = computed(() => !!config.value && configVersion.value < CONFIG_VERSION)
+const migrateCommand = computed(
+  () => `uv run --project its-a-live python its-a-live/migrate_config.py data/channels/${props.name}.toml`,
+)
+
 function section(key: string): Record<string, unknown> {
   return (config.value?.[key] as Record<string, unknown>) ?? {}
 }
@@ -221,12 +235,8 @@ function startEdit() {
   const aws = sub('aws')
   const s3 = sub('s3')
   const input = section('input')
-  const packaging = section('packaging')
-  const timeline = section('timeline')
   const express = sub('express')
   const docker = sub('docker')
-  const markers = section('markers')
-  const editTimeshift = timeshiftParamsFromConfig(section('timeshift'))
   const backend = (deploy.backend as ChannelCreatePayload['backend']) ?? 'ecs-express'
   // `port` lives in [infrastructure.express] for ecs-express, [infrastructure.docker] for local-docker
   // (see its_a_live.generate_toml()) -- one form field either way.
@@ -240,32 +250,13 @@ function startEdit() {
     source_path: String(input.source_path ?? ''),
     source_kind: deriveSourceKind(input),
     allow_missing_segments: Boolean(input.allow_missing_segments ?? false),
-    segment_duration: Number(packaging.segment_duration ?? 4.0),
-    dvr_window_seconds: Number(packaging.dvr_window_seconds ?? 30),
-    epoch_utc: String(timeline.epoch_utc ?? DEFAULT_EPOCH_UTC),
-    hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
-    hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
-    dash_addressing: (packaging.dash_addressing as ChannelCreatePayload['dash_addressing']) ?? 'number',
-    dash_timeline: (packaging.dash_timeline as ChannelCreatePayload['dash_timeline']) ?? 'full',
-    continuous: Boolean(timeline.continuous ?? true),
-    period_on_segmentation: periodTypesFromConfig(markers.period_on_segmentation),
-    period_on_segmentation_apply:
-      (markers.period_on_segmentation_apply as ChannelCreatePayload['period_on_segmentation_apply']) ?? 'both',
-    timeshift_enabled: editTimeshift.enabled,
-    timeshift_start_param: editTimeshift.start_param,
-    timeshift_end_param: editTimeshift.end_param,
-    timeshift_max_span_seconds: editTimeshift.max_span_seconds,
+    // packaging, timeline, markers and query settings: one mapping from the TOML layout to the form
+    ...formFieldsFromConfig(config.value ?? {}),
     port: portSection.port === 'auto' ? 'auto' : Number(portSection.port ?? 8080),
     bundle_content: backend === 'local-docker' ? Boolean(docker.bundle_content ?? false) : false,
     cpu: Number(express.cpu ?? 256),
     memory: Number(express.memory ?? 512),
     cdn: Boolean(express.cdn ?? true),
-    daterange_mode: (markers.daterange_mode as ChannelCreatePayload['daterange_mode']) ?? 'shared',
-    cue_tags: (markers.cue_tags as ChannelCreatePayload['cue_tags']) ?? 'none',
-    increment_event_ids: Boolean(markers.increment_event_ids ?? false),
-    daterange_id_format: String(markers.daterange_id_format ?? '{segcode}-{eventid}-{loop}'),
-    dash_signal_format: (markers.dash_signal_format as ChannelCreatePayload['dash_signal_format']) ?? 'binary',
-    dash_descriptor_mode: (markers.dash_descriptor_mode as ChannelCreatePayload['dash_descriptor_mode']) ?? 'shared',
   })
   editAutoPort.value = editForm.port === 'auto'
   editLastExplicitPort.value = typeof editForm.port === 'number' ? editForm.port : editLastExplicitPort.value
@@ -646,10 +637,16 @@ const playbackDashUrl = computed(() =>
 // Startover/catchup (loop-dee-loop/SCOPE.md §13): a generated time-shifted
 // URL can be previewed in the players in place of the live one. Only
 // ecs-express/local-docker run serve.py, so only they have this.
-const timeshiftParams = computed(() => timeshiftParamsFromConfig(section('timeshift')))
+const timeshiftParams = computed(() => timeshiftParamsFromConfig(config.value ?? undefined))
+// The panel under the players: shown when the channel reads any query parameter
+// (either [query] switch on); it offers only the kinds that are on.
 const timeshiftAvailable = computed(
-  () => usesChannelSection(String(section('deploy').backend ?? '')) && timeshiftParams.value.enabled,
+  () =>
+    usesChannelSection(String(section('deploy').backend ?? '')) &&
+    (timeshiftParams.value.timeshift || timeshiftParams.value.overrides),
 )
+// What a request gets for an override it leaves out: the channel's own value.
+const channelQueryDefaults = computed(() => channelDefaultsByParam(formFieldsFromConfig(config.value ?? {})))
 const timeshiftPreview = ref<TimeshiftPreview | null>(null)
 // Leaving a preview behind when the channel stops/changes would leave the
 // players pointed at a dead URL.
@@ -666,10 +663,10 @@ const showPlayback = computed(
 const windowAvailable = computed(
   () => !!showPlayback.value && usesChannelSection(String(section('deploy').backend ?? '')),
 )
-// A continuous timeline has no loop-wrap boundary: only forced signal-break Periods (period_on_segmentation) are any.
+// A continuous timeline has no loop-wrap boundary: only forced signal-break Periods ([markers] split_on) are any.
 const boundariesExpected = computed(() => {
   const continuous = Boolean(section('timeline').continuous ?? true)
-  const forced = periodTypesFromConfig(section('markers').period_on_segmentation)
+  const forced = periodTypesFromConfig(section('markers').split_on)
   return !continuous || forced.length > 0
 })
 const windowQuery = computed(() => {
@@ -927,6 +924,13 @@ watch(() => props.name, reload)
       </details>
     </Message>
 
+    <Message v-if="configNeedsMigration" severity="warn" :closable="false">
+      This channel's config file is an older layout (config_version {{ configVersion }}, current is
+      {{ CONFIG_VERSION }}): its-a-live will refuse it, and the settings shown here are defaults, not what the
+      file says. Migrate it (keeps comments, safe to repeat):
+      <pre class="job-log mt-2 mb-0">{{ migrateCommand }}</pre>
+    </Message>
+
     <Message v-if="phase === 'unreachable'" severity="error" :closable="false">
       Infrastructure reports running, but HlsPlaybackUrl/DashPlaybackUrl did not return a manifest
       on the last check. Common causes: a MediaPackage/CloudFront endpoint still propagating right
@@ -950,6 +954,7 @@ watch(() => props.name, reload)
       :hls-url="playbackHlsUrl"
       :dash-url="playbackDashUrl"
       :params="timeshiftParams"
+      :channel-defaults="channelQueryDefaults"
       :health="health"
       :previewing="timeshiftPreview !== null"
       @preview="timeshiftPreview = $event"
@@ -1171,7 +1176,7 @@ watch(() => props.name, reload)
             <table class="text-sm config-table">
               <tbody>
                 <tr v-for="row in sec.rows" :key="row.key">
-                  <td class="pr-3 text-color-secondary vertical-align-top config-key" :title="row.label">{{ row.key }}</td>
+                  <td class="pr-3 text-color-secondary vertical-align-top config-key" :title="row.label">{{ row.key }}<QpBadge :field="row.key" :prefix="timeshiftParams.prefix" :active="timeshiftParams.overrides" /></td>
                   <td class="font-mono config-value">{{ row.value }}</td>
                 </tr>
               </tbody>
@@ -1278,7 +1283,7 @@ watch(() => props.name, reload)
                 <div class="flex align-items-center gap-2 config-field-wide">
                   <Checkbox v-model="editForm.continuous" binary input-id="edit-continuous-timeline" />
                   <label for="edit-continuous-timeline" class="text-xs text-color-secondary">
-                    {{ L.continuous }}
+                    {{ L.continuous }}<QpBadge field="continuous" :form="editForm" />
                   </label>
                   <FieldHelp label="Continuous timeline">
                     Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
@@ -1300,9 +1305,15 @@ watch(() => props.name, reload)
                   <InputNumber v-else v-model="editForm.segment_duration" :min-fraction-digits="1" fluid />
                 </div>
                 <div class="flex flex-column gap-1">
-                  <label class="text-xs text-color-secondary">{{ L.dvr_window_seconds }}</label>
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.dvr_window_seconds }}</label><QpBadge field="dvr_window_seconds" :form="editForm" /></div>
                   <InputNumber v-model="editForm.dvr_window_seconds" fluid />
                 </div>
+              </div>
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">{{ T['packaging.hls'] }}</h4>
+              <div class="config-fields">
                 <div class="flex flex-column gap-1 config-field-wide">
                   <label class="text-xs text-color-secondary">{{ L.hls_format }}</label>
                   <Select v-model="editForm.hls_format" :options="hlsFormatOptions" option-label="label" option-value="value" fluid />
@@ -1311,44 +1322,39 @@ watch(() => props.name, reload)
                   <Checkbox v-model="editForm.hls_ts_mux_audio" binary input-id="edit-hls-ts-mux-audio" />
                   <label for="edit-hls-ts-mux-audio" class="text-xs text-color-secondary">{{ L.hls_ts_mux_audio }}</label>
                 </div>
+              </div>
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">{{ T['packaging.dash'] }}</h4>
+              <div class="config-fields">
                 <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">{{ L.dash_addressing }}</label>
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.dash_addressing }}</label><QpBadge field="dash_addressing" :form="editForm" /></div>
                   <Select v-model="editForm.dash_addressing" :options="dashAddressingOptions" option-label="label" option-value="value" fluid />
                 </div>
                 <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">{{ L.dash_timeline }}</label>
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.dash_timeline }}</label><QpBadge field="dash_timeline" :form="editForm" /></div>
                   <Select v-model="editForm.dash_timeline" :options="dashTimelineOptions" option-label="label" option-value="value" fluid />
                 </div>
               </div>
             </section>
 
             <section class="config-group">
+              <h4 class="config-group-title">{{ T.query }}</h4>
+              <TimeshiftFields :form="editForm" id-prefix="edit" part="query" />
+            </section>
+
+            <section v-if="editForm.timeshift_enabled || editForm.query_overrides" class="config-group">
               <h4 class="config-group-title">{{ T.timeshift }}</h4>
-              <TimeshiftFields :form="editForm" id-prefix="edit" />
+              <TimeshiftFields :form="editForm" id-prefix="edit" part="timeshift" />
             </section>
 
             <section class="config-group">
               <h4 class="config-group-title">{{ T.markers }}</h4>
               <div class="config-fields">
-                <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">{{ L.daterange_mode }}</label>
-                  <Select v-model="editForm.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" fluid />
-                </div>
-                <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">{{ L.cue_tags }}</label>
-                  <Select v-model="editForm.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" fluid />
-                </div>
-                <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">{{ L.dash_signal_format }}</label>
-                  <Select v-model="editForm.dash_signal_format" :options="dashSignalFormatOptions" option-label="label" option-value="value" fluid />
-                </div>
-                <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">{{ L.dash_descriptor_mode }}</label>
-                  <Select v-model="editForm.dash_descriptor_mode" :options="dashDescriptorModeOptions" option-label="label" option-value="value" fluid />
-                </div>
                 <div class="flex align-items-center gap-2 config-field-wide">
                   <Checkbox v-model="editForm.increment_event_ids" binary input-id="edit-increment-event-ids" />
-                  <label for="edit-increment-event-ids" class="text-xs text-color-secondary">{{ L.increment_event_ids }}</label>
+                  <label for="edit-increment-event-ids" class="text-xs text-color-secondary">{{ L.increment_event_ids }}<QpBadge field="increment_event_ids" :form="editForm" /></label>
                   <FieldHelp label="Increment SCTE-35 event ids">
                     Off (default) repeats the same event id every loop -- easiest to test against. On bumps
                     each id by loop_number &times; a shared step (a power of 10 above the channel's largest
@@ -1357,15 +1363,43 @@ watch(() => props.name, reload)
                     at the 32-bit SCTE-35 ceiling.
                   </FieldHelp>
                 </div>
+                <div class="config-field-wide">
+                  <PeriodSegmentationFields :form="editForm" id-prefix="edit" />
+                </div>
+              </div>
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">{{ T['markers.hls'] }}</h4>
+              <div class="config-fields">
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.daterange_mode }}</label><QpBadge field="daterange_mode" :form="editForm" /></div>
+                  <Select v-model="editForm.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" fluid />
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.cue_tags }}</label><QpBadge field="cue_tags" :form="editForm" /></div>
+                  <Select v-model="editForm.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" fluid />
+                </div>
                 <div class="flex flex-column gap-1 config-field-wide">
                   <div class="flex align-items-center gap-1">
-                    <label class="text-xs text-color-secondary" for="edit-daterange-id-format">{{ L.daterange_id_format }}</label>
+                    <label class="text-xs text-color-secondary" for="edit-daterange-id-format">{{ L.daterange_id_format }}<QpBadge field="daterange_id_format" :form="editForm" /></label>
                     <DaterangeIdFormatHelp />
                   </div>
                   <InputText id="edit-daterange-id-format" v-model="editForm.daterange_id_format" />
                 </div>
-                <div class="config-field-wide">
-                  <PeriodSegmentationFields :form="editForm" id-prefix="edit" />
+              </div>
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">{{ T['markers.dash'] }}</h4>
+              <div class="config-fields">
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.dash_descriptor_mode }}</label><QpBadge field="dash_descriptor_mode" :form="editForm" /></div>
+                  <Select v-model="editForm.dash_descriptor_mode" :options="dashDescriptorModeOptions" option-label="label" option-value="value" fluid />
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.dash_signal_format }}</label><QpBadge field="dash_signal_format" :form="editForm" /></div>
+                  <Select v-model="editForm.dash_signal_format" :options="dashSignalFormatOptions" option-label="label" option-value="value" fluid />
                 </div>
               </div>
             </section>

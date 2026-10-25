@@ -52,8 +52,9 @@ source_kind` is `playlist`, `archive` or `manifest`.
 and running state as each channel's summary arrives.
 
 **New.** A form whose groups are the TOML tables of the channel config
-(`[deploy]`, `[input]`, `[infrastructure.*]`, `[timeline]`, `[packaging]`,
-`[timeshift]`, `[markers]`). The same groups appear in the read-only
+(`[deploy]`, `[input]`, `[infrastructure.*]`, `[timeline]`, `[packaging]` and
+its `.hls`/`.dash` sub-tables, `[query]`, `[timeshift]`, `[markers]` and its
+`.hls`/`.dash` sub-tables). The same groups appear in the read-only
 configuration panel and the edit form. Field-by-field reference:
 [its-a-live AGENTS](../its-a-live/AGENTS.md).
 

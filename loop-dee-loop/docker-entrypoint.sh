@@ -106,7 +106,6 @@ case "$SUBCOMMAND" in
             WINDOW_SEGMENTS=""
             CONTINUOUS_TIMELINE="false"
             PERIOD_ON_SEGMENTATION=""
-            PERIOD_ON_SEGMENTATION_APPLY=""
             CHANNEL_NAME=""
             DASH_ADDRESSING=""
             DASH_TIMELINE=""
@@ -114,6 +113,8 @@ case "$SUBCOMMAND" in
             TIMESHIFT_START_PARAM=""
             TIMESHIFT_END_PARAM=""
             TIMESHIFT_MAX_SPAN_SECONDS=""
+            QUERY_PREFIX=""
+            QUERY_OVERRIDES="false"
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --host) HOST="$2"; shift 2 ;;
@@ -126,11 +127,12 @@ case "$SUBCOMMAND" in
                     --window-segments) WINDOW_SEGMENTS="$2"; shift 2 ;;
                     --continuous-timeline) CONTINUOUS_TIMELINE="true"; shift ;;
                     --period-on-segmentation) PERIOD_ON_SEGMENTATION="$2"; shift 2 ;;
-                    --period-on-segmentation-apply) PERIOD_ON_SEGMENTATION_APPLY="$2"; shift 2 ;;
                     --timeshift) TIMESHIFT="true"; shift ;;
+                    --query-overrides) QUERY_OVERRIDES="true"; shift ;;
                     --timeshift-start-param) TIMESHIFT_START_PARAM="$2"; shift 2 ;;
                     --timeshift-end-param) TIMESHIFT_END_PARAM="$2"; shift 2 ;;
                     --timeshift-max-span-seconds) TIMESHIFT_MAX_SPAN_SECONDS="$2"; shift 2 ;;
+                    --query-prefix) QUERY_PREFIX="$2"; shift 2 ;;
                     *)
                         log "ERROR: unrecognized serve.py flag in production mode: $1"
                         exit 2
@@ -144,9 +146,9 @@ case "$SUBCOMMAND" in
 
             export LOOP_PACKAGE_DIR="$LOOP_PACKAGE_LOCAL_DIR"
             export EPOCH_UTC DVR_WINDOW_SECONDS WINDOW_SEGMENTS CONTINUOUS_TIMELINE
-            export PERIOD_ON_SEGMENTATION PERIOD_ON_SEGMENTATION_APPLY CHANNEL_NAME DASH_ADDRESSING DASH_TIMELINE
+            export PERIOD_ON_SEGMENTATION CHANNEL_NAME DASH_ADDRESSING DASH_TIMELINE
             export TIMESHIFT TIMESHIFT_START_PARAM TIMESHIFT_END_PARAM
-            export TIMESHIFT_MAX_SPAN_SECONDS
+            export TIMESHIFT_MAX_SPAN_SECONDS QUERY_PREFIX QUERY_OVERRIDES
             WORKERS="${GUNICORN_WORKERS:-4}"
             log "starting gunicorn (${WORKERS} workers) on ${HOST}:${PORT}"
             exec gunicorn --bind "${HOST}:${PORT}" --workers "$WORKERS" \

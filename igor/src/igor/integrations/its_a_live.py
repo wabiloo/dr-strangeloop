@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 import subprocess
 import string
 from pathlib import Path
@@ -30,6 +31,30 @@ DEFAULT_DATERANGE_ID_FORMAT = "{segcode}-{eventid}-{loop}"
 DEFAULT_EPOCH_UTC = "2026-01-01T00:00:00Z"
 _EPOCH_UTC_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 _DATERANGE_ID_FIELDS = {"loop", "eventid", "segid", "seghex", "segcode", "segname", "epoch", "pd"}
+# The fixed-name query parameters of a channel's manifests. Mirrors
+# its-a-live/_query_cfg.py (separate venv, so not imported; a test keeps the
+# two in lockstep). `[query] start_param`/`end_param` must not collide with them.
+QUERY_FIXED_PARAMS = (
+    "full_loops", "timeline_mode", "offset", "epoch", "dvr_window",
+    "timeline_style", "addressing", "cue_tags", "descriptor_grouping",
+    "increment_event_ids", "signal_format", "id_template", "split_on",
+    "max_height", "max_bitrate",
+)
+_QUERY_PREFIX_RE = re.compile(r"^[A-Za-z0-9_.~-]*$")
+
+
+def validate_query_prefix(value: str) -> str:
+    """`[query] prefix`: prepended to every query parameter name, so it must be URL-safe."""
+    if not isinstance(value, str) or not _QUERY_PREFIX_RE.match(value):
+        raise ValueError("query prefix must contain only letters, digits, '_', '-', '.' or '~'")
+    return value
+
+
+def validate_query_names(start_param: str, end_param: str, prefix: str = "") -> None:
+    """Every on-the-wire name (prefix applied) must be distinct."""
+    names = [f"{prefix}{n}" for n in (start_param, end_param, *QUERY_FIXED_PARAMS)]
+    if len(set(names)) != len(names):
+        raise ValueError(f"query parameter names must be distinct, got {names}")
 
 
 def validate_daterange_id_format(value: str) -> str:
@@ -65,7 +90,14 @@ def validate_epoch_utc(value: str) -> str:
     return value
 
 
+# The layout of the channel TOML this module writes: its-a-live refuses a config
+# of another version and migrates old ones (its-a-live/_legacy_cfg.py CONFIG_VERSION;
+# a test keeps the two equal).
+CONFIG_VERSION = 2
+
 _TOML_TEMPLATE = """\
+config_version = {config_version}
+
 [deploy]
 name = "{name}"
 backend = "{backend}"
@@ -85,35 +117,49 @@ allow_missing_segments = {allow_missing_segments}
 
 _MARKERS_EXTRA = """
 [markers]
-daterange_mode      = "{daterange_mode}"
-cue_tags            = "{cue_tags}"
-increment_event_ids = {increment_event_ids}
-daterange_id_format = "{daterange_id_format}"
-dash_signal_format  = "{dash_signal_format}"
-dash_descriptor_mode = "{dash_descriptor_mode}"{period_extra}
+increment_event_ids = {increment_event_ids}{split_on_extra}
+
+[markers.hls]
+descriptor_grouping = "{daterange_mode}"
+cue_tags = "{cue_tags}"
+id_template = "{daterange_id_format}"
+
+[markers.dash]
+descriptor_grouping = "{dash_descriptor_mode}"
+signal_format = "{dash_signal_format}"
 """
 
-_TIMESHIFT_EXTRA = """
+_QUERY_EXTRA = """
+[query]
+timeshift = {timeshift}
+overrides = {overrides}
+prefix = "{prefix}"
+start_param = "{start_param}"
+end_param = "{end_param}"
+
 [timeshift]
-enabled          = {enabled}
-start_param      = "{start_param}"
-end_param        = "{end_param}"
 max_span_seconds = {max_span_seconds}
 """
 
-_ECS_EXPRESS_EXTRA = """
+_PACKAGING_EXTRA = """
 [packaging]
-segment_duration   = {segment_duration}
-dvr_window_seconds = {dvr_window_seconds}
-hls_format = "{hls_format}"
-hls_ts_mux_audio = {hls_ts_mux_audio}
-dash_addressing = "{dash_addressing}"
-dash_timeline = "{dash_timeline}"
+segment_duration = {segment_duration}
+dvr_window = {dvr_window_seconds}
+
+[packaging.hls]
+container = "{hls_format}"
+mux_audio = {hls_ts_mux_audio}
+
+[packaging.dash]
+timeline_style = "{dash_timeline}"
+addressing = "{dash_addressing}"
 
 [timeline]
-epoch_utc = "{epoch_utc}"
+epoch = "{epoch_utc}"
 continuous = {continuous}
+"""
 
+_ECS_EXPRESS_EXTRA = """
 [infrastructure.express]
 port   = {port}
 cpu    = {cpu}
@@ -122,18 +168,6 @@ cdn    = {cdn}
 """
 
 _LOCAL_DOCKER_EXTRA = """
-[packaging]
-segment_duration   = {segment_duration}
-dvr_window_seconds = {dvr_window_seconds}
-hls_format = "{hls_format}"
-hls_ts_mux_audio = {hls_ts_mux_audio}
-dash_addressing = "{dash_addressing}"
-dash_timeline = "{dash_timeline}"
-
-[timeline]
-epoch_utc = "{epoch_utc}"
-continuous = {continuous}
-
 [infrastructure.docker]
 port = {port}
 bundle_content = {bundle_content}
@@ -166,8 +200,9 @@ def generate_toml(
     dash_timeline: str = "full",
     continuous: bool = False,
     period_on_segmentation: list[str] | None = None,
-    period_on_segmentation_apply: str = "both",
     timeshift_enabled: bool = True,
+    query_overrides: bool = True,
+    query_prefix: str = "",
     timeshift_start_param: str = "start",
     timeshift_end_param: str = "end",
     timeshift_max_span_seconds: int = 21600,
@@ -205,27 +240,46 @@ def generate_toml(
         raise ValueError("dash_signal_format must be 'binary' or 'xml'")
     if dash_descriptor_mode not in ("shared", "narrowed"):
         raise ValueError("dash_descriptor_mode must be 'shared' or 'narrowed'")
-    if period_on_segmentation_apply not in ("both", "dash", "hls"):
-        raise ValueError("period_on_segmentation_apply must be 'both', 'dash' or 'hls'")
+    validate_query_prefix(query_prefix)
+    validate_query_names(timeshift_start_param, timeshift_end_param, query_prefix)
     period_ids = [int(str(i), 0) for i in (period_on_segmentation or [])]
     if any(not 0 <= i <= 0xFF for i in period_ids):
         raise ValueError("period_on_segmentation entries must be segmentation_type_ids (0..255)")
     # loop-dee-loop/SCOPE.md §14 -- only written when something is selected.
-    period_extra = (
-        "\nperiod_on_segmentation = [" + ", ".join(f"0x{i:02X}" for i in period_ids) + "]"
-        f'\nperiod_on_segmentation_apply = "{period_on_segmentation_apply}"'
+    split_on_extra = (
+        "\nsplit_on = [" + ", ".join(f"0x{i:02X}" for i in period_ids) + "]"
         if period_ids else ""
     )
 
-    def _timeshift_section() -> str:
-        return _TIMESHIFT_EXTRA.format(
-            enabled=str(timeshift_enabled).lower(),
+    def _query_section() -> str:
+        return _QUERY_EXTRA.format(
+            timeshift=str(timeshift_enabled).lower(), overrides=str(query_overrides).lower(),
+            prefix=query_prefix,
             start_param=timeshift_start_param, end_param=timeshift_end_param,
             max_span_seconds=int(timeshift_max_span_seconds),
         )
 
+    def _markers_section() -> str:
+        return _MARKERS_EXTRA.format(
+            daterange_mode=daterange_mode, cue_tags=cue_tags,
+            increment_event_ids=str(increment_event_ids).lower(),
+            daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
+            dash_signal_format=dash_signal_format,
+            dash_descriptor_mode=dash_descriptor_mode,
+            split_on_extra=split_on_extra,
+        )
+
+    def _packaging_section() -> str:
+        return _PACKAGING_EXTRA.format(
+            segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
+            epoch_utc=epoch_utc,
+            hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
+            dash_addressing=dash_addressing, dash_timeline=dash_timeline,
+            continuous=str(continuous).lower(),
+        )
+
     content = _TOML_TEMPLATE.format(
-        name=name, backend=backend, region=region, bucket_name=bucket_name,
+        config_version=CONFIG_VERSION, name=name, backend=backend, region=region, bucket_name=bucket_name,
         content_folder=content_folder, source_path=source_path,
         source_kind=source_kind,
         allow_missing_segments=str(allow_missing_segments).lower(),
@@ -233,48 +287,19 @@ def generate_toml(
     if backend == "ecs-express":
         if port == "auto":
             raise ValueError("port: 'auto' is only supported for the local-docker backend")
-        content += _MARKERS_EXTRA.format(
-            daterange_mode=daterange_mode, cue_tags=cue_tags,
-            increment_event_ids=str(increment_event_ids).lower(),
-            daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
-            dash_signal_format=dash_signal_format,
-            dash_descriptor_mode=dash_descriptor_mode,
-            period_extra=period_extra,
-        )
-        content += _ECS_EXPRESS_EXTRA.format(
-            segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
-            epoch_utc=epoch_utc,
-            hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
-            dash_addressing=dash_addressing,
-            dash_timeline=dash_timeline,
-            continuous=str(continuous).lower(),
-            port=int(port), cpu=cpu, memory=memory,
-            cdn=str(cdn).lower(),
-        )
-        content += _timeshift_section()
+        content += _markers_section() + _packaging_section()
+        content += _ECS_EXPRESS_EXTRA.format(port=int(port), cpu=cpu, memory=memory, cdn=str(cdn).lower())
+        content += _query_section()
     elif backend == "local-docker":
         # No [infrastructure.express] -- local-docker has no Fargate CPU/memory
         # concept, and [infrastructure.aws]/[infrastructure.s3] above are written but ignored by
         # channel.py for this backend (kept for TOML-shape consistency).
-        content += _MARKERS_EXTRA.format(
-            daterange_mode=daterange_mode, cue_tags=cue_tags,
-            increment_event_ids=str(increment_event_ids).lower(),
-            daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
-            dash_signal_format=dash_signal_format,
-            dash_descriptor_mode=dash_descriptor_mode,
-            period_extra=period_extra,
-        )
+        content += _markers_section() + _packaging_section()
         content += _LOCAL_DOCKER_EXTRA.format(
-            segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
-            epoch_utc=epoch_utc,
-            hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
-            dash_addressing=dash_addressing,
-            dash_timeline=dash_timeline,
-            continuous=str(continuous).lower(),
             port=_format_local_docker_port(port),
             bundle_content=str(bundle_content).lower(),
         )
-        content += _timeshift_section()
+        content += _query_section()
     return content
 
 

@@ -13,6 +13,19 @@ info:
     Use `/timeline.json` to see what is on air now, or, with the startover and
     catchup parameters, what was or will be on air at another time.
 
+    **Query parameters.** Besides startover/catchup (`start`, `end`,
+    `full_loops`, `offset`), every manifest accepts per-request overrides of how
+    it is rendered: the timeline (`timeline_mode`, `epoch`, `dvr_window`,
+    `split_on`), the DASH style (`timeline_style`, `addressing`), the SCTE-35
+    signalling (`cue_tags`, `descriptor_grouping`, `increment_event_ids`,
+    `signal_format`, `id_template`) and the ladder (`max_height`,
+    `max_bitrate`). Only the manifests change; segment bytes never do. A channel
+    may give every name a common prefix (`[query] prefix`) so they cannot clash
+    with a caller's own parameters, and may switch startover/catchup
+    (`[query] timeshift`: `start`, `end`, `full_loops`, `offset`) and the overrides
+    (`[query] overrides`: everything else) on or off independently -- a switch
+    that is off means its parameters are ignored; `/health` lists the effective names.
+
     **Window.** The part of the stream a player sees right now: the last few
     segments up to the live edge. With `start`/`end` it is the requested
     startover/catchup range instead.
@@ -47,8 +60,20 @@ paths:
         - $ref: "#/components/parameters/Start"
         - $ref: "#/components/parameters/End"
         - $ref: "#/components/parameters/FullLoops"
-        - $ref: "#/components/parameters/Timeline"
+        - $ref: "#/components/parameters/TimelineMode"
         - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Epoch"
+        - $ref: "#/components/parameters/DvrWindow"
+        - $ref: "#/components/parameters/SplitOn"
+        - $ref: "#/components/parameters/MaxHeight"
+        - $ref: "#/components/parameters/MaxBitrate"
+        - $ref: "#/components/parameters/DescriptorGrouping"
+        - $ref: "#/components/parameters/IncrementEventIds"
+        - $ref: "#/components/parameters/CueTags"
+        - $ref: "#/components/parameters/IdTemplate"
+        - $ref: "#/components/parameters/TimelineStyle"
+        - $ref: "#/components/parameters/Addressing"
+        - $ref: "#/components/parameters/SignalFormat"
         - $ref: "#/components/parameters/Scope"
       responses:
         "200":
@@ -61,7 +86,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/WindowDocument" }
         "400":
-          description: Bad timeshift parameters (plain-text message).
+          description: Bad query parameters (plain-text message).
           content:
             text/plain:
               schema: { type: string }
@@ -107,9 +132,17 @@ paths:
         - $ref: "#/components/parameters/Start"
         - $ref: "#/components/parameters/End"
         - $ref: "#/components/parameters/FullLoops"
-        - $ref: "#/components/parameters/Timeline"
+        - $ref: "#/components/parameters/TimelineMode"
         - $ref: "#/components/parameters/Offset"
-        - $ref: "#/components/parameters/Scope"
+        - $ref: "#/components/parameters/Epoch"
+        - $ref: "#/components/parameters/DvrWindow"
+        - $ref: "#/components/parameters/SplitOn"
+        - $ref: "#/components/parameters/MaxHeight"
+        - $ref: "#/components/parameters/MaxBitrate"
+        - $ref: "#/components/parameters/DescriptorGrouping"
+        - $ref: "#/components/parameters/IncrementEventIds"
+        - $ref: "#/components/parameters/CueTags"
+        - $ref: "#/components/parameters/IdTemplate"
       responses:
         "200":
           description: Multivariant playlist; the media playlists are linked from it.
@@ -125,9 +158,18 @@ paths:
         - $ref: "#/components/parameters/Start"
         - $ref: "#/components/parameters/End"
         - $ref: "#/components/parameters/FullLoops"
-        - $ref: "#/components/parameters/Timeline"
+        - $ref: "#/components/parameters/TimelineMode"
         - $ref: "#/components/parameters/Offset"
-        - $ref: "#/components/parameters/Scope"
+        - $ref: "#/components/parameters/Epoch"
+        - $ref: "#/components/parameters/DvrWindow"
+        - $ref: "#/components/parameters/SplitOn"
+        - $ref: "#/components/parameters/MaxHeight"
+        - $ref: "#/components/parameters/MaxBitrate"
+        - $ref: "#/components/parameters/DescriptorGrouping"
+        - $ref: "#/components/parameters/IncrementEventIds"
+        - $ref: "#/components/parameters/TimelineStyle"
+        - $ref: "#/components/parameters/Addressing"
+        - $ref: "#/components/parameters/SignalFormat"
       responses:
         "200":
           description: MPD.
@@ -142,9 +184,11 @@ components:
       required: false
       description: |
         Startover/catchup range start: epoch seconds, epoch milliseconds
-        (value >= 1e11) or ISO 8601 (naive = UTC). Only when timeshift is
-        enabled (`/health` -> `timeshift`). The parameter name is configurable
-        (`[timeshift]` in the channel TOML); `/health` reports the actual names.
+        (value >= 1e11) or ISO 8601 (naive = UTC). Only when the query
+        parameters are enabled (`/health` -> `query`). The name is
+        configurable (`[query]` in the channel TOML) and every parameter name
+        can carry a common prefix (`[query] prefix`); `/health` reports the
+        actual names.
       schema: { type: string }
     End:
       name: end
@@ -153,13 +197,13 @@ components:
       description: Range end, same formats as `start`. Requires `start`. Default `start` + max span.
       schema: { type: string }
     FullLoops:
-      name: full-loops
+      name: full_loops
       in: query
       required: false
       description: Widen the range to whole loops.
       schema: { type: boolean, default: false }
-    Timeline:
-      name: timeline
+    TimelineMode:
+      name: timeline_mode
       in: query
       required: false
       description: Per-request override of the timeline mode.
@@ -189,6 +233,108 @@ components:
         Pretend "now" is earlier (negative) or later (positive): signed seconds
         (`-3600`) or an ISO 8601 duration (`-PT1H`).
       schema: { type: string }
+    Epoch:
+      name: epoch
+      in: query
+      required: false
+      description: |
+        Replace the channel epoch (loop 0's start) for this request: epoch
+        seconds, epoch milliseconds (>= 1e11) or ISO 8601 (naive = UTC). Loop
+        numbering, `PROGRAM-DATE-TIME`, Period starts, `availabilityStartTime`
+        and the global segment numbers all follow it. `400` if it is in the
+        future; `start`/`end` are judged against it. Use a fixed value:
+        changing it between requests of one player session makes its timeline
+        jump.
+      schema: { type: string }
+    DvrWindow:
+      name: dvr_window
+      in: query
+      required: false
+      description: |
+        Size of the sliding window (DVR window) for this request: seconds
+        (`30`) or an ISO 8601 duration (`PT30S`), rounded up to whole segments.
+        Limited to the channel's maximum span.
+      schema: { type: string }
+    SplitOn:
+      name: split_on
+      in: query
+      required: false
+      description: |
+        Comma-separated SCTE-35 segmentation_type_ids (`0x22,0x30`; a Start
+        implies its End) at whose markers a new DASH Period / HLS
+        `#EXT-X-DISCONTINUITY` is forced. Signal only: timestamps stay
+        continuous. Replaces the channel's setting; empty or `none` disables.
+      schema: { type: string }
+    MaxHeight:
+      name: max_height
+      in: query
+      required: false
+      description: Keep only renditions up to this height (pixels). `400` if none is left. Media playlist names are unchanged.
+      schema: { type: integer, minimum: 1 }
+    MaxBitrate:
+      name: max_bitrate
+      in: query
+      required: false
+      description: Keep only renditions up to this bandwidth (bits per second). `400` if none is left.
+      schema: { type: integer, minimum: 1 }
+    DescriptorGrouping:
+      name: descriptor_grouping
+      in: query
+      required: false
+      description: |
+        How SCTE-35 descriptors map to signalling. HLS: `shared` (default; the
+        whole message in each DATERANGE), `narrowed` (each marker's own
+        single-descriptor message) or `grouped` (one DATERANGE per group of
+        coincident descriptors). DASH: `shared` or `narrowed`.
+      schema:
+        type: string
+        enum: [shared, narrowed, grouped]
+    IncrementEventIds:
+      name: increment_event_ids
+      in: query
+      required: false
+      description: Give every loop iteration its own SCTE-35 event ids (HLS and DASH).
+      schema: { type: boolean }
+    CueTags:
+      name: cue_tags
+      in: query
+      required: false
+      description: |
+        HLS only. `none`: DATERANGE only; `alongside`: also `#EXT-X-CUE-OUT`/`-CONT`/`-IN`;
+        `only`: cue tags instead of DATERANGE (every marker must be a bare splice_insert, else `400`).
+      schema:
+        type: string
+        enum: [none, alongside, only]
+    IdTemplate:
+      name: id_template
+      in: query
+      required: false
+      description: HLS only. DATERANGE ID template with `{placeholders}` (e.g. `{segcode}-{eventid}-{loop}`).
+      schema: { type: string }
+    TimelineStyle:
+      name: timeline_style
+      in: query
+      required: false
+      description: DASH only. SegmentTimeline style, `full` (@t and @d on every S) or `compact` (implicit @t, @r runs).
+      schema:
+        type: string
+        enum: [full, compact]
+    Addressing:
+      name: addressing
+      in: query
+      required: false
+      description: DASH only. SegmentTemplate addressing, `number` (`$Number$`) or `time` (`$Time$`).
+      schema:
+        type: string
+        enum: [number, time]
+    SignalFormat:
+      name: signal_format
+      in: query
+      required: false
+      description: DASH only. SCTE-35 EventStream encoding, `binary` (splice_info_section in a Binary element) or `xml`.
+      schema:
+        type: string
+        enum: [binary, xml]
   schemas:
     SegmentRange:
       type: object
@@ -594,15 +740,19 @@ components:
         window_segments: { type: integer }
         continuous_timeline: { type: boolean }
         epoch_utc: { $ref: "#/components/schemas/UtcTime" }
-        timeshift:
+        query:
           type: object
-          required: [enabled]
+          description: The channel's query-parameter configuration (see `[query]`).
+          required: [timeshift, overrides, params]
           properties:
-            enabled: { type: boolean }
             start_param: { type: string }
             end_param: { type: string }
             timeline_param: { type: string }
             offset_param: { type: string }
             full_loops_param: { type: string }
+            prefix: { type: string }
+            startover: { type: boolean, description: "Startover/catchup parameters (start, end, full_loops, offset) are read." }
+            overrides: { type: boolean, description: "The per-request override parameters are read." }
+            params: { type: array, items: { type: string } }
             max_span_seconds: { type: integer }
             continuous_supported: { type: boolean }

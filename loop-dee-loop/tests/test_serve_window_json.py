@@ -262,7 +262,7 @@ def test_timeline_route_matches_schema(tmp_path):
 
 
 def test_timeline_route_timeshift_range_and_errors(tmp_path):
-    client = _client(tmp_path, timeshift=TimeshiftConfig(enabled=True))
+    client = _client(tmp_path, timeshift=TimeshiftConfig(timeshift=True, overrides=True))
 
     resp = client.get("/timeline.json?start=0&end=2")
     assert resp.status_code == 200

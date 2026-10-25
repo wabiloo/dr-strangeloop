@@ -61,8 +61,8 @@ def cfg(package, bundle=None):
         "deploy": {"name": "chan", "backend": "local-docker"},
         "bake": {"local_output_dir": str(package)},
         "infrastructure": {"docker": docker},
-        "packaging": {"dvr_window_seconds": 20},
-        "timeline": {"epoch_utc": "2026-02-03T04:05:06Z", "continuous": True},
+        "packaging": {"dvr_window": 20},
+        "timeline": {"epoch": "2026-02-03T04:05:06Z", "continuous": True},
     }
 
 

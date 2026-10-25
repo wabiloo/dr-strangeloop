@@ -40,7 +40,7 @@ Needs the installed Google Chrome (H.264) and Node/npm for `setup`. Exit code 0
   signal-break Periods appear, so there is nothing to wait for: the run ends after `--duration` (120 s) instead of
   `--boundaries`, still judging whatever boundaries did show up (usually 0). `--boundaries 0` forces that
   fixed-duration mode on any channel. Igor's panel has a "Stop after boundaries / loops / duration (s)" choice with a value for
-  each; "boundaries" is disabled when none are expected (no timeline, or continuous without `period_on_segmentation`);
+  each; "boundaries" is disabled when none are expected (no timeline, or continuous without `[markers] split_on`);
   "loops" runs N x the loop duration (from `/health`) + 30 s as a fixed duration, and the hard cap (`--max-seconds`) grows to fit.
 - Period/discontinuity transitions come from each player's own mechanisms, never from the clock
   or the timeline: hls.js (`FRAG_CHANGED` continuity counter), dash.js (`PERIOD_SWITCH_COMPLETED`),
