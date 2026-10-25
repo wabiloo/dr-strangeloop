@@ -62,12 +62,29 @@ backend restarts). A new job adds a tab but does **not** open the drawer.
 `jobId` with the drawer and still emits `finished`. To surface a job from new
 code, call `trackJob(job)` (or render `JobPanel`).
 
-## Startover, catchup & query-parameter overrides (channel detail page)
+## Channel preview page, Timeshift & URL overrides
+
+A channel has two pages: the **detail page** (`/channels/:name`, `ChannelDetail.vue`: actions,
+schedule, configuration) and the **preview page** (`/channels/:name/preview`,
+`ChannelPreview.vue`: live players, the panels below, the timeline window, the Playback test).
+The detail page has a **Preview** button while the channel is playing, the channel list has an eye
+icon on running rows, and when an action brings a channel newly alive the detail page navigates
+to the preview page itself (`?alive=1`, which plays the "It's alive" banner there). The preview
+page has an *Actions & configuration* button back, and says so when the channel is not playing.
+
+Two separate, collapsible panels under the players -- **Timeshift** (`TimeshiftPanel.vue`:
+start/end, presets, whole loops, offset; shown while `[query] timeshift` is on) and **URL
+overrides** (`UrlOverridesPanel.vue`: every other per-request parameter; shown while `[query]
+overrides` is on) -- build ONE set of manifest URLs. Their state, validation and URL building are
+shared in `composables/useUrlRequestForm.ts`; `UrlRequestPanels.vue` hosts both, plus the shared
+output (kind/summary, problems, the HLS/DASH URLs, copy, **Preview**, *Back to live*). It emits
+`preview` (swap the players) and `built` (the URLs as currently built, whether previewed or not:
+the Playback test runs against these). The text below describes both.
 
 For `ecs-express` / `local-docker` channels with `[query] timeshift` on (the
-default), a running channel's page shows a **Startover & catchup** panel under
+default), a running channel's page shows the **Timeshift** panel under
 the players (**collapsed by default**, open/closed remembered in the browser; while a
-preview is active the collapsed header summarises it and offers *Back to live*): pick a start (and optional end) in UTC or local time, presets
+preview is active the output card summarises it and offers *Back to live*): pick a start (and optional end) in UTC or local time, presets
 (last N minutes, previous/current loop), *whole loops only*, and a timeline
 override (`timeline_mode=default|continuous|periodic`, fixed name, also usable on
 live URLs by leaving the start empty), and *Pretend “now” is…* (`offset=-PT1H` /
@@ -210,7 +227,7 @@ Rules, for any change that touches channel config:
 | ↳ `GET/POST /api/v1/channels/{name}/schedule`, `DELETE .../schedule/{window_id}` | scheduled on-air windows (`channel.py schedule list/add/remove`) -- aws-media/ecs-express only, hidden in igor's UI for local-docker. `POST` is job-spawning (an immediate window also runs `start`); `GET`/`DELETE` are synchronous (fast EventBridge Scheduler API calls). Requires `ItsALiveSharedStack-scheduler` deployed once per account/region -- see `its-a-live/README.md`'s "Scheduling" |
 | `GET /api/v1/docs/`, `.../pages/{slug}`, `.../channel-api/docs`, `.../channel-api/openapi.yaml` | documentation hub: catalog, Markdown of a catalogued page (only catalogued slugs are served), and the channel API spec (`loop-dee-loop/openapi.yaml`) with a ReDoc viewer that needs no running channel |
 | `GET /api/docs`, `/api/redoc`, `/api/openapi.json` | Igor's own generated OpenAPI docs. Deliberately under `/api` (not FastAPI's default `/docs`) so the one `/api` proxy rule in Vite dev and ingress covers them |
-| `GET /api/v1/playback-test/info`, `POST .../setup`, `GET/POST .../channels/{name}`, `GET .../channels/{name}/{run_id}[/{file}.png]` | **Playback test** panel (`PlaybackTestPanel.vue`, headless mode). `info` reports installed player SDKs/Chrome/ffmpeg; `setup` spawns `player-lab setup` (job); `POST channels/{name}` spawns `player-lab run --channel <toml> --out-dir outputs/player-lab/channels/<name>/<run_id>` (job + `run_id`; body: `players`, `formats`, `boundaries`, `duration_s`, `max_seconds`, `ffmpeg_s`); `GET channels/{name}` lists past run summaries + the active job; `{run_id}` returns `report.json`, `{file}.png` a failure screenshot. Needs Chrome on the Igor host. **In-browser mode:** `GET .../harness/{path}` serves the player-lab harness page and vendor SDKs same-origin (path-traversal guarded); `POST .../channels/{name}/browser-results` takes the raw snapshots a driver tab measured, judges them with `player-lab judge` and stores `report.json` (`mode: "browser"`), returning the report plus `run_id`. The panel opens `harness/browser.html` in a new tab (see `player-lab/AGENTS.md`) |
+| `GET /api/v1/playback-test/info`, `POST .../setup`, `GET/POST .../channels/{name}`, `GET .../channels/{name}/{run_id}[/{file}.png]` | **Playback test** panel (`PlaybackTestPanel.vue`, headless mode). `info` reports installed player SDKs/Chrome/ffmpeg; `setup` spawns `player-lab setup` (job); `POST channels/{name}` spawns `player-lab run --channel <toml> --out-dir outputs/player-lab/channels/<name>/<run_id>` (job + `run_id`; body: `players`, `formats`, `boundaries`, `duration_s`, `max_seconds`, `ffmpeg_s`, `hls_query`, `dash_query` -- the query strings of the override/timeshift URLs built in the panel above, passed as `--hls-query`/`--dash-query`); `GET channels/{name}` lists past run summaries + the active job; `{run_id}` returns `report.json`, `{file}.png` a failure screenshot. Needs Chrome on the Igor host. **In-browser mode:** `GET .../harness/{path}` serves the player-lab harness page and vendor SDKs same-origin (path-traversal guarded); `POST .../channels/{name}/browser-results` takes the raw snapshots a driver tab measured, judges them with `player-lab judge` and stores `report.json` (`mode: "browser"`), returning the report plus `run_id`. The panel opens `harness/browser.html` in a new tab, loading the override URLs as built (with their query on the `timeline` URL too; see `player-lab/AGENTS.md`) |
 | `GET /api/v1/jobs/*` | poll job status/log (`?log_offset=` for incremental tailing) |
 
 See `src/igor/app/routes/*.py` for the authoritative request/response

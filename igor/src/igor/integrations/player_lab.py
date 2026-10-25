@@ -91,6 +91,8 @@ def spawn_run(
     duration_s: int,
     max_seconds: int,
     ffmpeg_s: int | None,
+    hls_query: str | None = None,
+    dash_query: str | None = None,
 ) -> tuple[Job, str]:
     run_id = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = runs_root(channel) / run_id
@@ -102,6 +104,10 @@ def spawn_run(
         cmd += ["--format", ",".join(formats)]
     if ffmpeg_s:
         cmd += ["--ffmpeg", str(ffmpeg_s)]
+    if hls_query:
+        cmd += ["--hls-query", hls_query]
+    if dash_query:
+        cmd += ["--dash-query", dash_query]
     return runner.spawn("playback-test", cmd, cwd=paths.REPO_ROOT, channel_name=channel), run_id
 
 

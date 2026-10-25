@@ -622,6 +622,9 @@ export interface PlaybackTestPayload {
   duration_s?: number
   max_seconds?: number
   ffmpeg_s?: number | null
+  /** Query strings appended to the channel's HLS / DASH manifest URLs (overrides, timeshift). */
+  hls_query?: string | null
+  dash_query?: string | null
 }
 
 export interface PlaybackRunSummary {

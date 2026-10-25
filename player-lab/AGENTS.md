@@ -15,6 +15,8 @@ uv run player-lab setup          # npm install of the SDKs into ~/.dr-strangeloo
 uv run player-lab run --channel my-channel                    # data/channels/my-channel.toml, URLs via its-a-live status
 uv run player-lab run --hls http://host/index.m3u8 --dash http://host/stream.mpd
 uv run player-lab run ... --players dashjs,hlsjs --format dash --boundaries 3
+uv run player-lab run --channel my-channel --hls-query 'timeline_mode=continuous&dvr_window=60' --dash-query 'addressing=time'
+                                                              # per-request overrides: appended to the manifest URLs (and /timeline.json)
 uv run player-lab run ... --no-timeline --duration 120        # no /timeline.json (e.g. aws-media): generic checks only
 uv run player-lab run ... --profile profile.toml --ffmpeg 60 --trace
 ```

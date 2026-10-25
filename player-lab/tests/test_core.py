@@ -130,3 +130,18 @@ def test_keyed_players_need_a_key(tmp_path, monkeypatch):
     monkeypatch.setenv("BITMOVIN_LICENSE_KEY", "from-env")
     assert keys.load_keys()["bitmovin"] == "from-env"
     assert [c[0] for c in plan_cases(RunConfig(target=target))][:3] == ["hlsjs", "bitmovin", "shaka"]
+
+
+def test_with_queries_appends_to_manifests_and_timeline():
+    from player_lab.targets import Target, with_queries
+
+    t = Target("c", "http://h/hls/master.m3u8", "http://h/dash/manifest.mpd?x=1", "http://h/timeline.json")
+    out = with_queries(t, "timeline_mode=continuous", "addressing=time")
+    assert out.hls_url == "http://h/hls/master.m3u8?timeline_mode=continuous"
+    assert out.dash_url == "http://h/dash/manifest.mpd?x=1&addressing=time"
+    assert out.timeline_url == "http://h/timeline.json?timeline_mode=continuous"
+    # DASH only: the timeline follows the DASH query
+    d = with_queries(Target("c", None, "http://h/m.mpd", "http://h/timeline.json"), None, "addressing=time")
+    assert d.timeline_url == "http://h/timeline.json?addressing=time"
+    # nothing to add: unchanged
+    assert with_queries(t, None, None) == t

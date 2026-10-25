@@ -24,6 +24,8 @@ class PlaybackTestPayload(BaseModel):
     duration_s: int = Field(default=120, ge=10, le=3600, description="run length when the channel has no /timeline.json, or boundaries is 0")
     max_seconds: int = Field(default=600, ge=30, le=3600)
     ffmpeg_s: int | None = Field(default=None, ge=5, le=600)
+    hls_query: str | None = Field(default=None, max_length=2000, description="query string appended to the HLS manifest URL (per-request overrides / timeshift)")
+    dash_query: str | None = Field(default=None, max_length=2000, description="same, for the DASH manifest URL")
 
 
 def _channel_config(name: str) -> str:
@@ -73,6 +75,7 @@ def start_playback_test(name: str, payload: PlaybackTestPayload) -> dict:
         name, config_path, players=payload.players, formats=payload.formats,
         boundaries=payload.boundaries, duration_s=payload.duration_s,
         max_seconds=payload.max_seconds, ffmpeg_s=payload.ffmpeg_s,
+        hls_query=payload.hls_query, dash_query=payload.dash_query,
     )
     return {**job.to_dict(), "run_id": run_id}
 

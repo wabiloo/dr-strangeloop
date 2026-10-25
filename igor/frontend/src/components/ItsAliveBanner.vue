@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Fired once, briefly, the moment a channel actually transitions from
 // not-running to running -- see ChannelDetail.vue's onJobFinished, which
-// is the only caller of `trigger()`. Purely decorative (its-a-live's own
+// sends the channel to ChannelPreview.vue, the only caller of `trigger()`. Purely decorative (its-a-live's own
 // namesake pun), so it fails silently/never blocks anything: no props, no
 // events, no state the rest of the page depends on.
 import { reactive, ref } from 'vue'

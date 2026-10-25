@@ -26,6 +26,25 @@ class Target:
         return [f for f in ("hls", "dash") if self.url_for(f)]
 
 
+def with_queries(target: Target, hls_query: str | None, dash_query: str | None) -> Target:
+    """The same target with per-request query strings (e.g. loop-dee-loop overrides) on its
+    manifest URLs. /timeline.json gets the HLS query (else the DASH one), so it describes
+    what the players were asked for."""
+    def add(url: str | None, query: str | None) -> str | None:
+        q = (query or "").lstrip("?")
+        if not url or not q:
+            return url
+        return f"{url}{'&' if '?' in url else '?'}{q}"
+
+    timeline_q = (hls_query if target.hls_url and hls_query else dash_query) or ""
+    return Target(
+        name=target.name,
+        hls_url=add(target.hls_url, hls_query),
+        dash_url=add(target.dash_url, dash_query),
+        timeline_url=add(target.timeline_url, timeline_q),
+    )
+
+
 def _root_of(manifest_url: str) -> str:
     return manifest_url.rsplit("/", 1)[0]
 

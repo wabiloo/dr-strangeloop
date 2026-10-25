@@ -546,6 +546,15 @@ onBeforeUnmount(() => {
         <template #body="{ data }">
           <div class="flex gap-2" @click.stop>
             <Button
+              icon="pi pi-eye"
+              severity="secondary"
+              text
+              :style="{ visibility: isStopRelevant(data) ? 'visible' : 'hidden' }"
+              title="Preview: players, startover / catchup, URL overrides, playback test"
+              data-testid="list-preview"
+              @click="router.push(`/channels/${data.name}/preview`)"
+            />
+            <Button
               icon="pi pi-play"
               severity="success"
               text

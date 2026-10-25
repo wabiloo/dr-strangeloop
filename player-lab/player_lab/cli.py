@@ -16,7 +16,7 @@ from .reference import ffmpeg_check
 from .report import format_table
 from . import keys
 from .runner import PLAYERS, RunConfig, default_players, run
-from .targets import from_channel, from_manifest_urls
+from .targets import from_channel, from_manifest_urls, with_queries
 
 
 def cmd_setup(_args) -> int:
@@ -64,6 +64,8 @@ def cmd_run(args) -> int:
         target = from_channel(args.channel)
     else:
         target = from_manifest_urls(args.hls, args.dash, args.timeline)
+    if args.hls_query or args.dash_query:
+        target = with_queries(target, args.hls_query, args.dash_query)
     if args.no_timeline:
         target.timeline_url = None
     cfg = RunConfig(
@@ -118,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--dash", help="DASH MPD URL")
     r.add_argument("--timeline", help="override the /timeline.json URL (default: next to the manifest)")
     r.add_argument("--no-timeline", action="store_true", help="skip /timeline.json; run for --duration")
+    r.add_argument("--hls-query", help="query string to append to the HLS manifest URL (and /timeline.json), e.g. 'timeline_mode=continuous&dvr_window=60'")
+    r.add_argument("--dash-query", help="query string to append to the DASH manifest URL (and /timeline.json when there is no --hls-query)")
     r.add_argument("--players", default=",".join(default_players()), help=f"comma list of {sorted(PLAYERS)}")
     r.add_argument("--format", help="hls, dash or hls,dash (default: every format the channel has)")
     r.add_argument("--boundaries", type=int, default=2, help="stop after N boundaries were crossed (default %(default)s); 0 = play for --duration")

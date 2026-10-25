@@ -13,16 +13,11 @@ import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import BackendBadge from '../components/BackendBadge.vue'
-import ItsAliveBanner from '../components/ItsAliveBanner.vue'
 import JobPanel from '../components/JobPanel.vue'
-import PlaybackPanel from '../components/PlaybackPanel.vue'
-import PlaybackTestPanel from '../components/PlaybackTestPanel.vue'
 import EpochFields from '../components/EpochFields.vue'
 import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
 import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
-import WindowPanel from '../components/WindowPanel.vue'
-import TimeshiftPanel, { type TimeshiftPreview } from '../components/TimeshiftPanel.vue'
 import { timeshiftParamsFromConfig } from '../utils/timeshift'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import BundleContentField from '../components/BundleContentField.vue'
@@ -34,11 +29,8 @@ import {
   buildConfigSections,
   deriveSourceKind,
   CONFIG_VERSION,
-  channelDefaultsByParam,
   configVersionOf,
   formFieldsFromConfig,
-  periodTypesFromConfig,
-  usesChannelSection,
 } from '../utils/channelConfigLayout'
 import { alignConfirmPopup } from '../utils/confirmPopup'
 import {
@@ -108,8 +100,6 @@ const activeActionEta = ref('')
 // genuine not-running -> running transition (worth celebrating) apart from
 // e.g. Update content on an already-running channel.
 const phaseBeforeAction = ref<Phase | null>(null)
-const itsAliveBanner = ref<InstanceType<typeof ItsAliveBanner> | null>(null)
-const playbackPanel = ref<InstanceType<typeof PlaybackPanel> | null>(null)
 
 const editing = ref(false)
 const editSaving = ref(false)
@@ -304,16 +294,6 @@ const phase = computed<Phase>(() => {
   return liveStatusPhase(status.value)
 })
 
-// Whenever the channel (re-)reaches "It's Alive!", force both players to
-// tear down and restart from the live edge. PlaybackPanel already does this
-// itself when the playback URLs change or when it gets freshly mounted (via
-// `v-if="showPlayback"` toggling off/on), but a redeploy/restart can leave
-// the URLs identical while a player instance stays attached across the
-// gap -- left alone, it would just keep showing the tail end of the DVR
-// window from the previous run instead of jumping to the new stream.
-watch(phase, (next, prev) => {
-  if (next === 'alive' && prev !== 'alive') playbackPanel.value?.reloadPlayers()
-})
 
 // The State tag at the top of the page: same computation, same labels,
 // same colors as ChannelList.vue's State column (listItemPhase), so a
@@ -634,50 +614,14 @@ const playbackDashUrl = computed(() =>
 // live phase too (not just URL presence) means Stop actually tears the
 // players down (PlaybackPanel's onBeforeUnmount destroys both) instead of
 // leaving them mounted and auto-playing/erroring against a dead stream.
-// Startover/catchup (loop-dee-loop/SCOPE.md §13): a generated time-shifted
-// URL can be previewed in the players in place of the live one. Only
-// ecs-express/local-docker run serve.py, so only they have this.
+// Used by the read-only configuration table (override badges) below.
 const timeshiftParams = computed(() => timeshiftParamsFromConfig(config.value ?? undefined))
-// The panel under the players: shown when the channel reads any query parameter
-// (either [query] switch on); it offers only the kinds that are on.
-const timeshiftAvailable = computed(
-  () =>
-    usesChannelSection(String(section('deploy').backend ?? '')) &&
-    (timeshiftParams.value.timeshift || timeshiftParams.value.overrides),
-)
-// What a request gets for an override it leaves out: the channel's own value.
-const channelQueryDefaults = computed(() => channelDefaultsByParam(formFieldsFromConfig(config.value ?? {})))
-const timeshiftPreview = ref<TimeshiftPreview | null>(null)
-// Leaving a preview behind when the channel stops/changes would leave the
-// players pointed at a dead URL.
-watch([playbackHlsUrl, playbackDashUrl], () => (timeshiftPreview.value = null))
-const effectiveHlsUrl = computed(() => timeshiftPreview.value?.hlsUrl ?? playbackHlsUrl.value)
-const effectiveDashUrl = computed(() => timeshiftPreview.value?.dashUrl ?? playbackDashUrl.value)
 
+// The preview page (players, startover/catchup, URL overrides, playback test) is only
+// meaningful while the channel is actually playing.
 const showPlayback = computed(
   () => (playbackHlsUrl.value || playbackDashUrl.value) && phase.value !== 'stopped' && phase.value !== 'not-deployed',
 )
-
-// loop-dee-loop's /timeline.json describes the live window, or -- while a
-// startover/catchup preview is active -- the previewed range (same query).
-const windowAvailable = computed(
-  () => !!showPlayback.value && usesChannelSection(String(section('deploy').backend ?? '')),
-)
-// A continuous timeline has no loop-wrap boundary: only forced signal-break Periods ([markers] split_on) are any.
-const boundariesExpected = computed(() => {
-  const continuous = Boolean(section('timeline').continuous ?? true)
-  const forced = periodTypesFromConfig(section('markers').split_on)
-  return !continuous || forced.length > 0
-})
-const windowQuery = computed(() => {
-  const url = timeshiftPreview.value?.hlsUrl ?? timeshiftPreview.value?.dashUrl
-  if (!url) return ''
-  try {
-    return new URL(url, window.location.href).search.replace(/^\?/, '')
-  } catch {
-    return ''
-  }
-})
 
 async function loadConfig() {
   try {
@@ -829,8 +773,9 @@ async function onJobFinished(job: Job) {
   })
   const wasRunning = phaseBeforeAction.value === 'alive'
   await loadStatus()
+  // Newly alive: go and look at it (the preview page plays the "It's alive" banner).
   if (job.status === 'succeeded' && !wasRunning && phase.value === 'alive') {
-    itsAliveBanner.value?.trigger()
+    router.push({ name: 'channel-preview', params: { name: props.name }, query: { alive: '1' } })
   }
 }
 
@@ -913,7 +858,17 @@ watch(() => props.name, reload)
         class="pi pi-exclamation-triangle text-yellow-600 text-sm"
         :title="`List and live status briefly disagree (list: ${PHASE_LABEL[listPhase]}, live: ${PHASE_LABEL[phase]}) -- usually settles within a poll or two.`"
       />
-      <BackendBadge v-if="status" class="ml-auto" :backend="status.backend" pill />
+      <Button
+        v-if="showPlayback"
+        label="Preview"
+        icon="pi pi-eye"
+        size="small"
+        class="ml-auto"
+        data-testid="to-channel-preview"
+        title="Players, startover / catchup, URL overrides and the playback test"
+        @click="router.push({ name: 'channel-preview', params: { name } })"
+      />
+      <BackendBadge v-if="status" :class="showPlayback ? '' : 'ml-auto'" :backend="status.backend" pill />
     </div>
 
     <Message v-if="statusError && !statusErrorIsMissingStack" severity="warn">
@@ -937,40 +892,6 @@ watch(() => props.name, reload)
       after deploy, an empty target group, or content not actually Sparked/Started yet. Re-check
       with Refresh, or re-visit this page in a minute if you just deployed.
     </Message>
-
-    <PlaybackPanel
-      v-if="showPlayback"
-      ref="playbackPanel"
-      :hls-url="effectiveHlsUrl"
-      :dash-url="effectiveDashUrl"
-      :start-from-beginning="timeshiftPreview?.startEpochSeconds != null"
-      :dash-clock-offset-seconds="timeshiftPreview?.startEpochSeconds ?? 0"
-      :health="health"
-      :health-error="status?.backend === 'ecs-express' || status?.backend === 'local-docker' ? healthError : ''"
-    />
-
-    <TimeshiftPanel
-      v-if="showPlayback && timeshiftAvailable"
-      :hls-url="playbackHlsUrl"
-      :dash-url="playbackDashUrl"
-      :params="timeshiftParams"
-      :channel-defaults="channelQueryDefaults"
-      :health="health"
-      :previewing="timeshiftPreview !== null"
-      @preview="timeshiftPreview = $event"
-    />
-
-    <WindowPanel v-if="windowAvailable" :name="name" :query="windowQuery" />
-
-    <PlaybackTestPanel
-      v-if="showPlayback"
-      :name="name"
-      :has-timeline="windowAvailable"
-      :boundaries-expected="boundariesExpected"
-      :loop-duration-s="health?.total_loop_duration_seconds"
-      :hls-url="playbackHlsUrl"
-      :dash-url="playbackDashUrl"
-    />
 
     <div class="channel-detail-layout">
       <div class="flex flex-column gap-4 p-3 border-round surface-card channel-actions" style="border: 1px solid var(--surface-border)">
@@ -1421,7 +1342,6 @@ watch(() => props.name, reload)
 
     <JobPanel :job-id="activeJobId" :eta-hint="activeActionEta" @finished="onJobFinished" />
     <ConfirmPopup />
-    <ItsAliveBanner ref="itsAliveBanner" />
   </div>
 </template>
 

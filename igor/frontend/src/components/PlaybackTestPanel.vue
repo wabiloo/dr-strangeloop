@@ -29,10 +29,28 @@ const props = defineProps<{
   boundariesExpected?: boolean
   /** Duration of one loop, if known (health): lets the run be sized in loops. */
   loopDurationS?: number | null
-  /** Live manifest URLs the player-side of the in-browser mode loads (as the Live Playback panel does). */
+  /** Manifest URLs the players load -- the ones the Live Playback panel is playing, so any
+   * override / timeshift query built in the panel under it applies to the test too. */
   hlsUrl?: string | null
   dashUrl?: string | null
+  /** The channel's plain live URLs: what `hlsUrl`/`dashUrl` add a query to. */
+  baseHlsUrl?: string | null
+  baseDashUrl?: string | null
 }>()
+
+// The query part each URL carries on top of the plain one ('' when none): the headless
+// run appends it to the channel's own URLs server-side; the in-browser one loads the URLs.
+function extraQuery(url?: string | null, base?: string | null): string {
+  if (!url || !base || url === base) return ''
+  try {
+    return new URL(url, window.location.href).search.replace(/^\?/, '')
+  } catch {
+    return ''
+  }
+}
+const hlsQuery = computed(() => extraQuery(props.hlsUrl, props.baseHlsUrl))
+const dashQuery = computed(() => extraQuery(props.dashUrl, props.baseDashUrl))
+const requestQuery = computed(() => hlsQuery.value || dashQuery.value)
 
 const STORAGE_KEY = 'igor.playbackTestPanel.open'
 function loadOpen(): boolean {
@@ -179,6 +197,8 @@ async function run() {
       duration_s: effectiveDurationS.value,
       max_seconds: maxSecondsParam.value,
       ffmpeg_s: withFfmpeg.value ? 30 : null,
+      hls_query: hlsQuery.value || null,
+      dash_query: dashQuery.value || null,
     })
     jobDone.value = false
     activeKind.value = 'run'
@@ -207,6 +227,7 @@ function runInBrowser() {
     hls: props.hlsUrl,
     dash: props.dashUrl,
     withTimeline: props.hasTimeline,
+    timelineQuery: requestQuery.value,
     boundaries: boundariesParam.value,
     durationS: effectiveDurationS.value,
     maxS: maxSecondsParam.value,
@@ -392,6 +413,9 @@ const summaryText = computed(() => {
           size="small"
           aria-label="Where to run"
         />
+        <div v-if="requestQuery" class="text-sm text-color-secondary w-full">
+          <i class="pi pi-info-circle" /> Testing the URLs with the overrides set above (<span class="font-mono">{{ requestQuery }}</span>).
+        </div>
         <div v-for="p in playersList" :key="p" class="flex align-items-center gap-2">
           <Checkbox v-model="selectedPlayers" :input-id="`ptp-${p}`" :value="p" :disabled="noKey(p)" />
           <label
