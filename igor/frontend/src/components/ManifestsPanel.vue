@@ -137,7 +137,9 @@ async function copy() {
       </span>
     </div>
 
-    <div v-show="open" class="flex flex-column gap-3">
+    <!-- v-show on a plain wrapper: PrimeFlex's `.flex` is `display: flex !important` and would defeat it -->
+    <div v-show="open">
+    <div class="flex flex-column gap-3">
       <div class="flex align-items-center gap-3 flex-wrap">
         <div class="flex align-items-center gap-2">
           <Checkbox v-model="follow" binary input-id="mp-follow" />
@@ -249,6 +251,7 @@ async function copy() {
           </ul>
         </div>
       </template>
+    </div>
     </div>
   </section>
 </template>

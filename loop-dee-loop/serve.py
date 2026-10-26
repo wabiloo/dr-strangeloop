@@ -168,9 +168,10 @@ def _describe_markers(entries: list[tuple[dict, dict[str, str], int | None, str]
     ]
 
 
-def _dash_marker_comments(entries: list[tuple[dict, dict[str, str], int | None, str]]) -> str:
-    """`_describe_markers` as indented XML comment lines, each newline-ended."""
-    return "".join(f"    <!-- {line} -->\n" for line in _describe_markers(entries))
+def _dash_event_comment(entry: tuple[dict, dict[str, str], int | None, str]) -> str:
+    """`_describe_markers` for one marker, as an indented XML comment line
+    placed right before the <Event> it describes (newline-ended)."""
+    return "".join(f"    <!-- {line} -->\n" for line in _describe_markers([entry]))
 
 
 _DOCS_HTML = """<!doctype html>
@@ -828,14 +829,17 @@ class LoopPackage:
         return self.audio_rendition is not None
 
     # ── Public playlist names ──────────────────────────────────────────────
-    # index.m3u8 (HLS multivariant), stream.mpd (DASH), audio.m3u8 (the single
+    # index.m3u8 (HLS multivariant), index.mpd (DASH), audio.m3u8 (the single
     # shared audio track), and one media playlist per video rendition:
     # video[_N].m3u8 (video only) or video_audio[_N].m3u8 (audio muxed into the
     # segments, i.e. hls_format=ts with hls_ts_mux_audio). N is the 1-based
     # rendition index, only present when there is more than one rendition.
     INDEX_PLAYLIST = "index.m3u8"
     AUDIO_PLAYLIST = "audio.m3u8"
-    DASH_MANIFEST = "stream.mpd"
+    DASH_MANIFEST = "index.mpd"
+    # Legacy / alternate names, served as aliases of the two entry points above.
+    HLS_ALIAS = "stream.m3u8"
+    DASH_ALIAS = "stream.mpd"
 
     @property
     def audio_muxed_in_video(self) -> bool:
@@ -2502,7 +2506,6 @@ class Channel:
             )
 
             event_xml: list[tuple[int, str]] = []
-            event_markers: list[dict] = []
             for marker in pkg.markers:
                 # A single <Event> element describes the whole
                 # [presentationTime, presentationTime+duration) interval on
@@ -2520,7 +2523,6 @@ class Channel:
                     for seg_start_local, duration_ticks, _local_index in reference_entries
                 ):
                     continue
-                event_markers.append(marker)
                 duration_attr = (
                     f' duration="{marker["segmentation_duration_ticks"]}"'
                     if marker.get("segmentation_duration_ticks") is not None
@@ -2576,7 +2578,10 @@ class Channel:
                     marker["pts_time_ticks"] - pkg.segment_boundary_ticks[span_start_local] - pto_ticks
                 )
                 event_xml.append((event_presentation_time,
-                    f'    <Event presentationTime="{event_presentation_time}"'
+                    _dash_event_comment(
+                        (marker, event_id_map, None, self._marker_start_iso(marker, loop_number))
+                    )
+                    + f'    <Event presentationTime="{event_presentation_time}"'
                     f'{duration_attr} id="{synthetic_id}">\n'
                     f"{signal_xml}\n"
                     f"    </Event>"
@@ -2651,10 +2656,7 @@ class Channel:
             # can't fold events from two Periods of the same loop together.
             stream_value_attr = f' value="{loop_number}-{span_index}"' if spans_per_loop > 1 else ""
             event_streams_xml = (
-                _dash_marker_comments(
-                    [(m, event_id_map, None, self._marker_start_iso(m, loop_number)) for m in event_markers]
-                )
-                + f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}"{stream_value_attr}>\n'
+                f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}"{stream_value_attr}>\n'
                 + _join_events(event_xml)
                 + "\n    </EventStream>"
                 if event_xml else ""
@@ -2815,18 +2817,12 @@ class Channel:
             SCTE35_XML_NAMESPACE if pkg.dash_signal_format == "xml" else "urn:scte:scte35:2014:xml+bin"
         )
         event_xml_by_group: list[list[tuple[int, str]]] = [[] for _ in groups]
-        event_markers_by_group: list[list[tuple[dict, dict[str, str], int | None, str]]] = [
-            [] for _ in groups
-        ]
         anchors = self.marker_anchors(first_global_index, media_sequence)
         for global_index in global_indices:
             loop_number = global_index // spl
             group_number = group_of_global[global_index]
             event_id_map = build_event_id_map(pkg.markers, loop_number) if pkg.increment_event_ids else {}
             for marker in anchors.get(global_index, []):
-                event_markers_by_group[group_number].append(
-                    (marker, event_id_map, loop_number, self._marker_start_iso(marker, loop_number))
-                )
                 duration_attr = (
                     f' duration="{marker["segmentation_duration_ticks"]}"'
                     if marker.get("segmentation_duration_ticks") is not None
@@ -2883,7 +2879,10 @@ class Channel:
                     - origin_abs - _group_start_rel(group_number, groups[group_number][0])
                 )
                 event_xml_by_group[group_number].append((event_presentation_time,
-                    f'    <Event presentationTime="{event_presentation_time}"'
+                    _dash_event_comment(
+                        (marker, event_id_map, loop_number, self._marker_start_iso(marker, loop_number))
+                    )
+                    + f'    <Event presentationTime="{event_presentation_time}"'
                     f'{duration_attr} id="{synthetic_id}">\n'
                     f"{signal_xml}\n"
                     f"    </Event>"
@@ -2893,8 +2892,7 @@ class Channel:
         for group_number, (brk, indices) in enumerate(groups):
             event_xml = event_xml_by_group[group_number]
             event_streams_xml = (
-                _dash_marker_comments(event_markers_by_group[group_number])
-                + f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}">\n'
+                f'    <EventStream schemeIdUri="{scheme_id_uri}" timescale="{pkg.timescale}">\n'
                 + _join_events(event_xml)
                 + "\n    </EventStream>"
                 if event_xml else ""
@@ -3275,6 +3273,7 @@ def create_app(
         return Response(_DOCS_HTML, mimetype="text/html")
 
     @app.get(f"/{LoopPackage.INDEX_PLAYLIST}")
+    @app.get(f"/{LoopPackage.HLS_ALIAS}")
     def hls_master_playlist():
         ch, window, query = _request_view()
         return _manifest_response(
@@ -3282,6 +3281,7 @@ def create_app(
         )
 
     @app.get(f"/{LoopPackage.DASH_MANIFEST}")
+    @app.get(f"/{LoopPackage.DASH_ALIAS}")
     def dash_manifest():
         ch, window, _query = _request_view("dash")
         return _manifest_response(ch.build_dash_manifest(window=window), "application/dash+xml", window)
