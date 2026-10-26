@@ -64,7 +64,7 @@ def test_profile_rejects_unknown_key(tmp_path):
 
 
 def test_plan_cases_respects_player_formats():
-    t = Target("x", "http://h/index.m3u8", "http://h/stream.mpd", None)
+    t = Target("x", "http://h/index.m3u8", "http://h/index.mpd", None)
     cases = plan_cases(RunConfig(target=t))
     assert ("dashjs", "hls") not in cases and ("hlsjs", "dash") not in cases
     assert ("shaka", "hls") in cases and ("videojs", "dash") in cases
@@ -75,7 +75,7 @@ def test_plan_cases_respects_player_formats():
 
 
 def test_target_timeline_url_derived_from_manifest():
-    t = from_manifest_urls("http://h:1/index.m3u8", "http://h:1/stream.mpd", None)
+    t = from_manifest_urls("http://h:1/index.m3u8", "http://h:1/index.mpd", None)
     assert t.timeline_url == "http://h:1/timeline.json"
 
 
@@ -119,7 +119,7 @@ def test_keyed_players_need_a_key(tmp_path, monkeypatch):
     assert list(PLAYERS) == ["hlsjs", "dashjs", "bitmovin", "shaka", "videojs"]
     assert "bitmovin" not in default_players()
     assert keys.available() == {"bitmovin": False}
-    target = from_manifest_urls("http://x/index.m3u8", "http://x/stream.mpd", None)
+    target = from_manifest_urls("http://x/index.m3u8", "http://x/index.mpd", None)
     with __import__("pytest").raises(ValueError, match="no licence key"):
         plan_cases(RunConfig(target=target, players=["bitmovin"]))
 

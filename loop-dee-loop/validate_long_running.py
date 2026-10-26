@@ -187,7 +187,7 @@ def main() -> int:
         loops_observed.add(expected_pos.loop_number)
 
         hls_body = fetch(f"{args.base_url}/video.m3u8")
-        dash_body = fetch(f"{args.base_url}/stream.mpd")
+        dash_body = fetch(f"{args.base_url}/index.mpd")
 
         hls_ids = parse_hls_daterange_ids(hls_body)
         hls_daterange_triples = parse_hls_daterange_and_next_pdt(hls_body)

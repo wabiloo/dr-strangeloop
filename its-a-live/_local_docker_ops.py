@@ -409,7 +409,7 @@ def _resolve_epoch_arg(raw):
 
 def _print_urls(port):
     print(f"\nHLS:  http://localhost:{port}/index.m3u8")
-    print(f"DASH: http://localhost:{port}/stream.mpd")
+    print(f"DASH: http://localhost:{port}/index.mpd")
 
 
 def start(cfg, session, outputs, extra_args=None):
@@ -566,7 +566,7 @@ def image(cfg, session, channel_name, extra_args=None):
     print("\nRun it anywhere Docker is available -- no S3, AWS credentials or volume needed:")
     print(f"  docker run -p 8080:8080 {tag}")
     print("  HLS:  http://localhost:8080/index.m3u8")
-    print("  DASH: http://localhost:8080/stream.mpd")
+    print("  DASH: http://localhost:8080/index.mpd")
 
 
 def status(cfg, session, outputs):
@@ -581,7 +581,7 @@ def status(cfg, session, outputs):
     raw_port = infra_table(cfg, "docker").get("port", "auto")
     port = int(raw_port) if raw_port != "auto" else _running_port(name)
     hls_url = f"http://localhost:{port}/index.m3u8" if docker_status == "running" and port else None
-    dash_url = f"http://localhost:{port}/stream.mpd" if docker_status == "running" and port else None
+    dash_url = f"http://localhost:{port}/index.mpd" if docker_status == "running" and port else None
     result = {
         "backend": "local-docker",
         "container_name": name,

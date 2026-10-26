@@ -49,7 +49,7 @@ def _make(tmp_path, *, continuous: bool, addressing: str, now: int = 0):
 @pytest.mark.parametrize("continuous", [False, True])
 def test_number_mode_is_unchanged(tmp_path, continuous):
     app = _make(tmp_path, continuous=continuous, addressing="number", now=0)
-    mpd = app.test_client().get("/stream.mpd").get_data(as_text=True)
+    mpd = app.test_client().get("/index.mpd").get_data(as_text=True)
     assert "$Number$" in mpd and "startNumber=" in mpd and "$Time$" not in mpd
 
 
@@ -57,7 +57,7 @@ def test_number_mode_is_unchanged(tmp_path, continuous):
 def test_time_mode_templates_and_urls_serve_the_same_bytes(tmp_path, continuous):
     app = _make(tmp_path, continuous=continuous, addressing="time", now=0)
     client = app.test_client()
-    mpd = client.get("/stream.mpd").get_data(as_text=True)
+    mpd = client.get("/index.mpd").get_data(as_text=True)
     assert "$Number$" not in mpd and "startNumber" not in mpd
     seen = 0
     for template, times in _templates(mpd):
@@ -74,8 +74,8 @@ def test_time_mode_templates_and_urls_serve_the_same_bytes(tmp_path, continuous)
 def test_time_and_number_urls_return_identical_bytes(tmp_path, continuous):
     num = _make(tmp_path / "n", continuous=continuous, addressing="number").test_client()
     tim = _make(tmp_path / "t", continuous=continuous, addressing="time").test_client()
-    num_mpd = num.get("/stream.mpd").get_data(as_text=True)
-    time_mpd = tim.get("/stream.mpd").get_data(as_text=True)
+    num_mpd = num.get("/index.mpd").get_data(as_text=True)
+    time_mpd = tim.get("/index.mpd").get_data(as_text=True)
     for (nt, n_times), (tt, t_times) in zip(_templates(num_mpd), _templates(time_mpd)):
         assert n_times == t_times
         start = int(nt.get("startNumber"))
@@ -108,3 +108,9 @@ def test_window_json_dash_uris_follow_addressing(tmp_path):
     uris = ch.segment_uris(0, 1, None)["dash"]
     assert uris["first_uri"].startswith("1080p/cseg/t/")
     assert uris["last_uri"] != uris["first_uri"]
+
+
+def test_stream_aliases_serve_the_same_manifests(tmp_path):
+    client = _make(tmp_path, continuous=False, addressing="number").test_client()
+    for alias, canonical in (("/stream.mpd", "/index.mpd"), ("/stream.m3u8", "/index.m3u8")):
+        assert client.get(alias).get_data() == client.get(canonical).get_data()

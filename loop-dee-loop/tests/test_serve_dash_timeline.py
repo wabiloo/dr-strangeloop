@@ -88,7 +88,7 @@ def test_compact_mpd_expands_to_the_full_timeline(tmp_path, monkeypatch, continu
             d, epoch_ticks=0, window_segments=4, continuous=continuous,
             dash_addressing=addressing, dash_timeline=style,
         )
-        mpds[style] = app.test_client().get("/stream.mpd").get_data(as_text=True)
+        mpds[style] = app.test_client().get("/index.mpd").get_data(as_text=True)
     assert not re.search(r'<S [^>]*\sr="', mpds["full"])
 
     def timelines(mpd):

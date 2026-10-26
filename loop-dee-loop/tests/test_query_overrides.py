@@ -438,16 +438,16 @@ def test_descriptor_grouping_narrowed_swaps_the_hls_payload(tmp_path):
 def test_descriptor_grouping_is_validated_per_format(tmp_path):
     client, *_ = _app(tmp_path)
     assert _get(client, "/video.m3u8?descriptor_grouping=grouped")[0] == 200
-    status, body = _get(client, "/stream.mpd?descriptor_grouping=grouped")
+    status, body = _get(client, "/index.mpd?descriptor_grouping=grouped")
     assert status == 400 and "shared, narrowed" in body
-    assert _get(client, "/stream.mpd?descriptor_grouping=narrowed")[0] == 200
+    assert _get(client, "/index.mpd?descriptor_grouping=narrowed")[0] == 200
 
 
 @ffmpeg
 def test_dash_narrowed_uses_the_narrowed_payload(tmp_path):
     client, *_ = _app(tmp_path)
-    _, shared = _get(client, "/stream.mpd")
-    _, narrowed = _get(client, "/stream.mpd?descriptor_grouping=narrowed")
+    _, shared = _get(client, "/index.mpd")
+    _, narrowed = _get(client, "/index.mpd?descriptor_grouping=narrowed")
     assert REAL_B64 in shared and REAL_B64 not in narrowed
     assert f"<scte35:Binary>{NARROWED_B64}</scte35:Binary>" in narrowed
 
@@ -455,11 +455,11 @@ def test_dash_narrowed_uses_the_narrowed_payload(tmp_path):
 @ffmpeg
 def test_signal_format_xml_switches_the_dash_event_encoding(tmp_path):
     client, *_ = _app(tmp_path)
-    _, binary = _get(client, "/stream.mpd")
-    _, xml = _get(client, "/stream.mpd?signal_format=xml")
+    _, binary = _get(client, "/index.mpd")
+    _, xml = _get(client, "/index.mpd?signal_format=xml")
     assert "urn:scte:scte35:2014:xml+bin" in binary and "<scte35:Binary>" in binary
     assert "urn:scte:scte35:2014:xml+bin" not in xml and "SpliceInfoSection" in xml
-    assert _get(client, "/stream.mpd?signal_format=json")[0] == 400
+    assert _get(client, "/index.mpd?signal_format=json")[0] == 400
 
 
 @ffmpeg
@@ -512,8 +512,8 @@ def test_split_on_forces_a_discontinuity_for_matching_markers_only(tmp_path):
     assert discontinuities("/video.m3u8?split_on=none") == 0
     assert _get(client, "/video.m3u8?split_on=0x22")[1].count("#EXT-X-DISCONTINUITY\n") >= 1
     periods = lambda body: len(re.findall(r"<Period\b", body))
-    assert periods(_get(client, "/stream.mpd")[1]) == 1
-    assert periods(_get(client, "/stream.mpd?split_on=0x22")[1]) >= 2
+    assert periods(_get(client, "/index.mpd")[1]) == 1
+    assert periods(_get(client, "/index.mpd?split_on=0x22")[1]) >= 2
 
 
 @ffmpeg
@@ -531,21 +531,21 @@ def test_dvr_window_resizes_the_sliding_window(tmp_path):
 @ffmpeg
 def test_dash_addressing_and_timeline_style(tmp_path):
     client, *_ = _app(tmp_path)
-    _, number = _get(client, "/stream.mpd")
-    _, time_addr = _get(client, "/stream.mpd?addressing=time")
+    _, number = _get(client, "/index.mpd")
+    _, time_addr = _get(client, "/index.mpd?addressing=time")
     assert "$Number$" in number and "$Time$" not in number
     assert "$Time$" in time_addr and "$Number$" not in time_addr
-    _, full = _get(client, "/stream.mpd")
-    _, compact = _get(client, "/stream.mpd?timeline_style=compact")
+    _, full = _get(client, "/index.mpd")
+    _, compact = _get(client, "/index.mpd?timeline_style=compact")
     assert full != compact and len(compact) <= len(full)
     for bad in ("addressing=index", "timeline_style=tiny"):
-        assert _get(client, f"/stream.mpd?{bad}")[0] == 400
+        assert _get(client, f"/index.mpd?{bad}")[0] == 400
 
 
 @ffmpeg
 def test_time_addressed_segment_urls_are_served(tmp_path):
     client, *_ = _app(tmp_path)
-    _, mpd = _get(client, "/stream.mpd?addressing=time")
+    _, mpd = _get(client, "/index.mpd?addressing=time")
     media = re.search(r'media="([^"]+)"', mpd).group(1)
     t = re.search(r'<S t="(\d+)"', mpd).group(1)
     span = re.search(r"seg/t/(\d+)/", media)
@@ -585,17 +585,17 @@ def test_epoch_override_applies_to_manifests_and_validates_start(tmp_path):
 def test_epoch_override_changes_dash_availability_start_time(tmp_path):
     client, epoch, loop = _app(tmp_path)
     ast = lambda body: re.search(r'availabilityStartTime="([^"]+)"', body).group(1)
-    base = ast(_get(client, "/stream.mpd")[1])
-    other = ast(_get(client, f"/stream.mpd?epoch={epoch + 10 * loop}")[1])
+    base = ast(_get(client, "/index.mpd")[1])
+    other = ast(_get(client, f"/index.mpd?epoch={epoch + 10 * loop}")[1])
     assert base != other
 
 
 @ffmpeg
 def test_timeline_mode_renamed_from_timeline(tmp_path):
     client, *_ = _app(tmp_path)
-    assert 'id="continuous"' in _get(client, "/stream.mpd?timeline_mode=continuous")[1]
-    assert 'id="continuous"' not in _get(client, "/stream.mpd?timeline_mode=periodic")[1]
-    assert 'id="continuous"' not in _get(client, "/stream.mpd?timeline=continuous")[1]  # the old name is gone
+    assert 'id="continuous"' in _get(client, "/index.mpd?timeline_mode=continuous")[1]
+    assert 'id="continuous"' not in _get(client, "/index.mpd?timeline_mode=periodic")[1]
+    assert 'id="continuous"' not in _get(client, "/index.mpd?timeline=continuous")[1]  # the old name is gone
     assert _get(client, "/video.m3u8?timeline_mode=sometimes")[0] == 400
 
 
@@ -622,9 +622,9 @@ def test_ladder_filter_by_height_and_bitrate(tmp_path):
     assert by_rate.count("#EXT-X-STREAM-INF") == 1 and "RESOLUTION=640x360" in by_rate
     _, both = _get(client, "/index.m3u8?max_height=2000&max_bitrate=20000000")
     assert both.count("#EXT-X-STREAM-INF") == 2
-    _, mpd = _get(client, "/stream.mpd?max_height=720")
+    _, mpd = _get(client, "/index.mpd?max_height=720")
     assert 'height="360"' in mpd and 'height="1080"' not in mpd  # (one Representation per Period)
-    full_mpd = _get(client, "/stream.mpd")[1]
+    full_mpd = _get(client, "/index.mpd")[1]
     assert 'height="1080"' in full_mpd and 'height="360"' in full_mpd
     doc = json.loads(_get(client, "/timeline.json?max_height=720")[1])
     assert [r["name"] for r in doc["renditions"]] == ["360p"]
@@ -647,7 +647,7 @@ def test_ladder_filter_with_no_match_is_a_400_listing_the_ladder(tmp_path):
     client, *_ = _app(tmp_path, ladder=True)
     status, body = _get(client, "/index.m3u8?max_height=100")
     assert status == 400 and "1080p" in body and "360p" in body
-    assert _get(client, "/stream.mpd?max_bitrate=10")[0] == 400
+    assert _get(client, "/index.mpd?max_bitrate=10")[0] == 400
 
 
 @ffmpeg
@@ -722,10 +722,10 @@ def test_overrides_do_not_leak_between_requests(tmp_path):
     _, before = _get(client, "/video_1.m3u8")
     _get(client, "/video_1.m3u8?cue_tags=alongside&descriptor_grouping=narrowed&dvr_window=9&split_on=0x22")
     _get(client, "/index.m3u8?max_height=720")
-    _get(client, "/stream.mpd?addressing=time&timeline_style=compact&signal_format=xml")
+    _get(client, "/index.mpd?addressing=time&timeline_style=compact&signal_format=xml")
     assert _get(client, "/video_1.m3u8")[1] == before
     assert _get(client, "/index.m3u8")[1].count("#EXT-X-STREAM-INF") == 2
-    assert "$Number$" in _get(client, "/stream.mpd")[1]
+    assert "$Number$" in _get(client, "/index.mpd")[1]
 
 
 # ── documented in openapi.yaml ──────────────────────────────────────────────
@@ -743,7 +743,7 @@ def test_every_parameter_is_documented_in_the_openapi_spec():
     assert documented == {"start", "end", "scope", *FIXED_PARAMS}
 
 
-@pytest.mark.parametrize("path", ["/index.m3u8", "/stream.mpd", "/timeline.json"])
+@pytest.mark.parametrize("path", ["/index.m3u8", "/index.mpd", "/timeline.json"])
 def test_each_manifest_path_lists_the_parameters_it_honours(path):
     spec = _spec()
     components = spec["components"]["parameters"]
@@ -752,7 +752,7 @@ def test_each_manifest_path_lists_the_parameters_it_honours(path):
               "max_height", "max_bitrate", "descriptor_grouping", "increment_event_ids"}
     assert always <= listed
     hls_only, dash_only = {"cue_tags", "id_template"}, {"timeline_style", "addressing", "signal_format"}
-    assert (hls_only <= listed) == (path != "/stream.mpd")
+    assert (hls_only <= listed) == (path != "/index.mpd")
     assert (dash_only <= listed) == (path != "/index.m3u8")
     assert ("scope" in listed) == (path == "/timeline.json")
 
@@ -815,7 +815,7 @@ def test_overrides_off_over_http(tmp_path):
     assert _get(client, "/video_1.m3u8?cue_tags=alongside&dvr_window=9&descriptor_grouping=narrowed")[1] == plain
     assert _get(client, "/video_1.m3u8?cue_tags=bogus")[0] == 200  # ignored, not rejected
     assert _get(client, "/index.m3u8?max_height=100")[0] == 200  # would be a 400 with overrides on
-    mpd = _get(client, "/stream.mpd?addressing=time&timeline_mode=continuous&timeline_style=compact")[1]
+    mpd = _get(client, "/index.mpd?addressing=time&timeline_mode=continuous&timeline_style=compact")[1]
     assert "$Number$" in mpd and "$Time$" not in mpd and 'id="continuous"' not in mpd
     # startover/catchup is untouched
     status, body = _get(client, f"/video_1.m3u8?start={epoch + 5 * loop}&end={epoch + 7 * loop}")
@@ -919,8 +919,8 @@ def test_a_new_package_is_marked_as_holding_both_payloads(tmp_path):
 def test_an_old_package_cannot_switch_its_dash_payload(tmp_path):
     client = _legacy_package(tmp_path)
     assert LoopPackage(tmp_path).has_both_scte35_payloads is False
-    assert _get(client, "/stream.mpd")[0] == 200
-    status, body = _get(client, "/stream.mpd?descriptor_grouping=narrowed")  # used to be a 500 (KeyError)
+    assert _get(client, "/index.mpd")[0] == 200
+    status, body = _get(client, "/index.mpd?descriptor_grouping=narrowed")  # used to be a 500 (KeyError)
     assert status == 400 and "re-bake" in body and "DASH" in body
 
 
@@ -939,7 +939,7 @@ def test_an_old_package_still_accepts_what_needs_no_other_payload(tmp_path):
     client = _legacy_package(tmp_path)
     assert _get(client, "/video.m3u8?descriptor_grouping=shared")[0] == 200  # same as baked
     assert _get(client, "/video.m3u8?descriptor_grouping=grouped")[0] == 200  # grouped uses the whole-message payload
-    assert _get(client, "/stream.mpd?descriptor_grouping=shared")[0] == 200
+    assert _get(client, "/index.mpd?descriptor_grouping=shared")[0] == 200
     assert _get(client, "/video.m3u8?cue_tags=alongside")[0] == 200  # every other override is unaffected
 
 

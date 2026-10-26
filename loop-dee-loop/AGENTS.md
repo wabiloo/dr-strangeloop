@@ -113,7 +113,7 @@ Period always keeps `@t` (a front-trimmed window must not change anyone's t),
 ## Startover, catchup and per-request overrides (query parameters)
 
 `serve.py --timeshift` (its-a-live: `[query]`, on by default) makes the
-normal `index.m3u8` / `stream.mpd` accept `start`, `end`, `full_loops`, `offset` (pretend "now" is earlier/later; `SCOPE.md` §13.7) and
+normal `index.m3u8` / `index.mpd` accept `start`, `end`, `full_loops`, `offset` (pretend "now" is earlier/later; `SCOPE.md` §13.7) and
 `timeline_mode` query params (only `start`/`end` configurable) — catchup = VOD of a
 past range, startover = live-style from a past point — plus per-request overrides of
 the rendering (`epoch`, `dvr_window`, `split_on`, `timeline_style`, `addressing`,

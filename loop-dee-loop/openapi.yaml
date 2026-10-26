@@ -149,11 +149,64 @@ paths:
           content:
             application/vnd.apple.mpegurl:
               schema: { type: string }
-  /stream.mpd:
+  /stream.m3u8:
     get:
-      summary: "/stream.mpd — DASH manifest"
+      summary: "/stream.m3u8 — alias of /index.m3u8"
+      tags: [Manifests]
+      operationId: getHlsMasterAlias
+      parameters:
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+        - $ref: "#/components/parameters/FullLoops"
+        - $ref: "#/components/parameters/TimelineMode"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Epoch"
+        - $ref: "#/components/parameters/DvrWindow"
+        - $ref: "#/components/parameters/SplitOn"
+        - $ref: "#/components/parameters/MaxHeight"
+        - $ref: "#/components/parameters/MaxBitrate"
+        - $ref: "#/components/parameters/DescriptorGrouping"
+        - $ref: "#/components/parameters/IncrementEventIds"
+        - $ref: "#/components/parameters/CueTags"
+        - $ref: "#/components/parameters/IdTemplate"
+      responses:
+        "200":
+          description: Multivariant playlist; the media playlists are linked from it.
+          content:
+            application/vnd.apple.mpegurl:
+              schema: { type: string }
+  /index.mpd:
+    get:
+      summary: "/index.mpd — DASH manifest"
       tags: [Manifests]
       operationId: getDashManifest
+      parameters:
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+        - $ref: "#/components/parameters/FullLoops"
+        - $ref: "#/components/parameters/TimelineMode"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Epoch"
+        - $ref: "#/components/parameters/DvrWindow"
+        - $ref: "#/components/parameters/SplitOn"
+        - $ref: "#/components/parameters/MaxHeight"
+        - $ref: "#/components/parameters/MaxBitrate"
+        - $ref: "#/components/parameters/DescriptorGrouping"
+        - $ref: "#/components/parameters/IncrementEventIds"
+        - $ref: "#/components/parameters/TimelineStyle"
+        - $ref: "#/components/parameters/Addressing"
+        - $ref: "#/components/parameters/SignalFormat"
+      responses:
+        "200":
+          description: MPD.
+          content:
+            application/dash+xml:
+              schema: { type: string }
+  /stream.mpd:
+    get:
+      summary: "/stream.mpd — alias of /index.mpd"
+      tags: [Manifests]
+      operationId: getDashManifestAlias
       parameters:
         - $ref: "#/components/parameters/Start"
         - $ref: "#/components/parameters/End"
@@ -444,7 +497,7 @@ components:
           type: array
           description: |
             DASH Period view of the window, in time order. Ids match the `Period@id`
-            of `stream.mpd`: `loop{N}` or `loop{N}-{first local segment}` (periodic),
+            of `index.mpd`: `loop{N}` or `loop{N}-{first local segment}` (periodic),
             `continuous` or `break{global segment}` (continuous).
           items: { $ref: "#/components/schemas/Period" }
         discontinuities:

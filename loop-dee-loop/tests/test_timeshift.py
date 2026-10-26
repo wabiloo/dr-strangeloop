@@ -357,7 +357,7 @@ def test_span_over_max_is_400(tmp_path):
 @ffmpeg
 def test_catchup_dash_non_continuous_is_static_with_a_period_per_loop(tmp_path):
     client, epoch = _app(tmp_path)
-    mpd = client.get(f"/stream.mpd?start={epoch + 5}&end={epoch + 8}").get_data(as_text=True)
+    mpd = client.get(f"/index.mpd?start={epoch + 5}&end={epoch + 8}").get_data(as_text=True)
     assert 'type="static"' in mpd and "mediaPresentationDuration" in mpd
     assert "availabilityStartTime" not in mpd and "timeShiftBufferDepth" not in mpd
     assert mpd.count("<Period ") == 3
@@ -368,7 +368,7 @@ def test_catchup_dash_non_continuous_is_static_with_a_period_per_loop(tmp_path):
 @ffmpeg
 def test_catchup_dash_continuous_is_one_period_with_rebased_timeline(tmp_path):
     client, epoch = _app(tmp_path)
-    mpd = client.get(f"/stream.mpd?start={epoch + 5}&end={epoch + 8}&timeline_mode=continuous").get_data(
+    mpd = client.get(f"/index.mpd?start={epoch + 5}&end={epoch + 8}&timeline_mode=continuous").get_data(
         as_text=True
     )
     assert 'type="static"' in mpd and mpd.count("<Period ") == 1
@@ -381,7 +381,7 @@ def test_catchup_dash_continuous_is_one_period_with_rebased_timeline(tmp_path):
 @ffmpeg
 def test_growing_dash_is_dynamic_anchored_at_range_start(tmp_path):
     client, epoch = _app(tmp_path)
-    mpd = client.get(f"/stream.mpd?start={epoch + 50}&end={epoch + 500}").get_data(as_text=True)
+    mpd = client.get(f"/index.mpd?start={epoch + 50}&end={epoch + 500}").get_data(as_text=True)
     assert 'type="dynamic"' in mpd and "timeShiftBufferDepth" not in mpd
     ast = re.search(r'availabilityStartTime="([^"]+)"', mpd).group(1)
     assert ast.startswith("20")  # a real wall-clock instant, not the channel epoch
@@ -391,7 +391,7 @@ def test_growing_dash_is_dynamic_anchored_at_range_start(tmp_path):
 @ffmpeg
 def test_live_dash_unchanged(tmp_path):
     client, _ = _app(tmp_path)
-    mpd = client.get("/stream.mpd").get_data(as_text=True)
+    mpd = client.get("/index.mpd").get_data(as_text=True)
     assert 'type="dynamic"' in mpd and "timeShiftBufferDepth" in mpd
 
 
@@ -498,8 +498,8 @@ def test_continuous_override_works_on_plain_live(tmp_path, server_continuous):
     off = client.get("/video.m3u8?timeline_mode=periodic").get_data(as_text=True)
     assert "cseg/" in on and "#EXT-X-DISCONTINUITY\n" not in on and "PLAYLIST-TYPE" not in on
     assert "cseg/" not in off and "#EXT-X-DISCONTINUITY\n" in off
-    assert 'id="continuous"' in client.get("/stream.mpd?timeline_mode=continuous").get_data(as_text=True)
-    assert 'id="continuous"' not in client.get("/stream.mpd?timeline_mode=periodic").get_data(as_text=True)
+    assert 'id="continuous"' in client.get("/index.mpd?timeline_mode=continuous").get_data(as_text=True)
+    assert 'id="continuous"' not in client.get("/index.mpd?timeline_mode=periodic").get_data(as_text=True)
     master = client.get("/index.m3u8?timeline_mode=continuous").get_data(as_text=True)
     assert "video.m3u8?timeline_mode=continuous" in master
     # no param, or an explicit timeline_mode=default: the server default still applies
@@ -595,9 +595,9 @@ def test_dash_offset_adds_utc_timing_with_the_pretend_now(tmp_path):
     import datetime as dt
 
     client, epoch = _app(tmp_path)
-    plain = client.get("/stream.mpd").get_data(as_text=True)
+    plain = client.get("/index.mpd").get_data(as_text=True)
     assert "UTCTiming" not in plain
-    mpd = client.get("/stream.mpd?offset=-30").get_data(as_text=True)
+    mpd = client.get("/index.mpd?offset=-30").get_data(as_text=True)
     value = re.search(r'UTCTiming schemeIdUri="urn:mpeg:dash:utc:direct:2014" value="([^"]+)Z"', mpd).group(1)
     when = dt.datetime.fromisoformat(value).replace(tzinfo=dt.timezone.utc).timestamp()
     assert abs(when - (time.time() - 30)) < 2.5
@@ -605,10 +605,10 @@ def test_dash_offset_adds_utc_timing_with_the_pretend_now(tmp_path):
     ast = lambda m: re.search(r'availabilityStartTime="([^"]+)"', m).group(1)  # noqa: E731
     assert ast(mpd) == ast(plain)
     # a finished (static) range has no live edge to explain
-    done = client.get(f"/stream.mpd?start={epoch + 5}&end={epoch + 8}&offset=-30").get_data(as_text=True)
+    done = client.get(f"/index.mpd?start={epoch + 5}&end={epoch + 8}&offset=-30").get_data(as_text=True)
     assert 'type="static"' in done and "UTCTiming" not in done
     # also in continuous mode
-    cont = client.get("/stream.mpd?offset=-30&timeline_mode=continuous").get_data(as_text=True)
+    cont = client.get("/index.mpd?offset=-30&timeline_mode=continuous").get_data(as_text=True)
     assert "UTCTiming" in cont and 'id="continuous"' in cont
 
 
@@ -625,8 +625,8 @@ def test_mode_comment_says_live_or_startover_catchup(tmp_path):
     client, epoch = _app(tmp_path)
     q = f"start={epoch + 5}&end={epoch + 8}"
     assert "# mode: startover/catchup" in client.get(f"/video.m3u8?{q}").get_data(as_text=True)
-    assert "<!-- mode: startover/catchup -->" in client.get(f"/stream.mpd?{q}").get_data(as_text=True)
+    assert "<!-- mode: startover/catchup -->" in client.get(f"/index.mpd?{q}").get_data(as_text=True)
     assert "# mode: live" in client.get("/video.m3u8").get_data(as_text=True)
-    assert "<!-- mode: live -->" in client.get("/stream.mpd").get_data(as_text=True)
+    assert "<!-- mode: live -->" in client.get("/index.mpd").get_data(as_text=True)
     # a clock offset is surfaced as a time anchor
     assert "# clock offset: -30" in client.get("/video.m3u8?offset=-30").get_data(as_text=True)

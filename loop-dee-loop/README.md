@@ -225,7 +225,7 @@ python3 bake.py path/to/output.ts --output /var/loop-packages/2026-01-01 \
 | `/video[_N].m3u8` | HLS media playlist for one video rendition (video only). `_N` is the 1-based rendition index, present only when there is more than one rendition. |
 | `/video_audio[_N].m3u8` | Same, when audio is muxed into the segments (`container = "ts"` with `mux_audio`). |
 | `/audio.m3u8` | HLS media playlist (audio, the one track shared across renditions) — only present if the source has an audio track and it isn't muxed into the video segments. |
-| `/stream.mpd` | DASH MPD (one video `AdaptationSet` with one `Representation` per rendition, + one audio `AdaptationSet`). |
+| `/index.mpd` | DASH MPD (one video `AdaptationSet` with one `Representation` per rendition, + one audio `AdaptationSet`). |
 | `/<rendition>/init.mp4` | CMAF init segment for one rendition. |
 | `/<rendition>/seg/<n>.m4s` | CMAF media segments for one rendition. |
 | `/audio/init.mp4` | CMAF init segment (audio track). |
@@ -292,7 +292,7 @@ channel's own setting.
 ```bash
 # Catchup: a finished VOD of a past range (ENDLIST / static MPD)
 curl 'http://localhost:8080/index.m3u8?start=2026-09-30T08:00:00Z&end=2026-09-30T08:10:00Z'
-curl 'http://localhost:8080/stream.mpd?start=1790755200&end=1790755800'       # epoch seconds (ms also accepted)
+curl 'http://localhost:8080/index.mpd?start=1790755200&end=1790755800'       # epoch seconds (ms also accepted)
 
 # Startover: plays from the start point, grows to the live edge (end optional)
 curl 'http://localhost:8080/index.m3u8?start=2026-09-30T11:55:00Z'
@@ -303,7 +303,7 @@ curl 'http://localhost:8080/index.m3u8?start=...&end=...&full_loops=true&timelin
 # Overrides work on plain live too (no start needed)
 curl 'http://localhost:8080/index.m3u8?timeline_mode=continuous'
 curl 'http://localhost:8080/index.m3u8?cue_tags=alongside&descriptor_grouping=narrowed&dvr_window=PT2M'
-curl 'http://localhost:8080/stream.mpd?addressing=time&timeline_style=compact&signal_format=xml'
+curl 'http://localhost:8080/index.mpd?addressing=time&timeline_style=compact&signal_format=xml'
 curl 'http://localhost:8080/index.m3u8?max_height=720'
 
 # Play the live stream as it was an hour ago (or will be in an hour with a positive offset)

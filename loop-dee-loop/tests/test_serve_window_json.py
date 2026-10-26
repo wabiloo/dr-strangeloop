@@ -330,7 +330,7 @@ def test_openapi_document_is_served_and_valid(tmp_path):
     assert resp.status_code == 200
     spec = yaml.safe_load(resp.get_data(as_text=True))
     assert spec["openapi"].startswith("3.1")
-    for path in ("/timeline.json", "/health", "/index.m3u8", "/stream.mpd", "/openapi.yaml", "/docs"):
+    for path in ("/timeline.json", "/health", "/index.m3u8", "/index.mpd", "/openapi.yaml", "/docs"):
         assert path in spec["paths"]
     jsonschema.Draft202012Validator.check_schema(
         {"$ref": "#/components/schemas/WindowDocument", "components": spec["components"]}

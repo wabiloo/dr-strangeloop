@@ -120,7 +120,7 @@ timeline. Reference: [inspector-krogh README](../inspector-krogh/README.md).
 | API | Served by | Where to read it |
 |---|---|---|
 | **Igor API** (`/api/v1/...`): playlists, profiles, archives, manifests, channels, jobs, files, docs | Igor's FastAPI backend | Interactive OpenAPI docs: **Docs → Igor API** in the header (Swagger UI at `/api/docs`, ReDoc at `/api/redoc`, schema at `/api/openapi.json`). Behaviour notes in [Igor AGENTS](../igor/AGENTS.md) |
-| **Channel API**: `/index.m3u8`, `/stream.mpd`, `/timeline.json`, `/health`, startover/catchup query parameters | `loop-dee-loop/serve.py` on each running ecs-express / local-docker channel | **Docs → Channel API** in the header (the spec, `loop-dee-loop/openapi.yaml`), or a running channel's own `/docs`. Igor proxies a live channel's at `/api/v1/channels/{name}/docs` |
+| **Channel API**: `/index.m3u8`, `/index.mpd`, `/timeline.json`, `/health`, startover/catchup query parameters | `loop-dee-loop/serve.py` on each running ecs-express / local-docker channel | **Docs → Channel API** in the header (the spec, `loop-dee-loop/openapi.yaml`), or a running channel's own `/docs`. Igor proxies a live channel's at `/api/v1/channels/{name}/docs` |
 
 Igor's UI is a client of its own API; scripting against it is possible but
 for one-off tasks the CLIs above are the supported route.

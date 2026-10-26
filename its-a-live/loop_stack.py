@@ -197,7 +197,7 @@ class LoopStack(Stack):
             task_role_arn=task_role.role_arn,
             cpu=serve_cpu,
             memory=serve_memory,
-            health_check_path="/stream.mpd",
+            health_check_path="/index.mpd",
             # Pinned to one task up front (the Express default is a 1..N
             # range): `channel.py start` would otherwise have to apply it
             # right after `create`, and that update alone rolls out a second
@@ -315,4 +315,4 @@ class LoopStack(Stack):
         if use_cdn:
             cdk.CfnOutput(self, "CloudFrontDomainName", value=distribution.distribution_domain_name)
         cdk.CfnOutput(self, "HlsPlaybackUrl", value=f"https://{playback_host}/index.m3u8")
-        cdk.CfnOutput(self, "DashPlaybackUrl", value=f"https://{playback_host}/stream.mpd")
+        cdk.CfnOutput(self, "DashPlaybackUrl", value=f"https://{playback_host}/index.mpd")
