@@ -906,7 +906,7 @@ class LoopPackage:
             for i in range(len(self.segment_boundary_ticks))
         ]
         max_duration_seconds = max(segment_durations_ticks) / self.timescale
-        self.max_segment_duration_seconds_rounded_up = int(max_duration_seconds) + 1
+        self.max_segment_duration_seconds_rounded_up = math.ceil(max_duration_seconds)
 
     @property
     def has_audio(self) -> bool:
@@ -2334,7 +2334,10 @@ class Channel:
             depth = ""
         else:
             ast = self._iso_ticks(self.epoch_ticks)
-            depth = f'     timeShiftBufferDepth="PT{max_seg * window_segments}S"\n'
+            # The window is `window_segments` segments of the loop's MEAN
+            # duration (stable across refreshes); max_seg would inflate it.
+            mean_ticks = pkg.total_loop_duration_ticks * window_segments / pkg.segments_per_loop
+            depth = f'     timeShiftBufferDepth="PT{math.ceil(mean_ticks / pkg.timescale)}S"\n'
         return (
             ns + f'     type="dynamic"\n'
             f'     availabilityStartTime="{ast}"\n'

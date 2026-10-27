@@ -95,3 +95,17 @@ def test_manifests_match_golden(monkeypatch):
     assert got.keys() == want.keys()
     changed = sorted(f"{k}:{part}" for k in want for part in want[k] if got[k][part] != want[k][part])
     assert not changed, f"{len(changed)} manifests changed, e.g. {changed[:5]}"
+
+
+def test_dash_time_shift_buffer_depth_matches_window():
+    """The advertised depth is window_segments x the loop's mean segment
+    duration, not x the (rounded-up) longest segment."""
+    import math
+    import re
+
+    channel = _channel(boundaries=(), markers=[], now_ticks=NOWS["mid"], continuous=False, type_ids=frozenset())
+    pkg = channel.package
+    n = channel.window_segments
+    expected = math.ceil(pkg.total_loop_duration_ticks * n / pkg.segments_per_loop / pkg.timescale)
+    depth = re.search(r'timeShiftBufferDepth="PT(\d+)S"', channel.build_dash_manifest()).group(1)
+    assert int(depth) == expected

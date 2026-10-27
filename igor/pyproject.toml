@@ -1,6 +1,6 @@
 [project]
 name = "igor"
-version = "2.2.0"
+version = "2.2.1"
 description = "Dr. Strangeloop: web console to define, launch, and monitor dr-strangeloop channels."
 readme = "README.md"
 requires-python = ">=3.11"
