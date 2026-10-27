@@ -73,8 +73,8 @@ export const QP_SPECS: QpSpec[] = [
     kind: 'choice',
     formats: ['dash'],
     options: [
-      { label: 'full (@t and @d on every S)', value: 'full' },
-      { label: 'compact (implicit @t, @r runs)', value: 'compact' },
+      { label: 'full (@t and @d on every S, a SegmentTemplate per representation)', value: 'full' },
+      { label: 'compact (implicit @t, @r runs, one shared SegmentTemplate)', value: 'compact' },
     ],
     help: 'How the DASH SegmentTimeline is written.',
   },

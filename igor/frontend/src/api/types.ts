@@ -510,7 +510,7 @@ export interface ChannelCreatePayload {
   hls_ts_mux_audio?: boolean
   /** [packaging.dash].addressing -- DASH SegmentTemplate `$Number$` (default) or `$Time$`. */
   dash_addressing?: 'number' | 'time'
-  /** [packaging.dash].timeline_style -- SegmentTimeline `full` (@t and @d on every S) or `compact` (implicit @t + @r). */
+  /** [packaging.dash].timeline_style -- SegmentTimeline `full` (@t and @d on every S, a SegmentTemplate per representation) or `compact` (implicit @t + @r, one shared SegmentTemplate when the video renditions match). */
   dash_timeline?: 'full' | 'compact'
   /** loop-dee-loop/SCOPE.md §12: default true -- no #EXT-X-DISCONTINUITY /
    * DASH Period restart at the loop wrap (serve.py rewrites each segment's

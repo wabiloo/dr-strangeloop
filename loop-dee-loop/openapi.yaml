@@ -368,7 +368,7 @@ components:
       name: timeline_style
       in: query
       required: false
-      description: DASH only. SegmentTimeline style, `full` (@t and @d on every S) or `compact` (implicit @t, @r runs).
+      description: DASH only. SegmentTimeline style, `full` (@t and @d on every S, a SegmentTemplate per representation) or `compact` (implicit @t, @r runs, one shared SegmentTemplate when the video renditions match).
       schema:
         type: string
         enum: [full, compact]

@@ -79,7 +79,7 @@ dvr_window       = 30    # serve.py sliding-window size, seconds (also a query p
 # mux_audio = true       # TS only: mux audio into each video rendition, or a separate audio playlist
 
 # [packaging.dash]       # also query parameters of the same name
-# timeline_style = "full"  # "full" (every <S> has @t and @d) | "compact" (implicit @t, @r runs)
+# timeline_style = "full"  # "full" (every <S> has @t and @d, a SegmentTemplate per representation) | "compact" (implicit @t, @r runs, one shared SegmentTemplate)
 # addressing     = "number"  # "number" ($Number$) | "time" ($Time$)
 
 [timeline]                 # ecs-express/local-docker only

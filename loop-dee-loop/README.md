@@ -332,7 +332,7 @@ curl 'http://localhost:8080/index.m3u8?offset=-PT1H'
 
 | Param | Meaning |
 |---|---|
-| `timeline_style` | `full` (every `<S>` has `@t` and `@d`) or `compact` (implicit `@t`, `@r` runs). |
+| `timeline_style` | `full` (every `<S>` has `@t` and `@d`; a `SegmentTemplate` per representation) or `compact` (implicit `@t`, `@r` runs; identical video renditions share one `SegmentTemplate` via `$RepresentationID$`). |
 | `addressing` | `number` (`$Number$` + `startNumber`) or `time` (`$Time$`). |
 | `signal_format` | `binary` (`<scte35:Binary>`) or `xml` (the decoded `SpliceInfoSection`): the EventStream encoding of the SCTE-35 message. |
 

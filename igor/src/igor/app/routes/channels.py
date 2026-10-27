@@ -64,7 +64,8 @@ class ChannelCreatePayload(BaseModel):
     # or $Time$. ecs-express/local-docker only.
     dash_addressing: Literal["number", "time"] = "number"
     # [packaging].dash_timeline -- SegmentTimeline "full" (@t and @d on every
-    # <S>) or "compact" (implicit @t + @r). ecs-express/local-docker only.
+    # <S>, a SegmentTemplate per representation) or "compact" (implicit @t + @r,
+    # one shared SegmentTemplate). ecs-express/local-docker only.
     dash_timeline: Literal["full", "compact"] = "full"
     # loop-dee-loop/SCOPE.md §12: default on -- serve.py rewrites each
     # segment's own timestamps per request (header patch, never a re-mux)

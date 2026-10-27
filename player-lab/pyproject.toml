@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "player-lab"
-version = "2.1.0"
+version = "2.2.0"
 description = "Play a channel in several real players and report stalls, errors and Period/discontinuity counts"
 requires-python = ">=3.11"
 dependencies = [

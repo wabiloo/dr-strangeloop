@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from serve import Channel, LoopPackage, create_app, render_segment_timeline  # noqa: E402
+from serve import Channel, LoopPackage, create_app, render_audio_adaptation_set, render_segment_timeline, render_video_representations  # noqa: E402
 
 NS = {"d": "urn:mpeg:dash:schema:mpd:2011"}
 
@@ -104,3 +104,56 @@ def test_compact_mpd_expands_to_the_full_timeline(tmp_path, monkeypatch, continu
         f, c = re.sub(r' xmlns(:\w+)?="[^"]*"', "", f), re.sub(r' xmlns(:\w+)?="[^"]*"', "", c)
         assert _expand(c) == _expand(f)
     assert any(" r=" in c or " t=" not in c for c in compact), "compact should actually compact something"
+
+
+def _rep(name, timeline='        <S t="0" d="5" r="3" />', pto_attr=""):
+    return {
+        "name": name,
+        "variant": {"bandwidth": 1000, "codecs": "avc1.64001f", "width": 640, "height": 360, "frame_rate": "25/1"},
+        "media": f"{name}/seg/$Number$.m4s",
+        "init_attr": f' initialization="{name}/init.mp4"',
+        "timeline": timeline,
+        "pto_attr": pto_attr,
+    }
+
+
+def test_compact_shares_one_template_across_identical_renditions():
+    xml = render_video_representations([_rep("720p"), _rep("360p")], 90000, ' startNumber="0"', compact=True)
+    assert xml.count("<SegmentTemplate") == 1
+    assert 'media="$RepresentationID$/seg/$Number$.m4s"' in xml
+    assert 'initialization="$RepresentationID$/init.mp4"' in xml
+    assert '<Representation id="720p"' in xml and '<Representation id="360p"' in xml
+
+
+def test_compact_keeps_per_representation_templates_when_timelines_differ():
+    reps = [_rep("720p"), _rep("360p", timeline='        <S t="0" d="6" r="3" />')]
+    xml = render_video_representations(reps, 90000, "", compact=True)
+    assert xml.count("<SegmentTemplate") == 2
+    assert '<Representation id="720p"' in xml and "$RepresentationID$" not in xml
+
+
+def test_full_keeps_a_template_per_representation():
+    xml = render_video_representations([_rep("720p"), _rep("360p")], 90000, "", compact=False)
+    assert xml.count("<SegmentTemplate") == 2
+    assert '<Representation id="720p"' in xml and '<Representation id="360p"' in xml
+
+
+def _audio(compact):
+    a = {"bandwidth": 128000, "codecs": "mp4a.40.2"}
+    return render_audio_adaptation_set(
+        a, "audio/seg/$Number$.m4s", "audio/init.mp4", '          <S t="0" d="5" r="3" />', 90000, "", "", compact
+    )
+
+
+def test_audio_template_moves_to_the_adaptation_set_in_compact():
+    xml = _audio(True)
+    assert xml.index("<SegmentTemplate") < xml.index("<Representation")
+    assert 'media="$RepresentationID$/seg/$Number$.m4s"' in xml
+    assert 'initialization="$RepresentationID$/init.mp4"' in xml
+    assert '<Representation id="audio"' in xml
+
+
+def test_audio_template_stays_in_the_representation_in_full():
+    xml = _audio(False)
+    assert xml.index("<Representation") < xml.index("<SegmentTemplate")
+    assert 'media="audio/seg/$Number$.m4s"' in xml and '<Representation id="audio"' in xml

@@ -149,8 +149,8 @@ const dashAddressingOptions = [
   { label: '$Time$ (segment start time)', value: 'time' },
 ]
 const dashTimelineOptions = [
-  { label: 'Full (@t and @d on every S)', value: 'full' },
-  { label: 'Compact (implicit @t, @r for repeats)', value: 'compact' },
+  { label: 'Full (@t and @d on every S, a SegmentTemplate per representation)', value: 'full' },
+  { label: 'Compact (implicit @t, @r for repeats, one shared SegmentTemplate)', value: 'compact' },
 ]
 const hlsFormatOptions = [
   { label: 'CMAF (fragmented MP4)', value: 'cmaf' },

@@ -394,6 +394,90 @@ def render_segment_timeline(items: list[tuple], compact: bool) -> str:
         expected = t + d
     flush()
     return "\n".join(out)
+
+
+def render_video_representations(
+    reps: list[dict], timescale: int, start_number_attr: str, compact: bool
+) -> str:
+    """The <Representation> elements of the video AdaptationSet. Each item of
+    `reps` has the rendition's `name`, `variant` (bandwidth/codecs/size/rate),
+    `media` and `init_attr` (built with the rendition name in the path),
+    `timeline` (rendered <S> lines) and `pto_attr`. Each
+    Representation is named after its rendition. `full` gives every one its own
+    SegmentTemplate/SegmentTimeline. `compact`, when every rendition
+    shares the same timeline, offset and URL shape, writes one SegmentTemplate
+    on the AdaptationSet addressing them through $RepresentationID$."""
+
+    def attrs(v: dict) -> str:
+        return (
+            f'bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" '
+            f'height="{v["height"]}" frameRate="{_dash_frame_rate(v["frame_rate"])}"'
+        )
+
+    def template(r: dict, media: str, init_attr: str, indent: str) -> str:
+        return (
+            f'{indent}<SegmentTemplate media="{media}"{init_attr}\n'
+            f'{indent}                 timescale="{timescale}"{start_number_attr}{r["pto_attr"]}>\n'
+            f"{indent}  <SegmentTimeline>\n{r['timeline']}\n{indent}  </SegmentTimeline>\n"
+            f"{indent}</SegmentTemplate>"
+        )
+
+    if compact:
+        shaped = [
+            (
+                r["timeline"],
+                r["pto_attr"],
+                r["media"].replace(r["name"], "$RepresentationID$"),
+                r["init_attr"].replace(r["name"], "$RepresentationID$"),
+            )
+            for r in reps
+        ]
+        if len(set(shaped)) == 1:
+            _, _, media, init_attr = shaped[0]
+            body = "\n".join(f'      <Representation id="{r["name"]}" {attrs(r["variant"])} />' for r in reps)
+            return template(reps[0], media, init_attr, "      ") + "\n" + body
+    out = []
+    for r in reps:
+        out.append(
+            f'      <Representation id="{r["name"]}" {attrs(r["variant"])}>\n'
+            + template(r, r["media"], r["init_attr"], "        ")
+            + "\n      </Representation>"
+        )
+    return "\n".join(out)
+
+
+def render_audio_adaptation_set(
+    a: dict, media: str, init: str, timeline: str, timescale: int, start_number_attr: str,
+    pto_attr: str, compact: bool,
+) -> str:
+    """The audio <AdaptationSet> (a single Representation, id `audio` like its
+    URL path). `full` keeps the SegmentTemplate inside the Representation;
+    `compact` moves it up to the AdaptationSet, addressed via $RepresentationID$."""
+    tpl_attrs = f'timescale="{timescale}"{start_number_attr}{pto_attr}'
+    rep_attrs = f'id="audio" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}"'
+    if compact:
+        media, init = (x.replace("audio/", "$RepresentationID$/", 1) for x in (media, init))
+        return f'''
+    <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
+      <SegmentTemplate media="{media}" initialization="{init}"
+                       {tpl_attrs}>
+        <SegmentTimeline>
+{timeline}
+        </SegmentTimeline>
+      </SegmentTemplate>
+      <Representation {rep_attrs} />
+    </AdaptationSet>'''
+    return f'''
+    <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
+      <Representation {rep_attrs}>
+        <SegmentTemplate media="{media}" initialization="{init}"
+                         {tpl_attrs}>
+          <SegmentTimeline>
+{timeline}
+          </SegmentTimeline>
+        </SegmentTemplate>
+      </Representation>
+    </AdaptationSet>'''
 def expand_segmentation_pairs(type_ids: frozenset[int]) -> frozenset[int]:
     """A Start implies its End and vice versa (SCTE-35 Table 23: 0x22 Break
     Start <-> 0x23 Break End), so listing one is enough. An End shared by
@@ -2594,7 +2678,7 @@ class Channel:
             )
 
             video_representations = []
-            for idx, rendition in enumerate(pkg.video_renditions):
+            for rendition in pkg.video_renditions:
                 video_media = (
                     f"{rendition.name}/seg/t/{real_span_index}/$Time$.m4s"
                     if time_addressing
@@ -2617,14 +2701,16 @@ class Channel:
                 else:
                     init_attr = f' initialization="{rendition.name}/init.mp4"'
 
-                video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{_dash_frame_rate(v["frame_rate"])}">
-        <SegmentTemplate media="{video_media}"{init_attr}
-                         timescale="{pkg.timescale}"{start_number_attr}{pto_attr}>
-          <SegmentTimeline>
-{timeline_lines}
-          </SegmentTimeline>
-        </SegmentTemplate>
-      </Representation>''')
+                video_representations.append(
+                    {
+                        "name": rendition.name,
+                        "variant": v,
+                        "media": video_media,
+                        "init_attr": init_attr,
+                        "timeline": timeline_lines,
+                        "pto_attr": pto_attr,
+                    }
+                )
 
             audio_adaptation_set = ""
             if pkg.has_audio:
@@ -2639,17 +2725,10 @@ class Channel:
                     pkg.audio_rendition.audio_segment_boundary_ticks, pto_ticks
                 )
                 audio_timeline_lines = _segment_timeline_xml(audio_entries)
-                audio_adaptation_set = f'''
-    <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
-      <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
-        <SegmentTemplate media="{audio_media}" initialization="{audio_init}"
-                         timescale="{pkg.timescale}"{start_number_attr}{audio_pto_attr}>
-          <SegmentTimeline>
-{audio_timeline_lines}
-          </SegmentTimeline>
-        </SegmentTemplate>
-      </Representation>
-    </AdaptationSet>'''
+                audio_adaptation_set = render_audio_adaptation_set(
+                    a, audio_media, audio_init, audio_timeline_lines, pkg.timescale,
+                    start_number_attr, audio_pto_attr, self.dash_timeline == "compact",
+                )
 
             # With more than one Period per loop (grave-robber/SCOPE.md §6.1), give each
             # Period's EventStream its own @value so dash.js's (value, id) dedupe key
@@ -2666,7 +2745,7 @@ class Channel:
             period_xml_parts.append(f'''  <Period id="{period_id}" start="PT{period_start_seconds}S">
 {event_streams_xml}
     <AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
-{chr(10).join(video_representations)}
+{render_video_representations(video_representations, pkg.timescale, start_number_attr, self.dash_timeline == 'compact')}
     </AdaptationSet>{audio_adaptation_set}
   </Period>''')
 
@@ -2907,7 +2986,7 @@ class Channel:
             audio_media = "audio/cseg/t/$Time$.m4s" if time_addressing else "audio/cseg/$Number$.m4s"
 
             video_representations = []
-            for idx, rendition in enumerate(pkg.video_renditions):
+            for rendition in pkg.video_renditions:
                 video_media = (
                     f"{rendition.name}/cseg/t/$Time$.m4s"
                     if time_addressing
@@ -2926,14 +3005,16 @@ class Channel:
                     init_attr = f' initialization="{rendition.name}/init_0.mp4"'
                 else:
                     init_attr = f' initialization="{rendition.name}/init.mp4"'
-                video_representations.append(f'''      <Representation id="v{idx}" bandwidth="{v["bandwidth"]}" codecs="{v["codecs"]}" width="{v["width"]}" height="{v["height"]}" frameRate="{_dash_frame_rate(v["frame_rate"])}">
-        <SegmentTemplate media="{video_media}"{init_attr}
-                         timescale="{pkg.timescale}"{start_number_attr}{pto_attr}>
-          <SegmentTimeline>
-{timeline_lines}
-          </SegmentTimeline>
-        </SegmentTemplate>
-      </Representation>''')
+                video_representations.append(
+                    {
+                        "name": rendition.name,
+                        "variant": v,
+                        "media": video_media,
+                        "init_attr": init_attr,
+                        "timeline": timeline_lines,
+                        "pto_attr": pto_attr,
+                    }
+                )
 
             audio_adaptation_set = ""
             if pkg.has_audio:
@@ -2947,17 +3028,10 @@ class Channel:
                 audio_init = (
                     "audio/init_0.mp4" if pkg.audio_rendition.audio_sparse else "audio/init.mp4"
                 )
-                audio_adaptation_set = f'''
-    <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
-      <Representation id="a0" bandwidth="{a["bandwidth"]}" codecs="{a["codecs"]}">
-        <SegmentTemplate media="{audio_media}" initialization="{audio_init}"
-                         timescale="{pkg.timescale}"{start_number_attr}{pto_attr}>
-          <SegmentTimeline>
-{audio_timeline_lines}
-          </SegmentTimeline>
-        </SegmentTemplate>
-      </Representation>
-    </AdaptationSet>'''
+                audio_adaptation_set = render_audio_adaptation_set(
+                    a, audio_media, audio_init, audio_timeline_lines, pkg.timescale,
+                    start_number_attr, pto_attr, self.dash_timeline == "compact",
+                )
 
             # Stable across polls: named after the break that opened it,
             # never after where the sliding window happens to clip it. With
@@ -2968,7 +3042,7 @@ class Channel:
             period_xml_parts.append(f'''  <Period id="{period_id}" start="{period_start}">
 {event_streams_xml}
     <AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
-{chr(10).join(video_representations)}
+{render_video_representations(video_representations, pkg.timescale, start_number_attr, self.dash_timeline == 'compact')}
     </AdaptationSet>{audio_adaptation_set}
   </Period>''')
 
@@ -3536,9 +3610,10 @@ def main() -> int:
         "--dash-timeline",
         choices=DASH_TIMELINE_CHOICES,
         default="full",
-        help="DASH SegmentTimeline style: full (every <S> has @t and @d, "
-        "default) or compact (implicit @t where contiguous, @r for runs of "
-        "equal @d). HLS is unaffected.",
+        help="DASH SegmentTimeline style: full (every <S> has @t and @d, a "
+        "SegmentTemplate per representation; default) or compact (implicit @t "
+        "where contiguous, @r for runs of equal @d, one shared SegmentTemplate "
+        "when the video renditions match). HLS is unaffected.",
     )
     parser.add_argument(
         "--timeshift",

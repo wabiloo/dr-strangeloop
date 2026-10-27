@@ -107,7 +107,10 @@ boundaries); an unknown `t` is a 404. Tests: `tests/test_serve_dash_time.py`.
 "compact"`; query parameter `timeline_style`; default `full`) omits `@t` where a segment starts where the
 previous one ended and folds runs of equal `@d` into `@r`. The first `<S>` of a
 Period always keeps `@t` (a front-trimmed window must not change anyone's t),
-`@t` returns after a gap, and a loop/asset comment ends a run. Independent of
+`@t` returns after a gap, and a loop/asset comment ends a run. Compact also writes one `SegmentTemplate` on the video
+`AdaptationSet` (`$RepresentationID$` in `media`/`initialization`) when every
+rendition shares the same timeline, offset and URL shape; renditions that differ keep their own templates.
+Video `Representation@id` is the rendition name in both styles. Independent of
 `--dash-addressing`; HLS unaffected. Tests: `tests/test_serve_dash_timeline.py`.
 
 ## Startover, catchup and per-request overrides (query parameters)

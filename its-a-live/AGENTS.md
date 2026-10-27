@@ -85,7 +85,7 @@ container = "cmaf"           # "cmaf" (default) | "ts"; HLS only, DASH remains C
 mux_audio = true             # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
 
 [packaging.dash]             # also query parameters of the same name; ecs-express/local-docker, serve.py flags
-timeline_style = "full"      # "full" (default; every <S> has @t and @d) | "compact" (implicit @t where contiguous + @r for equal @d)
+timeline_style = "full"      # "full" (default; every <S> has @t and @d, a SegmentTemplate per representation) | "compact" (implicit @t where contiguous + @r for equal @d, one shared SegmentTemplate)
 addressing = "number"        # "number" (default; $Number$ + startNumber) | "time" ($Time$ = each <S t>); applied on create/redeploy
 
 [timeline]                  # ecs-express/local-docker only
