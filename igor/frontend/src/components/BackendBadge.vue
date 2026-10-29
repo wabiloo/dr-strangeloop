@@ -18,7 +18,7 @@ const BACKEND_ICON: Record<Backend, string> = {
 const BACKEND_COLOR: Record<Backend, string> = {
   'local-docker': '#2496ed',
   'ecs-express': '#ed7100',
-  'aws-lambda': '#d9822b',
+  'aws-lambda': '#2fa84f',
   'aws-media': '#8c4fff',
 }
 
