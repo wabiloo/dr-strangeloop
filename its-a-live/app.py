@@ -7,6 +7,7 @@ from _legacy_cfg import check_config_version
 from _paths_cfg import resolve_source_path
 from media_stack import MediaStack
 from loop_stack import LoopStack
+from lambda_stack import LambdaLoopStack
 from loop_shared_stack import LoopSharedStack
 from scheduler_stack import SchedulerStack
 
@@ -40,9 +41,9 @@ if source_path_override:
 
 name = config.get("deploy", {}).get("name", "default")
 backend = config.get("deploy", {}).get("backend")
-if backend not in ("aws-media", "ecs-express"):
+if backend not in ("aws-media", "ecs-express", "aws-lambda"):
     raise SystemExit(
-        f"[deploy].backend must be 'aws-media' or 'ecs-express', got {backend!r}"
+        f"[deploy].backend must be 'aws-media', 'ecs-express' or 'aws-lambda', got {backend!r}"
     )
 
 env = cdk.Environment(
@@ -57,7 +58,7 @@ stack_name = f"ItsALiveStack-{name}-{backend}"
 
 
 # Shared prerequisite for `channel.py schedule add/remove/list` -- not
-# backend-specific (covers both aws-media and ecs-express). Only included
+# backend-specific (covers aws-media, ecs-express and aws-lambda). Only included
 # with `-c scheduler=true`: its Lambda asset is Docker-bundled, and CDK
 # stages every asset of every stack in the app on every command, so
 # including it always made every channel deploy/destroy pay for the bundling.
@@ -75,6 +76,9 @@ if backend == "ecs-express":
     # `cdk deploy ItsALiveSharedStack-ecs-express` before any channel.
     LoopSharedStack(app, "ItsALiveSharedStack-ecs-express", env=env)
     LoopStack(app, stack_name, config=config, env=env)
+elif backend == "aws-lambda":
+    # No shared stack: nothing is shared between aws-lambda channels.
+    LambdaLoopStack(app, stack_name, config=config, env=env)
 else:
     MediaStack(app, stack_name, config=config, env=env)
 

@@ -98,7 +98,7 @@ from _paths_cfg import resolve_source_path
 
 _DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "config.toml")
 
-_BACKENDS = ("aws-media", "ecs-express", "local-docker")
+_BACKENDS = ("aws-media", "ecs-express", "aws-lambda", "local-docker")
 
 # Backends with no CloudFormation/CDK stack at all -- channel.py must never
 # call _cf_outputs() or `cdk deploy`/`cdk destroy` for these.
@@ -179,6 +179,9 @@ def _ops(cfg):
     if _backend(cfg) == "ecs-express":
         import _ecs_express_ops
         return _ecs_express_ops
+    if _backend(cfg) == "aws-lambda":
+        import _aws_lambda_ops
+        return _aws_lambda_ops
     if _backend(cfg) == "local-docker":
         import _local_docker_ops
         return _local_docker_ops
@@ -206,7 +209,7 @@ def cmd_start(cfg, extra_args):
 def cmd_image(cfg, extra_args):
     if _backend(cfg) != "local-docker":
         sys.exit("`image` is only available for the local-docker backend -- "
-                  "ecs-express keeps its content in S3 and aws-media has no image.")
+                  "ecs-express and aws-lambda keep their content in S3 and aws-media has no image.")
     _ops(cfg).image(cfg, _session(cfg), _channel_name(cfg), extra_args)
 
 
@@ -559,7 +562,7 @@ def cmd_redeploy(cfg, config_path, extra_args):
 
 def cmd_schedule(cfg, config_path, extra_args, as_json=False):
     if _backend(cfg) == "local-docker":
-        sys.exit("Scheduling requires an AWS backend (aws-media or ecs-express) -- "
+        sys.exit("Scheduling requires an AWS backend (aws-media, ecs-express or aws-lambda) -- "
                   "local-docker channels have no AWS presence to schedule against.")
     if not extra_args:
         sys.exit("Usage: channel.py schedule <add|remove|list> [args...]")

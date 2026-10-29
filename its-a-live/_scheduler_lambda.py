@@ -16,17 +16,19 @@ _ecs_express_ops.py), so there is exactly one implementation of what
 
 import boto3
 
+import _aws_lambda_ops
 import _aws_media_ops
 import _ecs_express_ops
 
 _OPS = {
     "aws-media": _aws_media_ops,
     "ecs-express": _ecs_express_ops,
+    "aws-lambda": _aws_lambda_ops,
 }
 
 
 def handler(event, context):
-    """event: {"channel_name": ..., "backend": "aws-media"|"ecs-express",
+    """event: {"channel_name": ..., "backend": "aws-media"|"ecs-express"|"aws-lambda",
     "action": "start"|"stop", "region": ...} -- see _scheduler_ops.py's
     add_window() for who sets this as the EventBridge Scheduler target
     input."""

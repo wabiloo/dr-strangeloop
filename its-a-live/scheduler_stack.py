@@ -14,6 +14,7 @@ ITS_A_LIVE_DIR = os.path.dirname(__file__)
 # transitive imports). Anything the handler starts importing must be added here.
 LAMBDA_MODULES = (
     "_scheduler_lambda.py",
+    "_aws_lambda_ops.py",
     "_aws_media_ops.py",
     "_ecs_express_ops.py",
     "_infra_cfg.py",
