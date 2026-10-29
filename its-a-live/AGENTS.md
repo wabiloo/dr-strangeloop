@@ -18,6 +18,7 @@ config.
 | `backend` | What it deploys | Chosen when |
 |---|---|---|
 | `"ecs-express"` | `loop-dee-loop` (self-hosted remux, no transcode) on ECS Express Mode + CloudFront | cheap/simple, content is already in final delivery format, no need for AWS-managed live transcoding |
+| `"aws-lambda"` | `loop-dee-loop` in a Lambda function behind CloudFront, package read lazily from S3 — design and trade-offs in [`LAMBDA_BACKEND.md`](./LAMBDA_BACKEND.md) | rarely-watched channels: no idle cost, no ECS cluster/ALB, the first viewer wakes it up. Many always-watched channels are cheaper on `ecs-express` |
 | `"aws-media"` | MediaLive + MediaPackage v1 (real live transcoding) | need MediaLive/MediaPackage-specific features, or transcoding from a non-final format |
 | `"local-docker"` | `loop-dee-loop` in a `docker run` container on this machine — no AWS resources, no CloudFormation stack at all | local dev/demo/testing of a channel before spending any AWS money, or when there's no AWS account in play |
 
@@ -25,14 +26,14 @@ This must be decided **before** writing the franken-ts config, because it
 determines whether `output.file` (single-rendition) or `output.dir` +
 `output.renditions` (ABR ladder) is required there — see
 `franken-ts/AGENTS.md`. `local-docker` follows the same rule as
-`ecs-express` here (it runs the same `bake.py`).
+`ecs-express` here (it runs the same `bake.py`); so does `aws-lambda`.
 
 ## Config (`config.toml`) — required fields to gather from the user
 
 ```toml
 [deploy]
 name = "..."          # required — drives stack name + all AWS resource names
-backend = "..."        # required — "ecs-express" | "aws-media" | "local-docker"
+backend = "..."        # required — "ecs-express" | "aws-lambda" | "aws-media" | "local-docker"
 
 # The deployment target lives under [infrastructure.*]: aws, s3, express, docker.
 # (The old top-level [aws]/[s3]/[express]/[docker] tables are rejected.)
@@ -120,6 +121,15 @@ memory = 512   # MB
 cdn = true     # ecs-express only: CloudFront in front of the service (default true). false skips it
                # (~3 min faster deploy) but loses edge caching, and the playback URLs then point at the
                # service endpoint -- changing it on a deployed channel changes those URLs
+# aws-lambda instead gets, in place of [infrastructure.express] (no port: CloudFront + a
+# Function URL only CloudFront may call own the endpoint):
+# [infrastructure.lambda]
+# memory = 1024               # MB; CPU scales with it. Use 1769 (one full vCPU) for hls container "ts" + continuous timeline
+# timeout = 30                # s
+# reserved_concurrency = 10   # cap on concurrent invocations (cost/blast radius); -1 = no reservation, for accounts whose
+#                             # Lambda concurrency quota is too small to reserve any. `stop` sets it to 0, `start` restores it. Never 0 here.
+# cache_mb = 512              # /tmp cache of segment bytes fetched from S3 (ephemeral storage is sized to fit)
+# architecture = "arm64"      # or "x86_64"
 # local-docker instead gets, in place of [infrastructure.express]:
 # [infrastructure.docker]
 # port = "auto"  # default -- auto-picks a free host port (8080-8179, skipping
@@ -205,7 +215,7 @@ reach serve.py as `--timeshift`, `--timeshift-start-param`, `--query-prefix`, ..
 
 ## Questions to ask before deploying (if not already answered)
 
-1. Backend (`ecs-express` vs `aws-media` vs `local-docker`) — see table above.
+1. Backend (`ecs-express` vs `aws-lambda` vs `aws-media` vs `local-docker`) — see table above.
 2. Channel `name` and target AWS `region` (region N/A for `local-docker`).
 3. Existing S3 bucket name + content folder prefix (never create a new
    bucket for this) — N/A for `local-docker`.
@@ -253,7 +263,7 @@ uv run python channel.py -c <config.toml> terminate   # tear the stack down for 
 cdk destroy ItsALiveStack-<name>-<backend> -c config=<config.toml>   # N/A for local-docker
 ```
 
-Scheduling (aws-media/ecs-express only -- local-docker has no AWS
+Scheduling (aws-media/ecs-express/aws-lambda only -- local-docker has no AWS
 presence to schedule against):
 
 ```bash

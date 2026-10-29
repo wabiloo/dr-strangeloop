@@ -159,12 +159,23 @@ epoch = "{epoch_utc}"
 continuous = {continuous}
 """
 
+BACKENDS = ("aws-media", "ecs-express", "aws-lambda", "local-docker")
+
 _ECS_EXPRESS_EXTRA = """
 [infrastructure.express]
 port   = {port}
 cpu    = {cpu}
 memory = {memory}
 cdn    = {cdn}
+"""
+
+_AWS_LAMBDA_EXTRA = """
+[infrastructure.lambda]
+memory               = {memory}
+timeout              = {timeout}
+reserved_concurrency = {reserved_concurrency}
+cache_mb             = {cache_mb}
+architecture         = "{architecture}"
 """
 
 _LOCAL_DOCKER_EXTRA = """
@@ -211,6 +222,11 @@ def generate_toml(
     cpu: int = 256,
     memory: int = 512,
     cdn: bool = True,
+    lambda_memory: int = 1024,
+    lambda_timeout: int = 30,
+    lambda_reserved_concurrency: int = 10,
+    lambda_cache_mb: int = 512,
+    lambda_architecture: str = "arm64",
     daterange_mode: str = "shared",
     cue_tags: str = "none",
     increment_event_ids: bool = False,
@@ -218,9 +234,9 @@ def generate_toml(
     dash_signal_format: str = "binary",
     dash_descriptor_mode: str = "shared",
 ) -> str:
-    if backend not in ("aws-media", "ecs-express", "local-docker"):
+    if backend not in BACKENDS:
         raise ValueError(
-            f"backend must be 'aws-media', 'ecs-express', or 'local-docker', got {backend!r}"
+            f"backend must be 'aws-media', 'ecs-express', 'aws-lambda' or 'local-docker', got {backend!r}"
         )
     if source_kind not in ("playlist", "archive", "manifest"):
         raise ValueError("source_kind must be 'playlist', 'archive' or 'manifest'")
@@ -289,6 +305,19 @@ def generate_toml(
             raise ValueError("port: 'auto' is only supported for the local-docker backend")
         content += _markers_section() + _packaging_section()
         content += _ECS_EXPRESS_EXTRA.format(port=int(port), cpu=cpu, memory=memory, cdn=str(cdn).lower())
+        content += _query_section()
+    elif backend == "aws-lambda":
+        # No port: the Function URL / CloudFront own the endpoint.
+        if lambda_architecture not in ("arm64", "x86_64"):
+            raise ValueError("lambda_architecture must be 'arm64' or 'x86_64'")
+        if lambda_reserved_concurrency == 0 or lambda_reserved_concurrency < -1:
+            raise ValueError("lambda_reserved_concurrency must be >= 1, or -1 for no reservation")
+        content += _markers_section() + _packaging_section()
+        content += _AWS_LAMBDA_EXTRA.format(
+            memory=int(lambda_memory), timeout=int(lambda_timeout),
+            reserved_concurrency=int(lambda_reserved_concurrency), cache_mb=int(lambda_cache_mb),
+            architecture=lambda_architecture,
+        )
         content += _query_section()
     elif backend == "local-docker":
         # No [infrastructure.express] -- local-docker has no Fargate CPU/memory

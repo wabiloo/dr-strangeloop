@@ -259,7 +259,7 @@ export interface ProbeResult {
 export interface ChannelListItem {
   config_path: string
   name: string
-  backend: 'aws-media' | 'ecs-express' | 'local-docker'
+  backend: 'aws-media' | 'ecs-express' | 'aws-lambda' | 'local-docker'
   stack_name: string | null
   // local-docker only (null for aws-media/ecs-express) -- there's no
   // CloudFormation stack for that backend, so this is the nearest
@@ -293,7 +293,7 @@ export interface ChannelListItem {
 }
 
 export interface ChannelStatus {
-  backend: 'aws-media' | 'ecs-express' | 'local-docker'
+  backend: 'aws-media' | 'ecs-express' | 'aws-lambda' | 'local-docker'
   status: string
   // CloudFormation StackStatus for aws-media/ecs-express (absent for
   // local-docker, which has no stack). Set even while `status` itself is
@@ -306,6 +306,10 @@ export interface ChannelStatus {
   stack_status?: string | null
   hls_url?: string | null
   dash_url?: string | null
+  // aws-lambda only: status is ACTIVE | STOPPED | PENDING | FAILED;
+  // reserved_concurrency 0 means stopped.
+  function_name?: string
+  reserved_concurrency?: number | null
   // ecs-express only:
   service_name?: string
   min_tasks?: number
@@ -491,7 +495,7 @@ export interface ChannelHealth {
 
 export interface ChannelCreatePayload {
   name: string
-  backend: 'aws-media' | 'ecs-express' | 'local-docker'
+  backend: 'aws-media' | 'ecs-express' | 'aws-lambda' | 'local-docker'
   region: string
   bucket_name: string
   content_folder: string
@@ -541,6 +545,13 @@ export interface ChannelCreatePayload {
   cpu?: number
   memory?: number
   cdn?: boolean
+  /** aws-lambda only: [infrastructure.lambda] memory / timeout / reserved_concurrency
+   * (-1 = no reservation) / cache_mb / architecture. */
+  lambda_memory?: number
+  lambda_timeout?: number
+  lambda_reserved_concurrency?: number
+  lambda_cache_mb?: number
+  lambda_architecture?: 'arm64' | 'x86_64'
   daterange_mode?: 'grouped' | 'shared' | 'narrowed'
   cue_tags?: 'none' | 'alongside' | 'only'
   increment_event_ids?: boolean

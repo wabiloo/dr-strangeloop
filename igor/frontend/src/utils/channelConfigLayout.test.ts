@@ -9,7 +9,9 @@ import {
   buildConfigSections,
   channelDefaultsByParam,
   formFieldsFromConfig,
+  lambdaFieldsFromConfig,
   periodTypesFromConfig,
+  usesChannelSection,
 } from './channelConfigLayout.ts'
 
 // A fully specified config in the current TOML layout (a parsed channel TOML).
@@ -123,8 +125,8 @@ test('periodTypesFromConfig: ints or strings -> hex, junk dropped', () => {
 
 test('every config section is one TOML table, titled after it', () => {
   assert.deepEqual(Object.keys(CONFIG_SECTION_TITLE), [
-    'deploy', 'input', 'infrastructure.aws', 'infrastructure.s3', 'infrastructure.express', 'infrastructure.docker',
-    'timeline', 'packaging', 'packaging.hls', 'packaging.dash', 'query', 'timeshift',
+    'deploy', 'input', 'infrastructure.aws', 'infrastructure.s3', 'infrastructure.express', 'infrastructure.lambda',
+    'infrastructure.docker', 'timeline', 'packaging', 'packaging.hls', 'packaging.dash', 'query', 'timeshift',
     'markers', 'markers.hls', 'markers.dash',
   ])
   assert.equal(CONFIG_SECTION_TITLE['markers.hls'], 'Markers · HLS')
@@ -236,4 +238,53 @@ test('channelDefaultsByParam: defaults for an empty config, and only names the r
   const { QP_NAMES } = await import('./queryParams.ts')
   for (const name of Object.keys(d)) assert.ok(QP_NAMES.includes(name), name)
   assert.deepEqual(QP_NAMES.filter((n) => !(n in d)), ['max_height', 'max_bitrate']) // no channel setting to default to
+})
+
+const LAMBDA = {
+  deploy: { name: 'lam', backend: 'aws-lambda' },
+  packaging: { segment_duration: 4, dvr_window: 30 },
+  input: { source_path: '../outputs/demo.ts', source_kind: 'playlist' },
+  infrastructure: {
+    aws: { region: 'eu-west-1' },
+    s3: { bucket_name: 'b', content_folder: 'c' },
+    lambda: { memory: 1769, timeout: 60, reserved_concurrency: -1, cache_mb: 2048, architecture: 'x86_64' },
+  },
+}
+
+test('lambdaFieldsFromConfig reads [infrastructure.lambda], defaults for a missing key', () => {
+  assert.deepEqual(lambdaFieldsFromConfig(LAMBDA), {
+    lambda_memory: 1769,
+    lambda_timeout: 60,
+    lambda_reserved_concurrency: -1,
+    lambda_cache_mb: 2048,
+    lambda_architecture: 'x86_64',
+  })
+  assert.deepEqual(lambdaFieldsFromConfig({}), {
+    lambda_memory: 1024,
+    lambda_timeout: 30,
+    lambda_reserved_concurrency: 10,
+    lambda_cache_mb: 512,
+    lambda_architecture: 'arm64',
+  })
+})
+
+test('aws-lambda: has its own infrastructure section, no port, plus the shared serve sections', () => {
+  const ids = buildConfigSections(LAMBDA).map((s) => s.id)
+  assert.ok(ids.includes('infrastructure.lambda'))
+  assert.ok(!ids.includes('infrastructure.express') && !ids.includes('infrastructure.docker'))
+  assert.ok(ids.includes('infrastructure.aws') && ids.includes('infrastructure.s3'))
+  assert.ok(ids.includes('timeline') && ids.includes('packaging') && ids.includes('query'))
+  const lambda = buildConfigSections(LAMBDA).find((s) => s.id === 'infrastructure.lambda')!
+  assert.deepEqual(
+    lambda.rows.map((r) => [r.key, r.value]),
+    [
+      ['lambda_memory', '1769'],
+      ['lambda_timeout', '60'],
+      ['lambda_reserved_concurrency', '-1'],
+      ['lambda_cache_mb', '2048'],
+      ['lambda_architecture', 'x86_64'],
+    ],
+  )
+  assert.equal(CONFIG_SECTION_TITLE['infrastructure.lambda'], 'Infrastructure · Lambda')
+  assert.ok(usesChannelSection('aws-lambda') && !usesChannelSection('aws-media'))
 })

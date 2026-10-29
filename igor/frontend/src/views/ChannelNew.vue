@@ -160,6 +160,11 @@ const form = reactive<ChannelCreatePayload>({
   cpu: 256,
   memory: 512,
   cdn: true,
+  lambda_memory: 1024,
+  lambda_timeout: 30,
+  lambda_reserved_concurrency: 10,
+  lambda_cache_mb: 512,
+  lambda_architecture: 'arm64',
   daterange_mode: 'shared',
   cue_tags: 'none',
   increment_event_ids: false,
@@ -256,12 +261,18 @@ onMounted(() => {
 
 const backendOptions = [
   { label: 'ecs-express (loop-dee-loop, self-hosted, cheap)', value: 'ecs-express' },
+  { label: 'aws-lambda (loop-dee-loop on Lambda + CloudFront, no idle cost)', value: 'aws-lambda' },
   { label: 'aws-media (MediaLive + MediaPackage, fully managed)', value: 'aws-media' },
   { label: 'local-docker (loop-dee-loop on this machine, no AWS)', value: 'local-docker' },
 ]
 
 const isEcsExpress = computed(() => form.backend === 'ecs-express')
 const isLocalDocker = computed(() => form.backend === 'local-docker')
+const isAwsLambda = computed(() => form.backend === 'aws-lambda')
+const lambdaArchitectureOptions = [
+  { label: 'arm64 (Graviton, cheaper)', value: 'arm64' },
+  { label: 'x86_64', value: 'x86_64' },
+]
 // "auto" port is local-docker-only (see backend/its_a_live.generate_toml
 // validation) -- fall back to an explicit port if the backend is switched
 // away from local-docker while it's toggled on.
@@ -278,8 +289,9 @@ watch(
 // ecs-express or the local-docker-only [infrastructure.docker] section
 // (generate_toml() picks the section, this form just shows one `port` field
 // either way). Only ecs-express additionally needs Fargate cpu/memory (also
-// in [infrastructure.express]).
-const usesChannelSection = computed(() => isEcsExpress.value || isLocalDocker.value)
+// in [infrastructure.express]). aws-lambda has no port: its own
+// [infrastructure.lambda] table (memory, timeout, reserved concurrency, ...).
+const usesChannelSection = computed(() => isEcsExpress.value || isAwsLambda.value || isLocalDocker.value)
 const dashAddressingOptions = [
   { label: '$Number$ (segment number + startNumber)', value: 'number' },
   { label: '$Time$ (segment start time)', value: 'time' },
@@ -464,8 +476,42 @@ async function submit() {
     </template>
 
     <template v-if="usesChannelSection">
-      <h4 class="mb-0 mt-2">{{ isLocalDocker ? T['infrastructure.docker'] : T['infrastructure.express'] }}</h4>
-      <div class="flex flex-column gap-1">
+      <h4 class="mb-0 mt-2">{{ isLocalDocker ? T['infrastructure.docker'] : isAwsLambda ? T['infrastructure.lambda'] : T['infrastructure.express'] }}</h4>
+      <div v-if="isAwsLambda" class="grid">
+        <div class="col-6 flex flex-column gap-1">
+          <label for="lambda-memory">{{ L.lambda_memory }}</label>
+          <InputNumber id="lambda-memory" v-model="form.lambda_memory" :use-grouping="false" />
+        </div>
+        <div class="col-6 flex flex-column gap-1">
+          <label for="lambda-timeout">{{ L.lambda_timeout }}</label>
+          <InputNumber id="lambda-timeout" v-model="form.lambda_timeout" :use-grouping="false" />
+        </div>
+        <div class="col-6 flex flex-column gap-1">
+          <label for="lambda-reserved">
+            {{ L.lambda_reserved_concurrency }}
+            <FieldHelp label="Reserved concurrency">
+              Caps concurrent invocations of this channel's function (cost and blast-radius guard);
+              <code>Stop</code> sets it to 0. Use -1 for no cap if your account's Lambda concurrency
+              quota is too small to reserve any (new accounts can be limited to 10 in total).
+            </FieldHelp>
+          </label>
+          <InputNumber id="lambda-reserved" v-model="form.lambda_reserved_concurrency" :use-grouping="false" />
+        </div>
+        <div class="col-6 flex flex-column gap-1">
+          <label for="lambda-cache">{{ L.lambda_cache_mb }}</label>
+          <InputNumber id="lambda-cache" v-model="form.lambda_cache_mb" :use-grouping="false" />
+        </div>
+        <div class="col-12 flex flex-column gap-1">
+          <label for="lambda-arch">{{ L.lambda_architecture }}</label>
+          <Select id="lambda-arch" v-model="form.lambda_architecture" :options="lambdaArchitectureOptions" option-label="label" option-value="value" />
+          <FieldHelp label="Lambda memory and cost">
+            The function reads the loop package from S3 on demand and costs nothing while nobody
+            watches. 1024 MB suits CMAF; use 1769 MB (one full vCPU) for MPEG-TS HLS with a
+            continuous timeline, which patches every packet.
+          </FieldHelp>
+        </div>
+      </div>
+      <div v-if="!isAwsLambda" class="flex flex-column gap-1">
         <label for="port">{{ L.port }}{{ isLocalDocker ? ' (also the host port -- http://localhost:<port>)' : '' }}</label>
         <div v-if="isLocalDocker" class="flex align-items-center gap-2">
           <Checkbox v-model="autoPort" binary input-id="auto-port" />

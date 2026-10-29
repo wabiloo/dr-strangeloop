@@ -195,7 +195,7 @@ def test_stack_shape():
     assert oac["OriginAccessControlConfig"]["OriginAccessControlOriginType"] == "lambda"
     (dist,) = _of_type(res, "AWS::CloudFront::Distribution")
     patterns = {b["PathPattern"] for b in dist["DistributionConfig"]["CacheBehaviors"]}
-    assert patterns == {"*/seg/*", "*/cseg/*", "*/rseg/*", "*/init*.mp4"}
+    assert patterns == {"*/seg/*", "*/cseg/*", "*/rseg/*", "*/init*.mp4", "/timeline.json", "/health"}
 
 
 def test_stack_has_no_cluster_or_load_balancer():
@@ -218,3 +218,10 @@ def test_stack_rejects_bad_lambda_config(bad):
 def test_unreserved_function_has_no_reservation():
     (fn,) = _of_type(_synth(CONFIG.replace("reserved_concurrency = 4", "reserved_concurrency = -1")), "AWS::Lambda::Function")
     assert "ReservedConcurrentExecutions" not in fn
+
+
+def test_timeline_and_health_forward_every_query_parameter_uncached():
+    policies = {p["CachePolicyConfig"]["Name"]: p["CachePolicyConfig"] for p in _of_type(_synth(CONFIG), "AWS::CloudFront::CachePolicy")}
+    status = policies["loop-dee-loop-t-status"]
+    assert status["ParametersInCacheKeyAndForwardedToOrigin"]["QueryStringsConfig"]["QueryStringBehavior"] == "all"
+    assert status["DefaultTTL"] == 0

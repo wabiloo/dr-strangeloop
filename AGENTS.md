@@ -50,6 +50,12 @@ data/playlists/*.yaml
         │                               (GPAC remux, no transcode)
         │                               → ECS Express Mode + CloudFront
         │
+        ├── backend = "aws-lambda"    → cdk deploy → loop-dee-loop/bake.py
+        │                               (same bake, pushed to S3)
+        │                               → Lambda (serve.py, package read
+        │                                 lazily from S3) + CloudFront;
+        │                                 no idle cost, no ECS/ALB
+        │
         └── backend = "local-docker"  → no cdk, no AWS at all →
                                         loop-dee-loop/bake.py → `docker run`
                                         on your own machine (content
@@ -58,13 +64,13 @@ data/playlists/*.yaml
                                         `[infrastructure.docker] bundle_content = true`)
 ```
 
-Three backends exist for phase 3, chosen per-channel via
+Four backends exist for phase 3, chosen per-channel via
 `[deploy].backend` in the its-a-live TOML config — **not** different
 tools an agent needs to pick between at the code level; `its-a-live`
 exposes one CLI (`channel.py`) regardless of backend. Only `aws-media`/
-`ecs-express` involve `cdk`/CloudFormation; `local-docker` has no stack at
+`ecs-express`/`aws-lambda` involve `cdk`/CloudFormation; `local-docker` has no stack at
 all. `loop-dee-loop` is only directly relevant if the backend is
-`ecs-express` or `local-docker`, and even then its `bake.py`/`serve.py` are
+`ecs-express`, `aws-lambda` or `local-docker`, and even then its `bake.py`/`serve.py` are
 normally invoked *by* `its-a-live` (`channel.py spark`/`start` / the
 deployed ECS task), not by hand — see `loop-dee-loop/AGENTS.md` for when
 running it directly is actually appropriate (local dev/testing).

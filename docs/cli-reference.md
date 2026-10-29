@@ -12,7 +12,7 @@ venv (`cd its-a-live && uv sync`).
 ## `galvanise.py`: all three phases, interactively
 
 ```bash
-uv run python galvanise.py [--backend aws-media|ecs-express] [--clear-cache] config.yaml
+uv run python galvanise.py [--backend aws-media|ecs-express|aws-lambda] [--clear-cache] config.yaml
 ```
 
 Builds the playlist, generates `data/channels/<name>.toml`, deploys and
@@ -49,8 +49,8 @@ uv run python channel.py -c <channel.toml> [--json] <command> [args]
 
 | Command | Effect |
 |---|---|
-| `create` | First-time setup: shared stack (ecs-express), `spark`, `cdk deploy`, `start` (local-docker: `spark` + `start`) |
-| `spark` | Stage the input: bake and push the loop package (ecs-express / local-docker) or upload the raw `.ts` (aws-media) |
+| `create` | First-time setup: shared stack (ecs-express only), `spark`, `cdk deploy`, `start` (local-docker: `spark` + `start`) |
+| `spark` | Stage the input: bake and push the loop package (ecs-express / aws-lambda / local-docker) or upload the raw `.ts` (aws-media) |
 | `start` / `stop` | Go live / stop paying for compute. `start --epoch-utc now\|<ISO8601>` resets the epoch (forces a redeploy) |
 | `refresh` | Pick up newly sparked content on a running channel (aws-media: a real stop/start) |
 | `update` | `spark` then `refresh` |
@@ -59,7 +59,7 @@ uv run python channel.py -c <channel.toml> [--json] <command> [args]
 | `redeploy` | Apply a config change or recover a broken stack (local-docker: alias for `refresh`) |
 | `terminate` | `cdk destroy` the stack (not for local-docker; staged S3 content is kept) |
 | `list [dir\|channel.toml]` | Channels under a directory with stack and live state |
-| `schedule add [--start ISO] [--end ISO]` / `remove <id>` / `list` | Scheduled on-air windows (aws-media / ecs-express only) |
+| `schedule add [--start ISO] [--end ISO]` / `remove <id>` / `list` | Scheduled on-air windows (aws-media / ecs-express / aws-lambda only) |
 
 `--json` makes `status`, `outputs`, `list` and `schedule` print a single JSON
 document. Reference: [its-a-live README](../its-a-live/README.md),
@@ -120,7 +120,7 @@ timeline. Reference: [inspector-krogh README](../inspector-krogh/README.md).
 | API | Served by | Where to read it |
 |---|---|---|
 | **Igor API** (`/api/v1/...`): playlists, profiles, archives, manifests, channels, jobs, files, docs | Igor's FastAPI backend | Interactive OpenAPI docs: **Docs → Igor API** in the header (Swagger UI at `/api/docs`, ReDoc at `/api/redoc`, schema at `/api/openapi.json`). Behaviour notes in [Igor AGENTS](../igor/AGENTS.md) |
-| **Channel API**: `/index.m3u8`, `/index.mpd`, `/timeline.json`, `/health`, startover/catchup query parameters | `loop-dee-loop/serve.py` on each running ecs-express / local-docker channel | **Docs → Channel API** in the header (the spec, `loop-dee-loop/openapi.yaml`), or a running channel's own `/docs`. Igor proxies a live channel's at `/api/v1/channels/{name}/docs` |
+| **Channel API**: `/index.m3u8`, `/index.mpd`, `/timeline.json`, `/health`, startover/catchup query parameters | `loop-dee-loop/serve.py` on each running ecs-express / aws-lambda / local-docker channel | **Docs → Channel API** in the header (the spec, `loop-dee-loop/openapi.yaml`), or a running channel's own `/docs`. Igor proxies a live channel's at `/api/v1/channels/{name}/docs` |
 
 Igor's UI is a client of its own API; scripting against it is possible but
 for one-off tasks the CLIs above are the supported route.

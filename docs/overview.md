@@ -39,6 +39,7 @@ channel TOML. There is a single CLI regardless of backend.
 |---|---|---|
 | `aws-media` | MediaLive + MediaPackage v1: real live transcoding of the `.ts` | AWS account, CDK |
 | `ecs-express` | `loop-dee-loop` on ECS Express Mode behind CloudFront | AWS account, CDK |
+| `aws-lambda` | `loop-dee-loop` in a Lambda function behind CloudFront; no idle cost, the first viewer wakes it up | AWS account, CDK |
 | `local-docker` | `loop-dee-loop` in a container on your machine | Docker only; no CDK, no stack |
 
 ## Concepts

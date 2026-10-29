@@ -38,7 +38,7 @@ _QUERY_PARAM_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
 
 class ChannelCreatePayload(BaseModel):
     name: str
-    backend: str  # "aws-media" | "ecs-express" | "local-docker"
+    backend: str  # "aws-media" | "ecs-express" | "aws-lambda" | "local-docker"
     region: str
     bucket_name: str
     content_folder: str
@@ -102,6 +102,13 @@ class ChannelCreatePayload(BaseModel):
     cpu: int = 256
     memory: int = 512
     cdn: bool = True
+    # aws-lambda only: [infrastructure.lambda] memory / timeout /
+    # reserved_concurrency (-1 = none) / cache_mb / architecture.
+    lambda_memory: int = 1024
+    lambda_timeout: int = 30
+    lambda_reserved_concurrency: int = 10
+    lambda_cache_mb: int = 512
+    lambda_architecture: Literal["arm64", "x86_64"] = "arm64"
     # [markers] -- shape of the HLS/DASH SCTE-35 signaling loop-dee-loop's
     # bake.py renders from this channel (see its-a-live/AGENTS.md).
     daterange_mode: str = "shared"
@@ -229,6 +236,13 @@ class ChannelCreatePayload(BaseModel):
         validate_query_names(self.timeshift_start_param, self.timeshift_end_param, self.query_prefix)
         return self
 
+    @field_validator("lambda_reserved_concurrency")
+    @classmethod
+    def _validate_lambda_reserved_concurrency(cls, v: int) -> int:
+        if v == 0 or v < -1:
+            raise ValueError("lambda_reserved_concurrency must be >= 1, or -1 for no reservation")
+        return v
+
     @model_validator(mode="after")
     def _validate_port_backend(self) -> "ChannelCreatePayload":
         if self.port == "auto" and self.backend != "local-docker":
@@ -280,7 +294,7 @@ def list_channels(live: bool = True) -> list[dict]:
             except (OSError, tomllib.TOMLDecodeError):
                 continue
             deploy = cfg.get("deploy", {})
-            if deploy.get("backend") not in ("aws-media", "ecs-express", "local-docker"):
+            if deploy.get("backend") not in its_a_live.BACKENDS:
                 continue
             channels.append({
                 "config_path": path,
@@ -412,7 +426,7 @@ def channel_outputs(name: str) -> dict:
 
 def _serve_url(name: str, path: str) -> str:
     """URL of a loop-dee-loop `serve.py` path for a running channel
-    (ecs-express and local-docker only, both of which actually run
+    (ecs-express, aws-lambda and local-docker only, all of which actually run
     serve.py -- aws-media has no equivalent).
 
     - ecs-express: the direct ECS Express service endpoint (not the
@@ -448,9 +462,17 @@ def _serve_url(name: str, path: str) -> str:
                 detail="No ExpressServiceEndpoint output -- not deployed yet.",
             )
         return endpoint.rstrip("/") + path
+    if backend == "aws-lambda":
+        # The Function URL is IAM-locked (CloudFront only); /health and
+        # /timeline.json have their own uncached, all-query-strings behaviors.
+        outputs = its_a_live.get_outputs(channel_store.config_path_for(name))
+        domain = outputs.get("CloudFrontDomainName")
+        if not domain:
+            raise HTTPException(status_code=404, detail="No CloudFrontDomainName output -- not deployed yet.")
+        return f"https://{domain}{path}"
     raise HTTPException(
         status_code=404,
-        detail=f"backend {backend!r} has no {path} endpoint (only ecs-express and local-docker run serve.py).",
+        detail=f"backend {backend!r} has no {path} endpoint (only ecs-express, aws-lambda and local-docker run serve.py).",
     )
 
 

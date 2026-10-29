@@ -1,8 +1,22 @@
 # its-a-live: an `aws-lambda` backend — scope
 
-Status: scoping only, not implemented, not wired into `channel.py` yet.
+Status: implemented on the `aws-lambda-backend` branch (loop-dee-loop
+`s3_package.py`/`package_io.py`/`Dockerfile.lambda`; its-a-live
+`lambda_stack.py`/`_aws_lambda_ops.py`; igor, galvanise, docs). Not yet
+deployed against a real account: the acceptance steps in §11 that need AWS
+(3 and 4) are still to do, and §9's cost figures are estimates.
 Self-contained: the implementer should not need the chat that produced it,
 but should ask before deviating from anything marked **DECIDED**.
+
+Deviations from the first draft of this document, found while building it:
+`reserved_concurrency = -1` means "no reservation" and `0` is rejected (it is
+what `stop` sets); `/timeline.json` and `/health` got their own uncached
+all-query-string CloudFront behaviors (the manifest cache policy's allow-list
+would have dropped their parameters, breaking igor and player-lab); the
+manifest cache policy has a high max TTL so time-shift responses'
+own `Cache-Control` is honoured; `start` reads the cap from the function's
+`RESERVED_CONCURRENCY` env var because the scheduler Lambda calls it without
+a config; `refresh` also invalidates the CloudFront cache.
 
 ## 1. Problem and goal
 
@@ -104,7 +118,7 @@ new function URLs).
 |---|---|---|
 | `memory` | 1024 | MB. CPU scales with it; use 1769 (=1 vCPU) for `hls_format = ts` (O(packets) patch) |
 | `timeout` | 30 | s |
-| `reserved_concurrency` | 10 | blast-radius / cost cap; `0` = stopped. Needs account unreserved quota >= 100 left over — check the account's Lambda concurrency limit first (new accounts can be far lower) |
+| `reserved_concurrency` | 10 | blast-radius / cost cap; `-1` = no reservation. Lambda keeps at least 100 unreserved, so reserving needs an account quota above 100 + this — check the limit first (new accounts can be as low as 10; use `-1` there). `0` is not a configuration: `stop` sets it |
 | `cache_mb` | 512 | `/tmp` segment LRU (ephemeral storage is sized to match) |
 | `architecture` | `arm64` | or `x86_64` |
 

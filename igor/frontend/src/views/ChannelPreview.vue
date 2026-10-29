@@ -67,7 +67,7 @@ const showPlayback = computed(
 )
 const loaded = computed(() => status.value !== null || statusError.value !== '')
 
-// Startover/catchup and per-request overrides: only ecs-express / local-docker run serve.py.
+// Startover/catchup and per-request overrides: only ecs-express / aws-lambda / local-docker run serve.py.
 const timeshiftParams = computed(() => timeshiftParamsFromConfig(config.value ?? undefined))
 const timeshiftAvailable = computed(
   () =>
@@ -129,7 +129,7 @@ async function loadListPhase() {
   }
 }
 async function loadHealth() {
-  if (status.value?.backend !== 'ecs-express' && status.value?.backend !== 'local-docker') return
+  if (!['ecs-express', 'aws-lambda', 'local-docker'].includes(status.value?.backend ?? '')) return
   try {
     health.value = await getChannelHealth(props.name)
     healthError.value = ''
@@ -235,7 +235,7 @@ watch(() => props.name, reload)
       :start-from-beginning="timeshiftPreview?.startEpochSeconds != null"
       :dash-clock-offset-seconds="timeshiftPreview?.startEpochSeconds ?? 0"
       :health="health"
-      :health-error="status?.backend === 'ecs-express' || status?.backend === 'local-docker' ? healthError : ''"
+      :health-error="['ecs-express', 'aws-lambda', 'local-docker'].includes(status?.backend ?? '') ? healthError : ''"
     />
 
     <WindowPanel v-if="windowAvailable" :name="name" :query="windowQuery" />

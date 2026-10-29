@@ -25,7 +25,7 @@ export function configVersionOf(config: Record<string, unknown> | null | undefin
   return typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : 1
 }
 
-export type ConfigBackend = 'aws-media' | 'ecs-express' | 'local-docker'
+export type ConfigBackend = 'aws-media' | 'ecs-express' | 'aws-lambda' | 'local-docker'
 export type ConfigSourceKind = 'playlist' | 'archive' | 'manifest'
 
 // Display order: identity ([deploy], [input]), infrastructure
@@ -37,6 +37,7 @@ export const CONFIG_SECTION_TITLE = {
   'infrastructure.aws': 'Infrastructure · AWS',
   'infrastructure.s3': 'Infrastructure · S3',
   'infrastructure.express': 'Infrastructure · Express',
+  'infrastructure.lambda': 'Infrastructure · Lambda',
   'infrastructure.docker': 'Infrastructure · Docker',
   timeline: 'Timeline',
   packaging: 'Packaging',
@@ -83,6 +84,11 @@ export const CONFIG_FIELD_LABEL = {
   cpu: 'Express CPU units',
   memory: 'Express memory (MB)',
   cdn: 'CloudFront CDN',
+  lambda_memory: 'Lambda memory (MB)',
+  lambda_timeout: 'Lambda timeout (s)',
+  lambda_reserved_concurrency: 'Lambda reserved concurrency (-1 = none)',
+  lambda_cache_mb: 'Lambda segment cache (MB)',
+  lambda_architecture: 'Lambda architecture',
   daterange_mode: 'HLS descriptor grouping',
   cue_tags: 'HLS CUE-OUT/CUE-IN tags',
   dash_signal_format: 'DASH SCTE-35 signal format',
@@ -94,9 +100,32 @@ export const CONFIG_FIELD_LABEL = {
 export type ConfigFieldKey = keyof typeof CONFIG_FIELD_LABEL
 
 // aws-media has no packaging/serving/SCTE-35 settings -- MediaLive/
-// MediaPackage own those; only ecs-express and local-docker bake+serve.
+// MediaPackage own those; ecs-express, aws-lambda and local-docker bake+serve.
 export function usesChannelSection(backend: string | undefined): boolean {
-  return backend === 'ecs-express' || backend === 'local-docker'
+  return backend === 'ecs-express' || backend === 'aws-lambda' || backend === 'local-docker'
+}
+
+/** The aws-lambda form's settings read from `[infrastructure.lambda]`, with
+ * the same defaults its-a-live applies for a missing key:
+ *
+ *   [infrastructure.lambda] memory, timeout, reserved_concurrency, cache_mb, architecture
+ *                              -> lambda_memory, lambda_timeout, lambda_reserved_concurrency,
+ *                                 lambda_cache_mb, lambda_architecture
+ */
+export function lambdaFieldsFromConfig(config: TomlConfig): Required<
+  Pick<
+    ChannelCreatePayload,
+    'lambda_memory' | 'lambda_timeout' | 'lambda_reserved_concurrency' | 'lambda_cache_mb' | 'lambda_architecture'
+  >
+> {
+  const lambda = infraTable(config, 'lambda')
+  return {
+    lambda_memory: Number(lambda.memory ?? 1024),
+    lambda_timeout: Number(lambda.timeout ?? 30),
+    lambda_reserved_concurrency: Number(lambda.reserved_concurrency ?? 10),
+    lambda_cache_mb: Number(lambda.cache_mb ?? 512),
+    lambda_architecture: (lambda.architecture as ChannelCreatePayload['lambda_architecture']) ?? 'arm64',
+  }
 }
 
 // input.source_kind is missing in configs created before it existed; a
@@ -132,8 +161,8 @@ function nested(config: TomlConfig, ...path: string[]): Record<string, unknown> 
   return path.reduce<TomlConfig>((node, key) => table(node, key), config)
 }
 
-/** `[infrastructure.<name>]` -- aws, s3, express or docker. */
-export function infraTable(config: TomlConfig, name: 'aws' | 's3' | 'express' | 'docker'): Record<string, unknown> {
+/** `[infrastructure.<name>]` -- aws, s3, express, lambda or docker. */
+export function infraTable(config: TomlConfig, name: 'aws' | 's3' | 'express' | 'lambda' | 'docker'): Record<string, unknown> {
   return table(table(config, 'infrastructure'), name)
 }
 
@@ -250,6 +279,7 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
   const backend = String(deploy.backend ?? '')
   const isLocalDocker = backend === 'local-docker'
   const isEcsExpress = backend === 'ecs-express'
+  const isAwsLambda = backend === 'aws-lambda'
   const sourceKind = deriveSourceKind(input)
   const portTable = isLocalDocker ? infraTable(config, 'docker') : infraTable(config, 'express')
 
@@ -274,13 +304,24 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
     ])
   }
   if (usesChannelSection(backend)) {
-    add(isLocalDocker ? 'infrastructure.docker' : 'infrastructure.express', [
-      ['port', portTable.port],
-      ['bundle_content', isLocalDocker ? Boolean(portTable.bundle_content ?? false) : undefined],
-      ['cpu', isEcsExpress ? portTable.cpu : undefined],
-      ['memory', isEcsExpress ? portTable.memory : undefined],
-      ['cdn', isEcsExpress ? (portTable.cdn ?? true) : undefined],
-    ])
+    if (isAwsLambda) {
+      const l = lambdaFieldsFromConfig(config)
+      add('infrastructure.lambda', [
+        ['lambda_memory', l.lambda_memory],
+        ['lambda_timeout', l.lambda_timeout],
+        ['lambda_reserved_concurrency', l.lambda_reserved_concurrency],
+        ['lambda_cache_mb', l.lambda_cache_mb],
+        ['lambda_architecture', l.lambda_architecture],
+      ])
+    } else {
+      add(isLocalDocker ? 'infrastructure.docker' : 'infrastructure.express', [
+        ['port', portTable.port],
+        ['bundle_content', isLocalDocker ? Boolean(portTable.bundle_content ?? false) : undefined],
+        ['cpu', isEcsExpress ? portTable.cpu : undefined],
+        ['memory', isEcsExpress ? portTable.memory : undefined],
+        ['cdn', isEcsExpress ? (portTable.cdn ?? true) : undefined],
+      ])
+    }
     const f = formFieldsFromConfig(config)
     add('timeline', [
       ['epoch_utc', f.epoch_utc],

@@ -8,7 +8,7 @@ from igor.app.routes.channels import ChannelCreatePayload
 from igor.integrations.its_a_live import generate_toml
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 @pytest.mark.parametrize("hls_format,mux_audio", [("cmaf", True), ("ts", True), ("ts", False)])
 def test_channel_hls_packaging_roundtrip(backend, hls_format, mux_audio):
     payload = ChannelCreatePayload(
@@ -20,7 +20,7 @@ def test_channel_hls_packaging_roundtrip(backend, hls_format, mux_audio):
     assert config["packaging"]["hls"] == {"container": hls_format, "mux_audio": mux_audio}
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 @pytest.mark.parametrize("continuous", [True, False])
 def test_channel_continuous_roundtrip(backend, continuous):
     payload = ChannelCreatePayload(
@@ -32,7 +32,7 @@ def test_channel_continuous_roundtrip(backend, continuous):
     assert config["timeline"]["continuous"] is continuous
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 @pytest.mark.parametrize("dash_addressing", ["number", "time"])
 def test_channel_dash_addressing_roundtrip(backend, dash_addressing):
     payload = ChannelCreatePayload(
@@ -44,7 +44,7 @@ def test_channel_dash_addressing_roundtrip(backend, dash_addressing):
     assert config["packaging"]["dash"]["addressing"] == dash_addressing
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 @pytest.mark.parametrize("dash_timeline", ["full", "compact"])
 def test_channel_dash_timeline_roundtrip(backend, dash_timeline):
     payload = ChannelCreatePayload(
@@ -112,7 +112,7 @@ def test_invalid_hls_format_rejected():
         )
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 @pytest.mark.parametrize("dash_signal_format", ["binary", "xml"])
 def test_channel_dash_signal_format_roundtrip(backend, dash_signal_format):
     payload = ChannelCreatePayload(
@@ -133,7 +133,7 @@ def test_invalid_dash_signal_format_rejected():
         )
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 @pytest.mark.parametrize("dash_descriptor_mode", ["shared", "narrowed"])
 def test_channel_dash_descriptor_mode_roundtrip(backend, dash_descriptor_mode):
     payload = ChannelCreatePayload(
@@ -154,7 +154,7 @@ def test_invalid_dash_descriptor_mode_rejected():
         )
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 def test_channel_timeshift_roundtrip(backend):
     payload = ChannelCreatePayload(
         name="test-channel", backend=backend, region="eu-west-1",
@@ -207,7 +207,7 @@ def test_invalid_timeshift_config_rejected(kwargs):
         )
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 @pytest.mark.parametrize("epoch_utc", ["1970-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-10-01T09:15:30Z"])
 def test_channel_epoch_utc_roundtrip(backend, epoch_utc):
     payload = ChannelCreatePayload(
@@ -239,7 +239,7 @@ def test_channel_epoch_utc_rejects_anything_but_the_exact_utc_form(bad):
         )
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 def test_channel_period_on_segmentation_roundtrip(backend):
     payload = ChannelCreatePayload(
         name="test-channel", backend=backend, region="eu-west-1",
@@ -347,7 +347,7 @@ def test_bundle_content_rejected_outside_local_docker(backend):
 # ── the new TOML layout ─────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 def test_generated_toml_uses_the_nested_marker_and_packaging_tables(backend):
     payload = _payload(
         backend=backend, daterange_mode="grouped", cue_tags="alongside", daterange_id_format="x-{eventid}",
@@ -381,7 +381,7 @@ def test_generated_toml_has_no_pre_rename_keys():
         assert ("timeshift", old) not in flat
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 def test_query_prefix_roundtrip(backend):
     config = tomllib.loads(generate_toml(**_payload(backend=backend, query_prefix="dsl_").model_dump()))
     assert config["query"]["prefix"] == "dsl_"
@@ -435,7 +435,7 @@ def test_fixed_query_params_match_its_a_live_and_loop_dee_loop():
     assert QUERY_FIXED_PARAMS == its_a_live_cfg.FIXED_PARAMS == loop_timeshift.FIXED_PARAMS
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 def test_generated_toml_is_accepted_by_its_a_live(backend):
     """The file Igor writes must pass its-a-live's own loader checks and
     settings validation (no legacy keys, every value valid)."""
@@ -469,7 +469,7 @@ def test_generated_toml_is_accepted_by_its_a_live(backend):
     assert _query_cfg.query_param_names(config)[0] == "dsl_from"
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 @pytest.mark.parametrize("overrides", [True, False])
 def test_query_overrides_roundtrip(backend, overrides):
     config = tomllib.loads(generate_toml(**_payload(backend=backend, query_overrides=overrides).model_dump()))
@@ -497,7 +497,7 @@ def test_generated_toml_with_overrides_off_is_read_back_by_its_a_live():
     assert "--timeshift" in flags and "--query-overrides" not in flags and "--no-query-overrides" not in flags
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 @pytest.mark.parametrize("timeshift", [True, False])
 def test_timeshift_switch_roundtrip(backend, timeshift):
     config = tomllib.loads(generate_toml(**_payload(backend=backend, timeshift_enabled=timeshift).model_dump()))
@@ -525,7 +525,7 @@ def test_the_switches_are_not_fixed_query_parameter_names():
 # ── config_version ──────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
 def test_generated_toml_starts_with_the_config_version(backend):
     text = generate_toml(**_payload(backend=backend).model_dump())
     assert text.startswith("config_version = 2\n\n[deploy]")

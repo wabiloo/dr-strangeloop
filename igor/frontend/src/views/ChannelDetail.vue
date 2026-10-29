@@ -31,6 +31,7 @@ import {
   CONFIG_VERSION,
   configVersionOf,
   formFieldsFromConfig,
+  lambdaFieldsFromConfig,
 } from '../utils/channelConfigLayout'
 import { alignConfirmPopup } from '../utils/confirmPopup'
 import {
@@ -133,6 +134,11 @@ const editForm = reactive<ChannelCreatePayload>({
   cpu: 256,
   memory: 512,
   cdn: true,
+  lambda_memory: 1024,
+  lambda_timeout: 30,
+  lambda_reserved_concurrency: 10,
+  lambda_cache_mb: 512,
+  lambda_architecture: 'arm64',
   daterange_mode: 'shared',
   cue_tags: 'none',
   increment_event_ids: false,
@@ -142,7 +148,12 @@ const editForm = reactive<ChannelCreatePayload>({
 })
 const editIsEcsExpress = computed(() => editForm.backend === 'ecs-express')
 const editIsLocalDocker = computed(() => editForm.backend === 'local-docker')
-const editUsesChannelSection = computed(() => editIsEcsExpress.value || editIsLocalDocker.value)
+const editIsAwsLambda = computed(() => editForm.backend === 'aws-lambda')
+const editUsesChannelSection = computed(() => editIsEcsExpress.value || editIsAwsLambda.value || editIsLocalDocker.value)
+const lambdaArchitectureOptions = [
+  { label: 'arm64 (Graviton, cheaper)', value: 'arm64' },
+  { label: 'x86_64', value: 'x86_64' },
+]
 const editIsArchiveSource = computed(() => editForm.source_kind === 'archive' || editForm.source_kind === 'manifest')
 const dashAddressingOptions = [
   { label: '$Number$ (segment number + startNumber)', value: 'number' },
@@ -247,6 +258,8 @@ function startEdit() {
     cpu: Number(express.cpu ?? 256),
     memory: Number(express.memory ?? 512),
     cdn: Boolean(express.cdn ?? true),
+    // [infrastructure.lambda] -> lambda_* (one mapping, in channelConfigLayout.ts)
+    ...lambdaFieldsFromConfig(config.value ?? {}),
   })
   editAutoPort.value = editForm.port === 'auto'
   editLastExplicitPort.value = typeof editForm.port === 'number' ? editForm.port : editLastExplicitPort.value
@@ -369,9 +382,10 @@ const bundleNote = computed(() =>
     : '',
 )
 
-function byBackend(localDocker: string, ecsExpress: string, awsMedia: string): string {
+function byBackend(localDocker: string, ecsExpress: string, awsMedia: string, awsLambda?: string): string {
   if (backend.value === 'local-docker') return localDocker
   if (backend.value === 'ecs-express') return ecsExpress
+  if (backend.value === 'aws-lambda') return awsLambda ?? ecsExpress
   return awsMedia
 }
 
@@ -383,11 +397,13 @@ const firstDeployAction = computed<ActionDef>(() => ({
     'Bakes the content locally and starts the container. Equivalent to running Spark then Start below.',
     'One-time, first deploy of this channel: bakes the content locally, stages it to S3, deploys the ECS/CloudFront stack, then starts it.',
     'One-time, first deploy of this channel: uploads the content to S3, deploys the MediaLive/MediaPackage stack, then starts it.',
+    'One-time, first deploy of this channel: bakes the content locally, stages it to S3, deploys the Lambda/CloudFront stack, then allows invocations. Nothing runs (or costs anything) until someone plays the channel.',
   ),
   eta: byBackend(
     '~10-60s for the bake, plus a one-time Docker image build the first time (a few minutes).',
     '~4-11 min -- Docker image build + push (only when the image is new; a cold build takes a few minutes), ECS task startup, and, if CloudFront is on, a brand-new distribution that adds about 3 min. This is normal, not a hang.',
     '~5-10 min -- MediaLive channel provisioning and startup. This is normal, not a hang.',
+    '~4-8 min -- Docker image build + push (only when the image is new) and a brand-new CloudFront distribution (about 3 min). This is normal, not a hang.',
   ),
   fn: () => createChannel(props.name),
   disabled: () => (backend.value === 'local-docker' ? isUpButMaybeUnreachable(phase.value) : phase.value !== 'not-deployed'),
@@ -417,8 +433,9 @@ const contentAction = computed<ActionDef>(() => {
         `Bakes the franken-ts output locally and recreates the container from it, in one step -- the routine way to ship new content to a running channel.${bundleNote.value}`,
         'Bakes the franken-ts output locally, stages it to S3, then re-syncs the running channel -- the routine way to ship new content, in one step.',
         'Uploads the franken-ts output to S3, then cycles the channel to pick it up -- the routine way to ship new content, in one step.',
+        'Bakes the franken-ts output locally, stages it to S3, recycles the warm Lambda environments and invalidates the CloudFront cache -- the routine way to ship new content, in one step.',
       ),
-      eta: byBackend(bundled.value ? '~30s-several min (image rebuild scales with loop size).' : '~15-90s.', '~40-90s.', 'A full stop/start cycle (a few minutes) on top of the bake/upload.'),
+      eta: byBackend(bundled.value ? '~30s-several min (image rebuild scales with loop size).' : '~15-90s.', '~40-90s.', 'A full stop/start cycle (a few minutes) on top of the bake/upload.', '~20-60s.'),
       fn: () => updateChannelContent(props.name),
       disabled: () => false,
       disabledReason: () => '',
@@ -472,11 +489,13 @@ const streamActions = computed<ActionDef[]>(() => [
       `Goes live: starts the local-docker container. Requires content to already be Sparked at least once.${bundleNote.value}`,
       'Goes live: scales the ECS Express service to 1 task. Requires content to already be Sparked at least once.',
       'Goes live: starts the MediaLive channel. Requires content to already be Sparked at least once.',
+      'Lifts the block set by Stop (restores the reserved concurrency). An idle Lambda costs nothing, so a freshly deployed channel is already playable. Requires content to already be Sparked at least once.',
     ),
     eta: byBackend(
       bundled.value ? '~30s-several min (image rebuild scales with loop size), then container startup.' : '~10-30s (container startup + health check).',
       '~30-60s (task startup + health check).',
       'A couple of minutes (MediaLive channel start).',
+      '~2s.',
     ),
     fn: () => startChannel(props.name),
     // aws-media/ecs-express: `start` reads CloudFormation stack outputs, so
@@ -502,8 +521,9 @@ const streamActions = computed<ActionDef[]>(() => [
       'Stops and removes the local container.',
       'Stops paying for compute: scales the ECS Express service to 0 tasks (the shared ALB stays up for other channels).',
       'Stops the MediaLive channel.',
+      'Blocks playback: sets the function\'s reserved concurrency to 0 so every request is throttled. (An idle Lambda costs nothing either way -- this is an access control, not a cost saving.)',
     ),
-    eta: byBackend('~5-10s.', '~10-30s.', 'Up to a couple of minutes.'),
+    eta: byBackend('~5-10s.', '~10-30s.', 'Up to a couple of minutes.', '~2s.'),
     fn: () => stopChannel(props.name),
     disabled: () => !isUpButMaybeUnreachable(phase.value),
     disabledReason: () =>
@@ -559,11 +579,13 @@ const infrastructureActions = computed<ActionDef[]>(() => {
         'Recreates the local container from whatever was last Sparked (same as the content-update action above).',
         'Applies your edited channel config to the already-deployed stack (runs cdk deploy; the service restarts briefly). Run this after changing any setting in the Configuration panel -- a running channel keeps using the old settings until you do. For new content, use Update content instead. If the stack is in a failed state it is deleted and recreated first.',
         'Applies your edited channel config to the already-deployed stack (runs cdk deploy). Run this after changing any setting in the Configuration panel -- a running channel keeps using the old settings until you do. For new content, use Update content instead. If the stack is in a failed state it is deleted and recreated first.',
+        'Applies your edited channel config to the already-deployed stack (runs cdk deploy; new settings take effect as warm Lambda environments are replaced). Run this after changing any setting in the Configuration panel. For new content, use Update content instead. If the stack is in a failed state it is deleted and recreated first.',
       ),
       eta: byBackend(
         '~10-30s.',
         '~5-10 min (ECS Express rolls the new task out with a canary, and the old task keeps serving for ~3+ min); longer only if a failed stack has to be deleted and recreated -- not a hang.',
         '~1-2 min for a config change; ~5-10 min only if a failed stack has to be deleted and recreated.',
+        '~1-3 min for a config change; a CloudFront change can take a few minutes more -- not a hang.',
       ),
       fn: () => redeployChannel(props.name),
       disabled: () => phase.value === 'unknown' && !statusError.value,
@@ -579,11 +601,13 @@ const infrastructureActions = computed<ActionDef[]>(() => {
         '', // never rendered -- local-docker has no infrastructureActions at all
         'Deletes the CloudFormation stack for good (ECS service, CloudFront distribution, load balancer, ...) -- stops billing. Uploaded content in S3 is not deleted. Use Galvanise above to bring it back.',
         'Deletes the CloudFormation stack for good (MediaLive channel, MediaPackage channel/endpoints) -- stops billing. Uploaded content in S3 is not deleted. Use Galvanise above to bring it back.',
+        'Deletes the CloudFormation stack for good (Lambda function, CloudFront distribution). Uploaded content in S3 is not deleted. Use Galvanise above to bring it back.',
       ),
       eta: byBackend(
         '',
         '~1-2 min, though CloudFront can take 15+ min to finish deleting its distribution in the background after this returns.',
         '~1-5 min for MediaLive/MediaPackage resource deletion.',
+        '~1-2 min, though CloudFront can take 15+ min to finish deleting its distribution in the background after this returns.',
       ),
       fn: () => terminateChannel(props.name),
       disabled: () => phase.value !== 'stopped' && phase.value !== 'failed',
@@ -656,7 +680,7 @@ async function loadListPhase() {
 }
 
 async function loadHealth() {
-  if (status.value?.backend !== 'ecs-express' && status.value?.backend !== 'local-docker') return
+  if (!['ecs-express', 'aws-lambda', 'local-docker'].includes(status.value?.backend ?? '')) return
   try {
     health.value = await getChannelHealth(props.name)
     healthError.value = ''
@@ -929,6 +953,7 @@ watch(() => props.name, reload)
                 'Spark and Start can both run now -- Start builds/launches the container directly, no separate deploy step for this backend.',
                 'Spark can run now to stage content ahead of the first deploy. Start/Stop need the channel deployed first -- run Galvanise above.',
                 'Spark can run now to stage content ahead of the first deploy. Start/Stop need the channel deployed first -- run Galvanise above.',
+                'Spark can run now to stage content ahead of the first deploy. Start/Stop need the channel deployed first -- run Galvanise above.',
               )
             }}
           </Message>
@@ -1157,9 +1182,9 @@ watch(() => props.name, reload)
 
           <template v-if="editUsesChannelSection">
             <section class="config-group">
-              <h4 class="config-group-title">{{ editIsLocalDocker ? T['infrastructure.docker'] : T['infrastructure.express'] }}</h4>
+              <h4 class="config-group-title">{{ editIsLocalDocker ? T['infrastructure.docker'] : editIsAwsLambda ? T['infrastructure.lambda'] : T['infrastructure.express'] }}</h4>
               <div class="config-fields">
-                <div class="flex flex-column gap-1" :class="{ 'config-field-wide': editIsLocalDocker }">
+                <div v-if="!editIsAwsLambda" class="flex flex-column gap-1" :class="{ 'config-field-wide': editIsLocalDocker }">
                   <label class="text-xs text-color-secondary">{{ L.port }}</label>
                   <div v-if="editIsLocalDocker" class="flex align-items-center gap-2">
                     <Checkbox v-model="editAutoPort" binary input-id="edit-auto-port" />
@@ -1173,6 +1198,28 @@ watch(() => props.name, reload)
                 <div v-if="editIsLocalDocker" class="config-field-wide">
                   <BundleContentField v-model="editForm.bundle_content" input-id="edit-bundle-content" />
                 </div>
+                <template v-if="editIsAwsLambda">
+                  <div class="flex flex-column gap-1">
+                    <label class="text-xs text-color-secondary">{{ L.lambda_memory }}</label>
+                    <InputNumber v-model="editForm.lambda_memory" :use-grouping="false" fluid />
+                  </div>
+                  <div class="flex flex-column gap-1">
+                    <label class="text-xs text-color-secondary">{{ L.lambda_timeout }}</label>
+                    <InputNumber v-model="editForm.lambda_timeout" :use-grouping="false" fluid />
+                  </div>
+                  <div class="flex flex-column gap-1">
+                    <label class="text-xs text-color-secondary">{{ L.lambda_reserved_concurrency }}</label>
+                    <InputNumber v-model="editForm.lambda_reserved_concurrency" :use-grouping="false" fluid />
+                  </div>
+                  <div class="flex flex-column gap-1">
+                    <label class="text-xs text-color-secondary">{{ L.lambda_cache_mb }}</label>
+                    <InputNumber v-model="editForm.lambda_cache_mb" :use-grouping="false" fluid />
+                  </div>
+                  <div class="flex flex-column gap-1">
+                    <label class="text-xs text-color-secondary">{{ L.lambda_architecture }}</label>
+                    <Select v-model="editForm.lambda_architecture" :options="lambdaArchitectureOptions" option-label="label" option-value="value" fluid />
+                  </div>
+                </template>
                 <template v-if="editIsEcsExpress">
                   <div class="flex flex-column gap-1">
                     <label class="text-xs text-color-secondary">{{ L.cpu }}</label>
@@ -1334,7 +1381,7 @@ watch(() => props.name, reload)
 
         <div class="text-color-secondary text-xs mt-2">
           Editing only rewrites configs/{{ name }}.toml -- it does not
-          {{ byBackend('touch the running container', 'touch AWS', 'touch AWS') }} by itself.
+          {{ byBackend('touch the running container', 'touch AWS', 'touch AWS', 'touch AWS') }} by itself.
           Use Update content to rebake HLS packaging after saving.
         </div>
       </div>

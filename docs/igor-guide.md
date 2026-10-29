@@ -72,7 +72,7 @@ configuration panel and the edit form. Field-by-field reference:
   Background: [loop-dee-loop README](../loop-dee-loop/README.md).
 - *Schedule*: on-air windows for AWS-backed channels.
 - *Configuration*: read-only view, **Edit**, and **Duplicate to ecs-express**.
-- *Health*: live loop position for `ecs-express` channels.
+- *Health*: live loop position for `ecs-express` and `aws-lambda` channels.
 
 ## Docs
 

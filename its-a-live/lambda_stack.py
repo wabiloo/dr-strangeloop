@@ -212,6 +212,20 @@ class LambdaLoopStack(Stack):
             enable_accept_encoding_brotli=True,
         )
 
+        # /timeline.json (and /health) take free-form query parameters (scope,
+        # count, ...) that the manifest policy's allow-list would drop before
+        # they reach the origin. Cheap JSON for tooling (igor, player-lab):
+        # forward every parameter, cache nothing.
+        status_cache_policy = cloudfront.CachePolicy(
+            self,
+            "StatusCachePolicy",
+            query_string_behavior=cloudfront.CacheQueryStringBehavior.all(),
+            cache_policy_name=f"loop-dee-loop-{name}-status",
+            default_ttl=Duration.seconds(0),
+            min_ttl=Duration.seconds(0),
+            max_ttl=Duration.seconds(1),
+        )
+
         origin = origins.FunctionUrlOrigin.with_origin_access_control(function_url)
 
         distribution = cloudfront.Distribution(
@@ -235,6 +249,14 @@ class LambdaLoopStack(Stack):
                     allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
                 )
                 for pattern in ("*/seg/*", "*/cseg/*", "*/rseg/*", "*/init*.mp4")
+            } | {
+                pattern: cloudfront.BehaviorOptions(
+                    origin=origin,
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    cache_policy=status_cache_policy,
+                    allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+                )
+                for pattern in ("/timeline.json", "/health")
             },
         )
         playback_host = distribution.distribution_domain_name
