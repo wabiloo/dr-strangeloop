@@ -22,6 +22,21 @@ from serve import (
 )
 
 package_dir = Path(os.environ["LOOP_PACKAGE_DIR"])
+
+# aws-lambda backend (its-a-live/LAMBDA_BACKEND.md): the package stays in S3;
+# build a local skeleton and fetch segment bytes on demand. Everything below
+# is then identical to the ECS path.
+if os.environ.get("LOOP_PACKAGE_STORE", "").lower() == "s3":
+    from s3_package import S3Package
+
+    _s3 = S3Package(
+        os.environ["LOOP_PACKAGE_S3_URI"],
+        package_dir,
+        cache_bytes=int(os.environ.get("SEGMENT_CACHE_MB") or 512) * 1024 * 1024,
+    )
+    _s3.materialize()
+    _s3.install()
+
 descriptor = read_package_descriptor(package_dir)
 
 epoch_ticks = resolve_epoch_ticks(os.environ["EPOCH_UTC"], int(descriptor["timescale"]))

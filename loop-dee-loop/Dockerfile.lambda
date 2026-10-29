@@ -1,0 +1,34 @@
+# Serve-only image for the aws-lambda backend (its-a-live/LAMBDA_BACKEND.md).
+# No GPAC / ffmpeg / awscli: bake never runs on Lambda (`channel.py spark`
+# bakes locally and pushes to S3), and the package is read from S3 lazily
+# (s3_package.py), so the image stays small -- the main cold-start lever.
+#
+# AWS Lambda Web Adapter (an extension) turns Function URL invocations into
+# plain HTTP requests to gunicorn on :8080, with response streaming so large
+# segments are not bound by the 6 MB buffered-response limit.
+FROM public.ecr.aws/docker/library/python:3.12-slim
+
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.9.0 /lambda-adapter /opt/extensions/lambda-adapter
+
+ENV PORT=8080 \
+    AWS_LWA_PORT=8080 \
+    AWS_LWA_INVOKE_MODE=response_stream \
+    AWS_LWA_READINESS_CHECK_PATH=/health \
+    AWS_LWA_ASYNC_INIT=true \
+    HOME=/tmp \
+    PYTHONUNBUFFERED=1 \
+    LOOP_PACKAGE_STORE=s3 \
+    LOOP_PACKAGE_LOCAL_DIR=/tmp/loop-package
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt boto3
+
+COPY serve.py wsgi.py scte35_signaling.py scte35_table23_data.py loop_math.py cmaf.py continuity.py timeshift.py package_io.py s3_package.py openapi.yaml pyproject.toml ./
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Function config supplies CMD (serve.py + the channel's flags) and
+# LOOP_PACKAGE_S3_URI, exactly like the ECS container command.
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["serve.py", "--help"]

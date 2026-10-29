@@ -132,3 +132,55 @@ def test_dockerfile_copies_every_module_serve_imports():
         imported = set(re.findall(r"^(?:import|from) (\w+)", source, re.M))
         for module in imported & local_modules:
             assert f"{module}.py" in copied, f"{entry} imports {module}.py but the Dockerfile does not COPY it"
+
+
+def test_s3_store_entrypoint_skips_sync_and_runs_one_threaded_worker(tmp_path: Path):
+    """aws-lambda backend: LOOP_PACKAGE_STORE=s3 must not `aws s3 sync` the
+    package (wsgi.py reads it lazily) and must run a single gthread worker."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    capture_path = tmp_path / "gunicorn.json"
+    (bin_dir / "aws").write_text("#!/bin/sh\necho aws-called >&2\nexit 1\n", encoding="utf-8")
+    (bin_dir / "aws").chmod(0o755)
+    (bin_dir / "gunicorn").write_text(
+        "#!/usr/bin/env python3\nimport json, os, sys\n"
+        "json.dump({'argv': sys.argv[1:], 'store': os.environ.get('LOOP_PACKAGE_STORE'),"
+        " 'uri': os.environ.get('LOOP_PACKAGE_S3_URI'), 'dir': os.environ.get('LOOP_PACKAGE_DIR')},"
+        " open(os.environ['CAPTURE_FILE'], 'w'))\nsys.exit(0)\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "gunicorn").chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "LOOP_PACKAGE_STORE": "s3",
+            "LOOP_PACKAGE_S3_URI": "s3://example/channel",
+            "LOOP_PACKAGE_LOCAL_DIR": str(tmp_path / "package"),
+            "CAPTURE_FILE": str(capture_path),
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT), "serve.py", "--epoch-utc", "2026-01-01T00:00:00Z", "--continuous-timeline"],
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "aws-called" not in result.stderr
+    got = json.loads(capture_path.read_text(encoding="utf-8"))
+    assert got["store"] == "s3" and got["uri"] == "s3://example/channel"
+    assert got["dir"] == str(tmp_path / "package")
+    argv = got["argv"]
+    assert argv[argv.index("--workers") + 1] == "1"
+    assert argv[argv.index("--worker-class") + 1] == "gthread"
+    assert argv[-1] == "wsgi:app"
+
+
+def test_s3_store_entrypoint_requires_a_uri(tmp_path: Path):
+    env = os.environ.copy()
+    env.update({"LOOP_PACKAGE_STORE": "s3", "LOOP_PACKAGE_LOCAL_DIR": str(tmp_path / "p")})
+    env.pop("LOOP_PACKAGE_S3_URI", None)
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT), "serve.py", "--epoch-utc", "2026-01-01T00:00:00Z"],
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 2

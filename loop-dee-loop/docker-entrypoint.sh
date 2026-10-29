@@ -80,7 +80,12 @@ case "$SUBCOMMAND" in
     serve.py)
         shift
         if [[ -n "${LOOP_PACKAGE_S3_URI:-}" || "${LOOP_PACKAGE_BAKED:-}" == "1" ]]; then
-            if [[ -n "${LOOP_PACKAGE_S3_URI:-}" ]]; then
+            if [[ "${LOOP_PACKAGE_STORE:-}" == "s3" ]]; then
+                # aws-lambda backend: no sync. wsgi.py lists the S3 prefix and
+                # fetches segment bytes lazily (s3_package.py).
+                [[ -n "${LOOP_PACKAGE_S3_URI:-}" ]] || { log "ERROR: LOOP_PACKAGE_STORE=s3 needs LOOP_PACKAGE_S3_URI"; exit 2; }
+                log "lazy S3 package ${LOOP_PACKAGE_S3_URI} (no sync)"
+            elif [[ -n "${LOOP_PACKAGE_S3_URI:-}" ]]; then
                 sync_down "$LOOP_PACKAGE_S3_URI" "$LOOP_PACKAGE_LOCAL_DIR"
             else
                 if [[ ! -d "$LOOP_PACKAGE_LOCAL_DIR" || -z "$(ls -A "$LOOP_PACKAGE_LOCAL_DIR" 2>/dev/null)" ]]; then
@@ -149,6 +154,17 @@ case "$SUBCOMMAND" in
             export PERIOD_ON_SEGMENTATION CHANNEL_NAME DASH_ADDRESSING DASH_TIMELINE
             export TIMESHIFT TIMESHIFT_START_PARAM TIMESHIFT_END_PARAM
             export TIMESHIFT_MAX_SPAN_SECONDS QUERY_PREFIX QUERY_OVERRIDES
+            if [[ "${LOOP_PACKAGE_STORE:-}" == "s3" ]]; then
+                # One execution environment handles one request at a time
+                # (Lambda), so one worker; threads cover the Web Adapter's
+                # health probe and response streaming.
+                export LOOP_PACKAGE_DIR LOOP_PACKAGE_STORE LOOP_PACKAGE_S3_URI
+                exec gunicorn --bind "${HOST}:${PORT}" --workers 1 --threads "${GUNICORN_THREADS:-4}" \
+                    --worker-class gthread --timeout 0 \
+                    --access-logfile - \
+                    --access-logformat '%(h)s "%(r)s" %(s)s %(b)s "%(a)s"' \
+                    wsgi:app
+            fi
             WORKERS="${GUNICORN_WORKERS:-4}"
             log "starting gunicorn (${WORKERS} workers) on ${HOST}:${PORT}"
             exec gunicorn --bind "${HOST}:${PORT}" --workers "$WORKERS" \

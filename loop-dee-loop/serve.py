@@ -30,6 +30,7 @@ import datetime as _dt
 import json
 import logging
 import math
+import mimetypes
 import time
 from collections.abc import Callable
 from decimal import Decimal
@@ -42,6 +43,7 @@ from flask import Flask, Response, abort, jsonify, request, send_file
 
 import cmaf
 import continuity
+import package_io
 from timeshift import (
     ADDRESSING_PARAM,
     ADDRESSING_VALUES,
@@ -689,7 +691,7 @@ class VideoRendition:
                     init = self.segments_dir / name if name else None
                 else:
                     init = self.audio_init_path()
-                found = cmaf.track_timescale(init.read_bytes()) if init else None
+                found = cmaf.track_timescale(package_io.read_bytes(init)) if init else None
             except (OSError, RuntimeError):
                 found = None
             self._audio_timescale = found or default
@@ -963,7 +965,7 @@ def _cmaf_tfdt_version(path: Path) -> int:
     eventually overflow on a channel that runs forever and keeps adding
     `loop_number * total_loop_duration_ticks` to it, no matter how large
     that duration is, so continuity mode refuses to start against one."""
-    data = path.read_bytes()
+    data = package_io.read_bytes(path)
     moof = cmaf._find(data, ("moof",))
     tfdt = cmaf._find(data, ("traf", "tfdt"), moof[0] + 8, moof[1]) if moof else None
     if moof is None or tfdt is None:
@@ -3167,6 +3169,15 @@ def resolve_request_channel(channel: "Channel", args, cfg: TimeshiftConfig, fmt:
     return ch.with_package_overrides(**overrides)
 
 
+def _send_package_file(path: Path, mimetype: str | None = None):
+    """`send_file` for a file inside the loop package. When a custom reader is
+    installed (package_io; the aws-lambda backend's S3-backed package) the
+    bytes come from it instead of the local path."""
+    if not package_io.custom_reader():
+        return send_file(path, mimetype=mimetype)
+    return Response(package_io.read_bytes(path), mimetype=mimetype or mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+
+
 def create_app(
     package_dir: Path,
     epoch_ticks: int,
@@ -3209,8 +3220,8 @@ def create_app(
         if path is None:
             abort(404)
         if shift_ticks is None:
-            return send_file(path, mimetype=mimetype)
-        data = path.read_bytes()
+            return _send_package_file(path, mimetype)
+        data = package_io.read_bytes(path)
         patched = (
             continuity.shift_ts_segment(data, shift_ticks)
             if ts
@@ -3388,7 +3399,7 @@ def create_app(
             # `no_init` handling), so a real player should never hit this;
             # 404 defensively rather than raising.
             abort(404)
-        return send_file(rendition.init_path())
+        return _send_package_file(rendition.init_path())
 
     @app.get("/<rendition_name>/init_<int:span>.mp4")
     def span_init_segment(rendition_name: str, span: int):
@@ -3399,7 +3410,7 @@ def create_app(
         path = rendition.init_path_for_span(span) if rendition.shared_init else None
         if path is None:
             abort(404)
-        return send_file(path)
+        return _send_package_file(path)
 
     _SEG_DEFAULTS = {"mode": "local", "origin_loop": None}
 
@@ -3471,14 +3482,14 @@ def create_app(
         def audio_init_segment():
             if package.audio_rendition.audio_sparse:
                 abort(404)
-            return send_file(package.audio_rendition.audio_init_path())
+            return _send_package_file(package.audio_rendition.audio_init_path())
 
         @app.get("/audio/init_<int:span>.mp4")
         def audio_span_init_segment(span: int):
             path = package.audio_rendition.audio_init_path_for_span(span) if package.audio_rendition.audio_sparse else None
             if path is None:
                 abort(404)
-            return send_file(path)
+            return _send_package_file(path)
 
         @app.get("/audio/seg/t/<int:span>/<int:time>.m4s", defaults={"mode": "local", "origin_loop": None})
         @app.get("/audio/cseg/t/<int:time>.m4s", defaults={"mode": "global", "origin_loop": None, "span": None})
