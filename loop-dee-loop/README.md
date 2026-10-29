@@ -512,6 +512,17 @@ didn't land exactly on a segment boundary (GPAC's `cues=...:cts` mode can
 silently snap an imprecise cue to the nearest keyframe — SCOPE.md §6 —
 which is fine for nominal grid points but never acceptable for a marker).
 
+## Deploying to Lambda
+
+The `aws-lambda` backend runs the same `serve.py` in a Lambda function
+(`Dockerfile.lambda`: serve-only, no GPAC/ffmpeg, behind the AWS Lambda Web
+Adapter). Nothing is synced: `LOOP_PACKAGE_STORE=s3` makes `wsgi.py` build a
+skeleton of the package from an S3 listing (`s3_package.py`: small files for
+real, a sparse placeholder per `.m4s`/`.ts`) and fetch segment bytes on demand
+into a bounded `/tmp` cache. `package_io.py` is the seam; with no reader
+installed everything reads the local filesystem exactly as before. Design and
+trade-offs: [`../its-a-live/LAMBDA_BACKEND.md`](../its-a-live/LAMBDA_BACKEND.md).
+
 ## Deploying to Fargate / ECS Express Mode
 
 The image (see `Dockerfile`) never bakes in channel-specific content — only

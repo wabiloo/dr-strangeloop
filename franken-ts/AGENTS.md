@@ -12,7 +12,7 @@ an agent doesn't have to re-derive config semantics from source.
 ## What this tool does NOT decide
 
 `franken-ts` only produces content; it has no opinion on how the channel
-is deployed. The `[deploy].backend` choice (`aws-media` vs `ecs-express`)
+is deployed. The `[deploy].backend` choice (`aws-media` vs `ecs-express` / `aws-lambda`)
 lives in `its-a-live`'s config, not here — but it **does** determine which
 `output` mode you must use in the YAML (see below), so get that decision
 from the user (or `its-a-live/AGENTS.md`) before writing the config.
@@ -35,8 +35,8 @@ uv run franken-ts <config.yaml> [--verify] [--dry-run]
 
 | Mode | Fields | When to use |
 |---|---|---|
-| Single-rendition | `output.file` (required path) | `aws-media` backend (MediaLive transcodes live from one file), or `ecs-express` with no ABR ladder needed |
-| Multi-rendition (ABR ladder) | `output.dir` (required) + `output.renditions: [{name, resolution, bitrate_kbps}, ...]` | `ecs-express` backend when you want an adaptive-bitrate ladder — writes `<dir>/<rendition.name>.ts` per rendition + one shared `<dir>/markers.json` |
+| Single-rendition | `output.file` (required path) | `aws-media` backend (MediaLive transcodes live from one file), or `ecs-express` / `aws-lambda` with no ABR ladder needed |
+| Multi-rendition (ABR ladder) | `output.dir` (required) + `output.renditions: [{name, resolution, bitrate_kbps}, ...]` | `ecs-express` or `aws-lambda` backend when you want an adaptive-bitrate ladder — writes `<dir>/<rendition.name>.ts` per rendition + one shared `<dir>/markers.json` |
 
 Shared `output` fields (either mode): `resolution` (default `1920x1080`,
 single-rendition only — renditions set their own), `framerate` (default

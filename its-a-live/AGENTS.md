@@ -8,7 +8,7 @@ schema (`config.toml`), identical commands regardless of backend.
 For architecture/CDK internals see [`AGENT_BRIEF.md`](./AGENT_BRIEF.md)
 (currently `aws-media`-focused; `ecs-express` internals live in
 [`loop-dee-loop/AGENTS.md`](../loop-dee-loop/AGENTS.md), which also
-covers `local-docker` since both run the same `loop-dee-loop` code) and
+covers `local-docker` and `aws-lambda` since all three run the same `loop-dee-loop` code; the Lambda design is in [`LAMBDA_BACKEND.md`](./LAMBDA_BACKEND.md)) and
 [`README.md`](./README.md) for full setup/lifecycle prose. This file is
 the condensed reference + the questions to resolve before writing a
 config.
@@ -45,11 +45,11 @@ bucket_name = "..."    # required (ignored by local-docker) — must already exi
 content_folder = "..." # required (ignored by local-docker) — content lives under <content_folder>/<name>/
 
 [input]
-source_path = "..."    # required — franken-ts output (.ts file, or ladder dir for ecs-express/local-docker), or a grave-robber segment-list manifest.json (from `grave-robber ingest`/`ingest-url`; ecs-express/local-docker only). Relative paths resolve against this TOML's directory (legacy `../outputs/x.ts`, relative to the cwd, still works if nothing exists at the TOML-relative spot); prefer absolute
+source_path = "..."    # required — franken-ts output (.ts file, or ladder dir for ecs-express/aws-lambda/local-docker), or a grave-robber segment-list manifest.json (from `grave-robber ingest`/`ingest-url`; ecs-express/aws-lambda/local-docker only). Relative paths resolve against this TOML's directory (legacy `../outputs/x.ts`, relative to the cwd, still works if nothing exists at the TOML-relative spot); prefer absolute
 source_kind = "playlist" # optional metadata written by igor: "playlist" | "archive" | "manifest" -- not read by channel.py
 allow_missing_segments = false # optional -- pass --allow-missing-segments to bake.py (segment-list manifests with holes)
 
-# ecs-express/local-docker only (ignored by aws-media):
+# ecs-express/aws-lambda/local-docker only (ignored by aws-media):
 [bake]
 local_output_dir = "..."   # optional, defaults to <local_package_dir>/<name> (see root AGENTS.md; default its-a-live/.local-loop-package)
 
@@ -66,7 +66,7 @@ split_on = []   # optional list of SCTE-35 segmentation_type_ids (e.g. [0x22, 0x
 [markers.hls]
 descriptor_grouping = "shared"   # "shared" (default) | "narrowed" | "grouped" -- one DATERANGE per descriptor with the full shared payload, per descriptor narrowed to just that event, or one per group of coincident descriptors
 cue_tags = "none"                # "none" (default) | "alongside" | "only" -- also emit EXT-X-CUE-OUT/-CONT/-IN next to DATERANGE, or instead of it entirely ("only" requires every marker to be a bare splice_insert). Both modes only ever build CUE-OUT/-CONT/-IN from bare splice_insert markers -- "alongside" still DATERANGE-tags every marker regardless of splice_type, but silently skips CUE-OUT/-IN for non-splice_insert ones, since nested/overlapping time_signal types (e.g. Break containing PPO containing Ad) have no well-formed single CUE-OUT/-IN pair the way a flat splice_insert avail does
-id_template = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template, ecs-express/local-docker only
+id_template = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template, ecs-express/aws-lambda/local-docker only
 
 [markers.dash]
 descriptor_grouping = "shared"   # "shared" (default) | "narrowed" -- the DASH counterpart of [markers.hls] descriptor_grouping (no "grouped" form); the two are independent
@@ -85,16 +85,16 @@ dvr_window = 30              # seconds -- serve.py sliding-window size (also the
 container = "cmaf"           # "cmaf" (default) | "ts"; HLS only, DASH remains CMAF
 mux_audio = true             # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
 
-[packaging.dash]             # also query parameters of the same name; ecs-express/local-docker, serve.py flags
+[packaging.dash]             # also query parameters of the same name; ecs-express/aws-lambda/local-docker, serve.py flags
 timeline_style = "full"      # "full" (default; every <S> has @t and @d, a SegmentTemplate per representation) | "compact" (implicit @t where contiguous + @r for equal @d, one shared SegmentTemplate)
 addressing = "number"        # "number" (default; $Number$ + startNumber) | "time" ($Time$ = each <S t>); applied on create/redeploy
 
-[timeline]                  # ecs-express/local-docker only
-epoch = "2026-01-01T00:00:00Z"   # optional (this is the default) -- loop 0's start and the DASH availabilityStartTime; UTC, exactly this form. A recent epoch keeps loop numbers small. ecs-express/local-docker only; applied on create/redeploy (local-docker: redeploy/refresh), not by a plain `start`. Changing it on a running channel restarts loop numbering.
-continuous = true   # default true -- serve.py rewrites each segment's own timestamps per request (header patch, never a re-mux -- loop-dee-loop/SCOPE.md §12) so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the loop wrap. false falls back to the honestly-signaled discontinuity/Period-restart default (e.g. if a package's CMAF fragments have a 32-bit tfdt, which continuity mode's startup check refuses). ecs-express/local-docker only -- aws-media (MediaLive/MediaPackage) doesn't run loop-dee-loop at all.
+[timeline]                  # ecs-express/aws-lambda/local-docker only
+epoch = "2026-01-01T00:00:00Z"   # optional (this is the default) -- loop 0's start and the DASH availabilityStartTime; UTC, exactly this form. A recent epoch keeps loop numbers small. ecs-express/aws-lambda/local-docker only; applied on create/redeploy (local-docker: redeploy/refresh), not by a plain `start`. Changing it on a running channel restarts loop numbering.
+continuous = true   # default true -- serve.py rewrites each segment's own timestamps per request (header patch, never a re-mux -- loop-dee-loop/SCOPE.md §12) so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the loop wrap. false falls back to the honestly-signaled discontinuity/Period-restart default (e.g. if a package's CMAF fragments have a 32-bit tfdt, which continuity mode's startup check refuses). ecs-express/aws-lambda/local-docker only -- aws-media (MediaLive/MediaPackage) doesn't run loop-dee-loop at all.
 
 # Query parameters on the channel's normal HLS/DASH URLs (loop-dee-loop/SCOPE.md §13)
-# -- ecs-express/local-docker only. Startover/catchup: start, end, full_loops,
+# -- ecs-express/aws-lambda/local-docker only. Startover/catchup: start, end, full_loops,
 # offset. Per-request overrides of how the manifest is rendered: timeline_mode
 # (default|continuous|periodic, overrides [timeline].continuous), epoch, dvr_window,
 # split_on, timeline_style, addressing, cue_tags, descriptor_grouping,
@@ -164,7 +164,7 @@ if the group has only ends.
 Unknown placeholders fail validation. Double quotes and Unicode control
 characters are removed from the expanded ID per RFC 8216 quoted-string and
 playlist text constraints. MediaPackage's aws-media backend does not author
-these IDs, so this setting applies only to ecs-express and local-docker.
+these IDs, so this setting applies only to ecs-express, aws-lambda and local-docker.
 
 ### `config_version`, renamed keys and migrating old files
 
@@ -243,9 +243,9 @@ Infrastructure:
 ```bash
 uv sync                                        # once, its-a-live has its own venv
 cdk bootstrap                                  # once per account/region -- N/A for local-docker
-cdk deploy ItsALiveSharedStack-ecs-express      # once per account/region, ecs-express only
+cdk deploy ItsALiveSharedStack-ecs-express      # once per account/region, ecs-express only (aws-lambda has no shared stack)
 cdk deploy ItsALiveSharedStack-scheduler -c scheduler=true        # once per account/region -- only needed if you'll
-                                                 # use `channel.py schedule` (aws-media/ecs-express only)
+                                                 # use `channel.py schedule` (aws-media/ecs-express/aws-lambda only)
 
 uv run python channel.py -c <config.toml> create      # first-time bootstrap: spark + deploy + start (spark + start only for local-docker)
 # ...or the manual equivalent, for finer-grained control:
@@ -316,9 +316,9 @@ uv run python channel.py -c <config.toml> refresh
 `spark` before the first deploy, not after — `ecs-express`'s container
 hard-crashes at startup if there's no package staged yet (same failure
 mode applies to `local-docker`'s `start`, which just exits with a clear
-error instead of crash-looping since there's no ECS service to loop).
+error instead of crash-looping since there's no ECS service to loop; `aws-lambda` doesn't crash-loop either, its first requests just fail until the package is staged).
 `refresh` has different cost/interruption characteristics per backend
-(fast re-sync for `ecs-express`, full stop/start cycle for `aws-media`,
+(fast re-sync for `ecs-express`, recycle of warm Lambda environments plus a CDN invalidation for `aws-lambda`, full stop/start cycle for `aws-media`,
 container recreate — a few seconds — for `local-docker`) — see
 `README.md` → "Updating content on a running channel" before promising a
 hot reload.

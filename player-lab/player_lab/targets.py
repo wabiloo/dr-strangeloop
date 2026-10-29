@@ -83,5 +83,5 @@ def from_channel(channel: str) -> Target:
         name=cfg.stem,
         hls_url=hls,
         dash_url=dash,
-        timeline_url=f"{root}/timeline.json" if backend in ("local-docker", "ecs-express") else None,
+        timeline_url=f"{root}/timeline.json" if backend in ("local-docker", "ecs-express", "aws-lambda") else None,
     )

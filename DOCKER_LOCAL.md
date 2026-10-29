@@ -120,7 +120,7 @@ unless the content is yours to publish. Details: `its-a-live/README.md`'s
 Included: franken-ts builds (ffmpeg/tsduck/GPAC all in-image), HTTP(S)
 stream assets (an `.m3u8`/`.mpd` VOD manifest as a playlist `file`,
 resolved via `yt-dlp` -- see `franken-ts/AGENTS.md`'s "assets" section),
-all three its-a-live backends (`aws-media`/`ecs-express` need your own AWS
+all four its-a-live backends (`aws-media`/`ecs-express`/`aws-lambda` need your own AWS
 credentials -- see `.env.example` -- `local-docker` needs nothing but your
 host Docker install), the asset file-browser/picker scoped to whatever you
 set `MEDIA_ROOT` to. The downloaded-stream cache persists in a named

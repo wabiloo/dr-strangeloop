@@ -25,10 +25,11 @@ The markers are configurable. You can choose the format of the markers and wheth
 
 ### Deployment targets
 
-Each channel picks one of three backends:
+Each channel picks one of four backends:
 
 - `local-docker`: runs the remux in a Docker container on your own machine, with no AWS involved.
 - `ecs-express`: ECS Express Mode behind CloudFront, deployed with CDK. This remuxes with GPAC and does no transcoding.
+- `aws-lambda`: the same engine in a Lambda function behind CloudFront, deployed with CDK, with the loop package read lazily from S3. It costs nothing while nobody watches and needs no ECS cluster or load balancer; the first viewer wakes it up.
 - `aws-media`: MediaLive and MediaPackage v1, deployed with CDK. This does real live transcoding.
 
 ### Modes of work
@@ -45,8 +46,8 @@ There are three ways to drive it, all operating on the same objects (playlists, 
 |---|---|---|
 | [`franken-ts/`](./franken-ts/README.md) | Define + build | Stitch MP4 assets together and inject SCTE-35 markers from a YAML playlist; outputs a `.ts` (or a rendition ladder) plus a `.markers.json` |
 | [`grave-robber/`](./grave-robber/README.md) | Define + build (alternative source) | Derive a loop from a captured HAR/Proxyman session, or from a VOD HLS/DASH manifest URL (`ingest-url`, full rendition ladder), instead of authoring one. Feeds `loop-dee-loop` rather than `franken-ts` |
-| [`loop-dee-loop/`](./loop-dee-loop/README.md) | Packaging engine | Self-hosted remux (GPAC, no transcoding) of a looped source into a continuous live HLS/DASH channel with SCTE-35 signalling: `bake.py` builds an immutable loop package, `serve.py` serves it. Used by the `ecs-express` and `local-docker` backends |
-| [`its-a-live/`](./its-a-live/README.md) | Deploy + run | One CLI (`channel.py`) to create, spark, start, stop and refresh a channel on one of three backends selected per channel: `local-docker`, `ecs-express` or `aws-media` (see [Deployment targets](#deployment-targets)) |
+| [`loop-dee-loop/`](./loop-dee-loop/README.md) | Packaging engine | Self-hosted remux (GPAC, no transcoding) of a looped source into a continuous live HLS/DASH channel with SCTE-35 signalling: `bake.py` builds an immutable loop package, `serve.py` serves it. Used by the `ecs-express`, `aws-lambda` and `local-docker` backends |
+| [`its-a-live/`](./its-a-live/README.md) | Deploy + run | One CLI (`channel.py`) to create, spark, start, stop and refresh a channel on one of four backends selected per channel: `local-docker`, `ecs-express`, `aws-lambda` or `aws-media` (see [Deployment targets](#deployment-targets)) |
 | [`inspector-krogh/`](./inspector-krogh/README.md) | Inspect + verify | `frame-extractor` (every frame, GOP/I-P-B timeline, interactive HTML) and `krogh` (independent SCTE-35 examiner: JSON, filmstrip and report, optionally compared against `markers.json`) |
 | [`igor/`](./igor/README.md) | UI + API | Web console and REST API (branded "Dr. Strangeloop", codenamed Igor) to define playlists, import archives and manifests, launch channels and monitor them |
 | [`galvanise.py`](./galvanise.py) | Orchestration | Runs build, config generation, deploy, spark and start from a single playlist, prompting at each step (AWS backends only) |
@@ -58,7 +59,7 @@ Outputs from `franken-ts` and `inspector-krogh` (`.ts` files, HTML reports, fram
 
 There are two families of workflow, depending on the backend. What you can use as a source, and how much control you get over signalling, depends on which one you pick.
 
-| | `local-docker` / `ecs-express` (loop-dee-loop) | `aws-media` |
+| | `local-docker` / `ecs-express` / `aws-lambda` (loop-dee-loop) | `aws-media` |
 |---|---|---|
 | Playlist, single rendition (`franken-ts`) | yes | yes (a single `.ts` only) |
 | Playlist, multi-rendition ladder (`franken-ts`) | yes | no |
@@ -66,9 +67,9 @@ There are two families of workflow, depending on the backend. What you can use a
 | VOD manifest URL (`grave-robber ingest-url`) | yes | no |
 | Marker format and timeline options | yes | no (defined by MediaLive/MediaPackage) |
 | Transcoding | no (remux only) | yes |
-| Cost | none locally; low on ECS | MediaLive + MediaPackage charges |
+| Cost | none locally; low on ECS; none while idle on Lambda | MediaLive + MediaPackage charges |
 
-### loop-dee-loop workflows (`local-docker`, `ecs-express`)
+### loop-dee-loop workflows (`local-docker`, `ecs-express`, `aws-lambda`)
 
 The content is remuxed with GPAC, never transcoded. It is baked once into an immutable loop package (`spark`), then served as a continuous live channel (`start`). Whichever source you use, the last two steps are identical:
 
@@ -102,6 +103,7 @@ At the marker level, `franken-ts` supports `splice_insert` and `time_signal` (wi
 Each channel is a TOML file in `data/channels/`, whose `[input].source_path` points at the source output. The backend is chosen with `[deploy].backend`:
 - `local-docker` needs no AWS account and has no stack; `channel.py` runs a container named after the channel.
 - `ecs-express` runs the same engine on ECS behind CloudFront, deployed with CDK.
+- `aws-lambda` runs it in a Lambda function behind CloudFront, deployed with CDK; see [`its-a-live/LAMBDA_BACKEND.md`](./its-a-live/LAMBDA_BACKEND.md).
 
 ### AWS Media workflow (`aws-media`)
 
@@ -112,7 +114,7 @@ data/playlists/x.yaml → franken-ts → outputs/x.ts
    → cdk deploy (once) → its-a-live spark (upload .ts to S3) → start (MediaLive loops it → MediaPackage → HLS/DASH)
 ```
 
-`galvanise.py` runs this whole sequence, prompting at each step, and can also do it for `ecs-express`.
+`galvanise.py` runs this whole sequence, prompting at each step, and can also do it for `ecs-express` and `aws-lambda`.
 
 ### Driving a workflow
 
@@ -126,10 +128,10 @@ All tools share the same Python environment. External binaries needed:
 |---|---|---|
 | `ffmpeg` + `ffprobe` | `franken-ts`, `inspector-krogh`, and `loop-dee-loop` baking | [ffmpeg.org](https://ffmpeg.org/) |
 | `tsp` (tsduck) | `franken-ts` (SCTE-35 injection) | [tsduck.io](https://tsduck.io/) |
-| `gpac` / `MP4Box` with `scte35dec` support | baking for `local-docker` and `ecs-express` (built from source; the Docker images bundle it) | [gpac.io](https://gpac.io/) |
-| `docker` | `local-docker` backend, `ecs-express` image build, and running Igor via Docker | [docker.com](https://www.docker.com/) |
-| `aws` (AWS CLI v2) | `aws-media` and `ecs-express` | [AWS docs](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) |
-| `cdk` (AWS CDK) | `aws-media` and `ecs-express` | `npm install -g aws-cdk` |
+| `gpac` / `MP4Box` with `scte35dec` support | baking for `local-docker`, `ecs-express` and `aws-lambda` (built from source; the Docker images bundle it) | [gpac.io](https://gpac.io/) |
+| `docker` | `local-docker` backend, `ecs-express` and `aws-lambda` image builds, and running Igor via Docker | [docker.com](https://www.docker.com/) |
+| `aws` (AWS CLI v2) | `aws-media`, `ecs-express` and `aws-lambda` | [AWS docs](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) |
+| `cdk` (AWS CDK) | `aws-media`, `ecs-express` and `aws-lambda` | `npm install -g aws-cdk` |
 | Node.js / npm | AWS CDK, and Igor's frontend build | [nodejs.org](https://nodejs.org/) |
 
 Local-only use (`local-docker`) needs no AWS CLI or CDK. To run Igor without installing any of this, see [`DOCKER_LOCAL.md`](./DOCKER_LOCAL.md).
@@ -189,7 +191,7 @@ Steps performed:
 2. Generate `data/channels/my-stream.toml` (its-a-live settings, `backend = <chosen backend>`)
 3. *(`ecs-express` only)* Ensure the shared ECS cluster stack is deployed
 4. Deploy the channel stack (`cdk deploy`)
-5. Spark: stage the input for the chosen backend (upload the raw `.ts` for `aws-media`; bake it locally via GPAC and push to S3 for `ecs-express`)
+5. Spark: stage the input for the chosen backend (upload the raw `.ts` for `aws-media`; bake it locally via GPAC and push to S3 for `ecs-express` and `aws-lambda`)
 6. Start the channel
 
 At the end it prints the exact commands to update content, stop the channel, and destroy the stack.
@@ -197,7 +199,7 @@ At the end it prints the exact commands to update content, stop the channel, and
 ### AWS step by step
 
 ```bash
-# ecs-express only, once per account/region: deploy the shared ECS cluster stack
+# ecs-express only (aws-lambda has no shared stack), once per account/region: deploy the shared ECS cluster stack
 cd its-a-live
 cdk deploy ItsALiveSharedStack-ecs-express -c config=../data/channels/my-stream.toml
 
@@ -215,7 +217,7 @@ cd its-a-live
 cdk destroy ItsALiveStack-my-stream-aws-media -c config=../data/channels/my-stream.toml
 ```
 
-`channel.py create` does the first-time bootstrap (spark, deploy, start) in one command. `aws-media` and `ecs-express` channels can also be given scheduled on-air windows with `channel.py schedule` (see [`its-a-live/README.md`](./its-a-live/README.md#scheduling)).
+`channel.py create` does the first-time bootstrap (spark, deploy, start) in one command. `aws-media`, `ecs-express` and `aws-lambda` channels can also be given scheduled on-air windows with `channel.py schedule` (see [`its-a-live/README.md`](./its-a-live/README.md#scheduling)).
 
 ### Web UI
 

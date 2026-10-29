@@ -15,6 +15,9 @@ name = "default"
 # Which backend serves this channel:
 #   "ecs-express"  -- loop-dee-loop baked locally, served on ECS Express
 #                      Mode + CloudFront (cheap, self-hosted, in AWS)
+#   "aws-lambda"   -- loop-dee-loop baked locally, served from a Lambda function
+#                      behind CloudFront, package read lazily from S3 (no
+#                      idle cost, no ECS/ALB; see LAMBDA_BACKEND.md)
 #   "aws-media"    -- MediaLive + MediaPackage v1 (fully managed AWS media
 #                      services)
 #   "local-docker" -- loop-dee-loop baked and served entirely on this
@@ -31,12 +34,12 @@ region = "eu-west-1"
 # created/deleted by this stack).
 bucket_name = "my-existing-bucket"
 # Channel content lives under <content_folder>/<name>/ in this bucket --
-# a baked loop package for ecs-express, or the raw uploaded .ts for
+# a baked loop package for ecs-express and aws-lambda, or the raw uploaded .ts for
 # aws-media.
 content_folder = "its-a-live/content"
 
 [input]
-# franken-ts output: for ecs-express and local-docker, either a single
+# franken-ts output: for ecs-express, aws-lambda and local-docker, either a single
 # .ts file (its sibling .markers.json is picked up automatically by
 # bake.py) or a directory containing a rendition ladder (see
 # loop-dee-loop/README.md "Multi-rendition"). For aws-media, a single
@@ -44,11 +47,11 @@ content_folder = "its-a-live/content"
 # AGENT_BRIEF.md's "timed cues" requirement).
 source_path = "../outputs/mychannel"
 
-# ── ecs-express/local-docker-only sections (ignored by aws-media) ───────
+# ── ecs-express/aws-lambda/local-docker-only sections (ignored by aws-media) ──
 
 [bake]
 # Where `channel.py spark` writes the local loop package -- pushed to S3
-# for ecs-express, served straight from disk (bind-mounted into the
+# for ecs-express and aws-lambda, served straight from disk (bind-mounted into the
 # container) for local-docker. Defaults to ./.local-loop-package/<name>
 # next to this file.
 # local_output_dir = "/tmp/my-channel-loop-package"
@@ -104,13 +107,22 @@ continuous = true # default -- no discontinuity/Period restart at the loop wrap 
 # max_span_seconds = 21600  # longest startover/catchup range (also caps dvr_window)
 
 [infrastructure.express]
-# ecs-express only -- local-docker gets [infrastructure.docker] instead (`port`, `bundle_content`).
+# ecs-express only -- aws-lambda gets [infrastructure.lambda] and local-docker [infrastructure.docker] instead (`port`, `bundle_content`).
 port   = 8080  # serve.py listen port, container-internal
 # ECS Express Mode CPU/memory codes (same numeric convention as Fargate:
 # 256 = 0.25 vCPU). See AWS ECS Express Mode docs for the full supported
 # list.
 cpu    = 256   # 0.25 vCPU
 memory = 512   # 0.5 GB
+
+# aws-lambda only, in place of [infrastructure.express] (no port: CloudFront and a
+# Function URL only CloudFront may call own the endpoint):
+# [infrastructure.lambda]
+# memory = 1024               # MB; CPU scales with it (1769 = one full vCPU, for hls container "ts" + continuous timeline)
+# timeout = 30                # s
+# reserved_concurrency = 10   # cap on concurrent invocations; -1 = none. `stop` sets it to 0, `start` restores it
+# cache_mb = 512              # /tmp cache of segment bytes fetched from S3
+# architecture = "arm64"      # or "x86_64"
 
 # local-docker only, in place of [infrastructure.express]:
 # [infrastructure.docker]

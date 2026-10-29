@@ -41,9 +41,10 @@ CATALOG: tuple[DocSection, ...] = (
         DocEntry("scte35-numbering", "SCTE-35 segment numbering", "Cross-standard reference for segment numbering.", "scte35-segment-numbering-spec-comparison.md"),
     )),
     DocSection("its-a-live", "Deploy and run: its-a-live", (
-        DocEntry("its-a-live-readme", "its-a-live", "Channel lifecycle across the three backends.", "its-a-live/README.md"),
+        DocEntry("its-a-live-readme", "its-a-live", "Channel lifecycle across the four backends.", "its-a-live/README.md"),
         DocEntry("its-a-live-agents", "its-a-live reference", "Channel TOML schema and every channel.py command.", "its-a-live/AGENTS.md"),
         DocEntry("its-a-live-brief", "Architecture brief", "Original design brief for the AWS stacks.", "its-a-live/AGENT_BRIEF.md"),
+        DocEntry("its-a-live-lambda", "aws-lambda backend", "Design and trade-offs of the Lambda + CloudFront backend.", "its-a-live/LAMBDA_BACKEND.md"),
         DocEntry("its-a-live-k8s", "Kubernetes backend", "Scope for a generic-Kubernetes backend.", "its-a-live/K8S_BACKEND.md"),
         DocEntry("its-a-live-mpv2", "MediaPackage v2", "Future work, not wired up.", "its-a-live/MEDIAPACKAGE_V2.md"),
     )),

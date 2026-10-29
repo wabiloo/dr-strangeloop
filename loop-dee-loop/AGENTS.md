@@ -1,7 +1,7 @@
 # Agent reference — loop-dee-loop
 
 Phase 3a of the pipeline (see repo-root [`AGENTS.md`](../AGENTS.md)):
-self-hosted `ecs-express` backend for `its-a-live`. Bakes a `franken-ts`
+self-hosted engine behind the `ecs-express`, `aws-lambda` and `local-docker` backends of `its-a-live`. Bakes a `franken-ts`
 `.ts` (+ `.markers.json`) into an immutable loop package once, then serves
 it forever as live-sliding HLS/DASH with zero drift. See
 [`README.md`](./README.md) for usage/module-layout and
@@ -12,9 +12,9 @@ stylistic).
 
 ## Do you need to touch this tool directly?
 
-**Usually no.** If you're deploying a channel with `ecs-express` backend,
+**Usually no.** If you're deploying a channel with the `ecs-express` or `aws-lambda` backend,
 `its-a-live/channel.py spark` calls `bake.py` for you and the deployed ECS
-task calls `serve.py` for you — see `its-a-live/AGENTS.md`. Run this
+task (or Lambda function, reading the package from S3 through `s3_package.py`) calls `serve.py` for you — see `its-a-live/AGENTS.md`. Run this
 tool's scripts directly only for:
 
 - local dev/testing of a franken-ts output before deploying anything,

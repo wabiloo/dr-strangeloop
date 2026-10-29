@@ -20,7 +20,7 @@ tools an agent would use directly: `franken-ts <config.yaml>`,
 - a background job runner so long operations (build, deploy, start/stop)
   don't block an HTTP request, with a pollable status+log endpoint,
   and a `/health` proxy to loop-dee-loop's `serve.py` for live loop
-  position on `ecs-express` channels.
+  position on `ecs-express` and `aws-lambda` channels.
 
 ## Pages
 
@@ -81,7 +81,7 @@ output (kind/summary, problems, the HLS/DASH URLs, copy, **Preview**, *Back to l
 `preview` (swap the players) and `built` (the URLs as currently built, whether previewed or not:
 the Playback test runs against these). The text below describes both.
 
-For `ecs-express` / `local-docker` channels with `[query] timeshift` on (the
+For `ecs-express` / `aws-lambda` / `local-docker` channels with `[query] timeshift` on (the
 default), a running channel's page shows the **Timeshift** panel under
 the players (**collapsed by default**, open/closed remembered in the browser; while a
 preview is active the output card summarises it and offers *Back to live*): pick a start (and optional end) in UTC or local time, presets
@@ -131,7 +131,7 @@ a preview is approximate. Design: `loop-dee-loop/SCOPE.md` §13.
 
 ## Channel epoch (New/Edit forms, "Timeline" group)
 
-`ecs-express` / `local-docker` channels have a **Channel epoch (UTC)**
+`ecs-express` / `aws-lambda` / `local-docker` channels have a **Channel epoch (UTC)**
 (`[timeline] epoch`, API field `epoch_utc`): loop 0's start and the DASH
 `availabilityStartTime`. A UTC date-time picker with three presets -- **Unix
 epoch (1970)**, **1 Jan 2026** (the default) and **Now** (fills in the current
