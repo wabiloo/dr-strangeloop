@@ -543,7 +543,7 @@ def _spawn(job_type: str, name: str, extra_args: list[str] | None = None) -> dic
 
 @router.post("/{name}/create")
 def create_channel(name: str) -> dict:
-    """First-time deploy: ensure shared stack (ecs-express only), cdk
+    """First-time deploy: ensure shared stack (ecs-express, aws-lambda), cdk
     deploy the channel stack, spark, start -- see channel.py's `create`
     command (added alongside this console)."""
     return _spawn("create", name)

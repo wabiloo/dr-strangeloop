@@ -203,10 +203,72 @@ def test_stack_has_no_cluster_or_load_balancer():
     assert not any(t.startswith(("AWS::ECS", "AWS::ElasticLoadBalancing")) for t in types)
 
 
-def test_manifest_cache_is_one_second_but_honours_origin_cache_control():
-    policies = {p["CachePolicyConfig"]["Name"]: p["CachePolicyConfig"] for p in _of_type(_synth(CONFIG), "AWS::CloudFront::CachePolicy")}
-    manifests = policies["loop-dee-loop-t-manifests"]
+def _shared(stack_cls_module: str, stack_cls: str) -> dict:
+    cdk = pytest.importorskip("aws_cdk")
+    import importlib
+
+    import aws_cdk.assertions as assertions
+
+    stack = getattr(importlib.import_module(stack_cls_module), stack_cls)(
+        cdk.App(), "Shared", env=cdk.Environment(account="123456789012", region="eu-west-1")
+    )
+    return assertions.Template.from_stack(stack).to_json()
+
+
+def _policies(resources) -> dict:
+    return {p["CachePolicyConfig"]["Name"]: p["CachePolicyConfig"] for p in _of_type(resources, "AWS::CloudFront::CachePolicy")}
+
+
+def test_shared_stack_holds_the_cache_policies_and_exports_their_ids():
+    template = _shared("lambda_shared_stack", "LambdaSharedStack")
+    policies = _policies(template["Resources"])
+    assert set(policies) == {
+        "loop-dee-loop-lambda-segments", "loop-dee-loop-lambda-status", "loop-dee-loop-lambda-manifests-default",
+    }
+    manifests = policies["loop-dee-loop-lambda-manifests-default"]
     assert manifests["DefaultTTL"] == 1 and manifests["MinTTL"] == 0 and manifests["MaxTTL"] > 86400
+    status = policies["loop-dee-loop-lambda-status"]
+    assert status["ParametersInCacheKeyAndForwardedToOrigin"]["QueryStringsConfig"]["QueryStringBehavior"] == "all"
+    assert status["DefaultTTL"] == 0
+    exports = {o["Export"]["Name"] for o in template["Outputs"].values() if "Export" in o}
+    assert exports == {f"ItsALive-aws-lambda-{k}-CachePolicyId" for k in ("segments", "status", "manifests")}
+
+
+def test_a_default_query_channel_owns_no_cache_policy_and_imports_all_three():
+    res = _synth(CONFIG)
+    assert _policies(res) == {}
+    (dist,) = _of_type(res, "AWS::CloudFront::Distribution")
+    config = dist["DistributionConfig"]
+    imported = str([config["DefaultCacheBehavior"]["CachePolicyId"]] + [b["CachePolicyId"] for b in config["CacheBehaviors"]])
+    for kind in ("segments", "status", "manifests"):
+        assert f"ItsALive-aws-lambda-{kind}-CachePolicyId" in imported
+
+
+def test_a_channel_with_custom_query_names_owns_only_its_manifests_policy():
+    custom = CONFIG + "\n[query]\nprefix = 'dsl_'\nstart_param = 'from'\nend_param = 'to'\n"
+    res = _synth(custom)
+    assert set(_policies(res)) == {"loop-dee-loop-t-manifests"}
+    (dist,) = _of_type(res, "AWS::CloudFront::Distribution")
+    imported = str([b["CachePolicyId"] for b in dist["DistributionConfig"]["CacheBehaviors"]])
+    assert "ItsALive-aws-lambda-segments-CachePolicyId" in imported and "ItsALive-aws-lambda-status-CachePolicyId" in imported
+    assert "manifests-CachePolicyId" not in str(dist["DistributionConfig"])
+
+
+def test_ecs_express_shares_its_policies_the_same_way():
+    template = _shared("loop_shared_stack", "LoopSharedStack")
+    assert set(_policies(template["Resources"])) == {"loop-dee-loop-ecs-segments", "loop-dee-loop-ecs-manifests-default"}
+    manifests = _policies(template["Resources"])["loop-dee-loop-ecs-manifests-default"]
+    assert manifests["DefaultTTL"] == 0 and manifests["MaxTTL"] == 1  # manifests are never cached on ecs-express
+    exports = {o["Export"]["Name"] for o in template["Outputs"].values() if "Export" in o}
+    assert exports == {"ItsALive-ecs-express-segments-CachePolicyId", "ItsALive-ecs-express-manifests-CachePolicyId"}
+
+    cdk = pytest.importorskip("aws_cdk")
+    import aws_cdk.assertions as assertions
+    from loop_stack import LoopStack
+
+    stack = LoopStack(cdk.App(), "C", config=tomllib.loads(CONFIG.replace("aws-lambda", "ecs-express")),
+                      env=cdk.Environment(account="123456789012", region="eu-west-1"))
+    assert _policies(assertions.Template.from_stack(stack).to_json()["Resources"]) == {}
 
 
 @pytest.mark.parametrize("bad", ["reserved_concurrency = 0", "reserved_concurrency = -5", "architecture = 'mips'", "cache_mb = 99999"])
@@ -218,10 +280,3 @@ def test_stack_rejects_bad_lambda_config(bad):
 def test_unreserved_function_has_no_reservation():
     (fn,) = _of_type(_synth(CONFIG.replace("reserved_concurrency = 4", "reserved_concurrency = -1")), "AWS::Lambda::Function")
     assert "ReservedConcurrentExecutions" not in fn
-
-
-def test_timeline_and_health_forward_every_query_parameter_uncached():
-    policies = {p["CachePolicyConfig"]["Name"]: p["CachePolicyConfig"] for p in _of_type(_synth(CONFIG), "AWS::CloudFront::CachePolicy")}
-    status = policies["loop-dee-loop-t-status"]
-    assert status["ParametersInCacheKeyAndForwardedToOrigin"]["QueryStringsConfig"]["QueryStringBehavior"] == "all"
-    assert status["DefaultTTL"] == 0

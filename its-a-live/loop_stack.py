@@ -12,13 +12,14 @@ from aws_cdk import (
     aws_cloudfront_origins as origins,
 )
 from constructs import Construct
-from loop_shared_stack import CLUSTER_NAME
+from loop_shared_stack import BACKEND as SHARED_BACKEND, CLUSTER_NAME
+import _cdn_policies as cdn
 from _host_paths import to_host_path
 from _epoch_cfg import config_epoch_utc
 from _infra_cfg import infra_table
 from _markers_cfg import split_on_serve_args
 from _packaging_cfg import dash_serve_args, dvr_window_seconds as config_dvr_window_seconds
-from _query_cfg import CLOUDFRONT_MAX_ALLOW_LIST, query_param_names, query_serve_args
+from _query_cfg import query_param_names, query_serve_args
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 
@@ -245,38 +246,19 @@ class LoopStack(Stack):
             # SCOPE.md §13) select what a manifest contains via query parameters
             # on its URL, so manifests MUST be cached per value of exactly those
             # parameters -- CloudFront's default is to drop the query string
-            # entirely, which would serve one viewer's range to everyone. Nothing
-            # else in the query string is keyed or forwarded -- unless there are
-            # more names than a cache policy's allow-list can hold, in which case
-            # the whole query string is keyed (manifests live a second at most).
-            query_params = query_param_names(config)
-            if not query_params:
-                manifest_query_strings = cloudfront.CacheQueryStringBehavior.none()
-            elif len(query_params) > CLOUDFRONT_MAX_ALLOW_LIST:
-                manifest_query_strings = cloudfront.CacheQueryStringBehavior.all()
+            # entirely, which would serve one viewer's range to everyone.
+            # The policies are shared (an account may only have 20): they live in
+            # ItsALiveSharedStack-ecs-express (loop_shared_stack.py), and this
+            # channel creates its own manifests policy only when its `[query]`
+            # parameter names differ from the default.
+            segment_cache_policy = cdn.import_policy(self, "SegmentCachePolicy", SHARED_BACKEND, "segments")
+            if cdn.uses_default_query(config):
+                manifest_cache_policy = cdn.import_policy(self, "ManifestCachePolicy", SHARED_BACKEND, "manifests")
             else:
-                manifest_query_strings = cloudfront.CacheQueryStringBehavior.allow_list(*query_params)
-            manifest_cache_policy = cloudfront.CachePolicy(
-                self,
-                "ManifestCachePolicy",
-                query_string_behavior=manifest_query_strings,
-                cache_policy_name=f"loop-dee-loop-{name}-manifests",
-                default_ttl=Duration.seconds(0),
-                min_ttl=Duration.seconds(0),
-                max_ttl=Duration.seconds(1),
-                enable_accept_encoding_gzip=True,
-                enable_accept_encoding_brotli=True,
-            )
-            segment_cache_policy = cloudfront.CachePolicy(
-                self,
-                "SegmentCachePolicy",
-                cache_policy_name=f"loop-dee-loop-{name}-segments",
-                default_ttl=Duration.minutes(5),
-                min_ttl=Duration.seconds(0),
-                max_ttl=Duration.hours(1),
-                enable_accept_encoding_gzip=True,
-                enable_accept_encoding_brotli=True,
-            )
+                manifest_cache_policy = cdn.manifest_policy(
+                    self, "ManifestCachePolicy", f"loop-dee-loop-{name}-manifests", query_param_names(config),
+                    default_ttl=Duration.seconds(0), max_ttl=Duration.seconds(1),
+                )
 
             origin = origins.HttpOrigin(
                 service_host,

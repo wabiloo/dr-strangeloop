@@ -18,9 +18,13 @@ from _epoch_cfg import config_epoch_utc
 from _infra_cfg import infra_table
 from _markers_cfg import split_on_serve_args
 from _packaging_cfg import dash_serve_args, dvr_window_seconds as config_dvr_window_seconds
-from _query_cfg import CLOUDFRONT_MAX_ALLOW_LIST, query_param_names, query_serve_args
+import _cdn_policies as cdn
+from _query_cfg import query_param_names, query_serve_args
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
+
+# Stack that owns the shared cache policies (lambda_shared_stack.py).
+SHARED_BACKEND = "aws-lambda"
 
 # Lambda's ephemeral storage is 512..10240 MB.
 _MIN_EPHEMERAL_MB, _MAX_EPHEMERAL_MB = 512, 10240
@@ -175,56 +179,19 @@ class LambdaLoopStack(Stack):
         )
 
         # ── CloudFront: the only public entrypoint ─────────────────────────────
-        # Manifests are cached per value of exactly the query parameters that
-        # select their content (startover/catchup and per-request overrides,
-        # loop-dee-loop/SCOPE.md §13) -- nothing else is keyed or forwarded.
-        query_params = query_param_names(config)
-        if not query_params:
-            manifest_query_strings = cloudfront.CacheQueryStringBehavior.none()
-        elif len(query_params) > CLOUDFRONT_MAX_ALLOW_LIST:
-            manifest_query_strings = cloudfront.CacheQueryStringBehavior.all()
+        # Cache policies come from ItsALiveSharedStack-aws-lambda (an account may
+        # only have 20): segments and status are the same for every channel; the
+        # manifests policy is shared too unless this channel's `[query]` parameter
+        # names (the manifest cache key) differ from the default.
+        segment_cache_policy = cdn.import_policy(self, "SegmentCachePolicy", SHARED_BACKEND, "segments")
+        status_cache_policy = cdn.import_policy(self, "StatusCachePolicy", SHARED_BACKEND, "status")
+        if cdn.uses_default_query(config):
+            manifest_cache_policy = cdn.import_policy(self, "ManifestCachePolicy", SHARED_BACKEND, "manifests")
         else:
-            manifest_query_strings = cloudfront.CacheQueryStringBehavior.allow_list(*query_params)
-        # Unlike loop_stack.py (default 0): a live manifest is cached for 1 s
-        # so CloudFront collapses concurrent identical requests and Lambda
-        # cost stops scaling with the number of viewers. A response that sets
-        # its own Cache-Control (time-shift ranges: immutable once ended,
-        # one segment while growing) is honoured, hence the high max.
-        manifest_cache_policy = cloudfront.CachePolicy(
-            self,
-            "ManifestCachePolicy",
-            query_string_behavior=manifest_query_strings,
-            cache_policy_name=f"loop-dee-loop-{name}-manifests",
-            default_ttl=Duration.seconds(1),
-            min_ttl=Duration.seconds(0),
-            max_ttl=Duration.days(365),
-            enable_accept_encoding_gzip=True,
-            enable_accept_encoding_brotli=True,
-        )
-        segment_cache_policy = cloudfront.CachePolicy(
-            self,
-            "SegmentCachePolicy",
-            cache_policy_name=f"loop-dee-loop-{name}-segments",
-            default_ttl=Duration.minutes(5),
-            min_ttl=Duration.seconds(0),
-            max_ttl=Duration.hours(1),
-            enable_accept_encoding_gzip=True,
-            enable_accept_encoding_brotli=True,
-        )
-
-        # /timeline.json (and /health) take free-form query parameters (scope,
-        # count, ...) that the manifest policy's allow-list would drop before
-        # they reach the origin. Cheap JSON for tooling (igor, player-lab):
-        # forward every parameter, cache nothing.
-        status_cache_policy = cloudfront.CachePolicy(
-            self,
-            "StatusCachePolicy",
-            query_string_behavior=cloudfront.CacheQueryStringBehavior.all(),
-            cache_policy_name=f"loop-dee-loop-{name}-status",
-            default_ttl=Duration.seconds(0),
-            min_ttl=Duration.seconds(0),
-            max_ttl=Duration.seconds(1),
-        )
+            manifest_cache_policy = cdn.manifest_policy(
+                self, "ManifestCachePolicy", f"loop-dee-loop-{name}-manifests", query_param_names(config),
+                default_ttl=Duration.seconds(1), max_ttl=Duration.days(365),
+            )
 
         origin = origins.FunctionUrlOrigin.with_origin_access_control(function_url)
 

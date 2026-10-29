@@ -243,7 +243,10 @@ Infrastructure:
 ```bash
 uv sync                                        # once, its-a-live has its own venv
 cdk bootstrap                                  # once per account/region -- N/A for local-docker
-cdk deploy ItsALiveSharedStack-ecs-express      # once per account/region, ecs-express only (aws-lambda has no shared stack)
+cdk deploy ItsALiveSharedStack-ecs-express      # once per account/region, ecs-express: cluster + cache policies
+cdk deploy ItsALiveSharedStack-aws-lambda       # once per account/region, aws-lambda only: the CloudFront cache policies every channel imports
+                                                 # (an account may only have 20; `channel.py create`/`redeploy` deploy these for you, and
+                                                 # redeploy one that predates them)
 cdk deploy ItsALiveSharedStack-scheduler -c scheduler=true        # once per account/region -- only needed if you'll
                                                  # use `channel.py schedule` (aws-media/ecs-express/aws-lambda only)
 

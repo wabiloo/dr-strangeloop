@@ -16,7 +16,9 @@ would have dropped their parameters, breaking igor and player-lab); the
 manifest cache policy has a high max TTL so time-shift responses'
 own `Cache-Control` is honoured; `start` reads the cap from the function's
 `RESERVED_CONCURRENCY` env var because the scheduler Lambda calls it without
-a config; `refresh` also invalidates the CloudFront cache.
+a config; `refresh` also invalidates the CloudFront cache. The CloudFront cache
+policies live in `ItsALiveSharedStack-aws-lambda`, not in each channel stack
+(CloudFront allows 20 per account and each channel used to own three).
 
 ## 1. Problem and goal
 
@@ -100,7 +102,13 @@ viewer -> CloudFront ──(OAC, SigV4)──> Lambda Function URL (AWS_IAM, RES
 
 ## 4. Stack (`lambda_stack.py`, `LambdaLoopStack`)
 
-Stack name `ItsALiveStack-<name>-aws-lambda`. No shared stack. Resources:
+Stack name `ItsALiveStack-<name>-aws-lambda`. A small shared stack,
+`ItsALiveSharedStack-aws-lambda` (`lambda_shared_stack.py`, deployed once per
+account/region; `channel.py create`/`redeploy` do it), holds the CloudFront
+cache policies that are identical across channels — an account may only have
+20, and each channel used to own three. Channels import them by CloudFormation
+export; a channel whose `[query]` parameter names differ from the default
+creates only its own manifests policy (`_cdn_policies.py`). Per channel:
 `DockerImageFunction` (arm64, `memory`, `timeout`, env, log retention
 7 days), execution role with `s3:GetObject`/`ListBucket` scoped to
 `<content_folder>/<name>/*` (existing bucket referenced only, as today),
@@ -131,7 +139,7 @@ work unchanged (they only produce serve flags).
 | command | behaviour |
 |---|---|
 | `spark` | identical to ecs-express (bake locally, `aws s3 sync`) — reuse, don't copy |
-| `create` | `cdk deploy` the stack (no shared stack step) |
+| `create` | ensure the shared cache-policy stack, then `cdk deploy` the stack |
 | `start` | restore `reserved_concurrency`; `--epoch-utc` handling as ecs-express (env var update) |
 | `stop` | reserved concurrency = 0 (viewers get 429 immediately; nothing is billed either way — `stop` is an access control, not a cost control) |
 | `refresh` | bump env `LOOP_PACKAGE_REVISION` -> all execution environments recycle and re-read S3 (needed after a re-`spark`) |

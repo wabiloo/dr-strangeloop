@@ -199,7 +199,8 @@ At the end it prints the exact commands to update content, stop the channel, and
 ### AWS step by step
 
 ```bash
-# ecs-express only (aws-lambda has no shared stack), once per account/region: deploy the shared ECS cluster stack
+# ecs-express and aws-lambda, once per account/region: deploy the backend's shared stack
+# (ecs-express: the ECS cluster + CloudFront cache policies; aws-lambda: ItsALiveSharedStack-aws-lambda, cache policies only)
 cd its-a-live
 cdk deploy ItsALiveSharedStack-ecs-express -c config=../data/channels/my-stream.toml
 

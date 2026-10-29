@@ -11,7 +11,7 @@ Paths may be absolute or relative to the current working directory.
 Pipeline (its-a-live backend selected by --backend, default aws-media):
   1. Run franken-ts to build the .ts file
   2. Generate <channels_dir>/<basename>.toml (default data/channels/)
-  3. (ecs-express only) Ensure the shared ECS cluster stack is deployed
+  3. (ecs-express, aws-lambda) Ensure the backend's shared stack is deployed
   4. Run CDK deploy (cdk deploy) for the channel stack
   5. Spark: stage the input for the chosen backend (upload .ts for
      aws-media; bake it locally via GPAC + push to S3 for ecs-express)
@@ -277,21 +277,24 @@ def main() -> None:
         print(f"{GREEN}TOML written to {toml_path}{RESET}")
 
     # ------------------------------------------------------------------
-    # Step 3 — (ecs-express only) ensure the shared ECS cluster stack
+    # Step 3 — (ecs-express, aws-lambda) ensure the backend's shared stack
     # ------------------------------------------------------------------
     step = 3
-    if backend == "ecs-express":
-        _header(step, "Ensure shared ECS cluster stack is deployed (ItsALiveSharedStack-ecs-express)")
+    if backend in ("ecs-express", "aws-lambda"):
+        shared_stack = f"ItsALiveSharedStack-{backend}"
+        shared_what = ("shared ECS cluster + CloudFront cache policies stack" if backend == "ecs-express"
+                       else "shared CloudFront cache policies stack")
+        _header(step, f"Ensure {shared_what} is deployed ({shared_stack})")
         shared_cmd = [
             "cdk", "deploy",
             "--require-approval", "never",
-            "--output", "cdk.out-_shared",
+            "--output", f"cdk.out-_shared-{backend}",
             "-c", f"config={toml_path}",
-            "ItsALiveSharedStack-ecs-express",
+            shared_stack,
         ]
         print(f"  cwd        : {push_dir}")
         print(f"  command    : {' '.join(shared_cmd)}")
-        if not _confirm("Deploy the shared cluster stack now? (safe/idempotent if already deployed)"):
+        if not _confirm("Deploy the shared stack now? (safe/idempotent if already deployed)"):
             print("Skipped.")
         else:
             _run(shared_cmd, cwd=push_dir)

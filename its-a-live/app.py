@@ -8,6 +8,7 @@ from _paths_cfg import resolve_source_path
 from media_stack import MediaStack
 from loop_stack import LoopStack
 from lambda_stack import LambdaLoopStack
+from lambda_shared_stack import LambdaSharedStack
 from loop_shared_stack import LoopSharedStack
 from scheduler_stack import SchedulerStack
 
@@ -77,7 +78,11 @@ if backend == "ecs-express":
     LoopSharedStack(app, "ItsALiveSharedStack-ecs-express", env=env)
     LoopStack(app, stack_name, config=config, env=env)
 elif backend == "aws-lambda":
-    # No shared stack: nothing is shared between aws-lambda channels.
+    # Shared prerequisite -- the CloudFront cache policies identical across
+    # channels (see lambda_shared_stack.py). Deploy it explicitly with
+    # `cdk deploy ItsALiveSharedStack-aws-lambda` before any channel
+    # (`channel.py create` does).
+    LambdaSharedStack(app, "ItsALiveSharedStack-aws-lambda", env=env)
     LambdaLoopStack(app, stack_name, config=config, env=env)
 else:
     MediaStack(app, stack_name, config=config, env=env)

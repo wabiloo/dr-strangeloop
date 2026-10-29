@@ -47,7 +47,7 @@ config file selects "aws-media" (MediaLive + MediaPackage v1) or
             Not available for local-docker (no stack) -- `stop` alone is
             sufficient teardown there. Content staged in S3 is NOT
             deleted (the stack doesn't own the bucket) -- see README.md.
-  create    First-time, non-interactive setup: (ecs-express only) ensure
+  create    First-time, non-interactive setup: (ecs-express, aws-lambda) ensure
             the shared ECS cluster stack is deployed, `spark` (content
             MUST be staged before the channel stack exists), `cdk deploy`
             the channel stack, then `start`. Equivalent to
@@ -158,8 +158,17 @@ def _cdk_output(name):
 
 
 def _shared_stack_name(cfg):
-    """Only meaningful for ecs-express (the shared ECS cluster stack)."""
-    return "ItsALiveSharedStack-ecs-express"
+    """The shared prerequisite stack of a backend (ecs-express: cluster +
+    cache policies; aws-lambda: cache policies), or None if it has none."""
+    return _SHARED_STACKS.get(_backend(cfg), (None, ()))[0]
+
+
+# backend -> (shared stack name, outputs it must have). A stack deployed by an
+# older version lacks the cache-policy outputs and is redeployed to add them.
+_SHARED_STACKS = {
+    "ecs-express": ("ItsALiveSharedStack-ecs-express", ("ClusterName", "SegmentsCachePolicyId", "ManifestsCachePolicyId")),
+    "aws-lambda": ("ItsALiveSharedStack-aws-lambda", ("SegmentsCachePolicyId", "StatusCachePolicyId", "ManifestsCachePolicyId")),
+}
 
 
 def _session(cfg):
@@ -419,23 +428,29 @@ def cmd_list(config_path, extra_args, as_json=False):
 
 
 def _ensure_shared_stack_if_needed(cfg, config_path):
-    """Deploy the shared ECS cluster stack (ecs-express only) unless it already
-    exists and is healthy. It is channel-independent and rarely changes, and a
-    no-op `cdk deploy` still pays a full synth + asset publish. To roll out a
-    change to loop_shared_stack.py, run `cdk deploy ItsALiveSharedStack-ecs-express`
-    by hand."""
+    """Deploy the backend's shared prerequisite stack (ecs-express: cluster +
+    cache policies; aws-lambda: cache policies) unless it already exists, is
+    healthy and has the outputs this version needs. It is channel-independent
+    and rarely changes, and a no-op `cdk deploy` still pays a full synth +
+    asset publish. A stack deployed before the cache policies moved into it
+    lacks their outputs, so it is redeployed once. To roll out any other
+    change to it, run `cdk deploy ItsALiveSharedStack-<backend>` by hand."""
     import subprocess
 
-    if _backend(cfg) != "ecs-express":
-        return
     shared_stack_name = _shared_stack_name(cfg)
+    if shared_stack_name is None:
+        return
+    required = _SHARED_STACKS[_backend(cfg)][1]
     status = _stack_status(_session(cfg).client("cloudformation"), shared_stack_name)
     if status in ("CREATE_COMPLETE", "UPDATE_COMPLETE"):
-        print(f"{shared_stack_name} already deployed ({status}) -- skipping.")
-        return
+        missing = [k for k in required if k not in _cf_outputs(cfg, shared_stack_name)]
+        if not missing:
+            print(f"{shared_stack_name} already deployed ({status}) -- skipping.")
+            return
+        print(f"{shared_stack_name} is missing {', '.join(missing)} (deployed by an older version) -- updating it.")
     print(f"Ensuring {shared_stack_name} is deployed ...")
     result = subprocess.run(
-        ["cdk", "deploy", "--require-approval", "never", *_cdk_output("_shared"),
+        ["cdk", "deploy", "--require-approval", "never", *_cdk_output(f"_shared-{_backend(cfg)}"),
          "-c", f"config={config_path}", shared_stack_name],
         check=False,
     )
@@ -445,7 +460,7 @@ def _ensure_shared_stack_if_needed(cfg, config_path):
 
 def cmd_create(cfg, config_path, extra_args):
     """Non-interactive first-time channel setup: ensure the shared stack
-    (ecs-express only), `spark` (stage content), `cdk deploy` the channel
+    (ecs-express and aws-lambda), `spark` (stage content), `cdk deploy` the channel
     stack, then `start`. This is `galvanise.py`'s pipeline (steps 3-6)
     with every interactive confirmation removed -- intended for
     programmatic callers (a management API/UI) that already know they

@@ -49,7 +49,7 @@ uv run python channel.py -c <channel.toml> [--json] <command> [args]
 
 | Command | Effect |
 |---|---|
-| `create` | First-time setup: shared stack (ecs-express only), `spark`, `cdk deploy`, `start` (local-docker: `spark` + `start`) |
+| `create` | First-time setup: shared stack (ecs-express, aws-lambda), `spark`, `cdk deploy`, `start` (local-docker: `spark` + `start`) |
 | `spark` | Stage the input: bake and push the loop package (ecs-express / aws-lambda / local-docker) or upload the raw `.ts` (aws-media) |
 | `start` / `stop` | Go live / stop paying for compute. `start --epoch-utc now\|<ISO8601>` resets the epoch (forces a redeploy) |
 | `refresh` | Pick up newly sparked content on a running channel (aws-media: a real stop/start) |
