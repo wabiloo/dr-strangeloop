@@ -189,6 +189,8 @@ class SpliceConfig(BaseModel):
 
     event_id: int
     splice_type: Literal["splice_insert", "time_signal"] = "splice_insert"
+    # `splice_insert` only: the 16-bit SCTE-35 `unique_program_id`. Accepts an
+    # int or a hex/decimal string; normalized to "0x%04X".
     unique_program_id: str = "0x0001"
     avail_num: int = 18
     avails_expected: int = 255
@@ -205,6 +207,19 @@ class SpliceConfig(BaseModel):
     # start/stop signaling.
     auto_return: bool = True
     segmentation: Optional[SegmentationConfig] = None
+
+    @field_validator("unique_program_id", mode="before")
+    @classmethod
+    def normalize_unique_program_id(cls, value: object) -> str:
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise ValueError("unique_program_id must be an integer or a hex string like '0x0001'")
+        try:
+            number = value if isinstance(value, int) else int(value.strip(), 0)
+        except ValueError:
+            raise ValueError(f"unique_program_id {value!r} is not a valid integer") from None
+        if not 0 <= number <= 0xFFFF:
+            raise ValueError(f"unique_program_id {value!r} must fit in 16 bits (0-65535)")
+        return f"0x{number:04X}"
 
     @model_validator(mode="after")
     def segmentation_required_for_time_signal(self) -> "SpliceConfig":

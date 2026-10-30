@@ -143,6 +143,8 @@ markers:
     type: ad                       # ad | ppo | break | any custom label
     splice_type: splice_insert     # splice_insert | time_signal
     assets: [ad1]                  # contiguous run of asset ids this marker covers
+    # splice_insert only, optional:
+    unique_program_id: 0x0001      # 16-bit int or hex string (default 0x0001)
     # time_signal only, optional:
     segmentation:
       type_id: "0x34"               # SCTE-35 segmentation_type_id, e.g. 0x34 = provider ad

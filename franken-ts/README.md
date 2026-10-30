@@ -421,7 +421,7 @@ markers:
 
 #### SCTE-35 marker types
 
-**`splice_insert`** — classic two-point splice: a splice-out at the start of the marker's span and a splice-in at the end.
+**`splice_insert`** — classic two-point splice: a splice-out at the start of the marker's span and a splice-in at the end. Set the SCTE-35 `unique_program_id` (16-bit, default `0x0001`) per marker with `unique_program_id: 42` or `unique_program_id: "0x002A"`; `avail_num`, `avails_expected` and `provider_avail_id` are also settable.
 
 **`time_signal`** — time signal with a segmentation descriptor. Requires a `segmentation` block. The `segmentation_duration` is derived from the marker's span duration unless overridden in the config. Required if the marker is part of a nested group (break/ppo/ad) that needs coincident boundaries merged into shared SCTE-35 messages.
 

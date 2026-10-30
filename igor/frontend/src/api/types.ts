@@ -185,6 +185,8 @@ export interface MarkerEntry {
   }
   /** `splice_insert` only, default true -- see franken_ts.config.SpliceConfig.auto_return. */
   auto_return?: boolean
+  /** `splice_insert` only, 16-bit; int or hex string (franken-ts normalizes to "0x%04X"). */
+  unique_program_id?: number | string
 }
 
 /** One resolved entry from POST /playlists/{name}/resolve-markers -- real

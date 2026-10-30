@@ -177,6 +177,8 @@ interface MarkerForm {
    * message with no cue-in (SCTE-35 auto_return); false emits an explicit
    * cue-out/cue-in pair. Ignored for `time_signal`. */
   auto_return: boolean
+  /** `splice_insert` only: 16-bit SCTE-35 unique_program_id (default 1). */
+  unique_program_id: number
   break_interval: number
 }
 
@@ -557,6 +559,7 @@ function commitBootstrap() {
       assets: [...adRun],
       segmentation: newSegmentation(),
       auto_return: true,
+      unique_program_id: 1,
       break_interval: 1,
     })
     adRun = []
@@ -1168,10 +1171,17 @@ function tagRange({ startIndex, endIndex }: { startIndex: number; endIndex: numb
     assets: assetIds,
     segmentation: newSegmentation(),
     auto_return: true,
+    unique_program_id: 1,
     break_interval: 1,
   }
   selectedMarkerEventId.value = markerDraft.value._ui_id
   selectedAssetIndex.value = null
+}
+
+/** unique_program_id arrives as an int or a "0x002A"-style string; the form edits it as a number. */
+function parseUniqueProgramId(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isInteger(n) && n >= 0 && n <= 0xffff ? n : 1
 }
 
 function editMarker(eventId: number, markerUiId?: number) {
@@ -1185,6 +1195,7 @@ function editMarker(eventId: number, markerUiId?: number) {
     assets: [...existing.assets],
     segmentation: { ...existing.segmentation },
     auto_return: existing.auto_return,
+    unique_program_id: existing.unique_program_id,
     break_interval: existing.break_interval,
   }
   selectedMarkerEventId.value = existing._ui_id
@@ -1358,6 +1369,7 @@ function commitDraft() {
         assets: [assetId],
         segmentation: { ...d.segmentation },
         auto_return: d.auto_return,
+        unique_program_id: d.unique_program_id,
         break_interval: d.break_interval,
       }
     })
@@ -1370,6 +1382,7 @@ function commitDraft() {
       assets: [...d.assets],
       segmentation: { ...d.segmentation },
       auto_return: d.auto_return,
+      unique_program_id: d.unique_program_id,
       break_interval: d.break_interval,
     })
   }
@@ -1522,6 +1535,7 @@ const draftPreviewSpan = computed(() => {
     assets: isDraftInstant.value ? d.assets.slice(0, 1) : [...d.assets],
     segmentation: { ...d.segmentation },
     auto_return: d.auto_return,
+    unique_program_id: d.unique_program_id,
     break_interval: d.break_interval,
   }
   const idToIndex = new Map(form.assets.map((a, i) => [a.id, i] as const))
@@ -1636,6 +1650,9 @@ function toYamlPlaylist(): Record<string, unknown> {
         // other optional marker/asset fields above.
         marker.auto_return = false
       }
+      if (m.splice_type === 'splice_insert' && m.unique_program_id !== 1) {
+        marker.unique_program_id = m.unique_program_id
+      }
       return marker
     })
   }
@@ -1743,6 +1760,7 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
         sub_segments_expected: seg.sub_segments_expected == null ? null : Number(seg.sub_segments_expected),
       },
       auto_return: m.auto_return !== false,
+      unique_program_id: parseUniqueProgramId(m.unique_program_id),
       break_interval: Number(m.break_interval ?? 1),
     }
   })
@@ -2584,6 +2602,10 @@ function applyHexPopover() {
                         title="Auto-return (default): one splice_insert message covers the whole break -- the player returns to content on its own once break_duration elapses, no cue-in is sent. Off: an explicit splice_insert cue-in is sent at the break's real end, in addition to the cue-out -- matching time_signal's Start/End pairing."
                       >({{ markerDraft.auto_return ? 'single message, no cue-in' : 'explicit cue-out + cue-in pair' }})</span>
                     </label>
+                  </div>
+                  <div class="col-3 flex flex-column gap-1">
+                    <label>Unique program ID</label>
+                    <InputNumber v-model="markerDraft.unique_program_id" :use-grouping="false" :min="0" :max="65535" />
                   </div>
                 </template>
               </div>
