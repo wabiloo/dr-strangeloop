@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 import tomllib
 from pathlib import Path
 from typing import Literal
@@ -424,6 +426,21 @@ def channel_outputs(name: str) -> dict:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+_OUTPUTS_TTL = 60.0
+_outputs_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _cached_outputs(name: str) -> dict:
+    """Stack outputs (endpoint/domain) only change on deploy, but the UI polls
+    /health and /timeline every few seconds -- don't spawn channel.py each time."""
+    hit = _outputs_cache.get(name)
+    if hit and time.monotonic() - hit[0] < _OUTPUTS_TTL:
+        return hit[1]
+    outputs = its_a_live.get_outputs(channel_store.config_path_for(name))
+    _outputs_cache[name] = (time.monotonic(), outputs)
+    return outputs
+
+
 def _serve_url(name: str, path: str) -> str:
     """URL of a loop-dee-loop `serve.py` path for a running channel
     (ecs-express, aws-lambda and local-docker only, all of which actually run
@@ -454,7 +471,7 @@ def _serve_url(name: str, path: str) -> str:
             )
         return f"http://localhost:{port}{path}"
     if backend == "ecs-express":
-        outputs = its_a_live.get_outputs(channel_store.config_path_for(name))
+        outputs = _cached_outputs(name)
         endpoint = outputs.get("ExpressServiceEndpoint")
         if not endpoint:
             raise HTTPException(
@@ -465,7 +482,7 @@ def _serve_url(name: str, path: str) -> str:
     if backend == "aws-lambda":
         # The Function URL is IAM-locked (CloudFront only); /health and
         # /timeline.json have their own uncached, all-query-strings behaviors.
-        outputs = its_a_live.get_outputs(channel_store.config_path_for(name))
+        outputs = _cached_outputs(name)
         domain = outputs.get("CloudFrontDomainName")
         if not domain:
             raise HTTPException(status_code=404, detail="No CloudFrontDomainName output -- not deployed yet.")
@@ -474,6 +491,12 @@ def _serve_url(name: str, path: str) -> str:
         status_code=404,
         detail=f"backend {backend!r} has no {path} endpoint (only ecs-express, aws-lambda and local-docker run serve.py).",
     )
+
+
+async def _serve_url_async(name: str, path: str) -> str:
+    """`_serve_url` shells out to channel.py (up to a minute when AWS is slow);
+    keep that off the event loop so it can't stall every other request."""
+    return await asyncio.to_thread(_serve_url, name, path)
 
 
 async def _proxy_serve_json(url: str, params: dict[str, str] | None = None) -> dict:
@@ -498,7 +521,7 @@ async def _proxy_serve_json(url: str, params: dict[str, str] | None = None) -> d
 @router.get("/{name}/health")
 async def channel_health(name: str) -> dict:
     """Proxies loop-dee-loop's `serve.py` `/health` endpoint."""
-    return await _proxy_serve_json(_serve_url(name, "/health"))
+    return await _proxy_serve_json(await _serve_url_async(name, "/health"))
 
 
 @router.get("/{name}/timeline")
@@ -508,12 +531,12 @@ async def channel_timeline(name: str, request: Request) -> dict:
     (`start`/`end`/`offset`/... timeshift selectors) are forwarded as-is so
     the same endpoint describes a startover/catchup range."""
     return await _proxy_serve_json(
-        _serve_url(name, "/timeline.json"), params=dict(request.query_params)
+        await _serve_url_async(name, "/timeline.json"), params=dict(request.query_params)
     )
 
 
 async def _proxy_serve_text(name: str, path: str) -> Response:
-    url = _serve_url(name, path)
+    url = await _serve_url_async(name, path)
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(url)

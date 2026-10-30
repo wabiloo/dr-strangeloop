@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "grave-robber"
-version = "2.3.2"
+version = "2.3.3"
 description = "Derive loop-dee-loop timing + SCTE-35 markers from a captured HTTP archive (HAR/Proxyman) of a real HLS/DASH session"
 requires-python = ">=3.11"
 dependencies = [

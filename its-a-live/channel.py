@@ -91,6 +91,7 @@ import sys
 import time
 import tomllib
 import boto3
+import botocore.config
 
 from _infra_cfg import infra_table, reject_legacy_tables
 from _legacy_cfg import check_config_version
@@ -176,9 +177,17 @@ def _session(cfg):
     return boto3.session.Session(region_name=region)
 
 
+# Bound every boto call's wall time (default: 60s connect+read, 5 retries --
+# minutes when credentials/network are bad) so one unreachable AWS endpoint
+# can't hang `list`/`status`/`outputs` and, through igor, the whole UI.
+_BOTO_CONFIG = botocore.config.Config(
+    connect_timeout=5, read_timeout=15, retries={"max_attempts": 2, "mode": "standard"},
+)
+
+
 def _cf_outputs(cfg, stack_name=None):
     stack_name = stack_name or _stack_name(cfg)
-    cf = _session(cfg).client("cloudformation")
+    cf = _session(cfg).client("cloudformation", config=_BOTO_CONFIG)
     resp = cf.describe_stacks(StackName=stack_name)
     return {o["OutputKey"]: o["OutputValue"] for o in resp["Stacks"][0].get("Outputs", [])}
 
@@ -264,7 +273,7 @@ def cmd_status(cfg, extra_args, as_json=False):
     # itself already unambiguously answers.
     stack_status = None
     if backend not in _NO_STACK_BACKENDS:
-        cf = _session(cfg).client("cloudformation")
+        cf = _session(cfg).client("cloudformation", config=_BOTO_CONFIG)
         stack_status = _stack_status(cf, _stack_name(cfg))
         if stack_status is None or not _stack_status_is_settled(stack_status):
             result = {
@@ -346,7 +355,7 @@ def _list_entry(path):
             "reachable": result.get("reachable"),
         }
     stack_name = _stack_name(cfg)
-    cf = _session(cfg).client("cloudformation")
+    cf = _session(cfg).client("cloudformation", config=_BOTO_CONFIG)
     status_value = _stack_status(cf, stack_name)
     entry = {
         "config_path": path,
@@ -522,7 +531,7 @@ def cmd_redeploy(cfg, config_path, extra_args):
         return
 
     stack_name = _stack_name(cfg)
-    cf = _session(cfg).client("cloudformation")
+    cf = _session(cfg).client("cloudformation", config=_BOTO_CONFIG)
 
     _ensure_shared_stack_if_needed(cfg, config_path)
 
