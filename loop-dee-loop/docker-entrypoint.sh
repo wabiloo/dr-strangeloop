@@ -120,6 +120,9 @@ case "$SUBCOMMAND" in
             TIMESHIFT_MAX_SPAN_SECONDS=""
             QUERY_PREFIX=""
             QUERY_OVERRIDES="false"
+            LL_DASH="false"
+            LL_TARGET_LATENCY=""
+            LL_UTC_TIMING_URL=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --host) HOST="$2"; shift 2 ;;
@@ -138,6 +141,9 @@ case "$SUBCOMMAND" in
                     --timeshift-end-param) TIMESHIFT_END_PARAM="$2"; shift 2 ;;
                     --timeshift-max-span-seconds) TIMESHIFT_MAX_SPAN_SECONDS="$2"; shift 2 ;;
                     --query-prefix) QUERY_PREFIX="$2"; shift 2 ;;
+                    --ll-dash) LL_DASH="true"; shift ;;
+                    --ll-target-latency) LL_TARGET_LATENCY="$2"; shift 2 ;;
+                    --ll-utc-timing-url) LL_UTC_TIMING_URL="$2"; shift 2 ;;
                     *)
                         log "ERROR: unrecognized serve.py flag in production mode: $1"
                         exit 2
@@ -154,6 +160,7 @@ case "$SUBCOMMAND" in
             export PERIOD_ON_SEGMENTATION CHANNEL_NAME DASH_ADDRESSING DASH_TIMELINE
             export TIMESHIFT TIMESHIFT_START_PARAM TIMESHIFT_END_PARAM
             export TIMESHIFT_MAX_SPAN_SECONDS QUERY_PREFIX QUERY_OVERRIDES
+            export LL_DASH LL_TARGET_LATENCY LL_UTC_TIMING_URL
             if [[ "${LOOP_PACKAGE_STORE:-}" == "s3" ]]; then
                 # One execution environment handles one request at a time
                 # (Lambda), so one worker; threads cover the Web Adapter's
@@ -161,6 +168,16 @@ case "$SUBCOMMAND" in
                 export LOOP_PACKAGE_DIR LOOP_PACKAGE_STORE LOOP_PACKAGE_S3_URI
                 exec gunicorn --bind "${HOST}:${PORT}" --workers 1 --threads "${GUNICORN_THREADS:-4}" \
                     --worker-class gthread --timeout 0 \
+                    --access-logfile - \
+                    --access-logformat '%(h)s "%(r)s" %(s)s %(b)s "%(a)s"' \
+                    wsgi:app
+            fi
+            if [[ "$LL_DASH" == "true" ]]; then
+                # Low-latency responses are held open (chunks released on the
+                # wall clock), which would starve sync workers: threaded ones.
+                log "low-latency DASH: gthread workers"
+                exec gunicorn --bind "${HOST}:${PORT}" --workers "${GUNICORN_WORKERS:-2}" \
+                    --threads "${GUNICORN_THREADS:-32}" --worker-class gthread --timeout 0 \
                     --access-logfile - \
                     --access-logformat '%(h)s "%(r)s" %(s)s %(b)s "%(a)s"' \
                     wsgi:app

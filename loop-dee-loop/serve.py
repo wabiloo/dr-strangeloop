@@ -43,6 +43,7 @@ from flask import Flask, Response, abort, jsonify, request, send_file
 
 import cmaf
 import continuity
+import lowlatency
 import package_io
 from timeshift import (
     ADDRESSING_PARAM,
@@ -772,6 +773,10 @@ class LoopPackage:
         self.segment_duration_seconds: float = float(
             self.descriptor["segment_duration_seconds"]
         )
+        # Set only by `bake.py --chunk-duration`: segments hold several
+        # moof+mdat chunks, so low-latency DASH delivery is possible.
+        _chunk = self.descriptor.get("chunk_duration_seconds")
+        self.chunk_duration_seconds: float | None = float(_chunk) if _chunk else None
         self.markers: list[dict] = self.descriptor["markers"]
         # Name of the baked source (franken-ts output name), when recorded.
         source_input = self.descriptor.get("source_input")
@@ -1002,7 +1007,16 @@ class Channel:
         channel_name: str = "",
         dash_addressing: str = "number",
         dash_timeline: str = "full",
+        ll_dash: bool = False,
+        ll_target_latency: float | None = None,
+        ll_utc_timing_url: str = "",
     ):
+        package_chunk = getattr(package, "chunk_duration_seconds", None)
+        if ll_dash and package_chunk is None:
+            raise ValueError(
+                "low-latency DASH needs a package baked with `bake.py --chunk-duration` "
+                "(this one has a single chunk per segment)"
+            )
         if dash_timeline not in DASH_TIMELINE_CHOICES:
             raise ValueError(f"dash_timeline must be one of {DASH_TIMELINE_CHOICES}, got {dash_timeline!r}")
         if dash_addressing not in DASH_ADDRESSING_CHOICES:
@@ -1050,6 +1064,16 @@ class Channel:
         self.continuous = continuous
         # Set only on a per-request with_offset() variant (SCOPE.md §13.7).
         self.offset_ticks = 0
+        # Low-latency DASH (lowlatency.py): chunks of an in-progress segment are
+        # released at their own wall-clock end, and the MPD lets players ask
+        # for a segment `ll_ato_seconds` early. ATO = segment - chunk, so the
+        # first chunk is due right when it is requested (a little before for
+        # uneven or marker-shortened segments, where the server simply holds).
+        self.ll_dash = ll_dash
+        chunk = package_chunk or 0.0
+        self.ll_ato_seconds = round(max(0.0, package.segment_duration_seconds - chunk), 3) if ll_dash else 0.0
+        self.ll_target_latency_seconds = ll_target_latency or max(4 * chunk, 1.0)
+        self.ll_utc_timing_url = ll_utc_timing_url
 
     def _period_starts(self, signal_breaks: frozenset[int]) -> frozenset[int]:
         """Local segment indices that open a new Period / discontinuity in
@@ -1280,6 +1304,15 @@ class Channel:
         variant = copy.copy(self)
         variant.dash_addressing = addressing
         variant.dash_timeline = timeline_style
+        return variant
+
+    def with_ll_utc_timing_url(self, url: str) -> "Channel":
+        """Low-latency MPD's UTCTiming endpoint, derived from the request when
+        none was configured."""
+        if self.ll_utc_timing_url or not self.ll_dash:
+            return self
+        variant = copy.copy(self)
+        variant.ll_utc_timing_url = url
         return variant
 
     def with_split_on(self, type_ids: frozenset[int]) -> "Channel":
@@ -2291,12 +2324,42 @@ class Channel:
         seconds = ticks_to_wall_clock_seconds(ticks, self.package.timescale)
         return _dt.datetime.utcfromtimestamp(seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
+    @property
+    def ll_template_attrs(self) -> str:
+        """Extra `SegmentTemplate` attributes of a low-latency MPD (empty otherwise)."""
+        if not self.ll_dash:
+            return ""
+        return f' availabilityTimeOffset="{self.ll_ato_seconds}" availabilityTimeComplete="false"'
+
+    def _ll_live(self, window: "TimeWindow | None") -> bool:
+        return self.ll_dash and window is None
+
+    def _service_description_xml(self, window: "TimeWindow | None") -> str:
+        """DASH-IF LL `ServiceDescription`: the latency the player should hold
+        (target, with a band it may catch up or slow down within)."""
+        if not self._ll_live(window):
+            return ""
+        target = round(self.ll_target_latency_seconds * 1000)
+        return (
+            '  <ServiceDescription id="0">\n'
+            f'    <Latency target="{target}" min="{target // 2}" max="{target * 2}"/>\n'
+            '    <PlaybackRate min="0.96" max="1.04"/>\n'
+            "  </ServiceDescription>\n"
+        )
+
     def _utc_timing_xml(self, window: "TimeWindow | None") -> str:
         """A dynamic MPD's players derive the live edge from their own clock.
         With an `offset` (SCOPE.md §13.7) "now" is not the client's now, so
         tell it what "now" is via a direct UTCTiming value -- the standard
         DASH mechanism -- and it plays as the stream would have then. Empty
         for plain live and for static (ended) MPDs."""
+        if self._ll_live(window) and self.offset_ticks == 0 and self.ll_utc_timing_url:
+            # Low latency needs the player's clock within tens of ms of ours:
+            # a polled endpoint, not a value baked into a cacheable MPD.
+            return (
+                '  <UTCTiming schemeIdUri="urn:mpeg:dash:utc:http-xsdate:2014" '
+                f'value="{self.ll_utc_timing_url}"/>\n'
+            )
         if self.offset_ticks == 0 or (window is not None and window.ended):
             return ""
         return (
@@ -2347,8 +2410,13 @@ class Channel:
             f'     publishTime="{self._iso_ticks(self.now_ticks())}"\n'
             f'     minimumUpdatePeriod="PT{max_seg}S"\n'
             + depth
-            + f'     suggestedPresentationDelay="PT{max_seg * 2}S"\n'
-            f'     minBufferTime="PT2S">'
+            + (
+                f'     suggestedPresentationDelay="PT{self.ll_target_latency_seconds:g}S"\n'
+                f'     minBufferTime="PT1S">'
+                if self.ll_dash and window is None
+                else f'     suggestedPresentationDelay="PT{max_seg * 2}S"\n'
+                f'     minBufferTime="PT2S">'
+            )
         )
 
     def build_dash_manifest(
@@ -2678,7 +2746,7 @@ class Channel:
                 ))
 
             time_addressing = self.dash_addressing == "time"
-            start_number_attr = "" if time_addressing else f' startNumber="{first_number}"'
+            start_number_attr = ("" if time_addressing else f' startNumber="{first_number}"') + self.ll_template_attrs
             audio_media = (
                 f"audio/seg/t/{real_span_index}/$Time$.m4s" if time_addressing else "audio/seg/$Number$.m4s"
             )
@@ -2779,7 +2847,7 @@ class Channel:
 <!-- {GENERATOR_COMMENT} -->
 {header_comments}
 {mpd_open}
-{chr(10).join(period_xml_parts)}
+{self._service_description_xml(window)}{chr(10).join(period_xml_parts)}
 {self._utc_timing_xml(window)}</MPD>
 '''
         return mpd
@@ -2988,7 +3056,7 @@ class Channel:
             first_global = indices[0]
 
             time_addressing = self.dash_addressing == "time"
-            start_number_attr = "" if time_addressing else f' startNumber="{first_global}"'
+            start_number_attr = ("" if time_addressing else f' startNumber="{first_global}"') + self.ll_template_attrs
             audio_media = "audio/cseg/t/$Time$.m4s" if time_addressing else "audio/cseg/$Number$.m4s"
 
             video_representations = []
@@ -3063,7 +3131,7 @@ class Channel:
 <!-- {GENERATOR_COMMENT} -->
 {header_comments}
 {mpd_open}
-{chr(10).join(period_xml_parts)}
+{self._service_description_xml(window)}{chr(10).join(period_xml_parts)}
 {self._utc_timing_xml(window)}</MPD>
 '''
         return mpd
@@ -3189,6 +3257,9 @@ def create_app(
     channel_name: str = "",
     dash_addressing: str = "number",
     dash_timeline: str = "full",
+    ll_dash: bool = False,
+    ll_target_latency: float | None = None,
+    ll_utc_timing_url: str = "",
 ) -> Flask:
     ts_cfg = timeshift or TimeshiftConfig()
     package = LoopPackage(package_dir)
@@ -3201,6 +3272,9 @@ def create_app(
         channel_name=channel_name,
         dash_addressing=dash_addressing,
         dash_timeline=dash_timeline,
+        ll_dash=ll_dash,
+        ll_target_latency=ll_target_latency,
+        ll_utc_timing_url=ll_utc_timing_url,
     )
     process_start_ticks = channel.now_ticks()
 
@@ -3213,6 +3287,7 @@ def create_app(
         ts: bool,
         shift_ticks: int | None,
         sequence_number: int = 0,
+        pace: "tuple[int, int, int] | None" = None,
     ):
         """Shared byte-serving tail for every segment route (SCOPE.md §12):
         the untouched static-file response in default mode, or a per-
@@ -3220,15 +3295,72 @@ def create_app(
         timestamp fields rewritten) when `shift_ticks` is not None."""
         if path is None:
             abort(404)
-        if shift_ticks is None:
+        if shift_ticks is None and pace is None:
             return _send_package_file(path, mimetype)
         data = package_io.read_bytes(path)
-        patched = (
-            continuity.shift_ts_segment(data, shift_ticks)
-            if ts
-            else continuity.shift_cmaf_fragment(data, shift_ticks, sequence_number=sequence_number)
+        if shift_ticks is not None:
+            data = (
+                continuity.shift_ts_segment(data, shift_ticks)
+                if ts
+                else continuity.shift_cmaf_fragment(data, shift_ticks, sequence_number=sequence_number)
+            )
+        if pace is not None:
+            return _paced_response(data, mimetype, *pace)
+        return Response(data, mimetype=mimetype)
+
+    def _paced_response(data: bytes, mimetype: str, start_tick: int, duration_ticks: int, track_timescale: int):
+        """Low-latency DASH: stream an in-progress segment chunk by chunk, each
+        released at its own wall-clock end (lowlatency.py). Sent with chunked
+        transfer encoding (no Content-Length), so a player reads each chunk as
+        it arrives."""
+        try:
+            chunks = lowlatency.split_chunks(data)
+        except ValueError:
+            return Response(data, mimetype=mimetype)  # not chunked: serve whole
+        offsets = lowlatency.release_offsets_ticks(
+            [t for _, t in chunks], track_timescale, package.timescale, duration_ticks
         )
-        return Response(patched, mimetype=mimetype)
+        moof = cmaf._find(data, ("moof",))
+        bodies = [c for c, _ in chunks]
+        if moof and moof[0]:
+            bodies[0] = data[: moof[0]] + bodies[0]  # styp/sidx ahead of the first chunk
+        stream = lowlatency.paced(
+            bodies, [start_tick + o for o in offsets], channel.now_ticks, time.sleep, package.timescale
+        )
+        resp = Response(stream, mimetype=mimetype)
+        resp.headers["X-Accel-Buffering"] = "no"
+        return resp
+
+    _track_timescales: dict[str, int] = {}
+
+    def _video_timescale(rendition) -> int:
+        if rendition.name not in _track_timescales:
+            found = None
+            if not rendition.self_initializing:
+                try:
+                    found = cmaf.track_timescale(package_io.read_bytes(rendition.init_path()))
+                except (OSError, RuntimeError):
+                    found = None
+            _track_timescales[rendition.name] = found or package.timescale
+        return _track_timescales[rendition.name]
+
+    def _ll_pace(boundaries: list[int], local_index: int, track_timescale: int, mode: str, index: int):
+        """(start_tick, duration_ticks, track_timescale) when this segment is
+        still in progress on the wall clock (low-latency DASH only), else None."""
+        if not channel.ll_dash or local_index >= len(boundaries):
+            return None
+        end = boundaries[local_index + 1] if local_index + 1 < len(boundaries) else package.total_loop_duration_ticks
+        duration = end - boundaries[local_index]
+        start = lowlatency.segment_occurrence(
+            channel.now_ticks(),
+            epoch_ticks,
+            package.total_loop_duration_ticks,
+            boundaries[local_index],
+            duration,
+            round(package.segment_duration_seconds * package.timescale),
+            loop_number=index // package.segments_per_loop if mode == "global" else None,
+        )
+        return None if start is None else (start, duration, track_timescale)
 
     @app.after_request
     def _add_cors(resp):
@@ -3373,7 +3505,16 @@ def create_app(
     @app.get(f"/{LoopPackage.DASH_ALIAS}")
     def dash_manifest():
         ch, window, _query = _request_view("dash")
+        ch = ch.with_ll_utc_timing_url(request.url_root + "time")
         return _manifest_response(ch.build_dash_manifest(window=window), "application/dash+xml", window)
+
+    @app.get("/time")
+    def server_time():
+        """The channel clock as an xs:dateTime, for the low-latency MPD's
+        `UTCTiming` (`urn:mpeg:dash:utc:http-xsdate:2014`). Never cached."""
+        resp = Response(channel._iso_ticks(channel.now_ticks()), mimetype="text/plain")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     def _register_video_playlist(rendition):
         def view():
@@ -3453,8 +3594,14 @@ def create_app(
         # SCOPE.md §11.3: a sparse-mode index with no physical media 404s --
         # manifest generation is otherwise completely unaffected (the
         # manifest always advertised this segment as if it existed).
+        rendition = package.rendition_by_name(rendition_name)
+        pace = (
+            _ll_pace(rendition.segment_boundary_ticks, local_index, _video_timescale(rendition), mode, physical_index)
+            if channel.ll_dash
+            else None
+        )
         return _serve_segment(
-            path, "video/iso.segment", ts=False, shift_ticks=shift_ticks, sequence_number=physical_index
+            path, "video/iso.segment", ts=False, shift_ticks=shift_ticks, sequence_number=physical_index, pace=pace
         )
 
     @app.get("/<rendition_name>/seg/<int:physical_index>.ts", defaults=_SEG_DEFAULTS)
@@ -3511,8 +3658,18 @@ def create_app(
             except IndexError:
                 abort(404)
             # sparse audio hole (path is None) -- _serve_segment 404s it.
+            audio = package.audio_rendition
+            pace = (
+                _ll_pace(
+                    audio.audio_segment_boundary_ticks, local_index, audio.audio_timescale(package.timescale),
+                    mode, physical_index,
+                )
+                if channel.ll_dash
+                else None
+            )
             return _serve_segment(
-                path, "audio/iso.segment", ts=False, shift_ticks=shift_ticks, sequence_number=physical_index
+                path, "audio/iso.segment", ts=False, shift_ticks=shift_ticks, sequence_number=physical_index,
+                pace=pace,
             )
 
         @app.get("/audio/seg/<int:physical_index>.ts", defaults=_SEG_DEFAULTS)
@@ -3631,6 +3788,28 @@ def main() -> int:
         "when the video renditions match). HLS is unaffected.",
     )
     parser.add_argument(
+        "--ll-dash",
+        action="store_true",
+        help="Low-latency DASH: advertise availabilityTimeOffset/ServiceDescription in the "
+        "MPD and stream the segment in progress chunk by chunk, each chunk released at its "
+        "own wall-clock end. Needs a package baked with `bake.py --chunk-duration`, and a "
+        "threaded/async server (held responses) -- not the default sync gunicorn worker.",
+    )
+    parser.add_argument(
+        "--ll-target-latency",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Latency the low-latency MPD asks players to hold (default: 4 x chunk, at least 1 s).",
+    )
+    parser.add_argument(
+        "--ll-utc-timing-url",
+        default="",
+        metavar="URL",
+        help="Absolute URL of this server's /time, for the low-latency MPD's UTCTiming. "
+        "Default: derived from each request's own URL (wrong behind a proxy that rewrites Host).",
+    )
+    parser.add_argument(
         "--timeshift",
         action="store_true",
         help="SCOPE.md §13: honour the startover/catchup query parameters on the "
@@ -3688,6 +3867,9 @@ def main() -> int:
         channel_name=args.channel_name,
         dash_addressing=args.dash_addressing,
         dash_timeline=args.dash_timeline,
+        ll_dash=args.ll_dash,
+        ll_target_latency=args.ll_target_latency,
+        ll_utc_timing_url=args.ll_utc_timing_url,
         timeshift=TimeshiftConfig(
             timeshift=args.timeshift,
             overrides=args.query_overrides,
@@ -3697,7 +3879,7 @@ def main() -> int:
             prefix=args.query_prefix,
         ),
     )
-    app.run(host=args.host, port=args.port)
+    app.run(host=args.host, port=args.port, threaded=True)
     return 0
 
 
