@@ -104,7 +104,7 @@ def test_fixed_parameter_names_are_the_decided_ones():
     assert FIXED_PARAMS == (
         "full_loops", "timeline_mode", "offset", "epoch", "dvr_window", "timeline_style", "addressing",
         "cue_tags", "descriptor_grouping", "increment_event_ids", "signal_format", "id_template",
-        "split_on", "max_height", "max_bitrate", "low_latency", "ll_target_latency", "ll_utc_timing",
+        "split_on", "announce_ahead", "announce_on", "max_height", "max_bitrate", "low_latency", "ll_target_latency", "ll_utc_timing",
     )
 
 
@@ -837,7 +837,7 @@ def test_overrides_off_over_http(tmp_path):
 def test_health_reports_the_overrides_switch(tmp_path):
     on, *_ = _app(tmp_path)
     ts = on.get("/health").get_json()["query"]
-    assert ts["overrides"] is True and len(ts["params"]) == 20
+    assert ts["overrides"] is True and len(ts["params"]) == 22
     off, *_ = _app(tmp_path / "off", overrides=False) if (tmp_path / "off").mkdir() is None else (None,)
     ts = off.get("/health").get_json()["query"]
     assert ts["overrides"] is False and ts["params"] == ["start", "end", "full_loops", "offset"]

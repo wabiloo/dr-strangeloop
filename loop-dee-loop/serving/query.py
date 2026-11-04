@@ -15,6 +15,8 @@ from timeshift import (
     DVR_WINDOW_PARAM,
     EPOCH_PARAM,
     HLS_DESCRIPTOR_GROUPING_VALUES,
+    ANNOUNCE_AHEAD_PARAM,
+    ANNOUNCE_ON_PARAM,
     ID_TEMPLATE_PARAM,
     INCREMENT_EVENT_IDS_PARAM,
     LL_MAX_TARGET_LATENCY_SECONDS,
@@ -33,6 +35,8 @@ from timeshift import (
     TIMELINE_STYLE_VALUES,
     TimeshiftConfig,
     TimeshiftError,
+    parse_announce_ahead,
+    parse_announce_on,
     parse_bool,
     parse_choice,
     parse_duration_seconds,
@@ -99,6 +103,13 @@ def resolve_request_channel(channel: Channel, args, cfg: TimeshiftConfig, fmt: s
     raw = arg(SPLIT_ON_PARAM)
     if raw is not None:
         ch = ch.with_split_on(parse_split_on(raw, name(SPLIT_ON_PARAM)))
+
+    raw_ahead, raw_on = arg(ANNOUNCE_AHEAD_PARAM), arg(ANNOUNCE_ON_PARAM)
+    if raw_ahead is not None or raw_on is not None:
+        ch = ch.with_announce(
+            float(parse_announce_ahead(raw_ahead, name(ANNOUNCE_AHEAD_PARAM))) if raw_ahead is not None else None,
+            parse_announce_on(raw_on, name(ANNOUNCE_ON_PARAM)) if raw_on is not None else None,
+        )
 
     raw_ll, raw_target, raw_clock = arg(LOW_LATENCY_PARAM), arg(LL_TARGET_LATENCY_PARAM), arg(LL_UTC_TIMING_PARAM)
     target = None

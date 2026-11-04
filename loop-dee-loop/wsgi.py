@@ -12,6 +12,8 @@ same flags serve.py's CLI accepts, since gunicorn imports this module
 import os
 from pathlib import Path
 
+from timeshift import parse_announce_on
+
 from serve import (
     TimeshiftConfig,
     create_app,
@@ -61,6 +63,8 @@ timeshift = TimeshiftConfig(
 
 period_on_segmentation = parse_segmentation_type_ids(os.environ.get("PERIOD_ON_SEGMENTATION"))
 
+announce_on, announce_splice_insert = parse_announce_on(os.environ.get("ANNOUNCE_ON", ""), "ANNOUNCE_ON")
+
 app = create_app(
     package_dir,
     epoch_ticks,
@@ -77,4 +81,7 @@ app = create_app(
     ll_utc_timing=os.environ.get("LL_UTC_TIMING") or "direct",
     ll_optin=os.environ.get("LL_OPTIN", "").lower() in ("1", "true", "yes"),
     ll_hls=os.environ.get("LL_HLS", "").lower() in ("1", "true", "yes"),
+    announce_ahead=float(os.environ.get("ANNOUNCE_AHEAD") or 0),
+    announce_on=announce_on,
+    announce_splice_insert=announce_splice_insert,
 )

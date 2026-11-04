@@ -16,6 +16,7 @@ import FieldHelp from '../components/FieldHelp.vue'
 import QpBadge from '../components/QpBadge.vue'
 import EpochFields from '../components/EpochFields.vue'
 import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
+import AnnounceFields from '../components/AnnounceFields.vue'
 import LowLatencyFields from '../components/LowLatencyFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
 import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
@@ -156,6 +157,8 @@ const form = reactive<ChannelCreatePayload>({
   utc_timing_url: '',
   continuous: false,
   period_on_segmentation: [],
+  announce_ahead: 0,
+  announce_on: [],
   timeshift_enabled: true,
   query_overrides: true,
   query_prefix: '',
@@ -646,6 +649,7 @@ async function submit() {
         </FieldHelp>
       </div>
       <PeriodSegmentationFields :form="form" id-prefix="new" />
+      <AnnounceFields :form="form" id-prefix="new" />
 
       <h4 class="mb-0 mt-2">{{ T['markers.hls'] }}</h4>
       <div class="flex flex-column gap-1">

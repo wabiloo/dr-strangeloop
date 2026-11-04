@@ -169,7 +169,7 @@ prefix = ""                  # put in front of EVERY query parameter name, e.g. 
 start_param = "start"        # e.g. https://<cdn>/index.m3u8?start=2026-09-30T08:00:00Z&end=2026-09-30T08:10:00Z
 end_param = "end"
 # The other parameters have fixed names: full_loops (bool), timeline_mode (default|continuous|periodic), offset
-# (e.g. -PT1H), epoch, dvr_window, split_on, timeline_style, addressing, cue_tags, descriptor_grouping,
+# (e.g. -PT1H), epoch, dvr_window, split_on, announce_ahead, announce_on, timeline_style, addressing, cue_tags, descriptor_grouping,
 # increment_event_ids, signal_format, id_template, max_height, max_bitrate, low_latency, ll_target_latency,
 # ll_utc_timing (DASH low latency, loop-dee-loop/README.md "Low-latency DASH").
 # All these names (prefixed) are also what CloudFront keys manifest caching on --
@@ -180,6 +180,8 @@ max_span_seconds = 21600     # longest startover/catchup range
 
 [markers]
 # split_on = [0x22, 0x30]    # optional: force a Period/discontinuity at these SCTE-35 segmentation_type_ids, even with continuous (loop-dee-loop/SCOPE.md §14)
+# announce_ahead = 10            # optional, seconds (0 = off): announce markers (HLS DATERANGE / DASH Event) at least this long before the segment they fall in, rounded to whole segments, also across the loop wrap; the tag/Event stays until every segment it covers has left the window; in DASH a marker announced in an earlier Period than the one it falls in is carried again by every later Period that still covers it. Marker times and CUE-OUT/-IN are not moved; not applied to a closed catchup range. Per request: ?announce_ahead=10&announce_on=0x22
+# announce_on = [0x22, "splice_insert"]   # optional: only announce these segmentation_type_ids and/or "splice_insert"; empty = every marker
 
 [infrastructure.express]
 port   = 8080

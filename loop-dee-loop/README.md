@@ -280,6 +280,27 @@ those `segmentation_type_id`s, in either timeline mode and in HLS and DASH
 alike. It is signal only: with `--continuous-timeline` the timestamps stay
 continuous across the new Period.
 
+### Announcing markers ahead of their segment (SCOPE.md §16)
+
+By default a marker's `EXT-X-DATERANGE` / DASH `<Event>` appears with the segment it falls
+in, which is the live edge only when that segment starts. `--announce-ahead 10`
+(its-a-live: `[markers] announce_ahead = 10`; per request: `?announce_ahead=10`, `0`
+off) puts it in the manifest as soon as the live edge is within 10 s of the marker, rounded
+to whole segments and across the loop wrap (a marker 2 s into the next loop is announced in
+the last segments of the current one). `--announce-on 0x22,0x30,splice_insert`
+(`announce_on = [0x22, "splice_insert"]`, `?announce_on=`) limits it to those markers (a Start
+implies its End; empty or `all` = every marker).
+
+Only *where* the marker is signalled changes: `START-DATE` and `Event@presentationTime` stay the
+marker's own, and `#EXT-X-CUE-OUT` / `-IN` stay exact. The tag or Event then stays in the
+manifest until every segment the marker covers has left the window -- not just the segment it
+was announced on. In DASH, where a forced Period (`split_on`) or the loop wrap
+separates the announce from the marker, the early Event sits in the earlier Period with a
+`presentationTime` past that Period's end, and the Period the marker belongs to carries it
+again (same id) while a segment it covers is still in the window. Low latency changes nothing
+here (the live edge is the segment in progress). A closed catchup range (`start`+`end`)
+never announces ahead.
+
 ### Low-latency DASH (CMAF chunked delivery)
 
 The overview, how to turn it on per channel, measured results and limits are in [`docs/low-latency.md`](../docs/low-latency.md); this section is the flag and delivery reference for DASH, the next one for HLS. Both are made from the same baked chunks.
@@ -401,6 +422,8 @@ curl 'http://localhost:8080/index.m3u8?offset=-PT1H'
 | `timeline_mode` | `default`, `continuous` or `periodic`; absent = `default` = the server's `--continuous-timeline` setting. Overrides it for this request, on live URLs too. `continuous` → `400` if the package can't be served continuously. |
 | `dvr_window` | Size of the sliding window: seconds (`30`) or an ISO 8601 duration (`PT30S`), rounded up to whole segments; at most the channel's max span (`400` beyond). |
 | `split_on` | Comma-separated SCTE-35 `segmentation_type_id`s (`0x22,0x30`; a Start implies its End) at whose markers a new DASH Period / HLS `#EXT-X-DISCONTINUITY` is forced (signal only). Replaces the channel setting; empty or `none` disables. |
+| `announce_ahead` | Announce markers this many seconds (or an ISO 8601 duration) before the segment they fall in; `0` = off. Replaces the channel setting. See "Announcing markers ahead". |
+| `announce_on` | Which markers `announce_ahead` applies to: segmentation_type_ids (`0x22,0x30`; a Start implies its End) and/or `splice_insert`; empty or `all` = every marker. Replaces the channel setting. |
 
 **DASH manifest style** (ignored by HLS)
 

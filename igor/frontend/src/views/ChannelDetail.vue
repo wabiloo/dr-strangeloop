@@ -16,6 +16,7 @@ import BackendBadge from '../components/BackendBadge.vue'
 import JobPanel from '../components/JobPanel.vue'
 import EpochFields from '../components/EpochFields.vue'
 import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
+import AnnounceFields from '../components/AnnounceFields.vue'
 import LowLatencyFields from '../components/LowLatencyFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
 import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
@@ -131,6 +132,8 @@ const editForm = reactive<ChannelCreatePayload>({
   utc_timing_url: '',
   continuous: false,
   period_on_segmentation: [],
+  announce_ahead: 0,
+  announce_on: [],
   timeshift_enabled: true,
   query_overrides: true,
   query_prefix: '',
@@ -1350,6 +1353,9 @@ watch(() => props.name, reload)
                 </div>
                 <div class="config-field-wide">
                   <PeriodSegmentationFields :form="editForm" id-prefix="edit" />
+                </div>
+                <div class="config-field-wide">
+                  <AnnounceFields :form="editForm" id-prefix="edit" />
                 </div>
               </div>
             </section>

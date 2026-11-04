@@ -42,6 +42,13 @@ INCREMENT_EVENT_IDS_PARAM = "increment_event_ids"
 SIGNAL_FORMAT_PARAM = "signal_format"
 ID_TEMPLATE_PARAM = "id_template"
 SPLIT_ON_PARAM = "split_on"
+# Announce markers ahead of the segment they fall in: `announce_ahead` seconds (0 = off), for the
+# markers matching `announce_on` (segmentation_type_ids and/or `splice_insert`; empty/`all` = every marker).
+ANNOUNCE_AHEAD_PARAM = "announce_ahead"
+ANNOUNCE_ON_PARAM = "announce_on"
+# Sanity bound for announce_ahead, seconds.
+ANNOUNCE_MAX_SECONDS = 3600
+SPLICE_INSERT_TOKEN = "splice_insert"
 # Ladder filtering.
 MAX_HEIGHT_PARAM = "max_height"
 MAX_BITRATE_PARAM = "max_bitrate"
@@ -64,6 +71,7 @@ FIXED_PARAMS = (
     FULL_LOOPS_PARAM, TIMELINE_PARAM, OFFSET_PARAM, EPOCH_PARAM, DVR_WINDOW_PARAM,
     TIMELINE_STYLE_PARAM, ADDRESSING_PARAM, CUE_TAGS_PARAM, DESCRIPTOR_GROUPING_PARAM,
     INCREMENT_EVENT_IDS_PARAM, SIGNAL_FORMAT_PARAM, ID_TEMPLATE_PARAM, SPLIT_ON_PARAM,
+    ANNOUNCE_AHEAD_PARAM, ANNOUNCE_ON_PARAM,
     MAX_HEIGHT_PARAM, MAX_BITRATE_PARAM,
     LOW_LATENCY_PARAM, LL_TARGET_LATENCY_PARAM, LL_UTC_TIMING_PARAM,
 )
@@ -257,6 +265,40 @@ def parse_split_on(value: str, name: str) -> frozenset[int]:
             raise TimeshiftError(f"'{name}': segmentation_type_id {token!r} is out of range 0..255")
         ids.add(type_id)
     return frozenset(ids)
+
+
+def parse_announce_ahead(value: str, name: str) -> Decimal:
+    """`announce_ahead=10` -> seconds (also ISO 8601, `PT10S`); `0` switches announcing ahead off."""
+    raw = value.strip()
+    seconds = Decimal(0) if _NUMERIC.match(raw) and Decimal(raw) == 0 else parse_duration_seconds(raw, name)
+    if seconds > ANNOUNCE_MAX_SECONDS:
+        raise TimeshiftError(f"'{name}' is limited to {ANNOUNCE_MAX_SECONDS} seconds")
+    return seconds
+
+
+def parse_announce_on(value: str, name: str) -> tuple[frozenset[int], bool]:
+    """`announce_on=0x22,0x30,splice_insert` -> (segmentation_type_ids, whether plain splice_insert markers
+    count). Empty, `all` or `none` -> (empty, False): no restriction, every marker is announced ahead."""
+    ids: set[int] = set()
+    splice_insert = False
+    for token in value.split(","):
+        token = token.strip()
+        if not token or token.lower() in ("all", "none"):
+            continue
+        if token.lower() == SPLICE_INSERT_TOKEN:
+            splice_insert = True
+            continue
+        try:
+            type_id = int(token, 0)
+        except ValueError:
+            raise TimeshiftError(
+                f"'{name}' must be a comma-separated list of segmentation_type_ids (e.g. 0x22,0x30) and/or "
+                f"{SPLICE_INSERT_TOKEN}, or all, got {value!r}"
+            ) from None
+        if not 0 <= type_id <= 0xFF:
+            raise TimeshiftError(f"'{name}': segmentation_type_id {token!r} is out of range 0..255")
+        ids.add(type_id)
+    return frozenset(ids), splice_insert
 
 
 def parse_instant_ticks(value: str, timescale: int, name: str = "time") -> int:

@@ -73,7 +73,7 @@ match, fix the upstream franken-ts input instead.
 | `serving/cli.py` · `startup.py` | `main` (the argparse command line) and the startup helpers shared with `wsgi.py` (descriptor, epoch, DVR window). |
 | `continuity.py` | Opt-in `--continuous-timeline` mode (`SCOPE.md` §12): per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite so the channel has no discontinuity/Period-restart at the loop wrap — header patch only, never a re-mux. |
 | `lowlatency.py` | Low-latency DASH and LL-HLS (README "Low-latency DASH" / "Low-latency HLS"): splits a baked segment into its `moof`+`mdat` chunks (the DASH chunks and the LL-HLS parts, with which start on a sync sample), computes each chunk's wall-clock release tick from the real `tfdt`s (integer ticks), the pacing generator, and which occurrence of a looping segment is still in progress. `serve.py` streams in-progress segments through it when `--ll-dash`/`--ll-optin`; `bake.py --chunk-duration` produces the chunks. |
-| `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig` (the parameter names + prefix), the per-request override parsers (`parse_choice`, `parse_duration_seconds`, `parse_split_on`, ...) and integer-tick `resolve_window` (segment snapping, `full_loops` widening, max-span cap). Pure ints, no Flask. |
+| `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig` (the parameter names + prefix), the per-request override parsers (`parse_choice`, `parse_duration_seconds`, `parse_split_on`, `parse_announce_ahead`, `parse_announce_on`, ...) and integer-tick `resolve_window` (segment snapping, `full_loops` widening, max-span cap). Pure ints, no Flask. |
 | `Dockerfile` / `Dockerfile.baked` / `docker-entrypoint.sh` | `Dockerfile`: code-only image shared by every channel (content comes from S3 or a bind mount). `Dockerfile.baked`: layers one channel's loop package on top for a self-contained, shareable image (`LOOP_PACKAGE_BAKED=1`, local-docker `bundle_content` only — see `its-a-live/AGENTS.md`). The entrypoint picks S3 / baked / passthrough mode from env vars. |
 | `load_test.py` | Concurrent-viewer load generator (see `PERFS.md`). |
 
@@ -99,6 +99,30 @@ split_on`; query parameter `split_on`) opens a new Period / `#EXT-X-DISCONTINUIT
 at markers with those `segmentation_type_id`s in HLS and DASH alike,
 signal-only (timestamps stay continuous under `--continuous-timeline`). Design: `SCOPE.md` §14; tests:
 `tests/test_serve_signal_periods.py`.
+
+## Announcing markers ahead
+
+`serve.py --announce-ahead 10 [--announce-on 0x22,splice_insert]` (its-a-live `[markers]
+announce_ahead` / `announce_on`; query parameters of the same names) signals markers
+before the segment they fall in. One rule decides it, shared by HLS, DASH and the rest:
+`_marker_covers_segment(..., announce_ticks)` in `serving/markers.py` (coverage = announce
+time up to the marker's own end), used by `TimelinePlanMixin.marker_anchors` (HLS and
+continuous DASH; entries are `Anchored(marker, loop)`: the loop the *marker* belongs to, which
+is the next one across the wrap) and, per Period, by the periodic DASH builder. Things an agent
+must not get wrong:
+
+- Only placement moves: `START-DATE`, `Event@presentationTime`, ids and `{loop}` all use the
+  marker's own loop, never the segment's. `#EXT-X-CUE-OUT/-IN` are not moved.
+- Coverage must keep running to the marker's own end (interval end, or for a point marker the
+  segment holding it): that is what keeps a tag/Event in the manifest after the segment it was
+  announced on has scrolled out. Do not shorten it to "from announce to start".
+- DASH continuous: an announced marker is placed in the Period of its first covered segment AND
+  in every later Period with a covered segment (events are only valid in the Period carrying
+  them). Markers with no lead keep the once-per-response rule, so lead 0 is byte-identical.
+- A closed catchup range (`window.ended`) never announces ahead (`announce=False`).
+- Low latency needs nothing special: the live edge is the segment in progress either way.
+- Tests: `tests/test_serve_announce_ahead.py` (pure + fake package, HLS/DASH, wrap, queries),
+  `tests/test_announce_ahead_ll.py` (LL-HLS parts/blocking reload, LL DASH).
 
 ## DASH `$Time$` addressing
 
@@ -130,7 +154,7 @@ Video `Representation@id` is the rendition name in both styles. Independent of
 normal `index.m3u8` / `index.mpd` accept `start`, `end`, `full_loops`, `offset` (pretend "now" is earlier/later; `SCOPE.md` §13.7) and
 `timeline_mode` query params (only `start`/`end` configurable) — catchup = VOD of a
 past range, startover = live-style from a past point — plus per-request overrides of
-the rendering (`epoch`, `dvr_window`, `split_on`, `timeline_style`, `addressing`,
+the rendering (`epoch`, `dvr_window`, `split_on`, `announce_ahead`, `announce_on`, `timeline_style`, `addressing`,
 `signal_format`, `descriptor_grouping`, `cue_tags`, `increment_event_ids`,
 `id_template`, `max_height`, `max_bitrate`, and for low-latency DASH `low_latency`, `ll_target_latency`,
 `ll_utc_timing`; `SCOPE.md` §13.8), all behind an optional

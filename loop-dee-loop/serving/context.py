@@ -49,6 +49,9 @@ class ServeContext(LowLatencyHttpMixin):
         ll_utc_timing: str = "direct",
         ll_optin: bool = False,
         ll_hls: bool = False,
+        announce_ahead: float = 0.0,
+        announce_on: frozenset[int] = frozenset(),
+        announce_splice_insert: bool = False,
     ):
         self.package_dir = package_dir
         self.epoch_ticks = epoch_ticks
@@ -69,6 +72,9 @@ class ServeContext(LowLatencyHttpMixin):
             ll_utc_timing=ll_utc_timing,
             ll_optin=ll_optin,
             ll_hls=ll_hls,
+            announce_ahead=announce_ahead,
+            announce_on=announce_on,
+            announce_splice_insert=announce_splice_insert,
         )
         self.process_start_ticks = self.channel.now_ticks()
 

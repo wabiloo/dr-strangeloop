@@ -1,6 +1,6 @@
 """`[markers]` channel config -> loop-dee-loop bake.py / serve.py flags.
 
-    [markers]       increment_event_ids, split_on
+    [markers]       increment_event_ids, split_on, announce_ahead, announce_on
     [markers.hls]   cue_tags, descriptor_grouping, id_template
     [markers.dash]  descriptor_grouping, signal_format
 
@@ -42,6 +42,44 @@ def split_on_ids(cfg: dict) -> list[int]:
     return ids
 
 
+MAX_ANNOUNCE_AHEAD = 3600
+SPLICE_INSERT = "splice_insert"
+
+
+def announce_ahead_seconds(cfg: dict) -> int | float:
+    """`[markers] announce_ahead = 10`: seconds (0 = off, at most 3600)."""
+    raw = cfg.get("markers", {}).get("announce_ahead", 0)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError(f"[markers] announce_ahead must be a number of seconds (0..{MAX_ANNOUNCE_AHEAD}), got {raw!r}")
+    if not 0 <= raw <= MAX_ANNOUNCE_AHEAD:
+        raise ValueError(f"[markers] announce_ahead must be between 0 and {MAX_ANNOUNCE_AHEAD} seconds, got {raw!r}")
+    return int(raw) if float(raw).is_integer() else float(raw)
+
+
+def announce_on_items(cfg: dict) -> list[int | str]:
+    """`[markers] announce_on = [0x22, "splice_insert"]`: segmentation_type_ids
+    (ints or "0x22" strings) and/or the word "splice_insert"; empty = every marker."""
+    raw = cfg.get("markers", {}).get("announce_on") or []
+    if isinstance(raw, (int, str)):
+        raw = [raw]
+    items: list[int | str] = []
+    for item in raw:
+        if isinstance(item, str) and item.strip().lower() == SPLICE_INSERT:
+            value: int | str = SPLICE_INSERT
+        else:
+            try:
+                value = int(item, 0) if isinstance(item, str) else int(item)
+            except ValueError:
+                raise ValueError(
+                    f"[markers] announce_on: {item!r} is neither a segmentation_type_id (0..255) nor 'splice_insert'"
+                ) from None
+            if not 0 <= value <= 0xFF:
+                raise ValueError(f"[markers] announce_on: {item!r} is not a segmentation_type_id (0..255)")
+        if value not in items:
+            items.append(value)
+    return items
+
+
 def markers_settings(cfg: dict) -> dict:
     """Merged + validated markers config, nested like the TOML."""
     markers = cfg.get("markers", {})
@@ -49,6 +87,8 @@ def markers_settings(cfg: dict) -> dict:
     return {
         "increment_event_ids": bool(markers.get("increment_event_ids", False)),
         "split_on": split_on_ids(cfg),
+        "announce_ahead": announce_ahead_seconds(cfg),
+        "announce_on": announce_on_items(cfg),
         "hls": {
             "cue_tags": _choice("markers.hls", "cue_tags", hls.get("cue_tags", "none"), CUE_TAGS_CHOICES),
             "descriptor_grouping": _choice(
@@ -90,3 +130,19 @@ def split_on_serve_args(cfg: dict) -> list[str]:
     Works with or without `continuous`; empty/absent = no forced breaks."""
     ids = split_on_ids(cfg)
     return ["--period-on-segmentation", ",".join(f"0x{i:02X}" for i in ids)] if ids else []
+
+
+def announce_serve_args(cfg: dict) -> list[str]:
+    """`[markers] announce_ahead = 10` / `announce_on = [0x22, "splice_insert"]`:
+    serve.py announces markers (HLS DATERANGE / DASH Event) that many seconds
+    before the segment they fall in. Off (no flags) when announce_ahead is 0;
+    announce_on empty = every marker."""
+    ahead = announce_ahead_seconds(cfg)
+    if not ahead:
+        announce_on_items(cfg)  # still validate
+        return []
+    args = ["--announce-ahead", str(ahead)]
+    items = announce_on_items(cfg)
+    if items:
+        args += ["--announce-on", ",".join(i if isinstance(i, str) else f"0x{i:02X}" for i in items)]
+    return args

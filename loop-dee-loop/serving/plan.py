@@ -5,6 +5,7 @@ is, which segments are discontinuities, or which segment a marker is signaled on
 from __future__ import annotations
 
 import bisect
+from typing import NamedTuple
 
 from loop_math import (
     compute_loop_position,
@@ -17,6 +18,14 @@ from timeshift import TimeWindow, resolve_window
 
 from serving.markers import _marker_covers_segment
 from serving.timeline import WindowRange
+
+
+class Anchored(NamedTuple):
+    """A marker signaled on a segment, and the loop iteration the marker occurrence itself belongs to (later than
+    the segment's own loop when it is announced ahead across the loop wrap)."""
+
+    marker: dict
+    loop: int
 
 
 class TimelinePlanMixin:
@@ -186,31 +195,59 @@ class TimelinePlanMixin:
             self.epoch_ticks,
         )
 
-    def marker_anchors(self, first: int, last: int) -> dict[int, list[dict]]:
+    def marker_anchors(self, first: int, last: int, announce: bool = True) -> dict[int, list[Anchored]]:
         """Markers signaled on each global segment of [first, last].
 
         A marker (one occurrence per loop) is described ONCE per response, on
-        the earliest in-range segment its active interval overlaps (see
+        the earliest in-range segment its coverage touches (see
         `_marker_covers_segment`). Anchors therefore move forward as older
-        segments leave the window, and vanish with the last overlapping one.
+        segments leave the window, and vanish with the last covered one.
         Keyed per loop: the same marker recurs every loop. Segment -> markers
         in package order; segments with nothing to signal are absent.
+
+        A marker announced ahead (`announce_ahead`, see `marker_announce_ticks`)
+        is covered from its announce time, so it is anchored on a segment
+        BEFORE its own -- possibly in the previous loop, for one near the start
+        of the next -- and stays in the response until every segment it covers
+        has left the window. Each entry carries the loop iteration the marker
+        itself belongs to, which is not the segment's loop in that case. With
+        `announce=False` (a closed catchup range, where nothing after its end
+        can be announced) every marker is anchored at its own segment.
         """
-        markers = self.package.markers
+        pkg = self.package
+        markers = pkg.markers
+        loop_ticks = pkg.total_loop_duration_ticks
+        # Loop iterations after a segment's own whose markers may be announced on it.
+        extra_loops = -(-self.announce_ahead_ticks // loop_ticks) if announce and self.announce_ahead_ticks else 0
+        announce_ticks = [self.marker_announce_ticks(m) if announce else 0 for m in markers]
         seen: set[tuple[int, str, object, int]] = set()
-        anchors: dict[int, list[dict]] = {}
+        anchors: dict[int, list[Anchored]] = {}
         for g in range(first, last + 1):
-            loop_number, local_index = divmod(g, self.package.segments_per_loop)
+            seg_loop, local_index = divmod(g, pkg.segments_per_loop)
             start, end = self.ref_segment_bounds(local_index)
             hits = []
-            for m in markers:
-                key = (loop_number, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
-                if key not in seen and _marker_covers_segment(m, start, end):
-                    seen.add(key)
-                    hits.append(m)
+            for ahead_loops in range(extra_loops + 1):
+                occurrence = seg_loop + ahead_loops
+                shift = ahead_loops * loop_ticks
+                for m, ticks in zip(markers, announce_ticks):
+                    if ahead_loops and not ticks:
+                        continue
+                    key = (occurrence, m["event_id"], m.get("marker_identity"), m["pts_time_ticks"])
+                    if key not in seen and _marker_covers_segment(m, start - shift, end - shift, ticks):
+                        seen.add(key)
+                        hits.append(Anchored(m, occurrence))
             if hits:
                 anchors[g] = hits
         return anchors
+
+    def marker_covers_global_segment(self, marker: dict, occurrence_loop: int, global_index: int) -> bool:
+        """Whether `marker`, as it occurs in loop `occurrence_loop`, covers the global segment `global_index`
+        (announce lead included)."""
+        pkg = self.package
+        seg_loop, local_index = divmod(global_index, pkg.segments_per_loop)
+        start, end = self.ref_segment_bounds(local_index)
+        shift = (occurrence_loop - seg_loop) * pkg.total_loop_duration_ticks
+        return _marker_covers_segment(marker, start - shift, end - shift, self.marker_announce_ticks(marker))
 
     def dash_period_id(self, loop_number: int, span_start_local: int | None = None) -> str:
         """DASH Period@id. Periodic: `loop<N>`, or `loop<N>-<first segment>`

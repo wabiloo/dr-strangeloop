@@ -6,7 +6,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from timeshift import TimeshiftConfig
+from timeshift import ANNOUNCE_MAX_SECONDS, TimeshiftConfig, TimeshiftError, parse_announce_on
 
 from serving.app import create_app
 from serving.constants import (
@@ -76,6 +76,23 @@ def main() -> int:
         "timeline mode. Signal only: with --continuous-timeline the "
         "timestamps stay continuous across the new Period. Channel-level; "
         "SCOPE.md §14.",
+    )
+    parser.add_argument(
+        "--announce-ahead",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="Announce markers this long BEFORE the segment they fall in (EXT-X-DATERANGE / DASH Event; the "
+        "marker's own time is unchanged), rounded to whole segments, across the loop wrap too. 0 (default) "
+        "announces each at its own segment. #EXT-X-CUE-OUT/-IN stay exact. Channel-level.",
+    )
+    parser.add_argument(
+        "--announce-on",
+        default="",
+        metavar="IDS",
+        help="Which markers --announce-ahead applies to: comma-separated segmentation_type_ids (e.g. "
+        "0x22,0x30; a Start implies its End) and/or splice_insert for plain splice_insert markers. Empty or "
+        "all (default): every marker.",
     )
     parser.add_argument(
         "--dash-addressing",
@@ -162,6 +179,12 @@ def main() -> int:
     parser.add_argument("--timeshift-end-param", default="end")
     parser.add_argument("--timeshift-max-span-seconds", type=int, default=21600)
     args = parser.parse_args()
+    if not 0 <= args.announce_ahead <= ANNOUNCE_MAX_SECONDS:
+        parser.error(f"--announce-ahead must be between 0 and {ANNOUNCE_MAX_SECONDS} seconds")
+    try:
+        announce_on, announce_splice_insert = parse_announce_on(args.announce_on, "--announce-on")
+    except TimeshiftError as exc:
+        parser.error(str(exc))
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -202,6 +225,9 @@ def main() -> int:
         ll_utc_timing=args.ll_utc_timing,
         ll_optin=args.ll_optin,
         ll_hls=args.ll_hls,
+        announce_ahead=args.announce_ahead,
+        announce_on=announce_on,
+        announce_splice_insert=announce_splice_insert,
         timeshift=TimeshiftConfig(
             timeshift=args.timeshift,
             overrides=args.query_overrides,

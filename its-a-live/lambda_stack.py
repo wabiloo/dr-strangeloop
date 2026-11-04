@@ -16,7 +16,7 @@ from constructs import Construct
 from _host_paths import to_host_path
 from _epoch_cfg import config_epoch_utc
 from _infra_cfg import infra_table
-from _markers_cfg import split_on_serve_args
+from _markers_cfg import announce_serve_args, split_on_serve_args
 from _packaging_cfg import check_low_latency, dash_serve_args, dvr_window_seconds as config_dvr_window_seconds
 import _cdn_policies as cdn
 from _query_cfg import query_param_names, query_serve_args
@@ -111,6 +111,7 @@ class LambdaLoopStack(Stack):
                 "--channel-name", name,
                 *(["--continuous-timeline"] if continuous else []),
                 *split_on_serve_args(config),
+                *announce_serve_args(config),
                 *dash_serve_args(config),
                 *query_serve_args(config),
             ],

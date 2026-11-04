@@ -39,7 +39,7 @@ FIXED_PARAMS = (
     "full_loops", "timeline_mode", "offset", "epoch", "dvr_window",
     "timeline_style", "addressing", "cue_tags", "descriptor_grouping",
     "increment_event_ids", "signal_format", "id_template", "split_on",
-    "max_height", "max_bitrate",
+    "announce_ahead", "announce_on", "max_height", "max_bitrate",
     "low_latency", "ll_target_latency", "ll_utc_timing",
 )
 

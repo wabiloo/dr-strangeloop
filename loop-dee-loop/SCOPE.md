@@ -967,6 +967,7 @@ with values is in `README.md` ("Query parameters") and `openapi.yaml`.
 |---|---|
 | Range / clock | `start`, `end` (configurable names), `full_loops`, `offset`, `epoch` |
 | Timeline / window | `timeline_mode`, `dvr_window`, `split_on` |
+| Marker announcement | `announce_ahead`, `announce_on` (§16) |
 | DASH style | `timeline_style`, `addressing`, `signal_format` |
 | SCTE-35 signaling | `descriptor_grouping`, `cue_tags`, `increment_event_ids`, `id_template` |
 | Ladder | `max_height`, `max_bitrate` |
@@ -1117,3 +1118,53 @@ difference: a JSON marker's `segments`
 includes a splice_insert break's implied duration up to its IN, whereas
 HLS/DASH signal it only on the segment its start/end fall in. A CDN strips unknown query params, so `scope` only
 works against the service directly (Igor proxies it).
+
+---
+
+## 16. Extension: announcing markers ahead of their segment (`--announce-ahead`)
+
+**DECIDED.** A marker is normally signalled (HLS `EXT-X-DATERANGE`, DASH `<Event>`) on the
+earliest in-window segment it covers, i.e. the segment it falls in; with segments of 2 s a
+consumer learns of a break only as the live edge reaches it. This lets a channel announce
+earlier, as SCTE 35-2 (pre-roll of at least 4 s), RFC 8216 ("added ... or earlier if
+possible") and origins such as Unified Origin do.
+
+**Settings.** `announce_ahead` (seconds, 0 = off, at most 3600) and `announce_on`
+(`segmentation_type_id`s, a Start implies its End, plus `splice_insert` for plain splice_insert
+markers; empty = every marker). Channel level (`--announce-ahead`, `--announce-on`;
+its-a-live `[markers] announce_ahead` / `announce_on`), per-request override by the query
+parameters of the same names. The lead is measured against the live edge (availability), not
+the player's position, and quantised to segments: a marker is announced on the first segment
+overlapping `[start - lead, ...)`, so at least `lead` and less than `lead + segment` before it.
+
+**Only placement moves.** `START-DATE`, `Event@presentationTime`, the SCTE-35 payload and ids
+are the marker's own. `#EXT-X-CUE-OUT` / `-CONT` / `-IN` mean "starts here" and are never moved.
+
+**Coverage.** `_marker_covers_segment(marker, seg_start, seg_end, announce_ticks)`: from
+`start - announce_ticks` to the marker's own end (end of its active interval, or for a
+point-in-time marker the segment holding its start). Because coverage still runs to the
+marker's end, the existing "anchor on the first in-window covered segment" rule keeps the
+tag/Event in every response until every segment the marker covers has left the window
+(RFC 8216: a DATERANGE must not be removed while any date in its range maps to a segment in
+the playlist), moving forward with the window like any other.
+
+**Loop wrap.** `marker_anchors` also considers the next loop's occurrences (as many loops
+ahead as the lead needs); each anchor carries the loop the marker belongs to, which drives
+START-DATE, event id remapping (`increment_event_ids`), `{loop}` in id templates and DASH
+synthetic ids. The dedupe key is the occurrence loop, so a marker is never announced twice.
+
+**DASH Periods.** Events are only valid in the Period carrying them (DVB-DASH TS 103 285,
+DVB-TA part 3: re-signal what is still active). Periodic mode already decides coverage per
+Period, so the next Period carries a marker again with its own `presentationTime`. Continuous
+mode with forced Periods (`split_on`) places an announced marker in the Period of its first
+covered segment and in every later Period with a covered segment (same id). In the earlier
+Period the `presentationTime` may lie past the Period's end: strict players or consumers that
+treat the Period holding an event as the break (MediaTailor) may react differently; verify with
+player-lab. Without a lead everything is as before (once per response).
+
+**Not applied** to a closed catchup range (`start`+`end`: nothing beyond its end can be
+announced); a startover without `end` behaves like live. Low latency is orthogonal (the live
+edge is the segment in progress in either case). `/timeline.json` is unchanged: it describes
+marker spans, not where a manifest announces them.
+
+Tests: `tests/test_serve_announce_ahead.py`, `tests/test_announce_ahead_ll.py`.

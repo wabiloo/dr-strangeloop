@@ -130,6 +130,24 @@ class VariantsMixin:
         variant.ll_utc_timing_url = url
         return variant
 
+    def with_announce(
+        self,
+        ahead: float | None = None,
+        on: tuple[frozenset[int], bool] | None = None,
+    ) -> Channel:
+        """Announce markers `ahead` seconds before their own segment for this request (0 = off), for the markers
+        `on` = (segmentation_type_ids, splice_insert) selects (empty = every marker). None keeps the channel's own."""
+        if ahead is None and on is None:
+            return self
+        variant = copy.copy(self)
+        new_on, new_splice = on if on is not None else (self.announce_on, self.announce_splice_insert)
+        if ahead is not None:
+            variant._set_announce(ahead, new_on, new_splice)
+        else:
+            variant.announce_on = expand_segmentation_pairs(frozenset(new_on))
+            variant.announce_splice_insert = new_splice
+        return variant
+
     def with_split_on(self, type_ids: frozenset[int]) -> Channel:
         """Force a Period / #EXT-X-DISCONTINUITY at markers of these
         segmentation_type_ids for this request (replaces the channel's

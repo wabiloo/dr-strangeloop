@@ -82,7 +82,7 @@ grave-robber segment-list `manifest.json`. Notable options:
 `--chunk-duration`.
 
 `serve.py` notable options: `--port`, `--channel-name`,
-`--dvr-window-seconds`, `--continuous-timeline`, `--dash-addressing number|time`, `--dash-timeline full|compact`, `--period-on-segmentation`,
+`--dvr-window-seconds`, `--continuous-timeline`, `--dash-addressing number|time`, `--dash-timeline full|compact`, `--period-on-segmentation`, `--announce-ahead SECONDS` + `--announce-on IDS` (markers announced before their segment),
 `--timeshift` (+ `--timeshift-start-param`, `--timeshift-end-param`,
 `--timeshift-max-span-seconds`), and for [low latency](./low-latency.md)
 `--ll-dash` / `--ll-hls` / `--ll-optin`, `--ll-target-latency`, `--ll-utc-timing direct|http|none`,

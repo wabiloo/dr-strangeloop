@@ -278,6 +278,44 @@ def test_channel_period_on_segmentation_rejects_bad_values():
     assert "apply" not in generate_toml(**stale.model_dump())
 
 
+@pytest.mark.parametrize("backend", ["ecs-express", "aws-lambda", "local-docker"])
+def test_channel_announce_roundtrip(backend):
+    payload = ChannelCreatePayload(
+        name="test-channel", backend=backend, region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+        announce_ahead=10, announce_on=["0x22", "34", "splice_insert", "SPLICE_INSERT", "0x30"],
+    )
+    assert payload.announce_on == ["0x22", "splice_insert", "0x30"]
+    text = generate_toml(**payload.model_dump())
+    markers = tomllib.loads(text)["markers"]
+    assert markers["announce_ahead"] == 10
+    assert markers["announce_on"] == [0x22, "splice_insert", 0x30]
+    assert "announce_ahead = 10\n" in text
+
+
+def test_channel_announce_omitted_by_default():
+    payload = ChannelCreatePayload(
+        name="test-channel", backend="local-docker", region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+    )
+    markers = tomllib.loads(generate_toml(**payload.model_dump()))["markers"]
+    assert "announce_ahead" not in markers and "announce_on" not in markers
+
+
+def test_channel_announce_rejects_bad_values():
+    base = dict(
+        name="test-channel", backend="local-docker", region="eu-west-1",
+        bucket_name="test-bucket", content_folder="content", source_path="outputs/test.ts",
+    )
+    for bad in (-1, 3601):
+        with pytest.raises(ValueError):
+            ChannelCreatePayload(**base, announce_ahead=bad)
+    for bad in (["nope"], ["0x100"]):
+        with pytest.raises(ValueError):
+            ChannelCreatePayload(**base, announce_on=bad)
+    assert ChannelCreatePayload(**base, announce_ahead=2.5).announce_ahead == 2.5
+
+
 @pytest.mark.parametrize("backend,table", [("ecs-express", "express"), ("local-docker", "docker")])
 def test_generated_toml_groups_infrastructure_tables(backend, table):
     payload = ChannelCreatePayload(

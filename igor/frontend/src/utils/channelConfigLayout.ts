@@ -66,6 +66,8 @@ export const CONFIG_FIELD_LABEL = {
   content_folder: 'S3 content folder',
   continuous: 'Continuous timeline across the loop wrap',
   period_on_segmentation: 'New Period / discontinuity on SCTE-35 segmentations',
+  announce_ahead: 'Announce SCTE-35 markers ahead (s, 0 = off)',
+  announce_on: 'Announce only these SCTE-35 markers',
   timeshift_enabled: 'Enable startover & catchup (timeshift query parameters)',
   query_overrides: 'Allow per-request overrides of the channel settings',
   query_prefix: 'Prefix for every query parameter',
@@ -104,6 +106,8 @@ export const CONFIG_FIELD_LABEL = {
 } as const
 
 export type ConfigFieldKey = keyof typeof CONFIG_FIELD_LABEL
+
+export const SPLICE_INSERT = 'splice_insert'
 
 // aws-media has no packaging/serving/SCTE-35 settings -- MediaLive/
 // MediaPackage own those; ecs-express, aws-lambda and local-docker bake+serve.
@@ -239,6 +243,20 @@ export function periodTypesFromConfig(raw: unknown): string[] {
     .map((n) => `0x${n.toString(16).toUpperCase().padStart(2, '0')}`)
 }
 
+/** TOML `[markers] announce_on` (ints and/or "splice_insert") -> "0x22" / "splice_insert" strings. */
+export function announceOnFromConfig(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const item of raw) {
+    if (typeof item === 'string' && item.trim().toLowerCase() === SPLICE_INSERT) {
+      if (!out.includes(SPLICE_INSERT)) out.push(SPLICE_INSERT)
+      continue
+    }
+    for (const hex of periodTypesFromConfig([item])) if (!out.includes(hex)) out.push(hex)
+  }
+  return out
+}
+
 /** The channel form's settings read from a channel's parsed TOML, with the
  * same defaults its-a-live applies for a missing key. The ONE mapping between
  * the TOML layout and the form/API field names (used by the Edit form and the
@@ -254,6 +272,7 @@ export function periodTypesFromConfig(raw: unknown): string[] {
  *                                              -> the same names (no older flat name to keep)
  *   [timeline] epoch                           -> epoch_utc
  *   [markers] split_on                         -> period_on_segmentation
+ *   [markers] announce_ahead, announce_on       -> the same names (announce_on: "0x22" strings and "splice_insert")
  *   [markers.hls] descriptor_grouping, cue_tags, id_template
  *                                              -> daterange_mode, cue_tags, daterange_id_format
  *   [markers.dash] descriptor_grouping, signal_format
@@ -265,7 +284,8 @@ export function formFieldsFromConfig(config: TomlConfig): Required<
   Pick<
     ChannelCreatePayload,
     | 'segment_duration' | 'dvr_window_seconds' | 'hls_format' | 'hls_ts_mux_audio' | 'dash_addressing'
-    | 'dash_timeline' | 'epoch_utc' | 'continuous' | 'period_on_segmentation' | 'timeshift_enabled'
+    | 'dash_timeline' | 'epoch_utc' | 'continuous' | 'period_on_segmentation' | 'announce_ahead' | 'announce_on'
+    | 'timeshift_enabled'
     | 'query_overrides' | 'query_prefix' | 'timeshift_start_param' | 'timeshift_end_param' | 'timeshift_max_span_seconds'
     | 'daterange_mode' | 'cue_tags' | 'increment_event_ids' | 'daterange_id_format' | 'dash_signal_format'
     | 'dash_descriptor_mode' | 'dash_low_latency' | 'hls_low_latency' | 'chunk_duration' | 'target_latency'
@@ -296,6 +316,8 @@ export function formFieldsFromConfig(config: TomlConfig): Required<
     epoch_utc: String(timeline.epoch ?? DEFAULT_EPOCH_UTC),
     continuous: Boolean(timeline.continuous ?? true),
     period_on_segmentation: periodTypesFromConfig(markers.split_on),
+    announce_ahead: Number(markers.announce_ahead ?? 0) || 0,
+    announce_on: announceOnFromConfig(markers.announce_on),
     timeshift_enabled: query.timeshift,
     query_overrides: query.overrides,
     query_prefix: query.prefix,
@@ -336,6 +358,8 @@ export function channelDefaultsByParam(f: ReturnType<typeof formFieldsFromConfig
     signal_format: f.dash_signal_format,
     id_template: f.daterange_id_format,
     split_on: f.period_on_segmentation.length ? f.period_on_segmentation.join(',') : 'none',
+    announce_ahead: f.announce_ahead ? `${f.announce_ahead} s` : 'off',
+    announce_on: f.announce_on.length ? f.announce_on.join(',') : 'every marker',
   }
 }
 
@@ -451,6 +475,8 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
     add('markers', [
       ['increment_event_ids', markers.increment_event_ids],
       ['period_on_segmentation', f.period_on_segmentation.length ? f.period_on_segmentation : undefined],
+      ['announce_ahead', f.announce_ahead ? `${f.announce_ahead} s` : undefined],
+      ['announce_on', f.announce_on.length ? f.announce_on : undefined],
     ])
     add('markers.hls', [
       ['daterange_mode', markersHls.descriptor_grouping],

@@ -37,7 +37,7 @@ _DATERANGE_ID_FIELDS = {"loop", "eventid", "segid", "seghex", "segcode", "segnam
 QUERY_FIXED_PARAMS = (
     "full_loops", "timeline_mode", "offset", "epoch", "dvr_window",
     "timeline_style", "addressing", "cue_tags", "descriptor_grouping",
-    "increment_event_ids", "signal_format", "id_template", "split_on",
+    "increment_event_ids", "signal_format", "id_template", "split_on", "announce_ahead", "announce_on",
     "max_height", "max_bitrate",
     "low_latency", "ll_target_latency", "ll_utc_timing",
 )
@@ -93,6 +93,38 @@ def validate_low_latency(
         raise ValueError("low_latency 'optin' needs query overrides enabled (?low_latency=true)")
     if hls_low_latency != "off" and hls_format != "cmaf":
         raise ValueError("hls_low_latency needs hls_format 'cmaf' (MPEG-TS segments cannot carry parts)")
+
+
+MAX_ANNOUNCE_AHEAD = 3600
+SPLICE_INSERT = "splice_insert"
+
+
+def validate_announce_ahead(value: float) -> float:
+    """`[markers] announce_ahead`: seconds, 0 = off (mirrors its-a-live/_markers_cfg.py)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= MAX_ANNOUNCE_AHEAD:
+        raise ValueError(f"announce_ahead must be a number of seconds between 0 and {MAX_ANNOUNCE_AHEAD} (0 = off)")
+    return value
+
+
+def normalise_announce_on(items: list) -> list[str]:
+    """`[markers] announce_on` entries: segmentation_type_ids as "0x22" plus optionally "splice_insert"; deduplicated."""
+    out: list[str] = []
+    for item in items:
+        if str(item).strip().lower() == SPLICE_INSERT:
+            entry = SPLICE_INSERT
+        else:
+            try:
+                value = int(str(item), 0)
+            except ValueError:
+                raise ValueError(
+                    f"invalid announce_on entry {item!r} (expected a segmentation_type_id such as 0x22, or {SPLICE_INSERT})"
+                ) from None
+            if not 0 <= value <= 0xFF:
+                raise ValueError(f"announce_on entry {item!r} out of range 0..255")
+            entry = f"0x{value:02X}"
+        if entry not in out:
+            out.append(entry)
+    return out
 
 
 def validate_query_prefix(value: str) -> str:
@@ -169,7 +201,7 @@ allow_missing_segments = {allow_missing_segments}
 
 _MARKERS_EXTRA = """
 [markers]
-increment_event_ids = {increment_event_ids}{split_on_extra}
+increment_event_ids = {increment_event_ids}{split_on_extra}{announce_extra}
 
 [markers.hls]
 descriptor_grouping = "{daterange_mode}"
@@ -269,6 +301,8 @@ def generate_toml(
     utc_timing_url: str = "",
     continuous: bool = False,
     period_on_segmentation: list[str] | None = None,
+    announce_ahead: float = 0,
+    announce_on: list[str] | None = None,
     timeshift_enabled: bool = True,
     query_overrides: bool = True,
     query_prefix: str = "",
@@ -342,6 +376,14 @@ def generate_toml(
         "\nsplit_on = [" + ", ".join(f"0x{i:02X}" for i in period_ids) + "]"
         if period_ids else ""
     )
+    # Only written when set: announce_ahead > 0, and announce_on when it narrows the markers.
+    validate_announce_ahead(announce_ahead)
+    announce_extra = f"\nannounce_ahead = {announce_ahead:g}" if announce_ahead else ""
+    announce_entries = normalise_announce_on(announce_on or [])
+    if announce_entries:
+        announce_extra += "\nannounce_on = [" + ", ".join(
+            json.dumps(e) if e == SPLICE_INSERT else e for e in announce_entries
+        ) + "]"
 
     def _query_section() -> str:
         return _QUERY_EXTRA.format(
@@ -358,7 +400,7 @@ def generate_toml(
             daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
             dash_signal_format=dash_signal_format,
             dash_descriptor_mode=dash_descriptor_mode,
-            split_on_extra=split_on_extra,
+            split_on_extra=split_on_extra, announce_extra=announce_extra,
         )
 
     def _packaging_section() -> str:

@@ -56,10 +56,13 @@ def test_markers_defaults():
     assert m == {
         "increment_event_ids": False,
         "split_on": [],
+        "announce_ahead": 0,
+        "announce_on": [],
         "hls": {"cue_tags": "none", "descriptor_grouping": "shared", "id_template": "{segcode}-{eventid}-{loop}"},
         "dash": {"descriptor_grouping": "shared", "signal_format": "binary"},
     }
     assert _markers_cfg.split_on_serve_args({}) == []
+    assert _markers_cfg.announce_serve_args({}) == []
 
 
 def test_markers_bake_args_default_to_the_bake_defaults():
@@ -129,6 +132,42 @@ def test_split_on_normalises_ids(raw, expected):
 def test_split_on_rejects_non_segmentation_type_ids(bad):
     with pytest.raises(ValueError):
         _markers_cfg.split_on_serve_args({"markers": {"split_on": bad}})
+
+
+@pytest.mark.parametrize(
+    "markers,expected",
+    [
+        ({"announce_ahead": 10}, ["--announce-ahead", "10"]),
+        ({"announce_ahead": 2.5}, ["--announce-ahead", "2.5"]),
+        ({"announce_ahead": 10.0, "announce_on": []}, ["--announce-ahead", "10"]),
+        ({"announce_ahead": 10, "announce_on": [0x22, "splice_insert"]}, ["--announce-ahead", "10", "--announce-on", "0x22,splice_insert"]),
+        ({"announce_ahead": 10, "announce_on": ["0x22", "48", 34]}, ["--announce-ahead", "10", "--announce-on", "0x22,0x30"]),
+        ({"announce_ahead": 10, "announce_on": 0x30}, ["--announce-ahead", "10", "--announce-on", "0x30"]),
+        ({"announce_ahead": 10, "announce_on": "splice_insert"}, ["--announce-ahead", "10", "--announce-on", "splice_insert"]),
+        ({"announce_ahead": 0, "announce_on": [0x22]}, []),
+        ({"announce_on": [0x22]}, []),
+    ],
+)
+def test_announce_serve_args(markers, expected):
+    assert _markers_cfg.announce_serve_args({"markers": markers}) == expected
+
+
+def test_announce_settings_are_in_markers_settings():
+    m = _markers_cfg.markers_settings({"markers": {"announce_ahead": 10, "announce_on": [0x22, "splice_insert"]}})
+    assert m["announce_ahead"] == 10 and m["announce_on"] == [0x22, "splice_insert"]
+
+
+@pytest.mark.parametrize(
+    "markers",
+    [
+        {"announce_ahead": -1}, {"announce_ahead": 3601}, {"announce_ahead": "10"}, {"announce_ahead": True},
+        {"announce_ahead": 10, "announce_on": [256]}, {"announce_ahead": 10, "announce_on": [-1]},
+        {"announce_ahead": 10, "announce_on": ["abc"]},
+    ],
+)
+def test_announce_rejects_bad_values(markers):
+    with pytest.raises(ValueError, match="announce_"):
+        _markers_cfg.announce_serve_args({"markers": markers})
 
 
 # ── [packaging] ─────────────────────────────────────────────────────────────
@@ -519,7 +558,7 @@ def _help(script: str) -> str:
 def test_every_flag_its_a_live_emits_exists_in_serve_and_bake():
     cfg = {
         "markers": {
-            "increment_event_ids": True, "split_on": [0x22],
+            "increment_event_ids": True, "split_on": [0x22], "announce_ahead": 10, "announce_on": [0x22, "splice_insert"],
             "hls": {"cue_tags": "alongside"}, "dash": {"signal_format": "xml"},
         },
         "packaging": {
@@ -534,11 +573,12 @@ def test_every_flag_its_a_live_emits_exists_in_serve_and_bake():
     }
     optin = {"packaging": {"dash": {"low_latency": "optin"}}}
     serve_flags = {
-        *_flags(_markers_cfg.split_on_serve_args(cfg)), *_flags(_packaging_cfg.dash_serve_args(cfg)),
+        *_flags(_markers_cfg.split_on_serve_args(cfg)), *_flags(_markers_cfg.announce_serve_args(cfg)),
+        *_flags(_packaging_cfg.dash_serve_args(cfg)),
         *_flags(_packaging_cfg.ll_serve_args(cfg)), *_flags(_packaging_cfg.ll_serve_args(optin)),
         *_flags(_query_cfg.query_serve_args(cfg)), "--dvr-window-seconds",
     }
-    assert {"--timeshift", "--query-overrides", "--query-prefix"} <= serve_flags
+    assert {"--timeshift", "--query-overrides", "--query-prefix", "--announce-ahead", "--announce-on"} <= serve_flags
     assert {"--ll-dash", "--ll-hls", "--ll-optin", "--ll-target-latency", "--ll-utc-timing", "--ll-utc-timing-url"} <= serve_flags
     bake_flags = {*_flags(_markers_cfg.markers_bake_args(cfg)), *_flags(_packaging_cfg.packaging_bake_args(cfg))}
     assert "--chunk-duration" in bake_flags

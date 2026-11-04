@@ -126,6 +126,8 @@ case "$SUBCOMMAND" in
             LL_UTC_TIMING=""
             LL_OPTIN="false"
             LL_HLS="false"
+            ANNOUNCE_AHEAD=""
+            ANNOUNCE_ON=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --host) HOST="$2"; shift 2 ;;
@@ -150,6 +152,8 @@ case "$SUBCOMMAND" in
                     --ll-utc-timing) LL_UTC_TIMING="$2"; shift 2 ;;
                     --ll-optin) LL_OPTIN="true"; shift ;;
                     --ll-hls) LL_HLS="true"; shift ;;
+                    --announce-ahead) ANNOUNCE_AHEAD="$2"; shift 2 ;;
+                    --announce-on) ANNOUNCE_ON="$2"; shift 2 ;;
                     *)
                         log "ERROR: unrecognized serve.py flag in production mode: $1"
                         exit 2
@@ -167,6 +171,7 @@ case "$SUBCOMMAND" in
             export TIMESHIFT TIMESHIFT_START_PARAM TIMESHIFT_END_PARAM
             export TIMESHIFT_MAX_SPAN_SECONDS QUERY_PREFIX QUERY_OVERRIDES
             export LL_DASH LL_TARGET_LATENCY LL_UTC_TIMING_URL LL_UTC_TIMING LL_OPTIN LL_HLS
+            export ANNOUNCE_AHEAD ANNOUNCE_ON
             if [[ "${LOOP_PACKAGE_STORE:-}" == "s3" ]]; then
                 # One execution environment handles one request at a time
                 # (Lambda), so one worker; threads cover the Web Adapter's

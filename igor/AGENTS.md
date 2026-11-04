@@ -107,7 +107,7 @@ controls (shown while `[query] timeshift` is on) a **Rendering overrides** block
 `[query] overrides` is on; each switch shows only its own kind, with a message when it is off)
 is **opt-in, to keep the form short**: it starts empty, and an **Add override…** picker (grouped
 **HLS and DASH** / **HLS** / **DASH**) adds the ones you want -- timeline mode, epoch, DVR window,
-descriptor grouping, event ids, `split_on`, ladder limits; `cue_tags` and the ID template; DASH
+descriptor grouping, event ids, `split_on`, `announce_ahead`/`announce_on`, ladder limits; `cue_tags` and the ID template; DASH
 style, addressing and signal format. Each added override is a row under its subheading with a
 remove button (removing clears its value); an added row with no value is left off the URLs.
 One **Preview**
@@ -164,7 +164,7 @@ exactly one its-a-live TOML table, named after it**:
 | `[packaging.dash]` | Packaging · DASH | `timeline_style`, `addressing`, and the low-latency keys `low_latency` (API/form field `dash_low_latency`), `target_latency`, `utc_timing`, `utc_timing_url` (the others keep the TOML names). Low-latency keys are written to the file only when that format's `low_latency` is not `off`; the form shows them for `ecs-express`/`local-docker` only, one component, `components/LowLatencyFields.vue`, rendered once per group (`part=packaging|hls|dash`); rules in `validate_low_latency`, mirrored from `its-a-live/_packaging_cfg.py` and `lowLatencyIssues` in `channelConfigLayout.ts`, kept in step by tests. See [`docs/low-latency.md`](../docs/low-latency.md) |
 | `[query]` | Query | `timeshift`, `overrides`, `prefix`, `start_param`, `end_param` |
 | `[timeshift]` | Timeshift | `max_span_seconds` |
-| `[markers]` | Markers | `increment_event_ids`, `split_on` |
+| `[markers]` | Markers | `increment_event_ids`, `split_on`, `announce_ahead`, `announce_on` (the last two written only when set; one component, `components/AnnounceFields.vue`, right after the `split_on` field) |
 | `[markers.hls]` | Markers · HLS | `descriptor_grouping`, `cue_tags`, `id_template` |
 | `[markers.dash]` | Markers · DASH | `descriptor_grouping`, `signal_format` |
 
@@ -180,6 +180,7 @@ names; `formFieldsFromConfig` (`channelConfigLayout.ts`) and
 | `[packaging.dash] timeline_style`, `addressing` | `dash_timeline`, `dash_addressing` |
 | `[timeline] epoch` | `epoch_utc` |
 | `[markers] split_on` | `period_on_segmentation` (the old `period_on_segmentation_apply` is gone) |
+| `[markers] announce_ahead`, `announce_on` | the same names (`announce_ahead`: seconds, 0 = off, 0..3600; `announce_on`: hex strings `"0x22"` plus optionally `"splice_insert"`, written to the TOML as ints and the string; empty = every marker) |
 | `[markers.hls] descriptor_grouping`, `cue_tags`, `id_template` | `daterange_mode`, `cue_tags`, `daterange_id_format` |
 | `[markers.dash] descriptor_grouping`, `signal_format` | `dash_descriptor_mode`, `dash_signal_format` |
 | `[query] timeshift`, `overrides`, `prefix`, `start_param`, `end_param` | `timeshift_enabled`, `query_overrides`, `query_prefix`, `timeshift_start_param`, `timeshift_end_param` |

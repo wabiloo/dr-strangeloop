@@ -322,7 +322,7 @@ class HlsMixin:
         # Channel.marker_anchors) -- not repeated on every segment the
         # interval spans. Same ID and byte-identical attributes on every
         # poll (RFC 8216 4.4.5.1).
-        anchors = self.marker_anchors(first_global_index, media_sequence)
+        anchors = self.marker_anchors(first_global_index, media_sequence, announce=not (window is not None and window.ended))
 
         # [markers].cue_tags: which cue_breaks (see LoopPackage.__init__)
         # have already had their opening #EXT-X-CUE-OUT/-CONT emitted in
@@ -401,22 +401,26 @@ class HlsMixin:
             # Skipped entirely when cue_tags="only" -- no DATERANGE fallback
             # in that mode, #EXT-X-CUE-OUT/-IN below is the only signaling.
             segment_markers = anchors.get(global_index, [])
-            if segment_markers:
+            # Normally every marker belongs to this segment's own loop; one announced ahead across the loop wrap
+            # belongs to the next loop, and its START-DATE / remapped ids are that loop's.
+            by_loop: dict[int, list[dict]] = {}
+            for anchored in segment_markers:
+                by_loop.setdefault(anchored.loop, []).append(anchored.marker)
+            for marker_loop, loop_markers in by_loop.items():
                 segment_id_map = (
-                    build_event_id_map(pkg.markers, local_loop_number) if pkg.increment_event_ids else {}
+                    build_event_id_map(pkg.markers, marker_loop) if pkg.increment_event_ids else {}
                 )
                 lines.extend(
                     f"# {line}"
                     for line in _describe_markers(
-                        [(m, segment_id_map, None, self._marker_start_iso(m, local_loop_number)) for m in segment_markers]
+                        [(m, segment_id_map, None, self._marker_start_iso(m, marker_loop)) for m in loop_markers]
                     )
                 )
 
             if pkg.cue_tags != "only":
-                matching_markers = segment_markers
-                if matching_markers:
+                for marker_loop, matching_markers in by_loop.items():
                     loop_start_ticks = program_date_time_ticks(
-                        local_loop_number, 0, pkg.total_loop_duration_ticks, self.epoch_ticks
+                        marker_loop, 0, pkg.total_loop_duration_ticks, self.epoch_ticks
                     )
                     loop_start_seconds = ticks_to_wall_clock_seconds(
                         loop_start_ticks, pkg.timescale
@@ -451,7 +455,7 @@ class HlsMixin:
                     signaling_markers = [_declared(sm) for sm in signaling_markers]
                     if pkg.increment_event_ids:
                         signaling_markers = _remap_signaling_markers(
-                            signaling_markers, pkg.markers, local_loop_number
+                            signaling_markers, pkg.markers, marker_loop
                         )
                     daterange_builder = (
                         build_grouped_daterange_tags
@@ -463,7 +467,7 @@ class HlsMixin:
                             signaling_markers,
                             pkg.timescale,
                             loop_start_datetime,
-                            loop_number=local_loop_number,
+                            loop_number=marker_loop,
                             daterange_id_format=pkg.daterange_id_format,
                         )
                     )

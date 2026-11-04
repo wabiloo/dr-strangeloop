@@ -62,6 +62,8 @@ local_output_dir = "..."   # optional, defaults to <local_package_dir>/<name> (s
 [markers]
 increment_event_ids = false      # bump every event id by (loop number * step) each iteration instead of repeating it every loop -- step is the smallest power of 10 above the channel's largest base event id (e.g. base ids 100-190 -> step 1000, so loop 1 emits 1100/1190, loop 2 emits 2100/2190, ...), so each id's original base stays recognizable as its low-order remainder, and the id at any moment is predictable purely from wall-clock time against the channel's epoch (no runtime counter). Wraps the loop-number component back to 0 at the 32-bit SCTE-35 ceiling.
 split_on = []   # optional list of SCTE-35 segmentation_type_ids (e.g. [0x22, 0x30]; a Start implies its End) that force a new DASH Period / #EXT-X-DISCONTINUITY at matching markers; signal only, so timestamps stay continuous when [timeline] continuous = true (loop-dee-loop/SCOPE.md §14) Applies to HLS and DASH alike (also the `split_on` query parameter).
+announce_ahead = 0   # optional, seconds (0 = off, the default; at most 3600), e.g. 10: announce each SCTE-35 marker (HLS EXT-X-DATERANGE / DASH Event) at least that long BEFORE the segment it falls in, rounded to whole segments, also across the loop wrap. The marker's own time never changes; the tag/Event stays until every segment it covers has left the window. In DASH a marker announced in an earlier Period than the one it falls in is carried again by every later Period that still covers it. EXT-X-CUE-OUT/-IN are not moved. Not applied to a closed catchup range. Also the `announce_ahead` query parameter (`?announce_ahead=10`). serve.py: --announce-ahead
+announce_on = []     # optional list limiting which markers are announced ahead: segmentation_type_ids (ints or "0x22" strings) and/or "splice_insert", e.g. [0x22, "splice_insert"]; empty/absent = every marker. Only used with announce_ahead > 0. Also the `announce_on` query parameter (`?announce_on=0x22,splice_insert`). serve.py: --announce-on
 
 [markers.hls]
 descriptor_grouping = "shared"   # "shared" (default) | "narrowed" | "grouped" -- one DATERANGE per descriptor with the full shared payload, per descriptor narrowed to just that event, or one per group of coincident descriptors
@@ -106,7 +108,7 @@ continuous = true   # default true -- serve.py rewrites each segment's own times
 # -- ecs-express/aws-lambda/local-docker only. Startover/catchup: start, end, full_loops,
 # offset. Per-request overrides of how the manifest is rendered: timeline_mode
 # (default|continuous|periodic, overrides [timeline].continuous), epoch, dvr_window,
-# split_on, timeline_style, addressing, cue_tags, descriptor_grouping,
+# split_on, announce_ahead, announce_on, timeline_style, addressing, cue_tags, descriptor_grouping,
 # increment_event_ids, signal_format, id_template, max_height, max_bitrate, and (DASH, low latency)
 # low_latency, ll_target_latency, ll_utc_timing. (LL-HLS's _HLS_msn/_HLS_part/_HLS_skip are protocol parameters, not overrides:
 # a low-latency HLS channel's CloudFront manifest policy keys on them automatically -- see _packaging_cfg.cdn_query_names.) Only

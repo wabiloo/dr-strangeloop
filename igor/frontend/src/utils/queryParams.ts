@@ -11,7 +11,7 @@
 // Pure functions only (no Vue, no DOM) so they can be tested directly.
 
 export type QpFormat = 'hls' | 'dash'
-export type QpKind = 'choice' | 'bool' | 'duration' | 'instant' | 'int' | 'text' | 'types'
+export type QpKind = 'choice' | 'bool' | 'duration' | 'lead' | 'instant' | 'int' | 'text' | 'types'
 
 export interface QpOption {
   label: string
@@ -149,6 +149,22 @@ export const QP_SPECS: QpSpec[] = [
     help: 'Comma-separated segmentation_type_ids; a Start implies its End. Replaces the channel setting; none disables it.',
   },
   {
+    name: 'announce_ahead',
+    label: 'Announce SCTE-35 markers ahead',
+    kind: 'lead',
+    formats: ['hls', 'dash'],
+    placeholder: 'seconds or PT10S (0 = off)',
+    help: 'Announce markers at least this long before the segment they fall in (rounded to whole segments, across the loop wrap): the DATERANGE / Event shows up earlier and stays until every segment it covers has left the window. The marker’s own time and CUE-OUT/CUE-IN do not move. 0 turns it off; at most 3600 seconds; not applied to a closed catchup range.',
+  },
+  {
+    name: 'announce_on',
+    label: 'Announce only these SCTE-35 markers',
+    kind: 'types',
+    formats: ['hls', 'dash'],
+    placeholder: 'e.g. 0x22,0x30,splice_insert (all = every marker)',
+    help: 'Which markers announce_ahead applies to: comma-separated segmentation_type_ids and/or splice_insert. Replaces the channel setting; empty or all = every marker.',
+  },
+  {
     name: 'max_height',
     label: 'Maximum height',
     kind: 'int',
@@ -209,6 +225,8 @@ export const FIELD_OVERRIDES: Record<string, { name: string; formats: QpFormat[]
   dvr_window_seconds: { name: 'dvr_window', formats: ['hls', 'dash'] },
   epoch_utc: { name: 'epoch', formats: ['hls', 'dash'] },
   period_on_segmentation: { name: 'split_on', formats: ['hls', 'dash'] },
+  announce_ahead: { name: 'announce_ahead', formats: ['hls', 'dash'] },
+  announce_on: { name: 'announce_on', formats: ['hls', 'dash'] },
   dash_addressing: { name: 'addressing', formats: ['dash'] },
   dash_timeline: { name: 'timeline_style', formats: ['dash'] },
   dash_low_latency: { name: 'low_latency', formats: ['dash'] },
@@ -298,6 +316,35 @@ export function parseSplitOn(text: string): number[] | null {
   return ids
 }
 
+/** The announced marker kinds in an `announce_on` value -- segmentation_type_ids and/or `splice_insert` -- or null
+ * when malformed. Empty / `all` give [] (every marker). */
+export function parseAnnounceOn(text: string): (number | 'splice_insert')[] | null {
+  const out: (number | 'splice_insert')[] = []
+  for (const token of text.split(',')) {
+    const t = token.trim().toLowerCase()
+    if (t === '' || t === 'all') continue
+    if (t === 'splice_insert') {
+      out.push('splice_insert')
+      continue
+    }
+    if (t === 'none') return null
+    const ids = parseSplitOn(t)
+    if (ids === null || ids.length !== 1) return null
+    out.push(ids[0])
+  }
+  return out
+}
+
+export const MAX_ANNOUNCE_AHEAD = 3600
+
+/** Seconds for an `announce_ahead` value (`0` = off, `10`, `PT10S`), or null when malformed or above 3600. */
+export function parseAnnounceAhead(text: string): number | null {
+  const raw = text.trim()
+  if (/^0+(\.0*)?$/.test(raw)) return 0
+  const s = parseDurationSeconds(raw)
+  return s === null || s > MAX_ANNOUNCE_AHEAD ? null : s
+}
+
 export interface ValidateContext {
   /** The channel's max span (also caps dvr_window). */
   maxSpanSeconds: number
@@ -335,8 +382,17 @@ export function validateOverrides(values: OverrideValues | undefined, ctx: Valid
         if (!/^\d+$/.test(raw) || Number(raw) < 1) problems.push(`${spec.label} must be a positive whole number.`)
         break
       case 'types':
-        if (parseSplitOn(raw) === null) {
+        if (spec.name === 'announce_on') {
+          if (parseAnnounceOn(raw) === null) {
+            problems.push(`${spec.label} must be comma-separated segmentation_type_ids (0x22,0x30), splice_insert, or all.`)
+          }
+        } else if (parseSplitOn(raw) === null) {
           problems.push(`${spec.label} must be comma-separated segmentation_type_ids (0x22,0x30) or none.`)
+        }
+        break
+      case 'lead':
+        if (parseAnnounceAhead(raw) === null) {
+          problems.push(`${spec.label} must be 0 (off) or a number of seconds (10) / ISO 8601 duration (PT10S), at most ${MAX_ANNOUNCE_AHEAD} seconds.`)
         }
         break
       case 'text':

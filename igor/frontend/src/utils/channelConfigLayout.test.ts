@@ -13,6 +13,7 @@ import {
   lowLatencyFromConfig,
   lowLatencyIssues,
   lowLatencyProblems,
+  announceOnFromConfig,
   periodTypesFromConfig,
   usesChannelSection,
 } from './channelConfigLayout.ts'
@@ -25,6 +26,8 @@ const FULL = {
   markers: {
     increment_event_ids: true,
     split_on: [0x22, 0x30],
+    announce_ahead: 10,
+    announce_on: [0x22, 'splice_insert'],
     hls: { descriptor_grouping: 'grouped', cue_tags: 'alongside', id_template: 'x-{eventid}' },
     dash: { descriptor_grouping: 'narrowed', signal_format: 'xml' },
   },
@@ -56,6 +59,8 @@ test('formFieldsFromConfig reads every setting from its new table', () => {
     epoch_utc: '2026-03-04T05:06:07Z',
     continuous: false,
     period_on_segmentation: ['0x22', '0x30'],
+    announce_ahead: 10,
+    announce_on: ['0x22', 'splice_insert'],
     timeshift_enabled: true,
     query_overrides: false,
     query_prefix: 'dsl_',
@@ -88,6 +93,8 @@ test('formFieldsFromConfig: an empty config gives its-a-live defaults', () => {
     epoch_utc: '2026-01-01T00:00:00Z',
     continuous: true,
     period_on_segmentation: [],
+    announce_ahead: 0,
+    announce_on: [],
     timeshift_enabled: true,
     query_overrides: true,
     query_prefix: '',
@@ -138,6 +145,11 @@ test('periodTypesFromConfig: ints or strings -> hex, junk dropped', () => {
   assert.deepEqual(periodTypesFromConfig(undefined), [])
 })
 
+test('announceOnFromConfig: ints, hex strings and splice_insert, deduplicated, junk dropped', () => {
+  assert.deepEqual(announceOnFromConfig([0x22, 'splice_insert', '0x30', 34, 'Splice_Insert', 'x', 256]), ['0x22', 'splice_insert', '0x30'])
+  assert.deepEqual(announceOnFromConfig(undefined), [])
+})
+
 test('every config section is one TOML table, titled after it', () => {
   assert.deepEqual(Object.keys(CONFIG_SECTION_TITLE), [
     'deploy', 'input', 'infrastructure.aws', 'infrastructure.s3', 'infrastructure.express', 'infrastructure.lambda',
@@ -165,7 +177,9 @@ test('buildConfigSections: one group per table, same keys as the TOML', () => {
     timeshift_end_param: 'to',
   })
   assert.deepEqual(rows('timeshift'), { timeshift_max_span_seconds: '1800' })
-  assert.deepEqual(rows('markers'), { increment_event_ids: 'yes', period_on_segmentation: '0x22, 0x30' })
+  assert.deepEqual(rows('markers'), {
+    increment_event_ids: 'yes', period_on_segmentation: '0x22, 0x30', announce_ahead: '10 s', announce_on: '0x22, splice_insert',
+  })
   assert.deepEqual(rows('markers.hls'), { daterange_mode: 'grouped', cue_tags: 'alongside', daterange_id_format: 'x-{eventid}' })
   assert.deepEqual(rows('markers.dash'), { dash_descriptor_mode: 'narrowed', dash_signal_format: 'xml' })
   assert.equal(byId['markers.hls'].title, 'Markers · HLS')
@@ -246,6 +260,8 @@ test('channelDefaultsByParam: the channel value of every overridable setting, by
     signal_format: 'xml',
     id_template: 'x-{eventid}',
     split_on: '0x22,0x30',
+    announce_ahead: '10 s',
+    announce_on: '0x22,splice_insert',
   })
 })
 
@@ -253,6 +269,8 @@ test('channelDefaultsByParam: defaults for an empty config, and only names the r
   const d = channelDefaultsByParam(formFieldsFromConfig({}))
   assert.equal(d.timeline_mode, 'continuous')
   assert.equal(d.split_on, 'none')
+  assert.equal(d.announce_ahead, 'off')
+  assert.equal(d.announce_on, 'every marker')
   assert.equal(d.increment_event_ids, 'off')
   const { QP_NAMES } = await import('./queryParams.ts')
   for (const name of Object.keys(d)) assert.ok(QP_NAMES.includes(name), name)

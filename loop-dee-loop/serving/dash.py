@@ -386,7 +386,26 @@ class DashMixin:
             )
 
             event_xml: list[tuple[int, str]] = []
-            for marker in pkg.markers:
+            # Loop iterations after this Period's own whose markers may be announced ahead inside it.
+            extra_loops = (
+                -(-self.announce_ahead_ticks // pkg.total_loop_duration_ticks)
+                if self.announce_ahead_ticks and not (window is not None and window.ended)
+                else 0
+            )
+            occurrences = [
+                (marker, ahead_loops)
+                for ahead_loops in range(extra_loops + 1)
+                for marker in pkg.markers
+                if not ahead_loops or self.marker_announce_ticks(marker)
+            ]
+            for marker, ahead_loops in occurrences:
+                # A marker announced ahead (and the next loop's, across the wrap) is this Period's `ahead_loops`
+                # loops later: shift the segments back into its own loop's time to test coverage, and use that
+                # loop's event ids. Its presentationTime then lies past the Period's own end -- still the marker's
+                # real time -- and the Period it truly belongs to carries it again.
+                shift = ahead_loops * pkg.total_loop_duration_ticks
+                announce_ticks = 0 if window is not None and window.ended else self.marker_announce_ticks(marker)
+                marker_loop = loop_number + ahead_loops
                 # A single <Event> element describes the whole
                 # [presentationTime, presentationTime+duration) interval on
                 # its own -- unlike HLS's per-segment EXT-X-DATERANGE tags,
@@ -399,10 +418,13 @@ class DashMixin:
                 # has scrolled out of the window (while later segments of
                 # the same break are still being served) still sees it.
                 if not any(
-                    _marker_covers_segment(marker, seg_start_local, seg_start_local + duration_ticks)
+                    _marker_covers_segment(
+                        marker, seg_start_local - shift, seg_start_local + duration_ticks - shift, announce_ticks
+                    )
                     for seg_start_local, duration_ticks, _local_index in reference_entries
                 ):
                     continue
+                event_id_map = build_event_id_map(pkg.markers, marker_loop) if pkg.increment_event_ids else {}
                 duration_attr = (
                     f' duration="{marker["segmentation_duration_ticks"]}"'
                     if marker.get("segmentation_duration_ticks") is not None
@@ -455,11 +477,11 @@ class DashMixin:
                 # no-op subtraction of pkg.segment_boundary_ticks[0]==0 in
                 # the common single-span-per-loop case).
                 event_presentation_time = (
-                    marker["pts_time_ticks"] - pkg.segment_boundary_ticks[span_start_local] - pto_ticks
+                    marker["pts_time_ticks"] + shift - pkg.segment_boundary_ticks[span_start_local] - pto_ticks
                 )
                 event_xml.append((event_presentation_time,
                     _dash_event_comment(
-                        (marker, event_id_map, None, self._marker_start_iso(marker, loop_number))
+                        (marker, event_id_map, None, self._marker_start_iso(marker, marker_loop))
                     )
                     + f'    <Event presentationTime="{event_presentation_time}"'
                     f'{duration_attr} id="{synthetic_id}">\n'
@@ -694,76 +716,89 @@ class DashMixin:
             SCTE35_XML_NAMESPACE if pkg.dash_signal_format == "xml" else "urn:scte:scte35:2014:xml+bin"
         )
         event_xml_by_group: list[list[tuple[int, str]]] = [[] for _ in groups]
-        anchors = self.marker_anchors(first_global_index, media_sequence)
+        announcing = not (window is not None and window.ended)
+        anchors = self.marker_anchors(first_global_index, media_sequence, announce=announcing)
+        # (Period group, marker, the loop the marker itself belongs to). A marker is signaled once, on the Period of
+        # the first segment that covers it. One announced ahead is covered from before its own start, possibly in an
+        # earlier Period than the one it falls in (a forced break, `split_on`): it is then ALSO signaled in every
+        # later Period that still has a segment it covers -- events are only valid in the Period carrying them
+        # (DVB-DASH TS 103 285 / DVB-TA part 3: re-signal what is still active), and a player that joins after
+        # the Period change would otherwise never see the break it is in.
+        placements: list[tuple[int, dict, int]] = []
         for global_index in global_indices:
-            loop_number = global_index // spl
             group_number = group_of_global[global_index]
+            for marker, marker_loop in anchors.get(global_index, []):
+                placements.append((group_number, marker, marker_loop))
+                if announcing and self.marker_announce_ticks(marker):
+                    for later in range(group_number + 1, len(groups)):
+                        if any(self.marker_covers_global_segment(marker, marker_loop, g) for g in groups[later][1]):
+                            placements.append((later, marker, marker_loop))
+        for group_number, marker, loop_number in placements:
             event_id_map = build_event_id_map(pkg.markers, loop_number) if pkg.increment_event_ids else {}
-            for marker in anchors.get(global_index, []):
-                duration_attr = (
-                    f' duration="{marker["segmentation_duration_ticks"]}"'
-                    if marker.get("segmentation_duration_ticks") is not None
-                    else ""
+            duration_attr = (
+                f' duration="{marker["segmentation_duration_ticks"]}"'
+                if marker.get("segmentation_duration_ticks") is not None
+                else ""
+            )
+            event_id_hex = event_id_map.get(marker["event_id"], marker["event_id"])
+            event_id_dec = int(event_id_hex, 16)
+            base_b64 = (
+                marker["splice_command_b64_narrowed"]
+                if pkg.dash_descriptor_mode == "narrowed"
+                else marker["splice_command_b64"]
+            )
+            splice_command_b64 = (
+                reencode_event_ids(base_b64, event_id_map) if pkg.increment_event_ids else base_b64
+            )
+            if is_instant_segmentation(marker):
+                direction = "instant"
+            elif is_out_marker(marker):
+                direction = "out"
+            else:
+                direction = "in"
+            if pkg.dash_signal_format == "xml":
+                full_xml = build_scte35_full_xml(splice_command_b64)
+                indented_xml = "\n".join(f"        {line}" for line in full_xml.splitlines())
+                signal_xml = f"      <scte35:Signal>\n{indented_xml}\n      </scte35:Signal>"
+            else:
+                signal_xml = (
+                    f"      <scte35:Signal>\n"
+                    f"        <scte35:Binary>{splice_command_b64}</scte35:Binary>\n"
+                    f"      </scte35:Signal>"
                 )
-                event_id_hex = event_id_map.get(marker["event_id"], marker["event_id"])
-                event_id_dec = int(event_id_hex, 16)
-                base_b64 = (
-                    marker["splice_command_b64_narrowed"]
-                    if pkg.dash_descriptor_mode == "narrowed"
-                    else marker["splice_command_b64"]
+            # A recurring marker gets a distinct id per loop_number it's
+            # re-emitted at (a single ever-open Period, unlike the
+            # default mode's one-namespace-per-Period, needs this to
+            # avoid dash.js's EventController silently dropping a
+            # same-id "duplicate" -- see build_dash_manifest's own
+            # DIRECTION_CODE comment for the base id math). Only the
+            # low bit of loop_number is folded in: a DVR window
+            # (SCOPE.md §12) spanning more than two loop iterations at
+            # once would need more room than this, but that is already
+            # a pathological window/loop-duration combination, not
+            # something continuity mode introduces.
+            base_id = event_id_dec * 4 + DIRECTION_CODE[direction]
+            if window is None:
+                synthetic_id = base_id * 2 + (loop_number & 1)
+            else:
+                # A range can span many loops and must keep stable ids
+                # as a growing manifest is refreshed: fold in the low 16
+                # bits of the absolute loop number (SCOPE.md §13.6).
+                synthetic_id = (base_id << 16) | (loop_number & 0xFFFF)
+            # Relative to the Period's own start (presentation axis).
+            event_presentation_time = (
+                loop_number * pkg.total_loop_duration_ticks + marker["pts_time_ticks"]
+                - origin_abs - _group_start_rel(group_number, groups[group_number][0])
+            )
+            event_xml_by_group[group_number].append((event_presentation_time,
+                _dash_event_comment(
+                    (marker, event_id_map, loop_number, self._marker_start_iso(marker, loop_number))
                 )
-                splice_command_b64 = (
-                    reencode_event_ids(base_b64, event_id_map) if pkg.increment_event_ids else base_b64
-                )
-                if is_instant_segmentation(marker):
-                    direction = "instant"
-                elif is_out_marker(marker):
-                    direction = "out"
-                else:
-                    direction = "in"
-                if pkg.dash_signal_format == "xml":
-                    full_xml = build_scte35_full_xml(splice_command_b64)
-                    indented_xml = "\n".join(f"        {line}" for line in full_xml.splitlines())
-                    signal_xml = f"      <scte35:Signal>\n{indented_xml}\n      </scte35:Signal>"
-                else:
-                    signal_xml = (
-                        f"      <scte35:Signal>\n"
-                        f"        <scte35:Binary>{splice_command_b64}</scte35:Binary>\n"
-                        f"      </scte35:Signal>"
-                    )
-                # A recurring marker gets a distinct id per loop_number it's
-                # re-emitted at (a single ever-open Period, unlike the
-                # default mode's one-namespace-per-Period, needs this to
-                # avoid dash.js's EventController silently dropping a
-                # same-id "duplicate" -- see build_dash_manifest's own
-                # DIRECTION_CODE comment for the base id math). Only the
-                # low bit of loop_number is folded in: a DVR window
-                # (SCOPE.md §12) spanning more than two loop iterations at
-                # once would need more room than this, but that is already
-                # a pathological window/loop-duration combination, not
-                # something continuity mode introduces.
-                base_id = event_id_dec * 4 + DIRECTION_CODE[direction]
-                if window is None:
-                    synthetic_id = base_id * 2 + (loop_number & 1)
-                else:
-                    # A range can span many loops and must keep stable ids
-                    # as a growing manifest is refreshed: fold in the low 16
-                    # bits of the absolute loop number (SCOPE.md §13.6).
-                    synthetic_id = (base_id << 16) | (loop_number & 0xFFFF)
-                # Relative to the Period's own start (presentation axis).
-                event_presentation_time = (
-                    loop_number * pkg.total_loop_duration_ticks + marker["pts_time_ticks"]
-                    - origin_abs - _group_start_rel(group_number, groups[group_number][0])
-                )
-                event_xml_by_group[group_number].append((event_presentation_time,
-                    _dash_event_comment(
-                        (marker, event_id_map, loop_number, self._marker_start_iso(marker, loop_number))
-                    )
-                    + f'    <Event presentationTime="{event_presentation_time}"'
-                    f'{duration_attr} id="{synthetic_id}">\n'
-                    f"{signal_xml}\n"
-                    f"    </Event>"
-                ))
+                + f'    <Event presentationTime="{event_presentation_time}"'
+                f'{duration_attr} id="{synthetic_id}">\n'
+                f"{signal_xml}\n"
+                f"    </Event>"
+            ))
 
         period_xml_parts = []
         for group_number, (brk, indices) in enumerate(groups):

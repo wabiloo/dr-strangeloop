@@ -38,7 +38,7 @@ import sys
 from _host_paths import to_host_path
 from _infra_cfg import infra_table
 from _paths_cfg import get_paths
-from _markers_cfg import markers_bake_args, split_on_serve_args
+from _markers_cfg import announce_serve_args, markers_bake_args, split_on_serve_args
 from _packaging_cfg import dash_serve_args, dvr_window_seconds, ll_serve_args, packaging_bake_args
 from _reachability import check_manifest_reachable
 from _epoch_cfg import config_epoch_utc
@@ -289,6 +289,7 @@ def _serve_args(cfg, channel_name, port, epoch):
         "--dvr-window-seconds", dvr_window_seconds(cfg),
         *_continuous_timeline_args(cfg),
         *split_on_serve_args(cfg),
+        *announce_serve_args(cfg),
         # `utc_timing = "http"` without an explicit utc_timing_url: the container is reached on localhost:<port>
         # (viewers elsewhere, e.g. through a tunnel, set utc_timing_url).
         *dash_serve_args(cfg),

@@ -61,7 +61,9 @@ def _hls_payload_markers(markers: list[dict], daterange_mode: str) -> list[dict]
     ]
 
 
-def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: int) -> bool:
+def _marker_covers_segment(
+    marker: dict, seg_start_ticks: int, seg_end_ticks: int, announce_ticks: int = 0
+) -> bool:
     """Whether `marker` should be signaled (EXT-X-DATERANGE / DASH <Event>)
     on a segment spanning [seg_start_ticks, seg_end_ticks).
 
@@ -87,13 +89,31 @@ def _marker_covers_segment(marker: dict, seg_start_ticks: int, seg_end_ticks: in
     `segmentation_type_id` would otherwise satisfy `is_out_marker` -- there
     is no matching CUE-IN that will ever close them, so they must never be
     treated as an open forward-looking interval.
+
+    `announce_ticks` > 0 announces the marker that long BEFORE its own start:
+    its coverage then begins at `pts_time_ticks - announce_ticks` and runs
+    through the same end as above (the end of its active interval, or for a
+    point-in-time marker the segment containing its start). So a marker
+    announced ahead stays covered -- and therefore in the manifest -- until
+    every segment it covers has left the window, not only until the segment
+    it was first announced on has. Only the placement changes: the marker's
+    own time (START-DATE, Event@presentationTime) does not.
     """
     start = marker["pts_time_ticks"]
+    announce = start - announce_ticks
     duration = marker.get("segmentation_duration_ticks")
     if duration and is_out_marker(marker) and not is_instant_segmentation(marker):
         end = start + duration
-        return seg_start_ticks < end and start < seg_end_ticks
-    return seg_start_ticks <= start < seg_end_ticks
+        return seg_start_ticks < end and announce < seg_end_ticks
+    return announce < seg_end_ticks and seg_start_ticks <= start
+
+
+def _marker_type_id(marker: dict) -> int | None:
+    """The marker's segmentation_type_id as an int, None for a plain splice_insert."""
+    raw = marker.get("segmentation_type_id")
+    if raw is None:
+        return None
+    return int(raw, 16) if isinstance(raw, str) else int(raw)
 
 
 def _marker_durations_ticks(markers: list[dict]) -> list[int]:

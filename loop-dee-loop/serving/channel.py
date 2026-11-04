@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import time
+from decimal import Decimal
 from pathlib import Path
 
 from loop_math import compute_loop_position, ticks_to_wall_clock_seconds
+from timeshift import ANNOUNCE_MAX_SECONDS
 
 from serving.constants import (
     DASH_ADDRESSING_CHOICES,
@@ -14,6 +16,7 @@ from serving.constants import (
 )
 from serving.dash import DashMixin
 from serving.hls import HlsMixin
+from serving.markers import _marker_type_id
 from serving.package import LoopPackage, _cmaf_tfdt_version, _first_present_segment
 from serving.plan import TimelinePlanMixin
 from serving.timeline import (
@@ -60,6 +63,9 @@ class Channel(VariantsMixin, TimelinePlanMixin, HlsMixin, DashMixin, WindowJsonM
         ll_utc_timing: str = "direct",
         ll_optin: bool = False,
         ll_hls: bool = False,
+        announce_ahead: float = 0.0,
+        announce_on: frozenset[int] = frozenset(),
+        announce_splice_insert: bool = False,
     ):
         if ll_utc_timing not in LL_UTC_TIMING_CHOICES:
             raise ValueError(f"ll_utc_timing must be one of {LL_UTC_TIMING_CHOICES}, got {ll_utc_timing!r}")
@@ -139,6 +145,32 @@ class Channel(VariantsMixin, TimelinePlanMixin, HlsMixin, DashMixin, WindowJsonM
         # /time endpoint), "direct" (the time written into the MPD, which must
         # then never be cached) or "none" (trust the player's own clock).
         self.ll_utc_timing = ll_utc_timing
+        # Markers announced ahead of the segment they fall in (see `_marker_covers_segment`): `announce_ahead`
+        # seconds early, for markers of these segmentation_type_ids (and plain splice_insert markers if
+        # `announce_splice_insert`); neither given = every marker. 0 = off, the default.
+        self.announce_ahead_ticks = 0
+        self.announce_on: frozenset[int] = frozenset()
+        self.announce_splice_insert = False
+        self._set_announce(announce_ahead, announce_on, announce_splice_insert)
+
+    def _set_announce(self, announce_ahead: float, announce_on: frozenset[int], announce_splice_insert: bool) -> None:
+        if announce_ahead < 0 or announce_ahead > ANNOUNCE_MAX_SECONDS:
+            raise ValueError(f"announce_ahead must be between 0 and {ANNOUNCE_MAX_SECONDS} seconds")
+        ticks = int((Decimal(str(announce_ahead)) * self.package.timescale).to_integral_value())
+        self.announce_ahead_ticks = ticks
+        self.announce_on = expand_segmentation_pairs(frozenset(announce_on))
+        self.announce_splice_insert = announce_splice_insert
+
+    def marker_announce_ticks(self, marker: dict) -> int:
+        """How many ticks before its own start this marker is announced (0: at its own segment, as always)."""
+        if not self.announce_ahead_ticks:
+            return 0
+        if not self.announce_on and not self.announce_splice_insert:
+            return self.announce_ahead_ticks
+        type_id = _marker_type_id(marker)
+        if type_id is None:
+            return self.announce_ahead_ticks if self.announce_splice_insert else 0
+        return self.announce_ahead_ticks if type_id in self.announce_on else 0
 
     def _period_starts(self, signal_breaks: frozenset[int]) -> frozenset[int]:
         """Local segment indices that open a new Period / discontinuity in

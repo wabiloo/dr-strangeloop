@@ -536,6 +536,13 @@ export interface ChannelCreatePayload {
    * (hex, e.g. "0x22"; a Start implies its End) whose markers force a new
    * DASH Period / HLS discontinuity, signal-only. Applies to both formats. */
   period_on_segmentation?: string[]
+  /** [markers].announce_ahead -- seconds (0 = off): announce SCTE-35 markers at least this long before the segment
+   * they fall in (HLS DATERANGE / DASH Event appear earlier; CUE-OUT/IN and the marker's own time do not move).
+   * Also the per-request query parameter `announce_ahead`. */
+  announce_ahead?: number
+  /** [markers].announce_on -- segmentation_type_ids (hex strings, e.g. "0x22") and/or "splice_insert" the announcing
+   * applies to; empty = every marker. Also the query parameter `announce_on`. */
+  announce_on?: string[]
   /** loop-dee-loop/SCOPE.md §13: [query] -- startover/catchup and per-request
    * overrides via query parameters on the normal manifest URLs. The names are
    * per-channel and also become the CDN's manifest cache key. ecs-express/

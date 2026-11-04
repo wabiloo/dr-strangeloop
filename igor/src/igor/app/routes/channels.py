@@ -23,6 +23,8 @@ from igor.integrations.its_a_live import (
     validate_epoch_utc,
     validate_query_names,
     validate_query_prefix,
+    validate_announce_ahead,
+    normalise_announce_on,
 )
 from igor.store import channels as channel_store
 
@@ -95,6 +97,12 @@ class ChannelCreatePayload(BaseModel):
     # signal-only (timestamps stay continuous). A Start implies its End.
     # Written as [markers] split_on; applies to HLS and DASH alike.
     period_on_segmentation: list[str] = []
+    # [markers] announce_ahead (seconds, 0 = off) and announce_on (segmentation_type_ids as hex strings, plus
+    # optionally "splice_insert"; empty = every marker): announce SCTE-35 markers ahead of the segment they fall in
+    # (HLS DATERANGE / DASH Event appear earlier; the marker's own time and CUE-OUT/IN do not move). Both are also
+    # per-request query parameters of the same names. Written to the TOML only when set.
+    announce_ahead: float = 0
+    announce_on: list[str] = []
     # loop-dee-loop/SCOPE.md §13: startover/catchup and per-request overrides
     # via query parameters on the normal manifest URLs ([query] + [timeshift]
     # max_span_seconds). The start/end names are configurable per channel,
@@ -150,6 +158,16 @@ class ChannelCreatePayload(BaseModel):
             if hexed not in out:
                 out.append(hexed)
         return out
+
+    @field_validator("announce_ahead")
+    @classmethod
+    def _validate_announce_ahead(cls, v: float) -> float:
+        return validate_announce_ahead(v)
+
+    @field_validator("announce_on")
+    @classmethod
+    def _validate_announce_on(cls, v: list[str]) -> list[str]:
+        return normalise_announce_on(v)
 
     @field_validator("name")
     @classmethod

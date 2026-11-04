@@ -8,6 +8,8 @@ import {
   appliesTo,
   overrideForField,
   overridePairs,
+  parseAnnounceAhead,
+  parseAnnounceOn,
   parseDurationSeconds,
   parseInstantMs,
   parseSplitOn,
@@ -21,7 +23,7 @@ const ctx = { maxSpanSeconds: 3600, nowMs: NOW }
 test('registry: the override names, in the order loop-dee-loop documents them', () => {
   assert.deepEqual(QP_NAMES, [
     'timeline_mode', 'epoch', 'dvr_window', 'timeline_style', 'addressing', 'cue_tags', 'descriptor_grouping',
-    'increment_event_ids', 'signal_format', 'id_template', 'split_on', 'max_height', 'max_bitrate',
+    'increment_event_ids', 'signal_format', 'id_template', 'split_on', 'announce_ahead', 'announce_on', 'max_height', 'max_bitrate',
     'low_latency', 'll_target_latency', 'll_utc_timing',
   ])
   assert.equal(new Set(QP_NAMES).size, QP_NAMES.length)
@@ -117,6 +119,30 @@ test('parseSplitOn: ids, none/empty clear, junk is null', () => {
   for (const bad of ['abc', '0x22,zz', '256', '-1', '0x100']) assert.equal(parseSplitOn(bad), null, bad)
 })
 
+test('parseAnnounceOn: ids and splice_insert, empty/all = every marker, junk is null', () => {
+  assert.deepEqual(parseAnnounceOn('0x22, 0x30,splice_insert'), [0x22, 0x30, 'splice_insert'])
+  assert.deepEqual(parseAnnounceOn('SPLICE_INSERT'), ['splice_insert'])
+  assert.deepEqual(parseAnnounceOn(''), [])
+  assert.deepEqual(parseAnnounceOn('all'), [])
+  for (const bad of ['abc', '0x22,zz', '256', 'none']) assert.equal(parseAnnounceOn(bad), null, bad)
+})
+
+test('parseAnnounceAhead: 0 = off, seconds or ISO duration, at most 3600', () => {
+  assert.equal(parseAnnounceAhead('0'), 0)
+  assert.equal(parseAnnounceAhead('10'), 10)
+  assert.equal(parseAnnounceAhead('2.5'), 2.5)
+  assert.equal(parseAnnounceAhead('PT1M'), 60)
+  assert.equal(parseAnnounceAhead('3600'), 3600)
+  for (const bad of ['', '3601', '-1', 'soon', 'PT2H']) assert.equal(parseAnnounceAhead(bad), null, bad)
+})
+
+test('overridePairs: announce_ahead and announce_on come right after split_on', () => {
+  const values = { max_height: '720', announce_on: '0x22', announce_ahead: '10', split_on: '0x22' }
+  assert.deepEqual(overridePairs(values, 'dash'), [
+    ['split_on', '0x22'], ['announce_ahead', '10'], ['announce_on', '0x22'], ['max_height', '720'],
+  ])
+})
+
 test('validateOverrides: nothing set, or valid values, is fine', () => {
   assert.deepEqual(validateOverrides(undefined, ctx), [])
   assert.deepEqual(validateOverrides({}, ctx), [])
@@ -124,7 +150,8 @@ test('validateOverrides: nothing set, or valid values, is fine', () => {
     validateOverrides({
       timeline_mode: 'continuous', epoch: '2026-09-30T08:00:00Z', dvr_window: 'PT1M', timeline_style: 'compact',
       addressing: 'time', cue_tags: 'only', descriptor_grouping: 'narrowed', increment_event_ids: 'true',
-      signal_format: 'xml', id_template: 'ad-{eventid}-{loop}', split_on: '0x22', max_height: '720', max_bitrate: '2000000',
+      signal_format: 'xml', id_template: 'ad-{eventid}-{loop}', split_on: '0x22', announce_ahead: 'PT10S', announce_on: '0x22,splice_insert', max_height: '720',
+      max_bitrate: '2000000',
     }, ctx),
     [],
   )
@@ -143,6 +170,10 @@ test('validateOverrides: each bad value names its parameter label', () => {
   assert.match(bad('id_template', '{nope}')[0], /unknown placeholder \{nope\}/)
   assert.match(bad('id_template', '{eventid')[0], /unbalanced/)
   assert.match(bad('split_on', 'zz')[0], /segmentation_type_ids/)
+  assert.match(bad('announce_ahead', 'soon')[0], /Announce SCTE-35 markers ahead must be 0/)
+  assert.match(bad('announce_ahead', '3601')[0], /at most 3600/)
+  assert.match(bad('announce_on', 'zz')[0], /splice_insert/)
+  assert.match(bad('announce_on', 'none')[0], /splice_insert/)
   assert.match(bad('max_height', '0')[0], /positive whole number/)
   assert.match(bad('max_bitrate', 'fast')[0], /positive whole number/)
 })

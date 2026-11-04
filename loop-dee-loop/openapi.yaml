@@ -16,7 +16,7 @@ info:
     **Query parameters.** Besides startover/catchup (`start`, `end`,
     `full_loops`, `offset`), every manifest accepts per-request overrides of how
     it is rendered: the timeline (`timeline_mode`, `epoch`, `dvr_window`,
-    `split_on`), the DASH style (`timeline_style`, `addressing`), the SCTE-35
+    `split_on`, `announce_ahead`, `announce_on`), the DASH style (`timeline_style`, `addressing`), the SCTE-35
     signalling (`cue_tags`, `descriptor_grouping`, `increment_event_ids`,
     `signal_format`, `id_template`) and the ladder (`max_height`,
     `max_bitrate`) and, for the MPD, low latency (`low_latency`, `ll_target_latency`, `ll_utc_timing`). Only the manifests change; segment bytes never do. A channel
@@ -139,6 +139,8 @@ paths:
         - $ref: "#/components/parameters/Epoch"
         - $ref: "#/components/parameters/DvrWindow"
         - $ref: "#/components/parameters/SplitOn"
+        - $ref: "#/components/parameters/AnnounceAhead"
+        - $ref: "#/components/parameters/AnnounceOn"
         - $ref: "#/components/parameters/MaxHeight"
         - $ref: "#/components/parameters/MaxBitrate"
         - $ref: "#/components/parameters/DescriptorGrouping"
@@ -166,6 +168,8 @@ paths:
         - $ref: "#/components/parameters/Epoch"
         - $ref: "#/components/parameters/DvrWindow"
         - $ref: "#/components/parameters/SplitOn"
+        - $ref: "#/components/parameters/AnnounceAhead"
+        - $ref: "#/components/parameters/AnnounceOn"
         - $ref: "#/components/parameters/MaxHeight"
         - $ref: "#/components/parameters/MaxBitrate"
         - $ref: "#/components/parameters/DescriptorGrouping"
@@ -256,6 +260,8 @@ paths:
         - $ref: "#/components/parameters/Epoch"
         - $ref: "#/components/parameters/DvrWindow"
         - $ref: "#/components/parameters/SplitOn"
+        - $ref: "#/components/parameters/AnnounceAhead"
+        - $ref: "#/components/parameters/AnnounceOn"
         - $ref: "#/components/parameters/MaxHeight"
         - $ref: "#/components/parameters/MaxBitrate"
         - $ref: "#/components/parameters/DescriptorGrouping"
@@ -286,6 +292,8 @@ paths:
         - $ref: "#/components/parameters/Epoch"
         - $ref: "#/components/parameters/DvrWindow"
         - $ref: "#/components/parameters/SplitOn"
+        - $ref: "#/components/parameters/AnnounceAhead"
+        - $ref: "#/components/parameters/AnnounceOn"
         - $ref: "#/components/parameters/MaxHeight"
         - $ref: "#/components/parameters/MaxBitrate"
         - $ref: "#/components/parameters/DescriptorGrouping"
@@ -390,6 +398,28 @@ components:
         implies its End) at whose markers a new DASH Period / HLS
         `#EXT-X-DISCONTINUITY` is forced. Signal only: timestamps stay
         continuous. Replaces the channel's setting; empty or `none` disables.
+      schema: { type: string }
+    AnnounceAhead:
+      name: announce_ahead
+      in: query
+      required: false
+      description: |
+        Announce markers this many seconds (or an ISO 8601 duration) BEFORE the segment they fall in: the
+        `EXT-X-DATERANGE` / DASH `Event` is added when the live edge gets that close, rounded to whole segments,
+        across the loop wrap too. Only where the marker is signalled changes, never its time (`START-DATE`,
+        `Event@presentationTime`), and `#EXT-X-CUE-OUT`/`-IN` stay exact. The tag or Event then stays until every
+        segment the marker covers has left the window. In DASH a marker announced in an earlier Period than the one
+        it falls in is carried again by every later Period that still covers it. Replaces the channel's setting;
+        `0` switches it off. Not applied to a closed catchup range.
+      schema: { type: string }
+    AnnounceOn:
+      name: announce_on
+      in: query
+      required: false
+      description: |
+        Which markers `announce_ahead` applies to: comma-separated SCTE-35 segmentation_type_ids (`0x22,0x30`; a
+        Start implies its End) and/or `splice_insert` for plain splice_insert markers. Empty or `all`: every marker.
+        Replaces the channel's setting.
       schema: { type: string }
     MaxHeight:
       name: max_height
