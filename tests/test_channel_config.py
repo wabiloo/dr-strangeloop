@@ -140,7 +140,10 @@ def test_packaging_defaults():
         "segment_duration": 4.0,
         "dvr_window": 30.0,
         "hls": {"container": "cmaf", "mux_audio": True},
-        "dash": {"timeline_style": "full", "addressing": "number"},
+        "dash": {
+            "timeline_style": "full", "addressing": "number", "low_latency": "off", "chunk_duration": 0.5,
+            "target_latency": None, "utc_timing": "direct", "utc_timing_url": "",
+        },
     }
     assert _flags(_packaging_cfg.packaging_bake_args({})) == {
         "--segment-duration": "4.0", "--hls-format": "cmaf", "--hls-ts-mux-audio": None,
@@ -185,6 +188,83 @@ def test_dash_flags_are_only_emitted_when_not_default():
 def test_packaging_values_are_validated(packaging, message):
     with pytest.raises(ValueError, match=message):
         _packaging_cfg.packaging_settings({"packaging": packaging})
+
+
+# ── [packaging.dash] low latency ────────────────────────────────────────────
+
+
+def ll(**dash):
+    return {"packaging": {"segment_duration": 2, "dash": {"low_latency": "on", **dash}}}
+
+
+def test_low_latency_is_off_by_default_and_adds_no_flags():
+    assert "--chunk-duration" not in _packaging_cfg.packaging_bake_args({})
+    assert not [a for a in _packaging_cfg.dash_serve_args({}) if a.startswith("--ll")]
+
+
+def test_low_latency_on_chunks_the_bake_and_enables_serving_with_direct_timing_by_default():
+    cfg = ll()
+    assert _flags(_packaging_cfg.packaging_bake_args(cfg))["--chunk-duration"] == "0.5"
+    args = _packaging_cfg.dash_serve_args(cfg)
+    assert _flags(args) == {"--ll-dash": None, "--ll-utc-timing": "direct"}
+    assert "--ll-utc-timing-url" not in args  # direct needs no URL
+
+
+def test_low_latency_settings_become_flags():
+    cfg = ll(chunk_duration=0.25, target_latency=1.5, utc_timing="none")
+    assert _flags(_packaging_cfg.packaging_bake_args(cfg))["--chunk-duration"] == "0.25"
+    assert _flags(_packaging_cfg.dash_serve_args(cfg)) == {
+        "--ll-dash": None, "--ll-target-latency": "1.5", "--ll-utc-timing": "none",
+    }
+
+
+def test_low_latency_optin_and_boolean_spellings():
+    optin = {"packaging": {"segment_duration": 2, "dash": {"low_latency": "optin"}}, "query": {"overrides": True}}
+    assert "--ll-optin" in _packaging_cfg.dash_serve_args(optin) and "--ll-dash" not in _packaging_cfg.dash_serve_args(optin)
+    assert "--ll-dash" in _packaging_cfg.dash_serve_args(ll(low_latency=True))  # TOML true == "on"
+    assert _packaging_cfg.packaging_settings(ll(low_latency=False))["dash"]["low_latency"] == "off"
+
+
+def test_http_timing_uses_the_configured_url_else_the_public_one_when_known():
+    cfg = ll(utc_timing="http")
+    assert _packaging_cfg.needs_public_url(cfg)
+    assert "--ll-utc-timing-url" not in _packaging_cfg.dash_serve_args(cfg)  # not known yet: nothing guessed
+    assert _flags(_packaging_cfg.dash_serve_args(cfg, public_url="https://d1.cloudfront.net/"))["--ll-utc-timing-url"] == (
+        "https://d1.cloudfront.net/time"
+    )
+    explicit = ll(utc_timing="http", utc_timing_url="https://time.example/t")
+    assert not _packaging_cfg.needs_public_url(explicit)
+    assert _flags(_packaging_cfg.dash_serve_args(explicit, public_url="https://ignored"))["--ll-utc-timing-url"] == "https://time.example/t"
+    assert not _packaging_cfg.needs_public_url(ll(utc_timing="direct"))
+    assert not _packaging_cfg.needs_public_url({"packaging": {"dash": {"utc_timing": "http"}}})  # LL off
+
+
+@pytest.mark.parametrize(
+    "cfg,message",
+    [
+        (ll(low_latency="fast"), "low_latency"),
+        (ll(chunk_duration=2), "chunk_duration"),  # not shorter than the 2 s segment
+        (ll(chunk_duration=0), "chunk_duration"),
+        (ll(target_latency=0), "target_latency"),
+        (ll(target_latency=121), "target_latency"),
+        (ll(utc_timing="ntp"), "utc_timing"),
+        (ll(utc_timing="direct", utc_timing_url="https://x/t"), "only applies"),
+        (ll(utc_timing="http", utc_timing_url="/time"), "absolute"),
+        ({"packaging": {"dash": {"low_latency": "optin"}}, "query": {"overrides": False}}, "overrides"),
+    ],
+)
+def test_low_latency_values_are_validated(cfg, message):
+    with pytest.raises(ValueError, match=message):
+        _packaging_cfg.packaging_settings(cfg)
+
+
+def test_low_latency_only_on_backends_that_can_hold_responses():
+    for backend in ("ecs-express", "local-docker"):
+        _packaging_cfg.check_low_latency(ll(), backend)
+    for backend in ("aws-lambda", "aws-media"):
+        with pytest.raises(ValueError, match="not supported"):
+            _packaging_cfg.check_low_latency(ll(), backend)
+    _packaging_cfg.check_low_latency({}, "aws-lambda")  # off is fine anywhere
 
 
 # ── [timeline] ──────────────────────────────────────────────────────────────
@@ -361,15 +441,25 @@ def test_every_flag_its_a_live_emits_exists_in_serve_and_bake():
             "increment_event_ids": True, "split_on": [0x22],
             "hls": {"cue_tags": "alongside"}, "dash": {"signal_format": "xml"},
         },
-        "packaging": {"hls": {"container": "ts", "mux_audio": False}, "dash": {"addressing": "time", "timeline_style": "compact"}},
+        "packaging": {
+            "hls": {"container": "ts", "mux_audio": False},
+            "dash": {
+                "addressing": "time", "timeline_style": "compact", "low_latency": "on", "chunk_duration": 0.25,
+                "target_latency": 2, "utc_timing": "http", "utc_timing_url": "https://t.example/time",
+            },
+        },
         "query": {"prefix": "dsl_"},
     }
+    optin = {"packaging": {"dash": {"low_latency": "optin"}}}
     serve_flags = {
         *_flags(_markers_cfg.split_on_serve_args(cfg)), *_flags(_packaging_cfg.dash_serve_args(cfg)),
+        *_flags(_packaging_cfg.dash_serve_args(optin)),
         *_flags(_query_cfg.query_serve_args(cfg)), "--dvr-window-seconds",
     }
     assert {"--timeshift", "--query-overrides", "--query-prefix"} <= serve_flags
+    assert {"--ll-dash", "--ll-optin", "--ll-target-latency", "--ll-utc-timing", "--ll-utc-timing-url"} <= serve_flags
     bake_flags = {*_flags(_markers_cfg.markers_bake_args(cfg)), *_flags(_packaging_cfg.packaging_bake_args(cfg))}
+    assert "--chunk-duration" in bake_flags
     serve_help, bake_help = _help("serve.py"), _help("bake.py")
     for flag in serve_flags:
         assert flag in serve_help, f"serve.py has no {flag}"
@@ -784,3 +874,15 @@ def test_galvanise_generated_config_uses_the_current_keys(backend):
     _packaging_cfg.packaging_settings(cfg)
     if backend == "ecs-express":
         assert cfg["packaging"]["dvr_window"] == 30
+
+
+def test_local_docker_serve_args_carry_the_low_latency_flags_and_its_own_time_url():
+    import _local_docker_ops
+
+    cfg = ll(utc_timing="http", target_latency=2)
+    args = _local_docker_ops._serve_args(cfg, "chan", 8123, "2026-01-01T00:00:00Z")
+    flags = _flags(args)
+    assert flags["--ll-dash"] is None and flags["--ll-utc-timing"] == "http"
+    assert flags["--ll-utc-timing-url"] == "http://localhost:8123/time" and flags["--ll-target-latency"] == "2"
+    off = _local_docker_ops._serve_args({}, "chan", 8123, "2026-01-01T00:00:00Z")
+    assert not [a for a in off if a.startswith("--ll")]

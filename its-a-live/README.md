@@ -326,6 +326,30 @@ and `outputs` don't apply (igor hides all three for local-docker channels
 rather than showing an inapplicable control), and playback URLs are
 always `http://localhost:<channel.port>/...`.
 
+## Low-latency DASH
+
+ecs-express and local-docker channels can serve low-latency DASH (CMAF chunked delivery; details in
+`loop-dee-loop/README.md` "Low-latency DASH"). Set it per channel under `[packaging.dash]` (keys in `config.toml`):
+
+```toml
+[packaging]
+segment_duration = 2          # shorter segments sit better with chunks
+
+[packaging.dash]
+low_latency = "on"            # "off" | "on" | "optin" (advertised only on ?low_latency=true)
+chunk_duration = 0.5
+# utc_timing = "direct"       # default: the time in the MPD (served no-store); "http" | "none"
+```
+
+- It decides how the loop is **baked** (chunks), so run `spark` again after turning it on or off.
+- `utc_timing = "http"` needs the channel's own `/time` URL. It is filled in automatically: for local-docker
+  `http://localhost:<port>/time`; for ecs-express the CloudFront domain (or the service endpoint without a CDN),
+  which only exists once the stack does, so `create` (and `redeploy` of a channel not deployed yet) deploys a second
+  time to set it. Set `utc_timing_url` for a tunnel or a custom domain. The URL is never a query parameter.
+- Not supported on aws-lambda (responses are held open) or aws-media: a config error.
+- `low_latency`, `target_latency` and `utc_timing` are also per-request query parameters (`[query] overrides`).
+- Measure it with `player-lab run --max-latency S` (see `player-lab/AGENTS.md`).
+
 ## Notes / gotchas
 
 - **Epoch (`ecs-express` / `local-docker`)** is `[timeline] epoch`,

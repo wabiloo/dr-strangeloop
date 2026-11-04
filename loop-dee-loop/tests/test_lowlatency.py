@@ -174,7 +174,7 @@ def chunked(tmp_path):
 def test_ll_mpd_advertises_early_availability_latency_and_clock(chunked, monkeypatch):
     path, seg, loop = chunked
     monkeypatch.setattr(Channel, "now_ticks", lambda self: seg + seg // 2)
-    app = create_app(path, epoch_ticks=0, window_segments=4, ll_dash=True)
+    app = create_app(path, epoch_ticks=0, window_segments=4, ll_dash=True, ll_utc_timing="http")
     mpd = app.test_client().get("/index.mpd").get_data(as_text=True)
     root = ET.fromstring(mpd)  # well-formed
     chunk_s = seg / TS / 4
@@ -213,7 +213,7 @@ def test_ll_dash_refuses_a_package_without_chunks(tmp_path):
 def test_configured_utc_timing_url_wins(chunked, monkeypatch):
     path, seg, _ = chunked
     monkeypatch.setattr(Channel, "now_ticks", lambda self: seg + seg // 2)
-    app = create_app(path, epoch_ticks=0, ll_dash=True, ll_utc_timing_url="https://cdn.example/time")
+    app = create_app(path, epoch_ticks=0, ll_dash=True, ll_utc_timing="http", ll_utc_timing_url="https://cdn.example/time")
     mpd = app.test_client().get("/index.mpd").get_data(as_text=True)
     assert 'value="https://cdn.example/time"' in mpd
 
@@ -292,12 +292,32 @@ def test_utc_timing_none_omits_it(chunked, monkeypatch):
 
 
 @pytestmark_ffmpeg
-def test_utc_timing_http_is_the_default_and_leaves_the_mpd_cacheable(chunked, monkeypatch):
+def test_utc_timing_direct_is_the_default(chunked, monkeypatch):
     path, seg, _ = chunked
     monkeypatch.setattr(Channel, "now_ticks", lambda self: seg + seg // 2)
     resp = create_app(path, epoch_ticks=0, ll_dash=True).test_client().get("/index.mpd")
-    assert _utc_timing(resp.get_data(as_text=True)).get("schemeIdUri") == "urn:mpeg:dash:utc:http-xsdate:2014"
-    assert "no-store" not in resp.headers.get("Cache-Control", "")
+    assert _utc_timing(resp.get_data(as_text=True)).get("schemeIdUri") == "urn:mpeg:dash:utc:direct:2014"
+    assert resp.headers["Cache-Control"] == "no-store"
+
+
+@pytestmark_ffmpeg
+def test_utc_timing_http_derives_its_url_only_for_a_localhost_request(chunked, monkeypatch):
+    path, seg, _ = chunked
+    monkeypatch.setattr(Channel, "now_ticks", lambda self: seg + seg // 2)
+    client = create_app(path, epoch_ticks=0, ll_dash=True, ll_utc_timing="http").test_client()
+    local = _utc_timing(client.get("/index.mpd", base_url="http://localhost:8080").get_data(as_text=True))
+    assert local.get("value") == "http://localhost:8080/time"
+    assert "no-store" not in client.get("/index.mpd").headers.get("Cache-Control", "")  # http: the MPD stays cacheable
+    # A forged / proxied Host is client-controlled: it must never reach the MPD (a shared cache could keep it).
+    assert _utc_timing(client.get("/index.mpd", base_url="http://evil.example").get_data(as_text=True)) is None
+    assert _utc_timing(client.get("/index.mpd", headers={"Host": "evil.example"}).get_data(as_text=True)) is None
+
+
+def test_loopback_host_detection():
+    for ok in ("localhost", "localhost:8080", "127.0.0.1:9000", "[::1]:80", "[::1]", "channel.localhost", "LOCALHOST"):
+        assert serve._is_loopback_host(ok), ok
+    for bad in ("evil.example", "localhost.evil.example", "127.0.0.1.evil.example", "10.0.0.5:8080", "x.cloudfront.net", ""):
+        assert not serve._is_loopback_host(bad), bad
 
 
 @pytestmark_ffmpeg
@@ -382,7 +402,7 @@ def test_ll_utc_timing_override(chunked, monkeypatch):
 @pytestmark_ffmpeg
 def test_the_utc_timing_url_is_not_overridable(chunked, monkeypatch):
     path, seg, _ = chunked
-    c = _qapp(path, monkeypatch, seg, ll_dash=True, ll_utc_timing_url="https://good.example/time")
+    c = _qapp(path, monkeypatch, seg, ll_dash=True, ll_utc_timing="http", ll_utc_timing_url="https://good.example/time")
     mpd = c.get("/index.mpd?ll_utc_timing_url=https://evil.example/time&utc_timing_url=https://evil.example/time").get_data(as_text=True)
     assert "evil.example" not in mpd and 'value="https://good.example/time"' in mpd
 

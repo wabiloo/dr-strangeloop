@@ -76,7 +76,9 @@ if backend == "ecs-express":
     # resolve its CLUSTER_NAME reference; deploy it explicitly with
     # `cdk deploy ItsALiveSharedStack-ecs-express` before any channel.
     LoopSharedStack(app, "ItsALiveSharedStack-ecs-express", env=env)
-    LoopStack(app, stack_name, config=config, env=env)
+    # `-c public_host=<cloudfront domain | service host>`: the channel's own public address, which only exists after
+    # the first deploy (`channel.py` passes it from the stack's outputs; see _packaging_cfg.needs_public_url).
+    LoopStack(app, stack_name, config=config, public_host=app.node.try_get_context("public_host"), env=env)
 elif backend == "aws-lambda":
     # Shared prerequisite -- the CloudFront cache policies identical across
     # channels (see lambda_shared_stack.py). Deploy it explicitly with

@@ -63,7 +63,9 @@ class LoopStack(Stack):
     that gap with a shared-secret origin header if needed later.
     """
 
-    def __init__(self, scope: Construct, construct_id: str, *, config: dict, **kwargs) -> None:
+    def __init__(
+        self, scope: Construct, construct_id: str, *, config: dict, public_host: str | None = None, **kwargs
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         name = config.get("deploy", {}).get("name", "default")
@@ -218,7 +220,7 @@ class LoopStack(Stack):
                     "--channel-name", config.get("deploy", {}).get("name", "default"),
                     *(["--continuous-timeline"] if continuous else []),
                     *split_on_serve_args(config),
-                    *dash_serve_args(config),
+                    *dash_serve_args(config, public_url=f"https://{public_host}" if public_host else None),
                     *query_serve_args(config),
                 ],
                 environment=[

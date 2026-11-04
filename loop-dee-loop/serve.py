@@ -1016,7 +1016,7 @@ class Channel:
         ll_dash: bool = False,
         ll_target_latency: float | None = None,
         ll_utc_timing_url: str = "",
-        ll_utc_timing: str = "http",
+        ll_utc_timing: str = "direct",
         ll_optin: bool = False,
     ):
         if ll_utc_timing not in LL_UTC_TIMING_CHOICES:
@@ -1345,8 +1345,7 @@ class Channel:
         return variant
 
     def with_ll_utc_timing_url(self, url: str) -> "Channel":
-        """Low-latency MPD's UTCTiming endpoint, derived from the request when
-        none was configured."""
+        """Low-latency MPD's UTCTiming endpoint for `http` mode, when none was configured."""
         if self.ll_utc_timing_url or not self.ll_dash or self.ll_utc_timing != "http":
             return self
         variant = copy.copy(self)
@@ -3295,6 +3294,16 @@ def resolve_request_channel(channel: "Channel", args, cfg: TimeshiftConfig, fmt:
     return ch.with_package_overrides(**overrides)
 
 
+def _is_loopback_host(host: str) -> bool:
+    """Whether a request's Host header names this machine (localhost / 127.0.0.1 / ::1, any port)."""
+    name = host.strip().lower()
+    if name.startswith("["):
+        name = name[1:].split("]", 1)[0]
+    else:
+        name = name.rsplit(":", 1)[0] if name.count(":") == 1 else name
+    return name in ("localhost", "127.0.0.1", "::1") or name.endswith(".localhost")
+
+
 def _send_package_file(path: Path, mimetype: str | None = None):
     """`send_file` for a file inside the loop package. When a custom reader is
     installed (package_io; the aws-lambda backend's S3-backed package) the
@@ -3317,7 +3326,7 @@ def create_app(
     ll_dash: bool = False,
     ll_target_latency: float | None = None,
     ll_utc_timing_url: str = "",
-    ll_utc_timing: str = "http",
+    ll_utc_timing: str = "direct",
     ll_optin: bool = False,
 ) -> Flask:
     ts_cfg = timeshift or TimeshiftConfig()
@@ -3566,7 +3575,10 @@ def create_app(
     @app.get(f"/{LoopPackage.DASH_ALIAS}")
     def dash_manifest():
         ch, window, _query = _request_view("dash")
-        ch = ch.with_ll_utc_timing_url(request.url_root + "time")
+        if _is_loopback_host(request.host):
+            # Only a request to this machine itself may name its own /time: any other Host header is
+            # client-controlled, and a shared cache could keep a forged one for every viewer.
+            ch = ch.with_ll_utc_timing_url(request.url_root + "time")
         resp = _manifest_response(ch.build_dash_manifest(window=window), "application/dash+xml", window)
         if ch.ll_dash and ch.ll_utc_timing == "direct" and window is None and ch.offset_ticks == 0:
             # The MPD carries the current time: a cached copy would be a wrong clock.
@@ -3876,17 +3888,19 @@ def main() -> int:
     parser.add_argument(
         "--ll-utc-timing",
         choices=LL_UTC_TIMING_CHOICES,
-        default="http",
-        help="How the low-latency MPD lets players sync their clock: http (a polled /time "
-        "endpoint; default), direct (the time written into the MPD, which is then served "
-        "no-store -- accurate only while the MPD is not cached) or none (the player's own clock).",
+        default="direct",
+        help="How the low-latency MPD lets players sync their clock: direct (default: the time "
+        "written into the MPD, which is then served no-store -- accurate only while the MPD is "
+        "not cached), http (a polled /time endpoint; needs --ll-utc-timing-url except on localhost) "
+        "or none (the player's own clock)."
     )
     parser.add_argument(
         "--ll-utc-timing-url",
         default="",
         metavar="URL",
-        help="Absolute URL of this server's /time, for the low-latency MPD's UTCTiming. "
-        "Default: derived from each request's own URL (wrong behind a proxy that rewrites Host).",
+        help="Absolute URL of this server's /time, for --ll-utc-timing http. Without it the URL is derived "
+        "from the request only when it is addressed to localhost; for any other Host no UTCTiming is "
+        "written (a Host header is client-controlled, and a shared cache could keep a forged one).",
     )
     parser.add_argument(
         "--timeshift",

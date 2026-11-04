@@ -289,7 +289,9 @@ def _serve_args(cfg, channel_name, port, epoch):
         "--dvr-window-seconds", dvr_window_seconds(cfg),
         *_continuous_timeline_args(cfg),
         *split_on_serve_args(cfg),
-        *dash_serve_args(cfg),
+        # `utc_timing = "http"` without an explicit utc_timing_url: the container is reached on localhost:<port>
+        # (viewers elsewhere, e.g. through a tunnel, set utc_timing_url).
+        *dash_serve_args(cfg, public_url=f"http://localhost:{port}"),
         *query_serve_args(cfg),
     ]
 

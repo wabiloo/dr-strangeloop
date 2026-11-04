@@ -92,9 +92,11 @@ import time
 import tomllib
 import boto3
 import botocore.config
+import botocore.exceptions
 
 from _infra_cfg import infra_table, reject_legacy_tables
 from _legacy_cfg import check_config_version
+from _packaging_cfg import check_low_latency, needs_public_url
 from _paths_cfg import resolve_source_path
 
 _DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "config.toml")
@@ -132,6 +134,10 @@ def _config(config_path):
         sys.exit(f"[deploy].backend must be one of {_BACKENDS!r} in {config_path}, got {backend!r}")
     reject_legacy_tables(cfg, config_path)
     check_config_version(cfg, config_path)
+    try:
+        check_low_latency(cfg, backend)
+    except ValueError as exc:
+        sys.exit(f"{config_path}: {exc}")
     source = cfg.get("input", {})
     if source.get("source_path"):
         source["source_path"] = resolve_source_path(source["source_path"], config_path)
@@ -190,6 +196,57 @@ def _cf_outputs(cfg, stack_name=None):
     cf = _session(cfg).client("cloudformation", config=_BOTO_CONFIG)
     resp = cf.describe_stacks(StackName=stack_name)
     return {o["OutputKey"]: o["OutputValue"] for o in resp["Stacks"][0].get("Outputs", [])}
+
+
+def _public_host(outputs):
+    """The channel's public host from its stack outputs: the CloudFront domain, else the Express service's own
+    endpoint (an `https://<host>` URL; scheme stripped). None when the stack has neither (yet)."""
+    host = outputs.get("CloudFrontDomainName")
+    if host:
+        return host
+    return outputs.get("ExpressServiceEndpoint", "").split("//", 1)[-1] or None
+
+
+def _public_host_context(cfg):
+    """`cdk deploy` context carrying the channel's own public host, for the serve flags that need it
+    (`_packaging_cfg.needs_public_url`: low latency with `utc_timing = "http"` and no explicit URL).
+
+    The host only exists once the stack does -- the service's command line cannot reference the distribution
+    or its own endpoint (a CloudFormation cycle) -- so it is read from the existing stack's outputs: [] for a
+    channel not deployed yet (create then deploys a second time), and whenever nothing needs it."""
+    if _backend(cfg) != "ecs-express" or not needs_public_url(cfg):
+        return []
+    try:
+        host = _public_host(_cf_outputs(cfg))
+    except botocore.exceptions.ClientError:  # no such stack yet
+        return []
+    return ["-c", f"public_host={host}"] if host else []
+
+
+def _cdk_deploy(cfg, config_path, stack_name):
+    """`cdk deploy` the channel stack; returns the exit code. With `utc_timing = "http"` and no configured URL on
+    ecs-express, a first deploy cannot know the public address, so once the stack exists it is deployed again
+    with it (one rolling task replacement, only ever for a new channel: later deploys already know it)."""
+    import subprocess
+
+    base = ["cdk", "deploy", "--require-approval", "never", *_cdk_output(_channel_name(cfg)),
+            "-c", f"config={config_path}"]
+    context = _public_host_context(cfg)
+    cmd = [*base, *context, stack_name]
+    print(f"Running: {' '.join(cmd)}")
+    code = subprocess.run(cmd, check=False).returncode
+    if code != 0 or context or not needs_public_url(cfg) or _backend(cfg) != "ecs-express":
+        return code
+    context = _public_host_context(cfg)
+    if not context:
+        print("WARNING: could not read the channel's public address from the stack outputs; the low-latency "
+              "UTCTiming URL (utc_timing = \"http\") is not set. Set [packaging.dash] utc_timing_url, or use "
+              "utc_timing = \"direct\".")
+        return 0
+    print("Redeploying once to set the low-latency UTCTiming URL from the channel's public address ...")
+    cmd = [*base, *context, stack_name]
+    print(f"Running: {' '.join(cmd)}")
+    return subprocess.run(cmd, check=False).returncode
 
 
 def _ops(cfg):
@@ -504,13 +561,9 @@ def cmd_create(cfg, config_path, extra_args):
 
     stack_name = _stack_name(cfg)
     print(f"Deploying {stack_name} ...")
-    result = subprocess.run(
-        ["cdk", "deploy", "--require-approval", "never", *_cdk_output(_channel_name(cfg)),
-         "-c", f"config={config_path}", stack_name],
-        check=False,
-    )
-    if result.returncode != 0:
-        sys.exit(result.returncode)
+    code = _cdk_deploy(cfg, config_path, stack_name)
+    if code != 0:
+        sys.exit(code)
 
     print("Starting the channel ...")
     cmd_start(cfg, [])
@@ -577,11 +630,7 @@ def cmd_redeploy(cfg, config_path, extra_args):
     # Explicit stack name: for ecs-express the app also contains
     # ItsALiveSharedStack-ecs-express, so a bare `cdk deploy` with no stack
     # argument would be ambiguous and CDK would refuse it.
-    cdk_cmd = ["cdk", "deploy", "--require-approval", "never", *_cdk_output(_channel_name(cfg)),
-               "-c", f"config={config_path}", stack_name]
-    print(f"Running: {' '.join(cdk_cmd)}")
-    result = subprocess.run(cdk_cmd, check=False)
-    sys.exit(result.returncode)
+    sys.exit(_cdk_deploy(cfg, config_path, stack_name))
 
 
 def cmd_schedule(cfg, config_path, extra_args, as_json=False):

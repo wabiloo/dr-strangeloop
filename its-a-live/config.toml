@@ -84,6 +84,13 @@ dvr_window       = 30    # serve.py sliding-window size, seconds (also a query p
 # [packaging.dash]       # also query parameters of the same name
 # timeline_style = "full"  # "full" (every <S> has @t and @d, a SegmentTemplate per representation) | "compact" (implicit @t, @r runs, one shared SegmentTemplate)
 # addressing     = "number"  # "number" ($Number$) | "time" ($Time$)
+#
+# Low-latency DASH (loop-dee-loop/README.md "Low-latency DASH"); ecs-express and local-docker only.
+# low_latency    = "off"     # "off" | "on" (every MPD advertises it) | "optin" (delivered, but an MPD advertises it only on ?low_latency=true; needs [query] overrides). Also a query parameter. Changing it from/to "off" needs a re-spark: it decides how the loop is baked.
+# chunk_duration = 0.5       # seconds, shorter than segment_duration: segments are baked as chunks this long. Bake time -- no query parameter.
+# target_latency = 2         # optional, seconds (at most 120): the latency the MPD asks players to hold; default 4 chunks, at least 1 s. Also a query parameter.
+# utc_timing     = "direct"  # how the MPD lets players sync their clock. "direct" (default): the time written into the MPD, which is then served no-store (never CDN-cached; no URL needed). "http": a polled /time -- its URL is set automatically at deploy time (local-docker: http://localhost:<port>/time; ecs-express: the CloudFront domain or the service endpoint, via one extra deploy for a new channel). "none": the player's own clock. Also a query parameter.
+# utc_timing_url = "https://time.example/time"  # optional, absolute http(s), only with utc_timing = "http": use this instead of the automatic one (e.g. a tunnel, a custom domain). Configuration only -- never a query parameter.
 
 [timeline]                 # ecs-express/local-docker only
 epoch = "2026-01-01T00:00:00Z"  # optional, this is the default -- loop 0's start / DASH availabilityStartTime (UTC, exactly this form)

@@ -298,8 +298,8 @@ several `moof`+`mdat` chunks, each with its own `tfdt`. Serve it with `serve.py 
 | `--ll-dash` | Deliver low latency **and** advertise it in every MPD. Refused (`ValueError`) on a package baked without chunks. |
 | `--ll-optin` | Deliver it, but an MPD advertises it only when asked (`?low_latency=true`, needs `--query-overrides`). |
 | `--ll-target-latency S` | Latency the MPD asks players to hold. |
-| `--ll-utc-timing http\|direct\|none` | Clock source: `http` (default; a polled `/time`, `Cache-Control: no-store`), `direct` (the time written into the MPD, which is then served `no-store`: only as accurate as the MPD is fresh), `none` (the player's own clock; dash.js falls back to the response `Date` header). |
-| `--ll-utc-timing-url URL` | Absolute URL of `/time` for `http`. Default: derived from each request, wrong behind a proxy that rewrites the host (the spec wants an absolute `http(s)` URL; relative values are not valid). Never overridable per request. |
+| `--ll-utc-timing direct\|http\|none` | Clock source in the MPD. `direct` (default): the current time written into the MPD, which is then served `Cache-Control: no-store` (a cached copy would be a wrong clock; needs no URL, but the MPD is never CDN-cached). `http`: a polled `/time` (`no-store`), the MPD stays cacheable. `none`: the player's own clock (dash.js falls back to the response `Date` header). |
+| `--ll-utc-timing-url URL` | Absolute URL of `/time` for `http` (the spec wants an absolute `http(s)` URL; relative values are not valid). Without it the URL is derived from the request **only when it is addressed to localhost**; for any other `Host` no `UTCTiming` is written (a `Host` header is client-controlled and a shared cache could keep a forged one). Never overridable per request. |
 
 Per request (behind `--query-overrides`, MPD only; HLS and `/timeline.json` accept and ignore them):
 `low_latency=true|false`, `ll_target_latency=<seconds>` (at most 120), `ll_utc_timing=http|direct|none`. `low_latency=true`

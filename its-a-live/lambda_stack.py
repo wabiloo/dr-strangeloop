@@ -17,7 +17,7 @@ from _host_paths import to_host_path
 from _epoch_cfg import config_epoch_utc
 from _infra_cfg import infra_table
 from _markers_cfg import split_on_serve_args
-from _packaging_cfg import dash_serve_args, dvr_window_seconds as config_dvr_window_seconds
+from _packaging_cfg import check_low_latency, dash_serve_args, dvr_window_seconds as config_dvr_window_seconds
 import _cdn_policies as cdn
 from _query_cfg import query_param_names, query_serve_args
 
@@ -63,6 +63,8 @@ class LambdaLoopStack(Stack):
         if not bucket_name:
             # During cdk bootstrap no config values are required -- empty stack.
             return
+
+        check_low_latency(config, "aws-lambda")  # held responses: not a fit for one-request-per-environment Lambda
 
         loop_package_folder = infra_table(config, "s3").get("content_folder", "its-a-live/content").strip("/")
         loop_package_s3_uri = f"s3://{bucket_name}/{loop_package_folder}/{name}"
