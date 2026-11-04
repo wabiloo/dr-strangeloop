@@ -38,6 +38,7 @@ from fractions import Fraction
 from pathlib import Path
 
 import cmaf
+import lowlatency
 from gpac_pipeline import (
     AudioTrackParams,
     build_cues_xml,
@@ -1692,6 +1693,24 @@ def bake_segment_list(
     )
 
 
+def max_chunk_ticks(
+    rendition_dir: Path, track_id: int, boundary_ticks: list[int], total_ticks: int, *, all_sync: bool = False
+) -> int:
+    """The longest chunk, in package ticks, over every segment of one baked track.
+
+    LL-HLS `PART-TARGET` must be at least as long as every part and must never change, so serve.py needs the real
+    maximum -- GPAC does not cut chunks evenly (a 0.5 s target gave 0.60 s for the first chunk of a loop)."""
+    init = next(iter(sorted(rendition_dir.glob(f"*track{track_id}_init.mp4"))), None)
+    track_timescale = (cmaf.track_timescale(init.read_bytes()) if init else None) or TIMESCALE
+    segments = sorted(rendition_dir.glob(f"*track{track_id}_*.m4s"), key=_numeric_segment_index)
+    longest = 0
+    for index, path in enumerate(segments):
+        end = boundary_ticks[index + 1] if index + 1 < len(boundary_ticks) else total_ticks
+        table = lowlatency.chunk_table(path.read_bytes(), track_timescale, TIMESCALE, end - boundary_ticks[index], all_sync=all_sync)
+        longest = max([longest, *(c.duration_ticks for c in table)])
+    return longest
+
+
 def bake_one_rendition(
     name: str,
     ts_file: Path,
@@ -1820,6 +1839,15 @@ def bake_one_rendition(
 
     variant_metadata = read_variant_metadata(rendition_dir / "manifest.mpd")
 
+    longest_chunk = None
+    if chunk_duration_seconds is not None:
+        longest_chunk = max_chunk_ticks(rendition_dir, video_track_id, segment_boundary_ticks, total_loop_duration_ticks)
+        if include_audio and audio_segment_boundary_ticks is not None:
+            longest_chunk = max(
+                longest_chunk,
+                max_chunk_ticks(rendition_dir, audio_track_id, audio_segment_boundary_ticks, total_loop_duration_ticks, all_sync=True),
+            )
+
     logger.info(
         "Rendition '%s': produced %d real segment(s); all %d marker "
         "tick(s) landed exactly on a segment boundary",
@@ -1836,6 +1864,8 @@ def bake_one_rendition(
         "video_variant": variant_metadata["video"],
         "audio_variant": variant_metadata["audio"] if include_audio else None,
         "markers": validated_markers,
+        # Only for a chunked bake (--chunk-duration), so every other package's descriptor is unchanged.
+        **({"max_chunk_ticks": longest_chunk} if longest_chunk is not None else {}),
     }
 
 

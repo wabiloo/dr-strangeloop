@@ -102,7 +102,9 @@ def test_segment_occurrence_continuous_uses_the_named_loop():
 pytestmark_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
 
-def _write_chunked_package(package_dir: Path, chunks_per_segment: int = 4) -> tuple[int, int]:
+def _write_chunked_package(
+    package_dir: Path, chunks_per_segment: int = 4, names: tuple[str, ...] = ("1080p",)
+) -> tuple[int, int]:
     """Two segments of `chunks_per_segment` real fMP4 chunks each (0.25 s). Returns
     (segment_ticks, loop_ticks)."""
     subprocess.run(
@@ -125,11 +127,14 @@ def _write_chunked_package(package_dir: Path, chunks_per_segment: int = 4) -> tu
     segment_ticks = starts[1] - starts[0]
     loop_ticks = 2 * segment_ticks
 
-    seg_dir = package_dir / "segments" / "1080p"
-    seg_dir.mkdir(parents=True)
-    (seg_dir / "seg_track1_init.mp4").write_bytes(init)
-    for i, seg in enumerate(segments):
-        (seg_dir / f"seg_track1_{i}.m4s").write_bytes(seg)
+    # What a real bake records (bake.max_chunk_ticks): LL-HLS PART-TARGET must cover the longest part.
+    max_chunk = max(c.duration_ticks for seg in segments for c in lowlatency.chunk_table(seg, TS, TS, segment_ticks))
+    for name in names:
+        seg_dir = package_dir / "segments" / name
+        seg_dir.mkdir(parents=True)
+        (seg_dir / "seg_track1_init.mp4").write_bytes(init)
+        for i, seg in enumerate(segments):
+            (seg_dir / f"seg_track1_{i}.m4s").write_bytes(seg)
     descriptor = {
         "version": 2,
         "timescale": 90_000,
@@ -146,7 +151,7 @@ def _write_chunked_package(package_dir: Path, chunks_per_segment: int = 4) -> tu
         "asset_boundaries": [],
         "video_renditions": [
             {
-                "name": "1080p",
+                "name": name,
                 "sparse": False,
                 "video_track_id": 1,
                 "audio_track_id": None,
@@ -156,7 +161,9 @@ def _write_chunked_package(package_dir: Path, chunks_per_segment: int = 4) -> tu
                     "frame_rate": 24.0, "bandwidth": 500_000,
                 },
                 "audio_variant": None,
+                "max_chunk_ticks": max_chunk,
             }
+            for name in names
         ],
         "source_input": "a.mp4",
     }
@@ -423,3 +430,44 @@ def test_hls_and_timeline_json_accept_but_ignore_the_ll_parameters(chunked, monk
     # The master playlist passes the request's query on to its child playlist URLs; nothing else differs.
     assert c.get("/index.m3u8" + q).get_data().replace(q.encode(), b"") == c.get("/index.m3u8").get_data()
     assert c.get("/timeline.json" + q).get_json() == c.get("/timeline.json").get_json()
+
+
+# ── chunk table (the parts of a segment) ──────────────────────────────────────────────────────
+
+
+@pytestmark_ffmpeg
+def test_chunk_table_tiles_the_segment_and_follows_the_real_timestamps(chunked):
+    path, seg, _ = chunked
+    data = (path / "segments" / "1080p" / "seg_track1_0.m4s").read_bytes()
+    table = lowlatency.chunk_table(data, TS, TS, seg)
+    assert len(table) == 4
+    assert sum(c.duration_ticks for c in table) == seg  # the last chunk runs to the segment end
+    assert [c.start_ticks for c in table] == [0, *(sum(c.duration_ticks for c in table[:i]) for i in range(1, 4))]
+    # byte spans tile the file: no gap, no overlap, the first one carries anything ahead of the first moof
+    assert table[0].byte_start == 0 and table[-1].byte_end == len(data)
+    assert all(a.byte_end == b.byte_start for a, b in zip(table, table[1:]))
+    assert all(c.independent for c in table)  # the fixture cuts a fragment at every keyframe
+    # the spans reproduce the chunks the pacer streams
+    assert [data[c.byte_start : c.byte_end] for c in table][1:] == [c for c, _ in lowlatency.split_chunks(data)][1:]
+
+
+@pytestmark_ffmpeg
+def test_chunk_table_marks_chunks_that_do_not_start_on_a_keyframe(tmp_path):
+    # Fragments cut by duration rather than at keyframes: GOP 12 frames, fragments of 6 -> every second one is not a sync start.
+    subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=24:duration=2",
+            "-c:v", "libx264", "-g", "12", "-keyint_min", "12", "-sc_threshold", "0", "-video_track_timescale", "90000",
+            "-movflags", "frag_custom+empty_moov+default_base_moof", "-frag_duration", "250000", "-f", "mp4", str(tmp_path / "a.mp4"),
+        ],
+        check=True,
+    )
+    _, fragments = cmaf.split_init_and_fragments((tmp_path / "a.mp4").read_bytes())
+    data = b"".join(fragments[:4])
+    table = lowlatency.chunk_table(data, TS, TS, sum(c.duration_ticks for c in lowlatency.chunk_table(data, TS, TS, 90_000)) or 90_000)
+    flags = [c.independent for c in table]
+    assert flags[0] is True and False in flags  # the first starts on a keyframe, a later one does not
+
+
+def test_chunk_table_audio_is_all_independent_and_empty_input_is_empty():
+    assert lowlatency.chunk_table(b"", TS, TS, 90_000) == []

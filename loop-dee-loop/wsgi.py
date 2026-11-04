@@ -76,4 +76,5 @@ app = create_app(
     ll_utc_timing_url=os.environ.get("LL_UTC_TIMING_URL", ""),
     ll_utc_timing=os.environ.get("LL_UTC_TIMING") or "direct",
     ll_optin=os.environ.get("LL_OPTIN", "").lower() in ("1", "true", "yes"),
+    ll_hls=os.environ.get("LL_HLS", "").lower() in ("1", "true", "yes"),
 )

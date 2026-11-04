@@ -31,6 +31,7 @@ import json
 import logging
 import math
 import mimetypes
+import re
 import time
 from collections.abc import Callable
 from decimal import Decimal
@@ -199,6 +200,24 @@ class WindowRange:
     live_edge: int
     ended: bool
     position: LoopPosition
+
+
+# LL-HLS lists the parts of this many newest segments (the live one included); older segments are plain.
+LL_HLS_PART_SEGMENTS = 3
+
+
+@dataclasses.dataclass(frozen=True)
+class _HlsLL:
+    """What an LL-HLS media playlist needs besides its own boundaries: how to get the parts of one of its segments,
+    and the other playlists (name, boundaries, parts) to point `EXT-X-RENDITION-REPORT` at."""
+
+    chunks: Callable[[int], "list[lowlatency.Chunk]"]
+    others: "list[tuple[str, list[int], Callable[[int], list[lowlatency.Chunk]]]]"
+
+
+def _part_uri(segment_uri: str, part: int) -> str:
+    """The URI of part `part` of a CMAF segment: `.../seg/12.m4s` -> `.../seg/12.3.m4s`."""
+    return re.sub(r"\.m4s$", f".{part}.m4s", segment_uri)
 
 
 def _hls_payload_markers(markers: list[dict], daterange_mode: str) -> list[dict]:
@@ -572,6 +591,8 @@ class VideoRendition:
 
     def __init__(self, package_dir: Path, rendition: dict):
         self.name: str = rendition["name"]
+        # The longest baked chunk, in package ticks (bake.py --chunk-duration; 0 = not a chunked bake).
+        self.max_chunk_ticks: int = int(rendition.get("max_chunk_ticks") or 0)
         self.sparse: bool = bool(rendition.get("sparse", False))
         # Sparse packages baked as proper CMAF carry one init per span
         # (output period / discontinuity): `init_files[k]` serves segments from
@@ -954,6 +975,51 @@ class LoopPackage:
                 return r
         raise KeyError(name)
 
+    # ── low latency: the parts of a segment ────────────────────────────────
+
+    @property
+    def part_target_seconds(self) -> float | None:
+        """LL-HLS `PART-TARGET`: at least the longest baked chunk, rounded up to a millisecond (it must cover every
+        part and never change while the channel runs). None for a package baked without chunks."""
+        longest = max((r.max_chunk_ticks for r in self.video_renditions), default=0)
+        if not longest:
+            return None
+        return math.ceil(longest * 1000 / self.timescale) / 1000
+
+    def video_track_timescale(self, rendition: "VideoRendition") -> int:
+        """The video track's own media timescale (its init's mdhd), which its `tfdt`s are written in."""
+        cache = self.__dict__.setdefault("_video_timescales", {})
+        if rendition.name not in cache:
+            found = None
+            if not rendition.self_initializing:
+                try:
+                    found = cmaf.track_timescale(package_io.read_bytes(rendition.init_path()))
+                except (OSError, RuntimeError):
+                    found = None
+            cache[rendition.name] = found or self.timescale
+        return cache[rendition.name]
+
+    def chunk_table(self, rendition_name: str | None, local_index: int, duration_ticks: int) -> "list[lowlatency.Chunk]":
+        """The chunks (LL-HLS parts) of one baked segment; `rendition_name` None = the audio track. Read lazily from
+        the segment file and cached: the files are immutable, so the cache never goes stale and a package baked
+        before LL-HLS existed needs no re-bake."""
+        cache = self.__dict__.setdefault("_chunk_tables", {})
+        key = (rendition_name, local_index)
+        if key not in cache:
+            if rendition_name is None:
+                audio = self.audio_rendition
+                path = audio.audio_segment_path_for_index(local_index)
+                timescale, all_sync = audio.audio_timescale(self.timescale), True
+            else:
+                rendition = self.rendition_by_name(rendition_name)
+                path = rendition.segment_path_for_index(local_index)
+                timescale, all_sync = self.video_track_timescale(rendition), False
+            cache[key] = (
+                [] if path is None
+                else lowlatency.chunk_table(package_io.read_bytes(path), timescale, self.timescale, duration_ticks, all_sync=all_sync)
+            )
+        return cache[key]
+
 
 def _first_present_segment(files: "list[Path | None]", label: str) -> Path:
     """First non-None entry of a (possibly sparse, SCOPE.md §11) segment
@@ -1018,11 +1084,14 @@ class Channel:
         ll_utc_timing_url: str = "",
         ll_utc_timing: str = "direct",
         ll_optin: bool = False,
+        ll_hls: bool = False,
     ):
         if ll_utc_timing not in LL_UTC_TIMING_CHOICES:
             raise ValueError(f"ll_utc_timing must be one of {LL_UTC_TIMING_CHOICES}, got {ll_utc_timing!r}")
         package_chunk = getattr(package, "chunk_duration_seconds", None)
-        if (ll_dash or ll_optin) and package_chunk is None:
+        if ll_hls and getattr(package, "hls_format", "cmaf") != "cmaf":
+            raise ValueError("low-latency HLS needs CMAF segments (hls_format 'cmaf'): MPEG-TS cannot carry parts")
+        if (ll_dash or ll_optin or ll_hls) and package_chunk is None:
             raise ValueError(
                 "low-latency DASH needs a package baked with `bake.py --chunk-duration` "
                 "(this one has a single chunk per segment)"
@@ -1083,9 +1152,11 @@ class Channel:
         # (a server property -- segment URLs carry no query string). `ll_optin`: capable, but an MPD only
         # advertises LL when asked (`?low_latency=true`).
         self.ll_dash = ll_dash
-        self.ll_capable = ll_dash or ll_optin
+        # `ll_hls`: this HLS media playlist advertises low latency (parts, blocking reload, preload hint).
+        self.ll_hls = ll_hls
+        self.ll_capable = ll_dash or ll_optin or ll_hls
         chunk = package_chunk or 0.0
-        self.ll_ato_seconds = round(max(0.0, package.segment_duration_seconds - chunk), 3) if (ll_dash or ll_optin) else 0.0
+        self.ll_ato_seconds = round(max(0.0, package.segment_duration_seconds - chunk), 3) if (ll_dash or ll_optin or ll_hls) else 0.0
         self.ll_target_latency_seconds = ll_target_latency or max(4 * chunk, 1.0)
         self.ll_utc_timing_url = ll_utc_timing_url
         # How a low-latency MPD lets the player sync its clock: "http" (a polled
@@ -1325,18 +1396,28 @@ class Channel:
         return variant
 
     def with_ll(
-        self, low_latency: bool | None = None, target_latency: float | None = None, utc_timing: str | None = None
+        self,
+        low_latency: bool | None = None,
+        target_latency: float | None = None,
+        utc_timing: str | None = None,
+        fmt: str = "dash",
     ) -> "Channel":
-        """Per-request low-latency settings (DASH MPD only). `low_latency=True` needs a channel that delivers
-        low latency at all (`--ll-dash` / `--ll-optin`, on a package baked with `--chunk-duration`)."""
+        """Per-request low-latency settings. `low_latency` is whether THIS response (the MPD for fmt "dash", an HLS
+        playlist for "hls") advertises it; the target and the clock source are DASH-only. `low_latency=True` needs
+        a channel that delivers low latency at all (`--ll-dash` / `--ll-hls` / `--ll-optin`, on a package baked
+        with `--chunk-duration`; for HLS also CMAF segments)."""
         if low_latency is None and target_latency is None and utc_timing is None:
             return self
         if low_latency and not self.ll_capable:
             raise TimeshiftError(
                 "low latency is not available on this channel (not enabled, or the package was baked without chunks)"
             )
+        if low_latency and fmt == "hls" and self.package.hls_format != "cmaf":
+            raise TimeshiftError("low-latency HLS needs CMAF segments; this channel's HLS is MPEG-TS")
         variant = copy.copy(self)
-        if low_latency is not None:
+        if low_latency is not None and fmt == "hls":
+            variant.ll_hls = low_latency
+        elif low_latency is not None and fmt == "dash":
             variant.ll_dash = low_latency
         if target_latency is not None:
             variant.ll_target_latency_seconds = target_latency
@@ -1918,6 +1999,38 @@ class Channel:
             "markers": markers,
         }
 
+    def hls_ll_live(self, window: "TimeWindow | None") -> bool:
+        """Whether an HLS media playlist for this request is a low-latency one: advertised, live (no startover or
+        catchup range, no `offset`), and the package has chunks to make parts of."""
+        return (
+            self.ll_hls and window is None and self.offset_ticks == 0 and self.package.part_target_seconds is not None
+        )
+
+    def _ll_chunks(self, rendition_name: str | None, boundary_ticks: list[int]) -> Callable[[int], "list[lowlatency.Chunk]"]:
+        pkg = self.package
+
+        def chunks(local_index: int) -> "list[lowlatency.Chunk]":
+            end = boundary_ticks[local_index + 1] if local_index + 1 < len(boundary_ticks) else pkg.total_loop_duration_ticks
+            return pkg.chunk_table(rendition_name, local_index, end - boundary_ticks[local_index])
+
+        return chunks
+
+    def _hls_ll(self, own: str | None) -> _HlsLL:
+        """`own` is this playlist's rendition name, or None for the audio playlist."""
+        pkg = self.package
+        by_name = {r.name: r for r in pkg.video_renditions}
+        mine = by_name[own] if own is not None else None
+        boundaries = mine.segment_boundary_ticks if mine else pkg.audio_rendition.audio_segment_boundary_ticks
+        others = [
+            (pkg.video_playlist_name(r), r.segment_boundary_ticks, self._ll_chunks(r.name, r.segment_boundary_ticks))
+            for r in pkg.video_renditions
+            if r.name != own
+        ]
+        if pkg.has_audio and own is not None and pkg.hls_format == "cmaf":
+            ab = pkg.audio_rendition.audio_segment_boundary_ticks
+            others.append((LoopPackage.AUDIO_PLAYLIST, ab, self._ll_chunks(None, ab)))
+        return _HlsLL(chunks=self._ll_chunks(own, boundaries), others=others)
+
     def build_hls_master_playlist(self, query: str = "") -> str:
         """Build the HLS multivariant (master) playlist -- required by the
         HLS spec and by most real players (Safari/hls.js, etc. generally
@@ -1977,7 +2090,8 @@ class Channel:
         return "\n".join(lines) + "\n"
 
     def build_hls_manifest(
-        self, rendition_name: str, window_segments: int | None = None, window: TimeWindow | None = None
+        self, rendition_name: str, window_segments: int | None = None, window: TimeWindow | None = None,
+        query: str = "",
     ) -> str:
         rendition = self.package.rendition_by_name(rendition_name)
         is_ts = self.package.hls_format == "ts"
@@ -1993,10 +2107,12 @@ class Channel:
             seg_uri_template=f"{rendition.name}/seg/{{index}}.ts" if is_ts else f"{rendition.name}/seg/{{index}}.m4s",
             window_segments=window_segments,
             window=window,
+            ll=self._hls_ll(rendition.name) if self.hls_ll_live(window) and not rendition.sparse else None,
+            query=query,
         )
 
     def build_hls_audio_manifest(
-        self, window_segments: int | None = None, window: TimeWindow | None = None
+        self, window_segments: int | None = None, window: TimeWindow | None = None, query: str = ""
     ) -> str:
         pkg = self.package
         if not pkg.has_audio:
@@ -2011,6 +2127,8 @@ class Channel:
             seg_uri_template="audio/seg/{index}.ts" if is_ts else "audio/seg/{index}.m4s",
             window_segments=window_segments,
             window=window,
+            ll=self._hls_ll(None) if self.hls_ll_live(window) and not is_ts and not pkg.audio_rendition.audio_sparse else None,
+            query=query,
         )
 
     def _build_hls_media_playlist(
@@ -2022,6 +2140,8 @@ class Channel:
         window_segments: int | None = None,
         span_init_uri: Callable[[int], str] | None = None,
         window: TimeWindow | None = None,
+        ll: _HlsLL | None = None,
+        query: str = "",
     ) -> str:
         """Shared builder for every video rendition's HLS media playlist and
         for the (single, shared) audio HLS media playlist.
@@ -2045,8 +2165,11 @@ class Channel:
         pkg = self.package
         # SCOPE.md §13: explicit startover/catchup range, else the sliding
         # live window ending at "now".
-        win = self.window_range(window, window_segments)
+        now = self.now_ticks()  # one reading: the window and the parts released must agree
+        win = self.window_range(window, window_segments, now=now)
         media_sequence = win.last
+        ll_on = ll is not None and self.hls_ll_live(window)
+        part_target = pkg.part_target_seconds if ll_on else None
 
         # Every physical segment file is reused, byte-for-byte, on every
         # loop iteration (SCOPE.md §4.1 step 6): its internal fMP4
@@ -2102,8 +2225,20 @@ class Channel:
             f"# {GENERATOR_COMMENT}",
             *(f"# {c}" for c in self._header_comments(window)),
             f"# current loop: {self._loop_label(first_global_index // pkg.segments_per_loop)}",
-            "#EXT-X-VERSION:6" if init_uri is None and span_init_uri is None else "#EXT-X-VERSION:7",
+            "#EXT-X-VERSION:9" if ll_on else (
+                "#EXT-X-VERSION:6" if init_uri is None and span_init_uri is None else "#EXT-X-VERSION:7"
+            ),
             f"#EXT-X-TARGETDURATION:{pkg.max_segment_duration_seconds_rounded_up}",
+            *(
+                [
+                    # Parts of the newest segments, a blocking playlist reload, a preload hint: Apple's LL-HLS
+                    # (RFC 8216bis). PART-HOLD-BACK at 3 part targets is the spec's recommendation.
+                    f"#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK={3 * part_target:.3f}",
+                    f"#EXT-X-PART-INF:PART-TARGET={part_target:.3f}",
+                ]
+                if ll_on
+                else []
+            ),
             f"#EXT-X-MEDIA-SEQUENCE:{first_global_index}",
             f"#EXT-X-DISCONTINUITY-SEQUENCE:{first_discontinuity_sequence}",
         ]
@@ -2146,6 +2281,8 @@ class Channel:
         # `range(window_segments)` would overshoot past the live edge and
         # reintroduce future segments, the exact bug being fixed here.
         entries_in_window = media_sequence - first_global_index + 1
+        ll_first_part_segment = max(first_global_index, media_sequence - LL_HLS_PART_SEGMENTS + 1)
+        ll_last: tuple[int, int, int] | None = None  # (segment, parts released, parts in it) of the newest segment
         discontinuities = set(self.hls_discontinuities(first_global_index, media_sequence))
         for i in range(entries_in_window):
             global_index = first_global_index + i
@@ -2343,16 +2480,46 @@ class Channel:
             )
 
             lines.append(f"#EXT-X-PROGRAM-DATE-TIME:{program_date_str}")
-            lines.append(f"#EXTINF:{segment_duration_seconds:.3f},")
-            # SCOPE.md §12.2: continuity mode's byte-serving routes need the
-            # ever-increasing global index (not the plain physical/local
-            # one) to know which loop iteration -- and therefore which tick
-            # shift -- a given segment request belongs to, since the same
-            # physical file is reused every loop. This does trade away the
-            # default mode's "one URL forever, cacheable across every loop
-            # iteration" property (SCOPE.md §4.2) for continuity mode.
-            lines.append(self.segment_uri(seg_uri_template, global_index, local_index, window))
+            segment_uri = self.segment_uri(seg_uri_template, global_index, local_index, window)
+            # Low-latency HLS: the parts of the newest segments precede that segment's EXTINF; the segment in
+            # progress has only the parts released so far and no EXTINF/URI yet (it is not complete).
+            in_progress = False
+            if ll_on and global_index >= ll_first_part_segment:
+                chunks = ll.chunks(local_index)
+                segment_abs_start = self.epoch_ticks + local_loop_number * pkg.total_loop_duration_ticks + segment_start_ticks
+                released = lowlatency.parts_released(chunks, segment_abs_start, now)
+                for part, chunk in enumerate(chunks[:released]):
+                    lines.append(
+                        f'#EXT-X-PART:DURATION={ticks_to_wall_clock_seconds(chunk.duration_ticks, pkg.timescale):.5f},'
+                        f'URI="{_part_uri(segment_uri, part)}"' + (",INDEPENDENT=YES" if chunk.independent else "")
+                    )
+                in_progress = released < len(chunks)
+                ll_last = (global_index, released, len(chunks))
+            if not in_progress:
+                lines.append(f"#EXTINF:{segment_duration_seconds:.3f},")
+                # SCOPE.md §12.2: continuity mode's byte-serving routes need the
+                # ever-increasing global index (not the plain physical/local
+                # one) to know which loop iteration -- and therefore which tick
+                # shift -- a given segment request belongs to, since the same
+                # physical file is reused every loop. This does trade away the
+                # default mode's "one URL forever, cacheable across every loop
+                # iteration" property (SCOPE.md §4.2) for continuity mode.
+                lines.append(segment_uri)
 
+        if ll_on:
+            # The next part to be released: the one after those listed, or the first of the next segment.
+            if ll_last is not None and ll_last[1] < ll_last[2]:
+                hint_segment, hint_part = ll_last[0], ll_last[1]
+            else:
+                hint_segment, hint_part = media_sequence + 1, 0
+            hint_base = self.segment_uri(seg_uri_template, hint_segment, hint_segment % pkg.segments_per_loop, window)
+            lines.append(f'#EXT-X-PRELOAD-HINT:TYPE=PART,URI="{_part_uri(hint_base, hint_part)}"')
+            suffix = f"?{query}" if query else ""
+            for uri, boundaries, chunks_for in ll.others:
+                msn, part = lowlatency.live_position(
+                    boundaries, pkg.total_loop_duration_ticks, self.epoch_ticks, pkg.segments_per_loop, chunks_for, now
+                )
+                lines.append(f'#EXT-X-RENDITION-REPORT:URI="{uri}{suffix}",LAST-MSN={msn},LAST-PART={part}')
         if window is not None and window.ended:
             lines.append("#EXT-X-ENDLIST")
         return "\n".join(lines) + "\n"
@@ -3264,6 +3431,7 @@ def resolve_request_channel(channel: "Channel", args, cfg: TimeshiftConfig, fmt:
         parse_bool(raw_ll, name(LOW_LATENCY_PARAM)) if raw_ll is not None else None,
         target,
         parse_choice(raw_clock, name(LL_UTC_TIMING_PARAM), LL_UTC_TIMING_VALUES) if raw_clock is not None else None,
+        fmt=fmt,
     )
 
     overrides: dict = {}
@@ -3328,6 +3496,7 @@ def create_app(
     ll_utc_timing_url: str = "",
     ll_utc_timing: str = "direct",
     ll_optin: bool = False,
+    ll_hls: bool = False,
 ) -> Flask:
     ts_cfg = timeshift or TimeshiftConfig()
     package = LoopPackage(package_dir)
@@ -3345,6 +3514,7 @@ def create_app(
         ll_utc_timing_url=ll_utc_timing_url,
         ll_utc_timing=ll_utc_timing,
         ll_optin=ll_optin,
+        ll_hls=ll_hls,
     )
     process_start_ticks = channel.now_ticks()
 
@@ -3593,10 +3763,62 @@ def create_app(
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
+    def _wait_until(release_tick: int) -> None:
+        """Hold the request until the wall clock reaches `release_tick` (an LL-HLS part or segment becoming
+        available), in short slices; gives up after three target durations, as a client would."""
+        limit = channel.now_ticks() + 3 * package.max_segment_duration_seconds_rounded_up * package.timescale
+        while True:
+            now = channel.now_ticks()
+            remaining = release_tick - now
+            if remaining <= 0 or now >= limit:
+                return
+            time.sleep(min(remaining / package.timescale, 0.05))
+
+    def _bad_request(message: str):
+        abort(Response(f"{message}\n", status=400, mimetype="text/plain"))
+
+    def _block_for_reload(ch: Channel, window, rendition_name: str | None) -> None:
+        """LL-HLS blocking playlist reload: `_HLS_msn` (and `_HLS_part`) ask for a playlist that already holds that
+        segment (part); hold the request until it exists. Ignored unless this is a low-latency live playlist.
+        `_HLS_skip` (delta updates) is accepted and ignored: CAN-SKIP-UNTIL is not advertised."""
+        raw_msn, raw_part = request.args.get("_HLS_msn"), request.args.get("_HLS_part")
+        if raw_part is not None and raw_msn is None:
+            _bad_request("'_HLS_part' needs '_HLS_msn'")
+        if raw_msn is None or not ch.hls_ll_live(window):
+            return
+        try:
+            msn = int(raw_msn)
+            part = int(raw_part) if raw_part is not None else None
+        except ValueError:
+            _bad_request("'_HLS_msn' and '_HLS_part' must be non-negative integers")
+        if msn < 0 or (part is not None and part < 0):
+            _bad_request("'_HLS_msn' and '_HLS_part' must be non-negative integers")
+        now = ch.now_ticks()
+        if msn > ch.window_range(None, 1, now=now).last + 2:
+            _bad_request("'_HLS_msn' is more than two segments ahead of the live edge")
+        spl = package.segments_per_loop
+        loop_number, local_index = divmod(msn, spl)
+        if rendition_name is None:
+            boundaries = package.audio_rendition.audio_segment_boundary_ticks
+        else:
+            boundaries = package.rendition_by_name(rendition_name).segment_boundary_ticks
+        end = boundaries[local_index + 1] if local_index + 1 < len(boundaries) else package.total_loop_duration_ticks
+        duration = end - boundaries[local_index]
+        start = epoch_ticks + loop_number * package.total_loop_duration_ticks + boundaries[local_index]
+        if part is None:
+            release = start + duration  # the whole segment
+        else:
+            chunks = package.chunk_table(rendition_name, local_index, duration)
+            if part >= len(chunks):
+                _bad_request(f"'_HLS_part' is beyond the last part of segment {msn}")
+            release = lowlatency.part_release_tick(chunks, start, part)
+        _wait_until(release)
+
     def _register_video_playlist(rendition):
         def view():
-            ch, window, _query = _request_view()
-            body = ch.build_hls_manifest(rendition.name, window=window)
+            ch, window, query = _request_view()
+            _block_for_reload(ch, window, rendition.name)
+            body = ch.build_hls_manifest(rendition.name, window=window, query=query)
             return _manifest_response(body, "application/vnd.apple.mpegurl", window)
 
         name = package.video_playlist_name(rendition)
@@ -3681,6 +3903,46 @@ def create_app(
             path, "video/iso.segment", ts=False, shift_ticks=shift_ticks, sequence_number=physical_index, pace=pace
         )
 
+    def _serve_part(rendition_name: str | None, physical_index: int, part: int, mode: str, origin_loop: int | None):
+        """One LL-HLS part (a baked chunk) of a segment, `rendition_name` None = audio. A part that is not complete
+        yet is held until it is (the answer to a preload hint); a finished one is served at once."""
+        if not channel.ll_capable or package.hls_format != "cmaf":
+            abort(404)
+        local_index, shift_ticks = _decode_segment_index(physical_index, mode, origin_loop)
+        try:
+            if rendition_name is None:
+                audio = package.audio_rendition
+                path = channel.audio_segment_bytes_path(local_index)
+                boundaries, track_timescale, mimetype = audio.audio_segment_boundary_ticks, audio.audio_timescale(package.timescale), "audio/iso.segment"
+                if shift_ticks is not None:  # tfdt is in the audio track's own timescale
+                    shift_ticks = round(shift_ticks * track_timescale / package.timescale)
+            else:
+                rendition = package.rendition_by_name(rendition_name)
+                path = channel.segment_bytes_path(rendition_name, local_index)
+                boundaries, track_timescale, mimetype = rendition.segment_boundary_ticks, _video_timescale(rendition), "video/iso.segment"
+        except (KeyError, IndexError):
+            abort(404)
+        if path is None:
+            abort(404)
+        end = boundaries[local_index + 1] if local_index + 1 < len(boundaries) else package.total_loop_duration_ticks
+        duration = end - boundaries[local_index]
+        chunks = package.chunk_table(rendition_name, local_index, duration)
+        if part >= len(chunks):
+            abort(404)
+        pace = _ll_pace(boundaries, local_index, track_timescale, mode, physical_index)
+        if pace is not None:
+            _wait_until(lowlatency.part_release_tick(chunks, pace[0], part))
+        data = package_io.read_bytes(path)
+        if shift_ticks is not None:
+            data = continuity.shift_cmaf_fragment(data, shift_ticks, sequence_number=physical_index)
+        chunk = chunks[part]
+        return Response(data[chunk.byte_start : chunk.byte_end], mimetype=mimetype)
+
+    @app.get("/<rendition_name>/seg/<int:physical_index>.<int:part>.m4s", defaults=_SEG_DEFAULTS)
+    @app.get("/<rendition_name>/cseg/<int:physical_index>.<int:part>.m4s", defaults={"mode": "global", "origin_loop": None})
+    def video_part(rendition_name: str, physical_index: int, part: int, mode: str, origin_loop: int | None):
+        return _serve_part(rendition_name, physical_index, part, mode, origin_loop)
+
     @app.get("/<rendition_name>/seg/<int:physical_index>.ts", defaults=_SEG_DEFAULTS)
     @app.get("/<rendition_name>/cseg/<int:physical_index>.ts", defaults={"mode": "global", "origin_loop": None})
     @app.get("/<rendition_name>/rseg/<int:origin_loop>/<int:physical_index>.ts", defaults={"mode": "origin"})
@@ -3699,8 +3961,9 @@ def create_app(
         def hls_audio_manifest():
             if package.hls_format == "ts" and package.hls_ts_mux_audio:
                 abort(404)
-            ch, window, _query = _request_view()
-            body = ch.build_hls_audio_manifest(window=window)
+            ch, window, query = _request_view()
+            _block_for_reload(ch, window, None)
+            body = ch.build_hls_audio_manifest(window=window, query=query)
             return _manifest_response(body, "application/vnd.apple.mpegurl", window)
 
         @app.get("/audio/init.mp4")
@@ -3748,6 +4011,11 @@ def create_app(
                 path, "audio/iso.segment", ts=False, shift_ticks=shift_ticks, sequence_number=physical_index,
                 pace=pace,
             )
+
+        @app.get("/audio/seg/<int:physical_index>.<int:part>.m4s", defaults=_SEG_DEFAULTS)
+        @app.get("/audio/cseg/<int:physical_index>.<int:part>.m4s", defaults={"mode": "global", "origin_loop": None})
+        def audio_part(physical_index: int, part: int, mode: str, origin_loop: int | None):
+            return _serve_part(None, physical_index, part, mode, origin_loop)
 
         @app.get("/audio/seg/<int:physical_index>.ts", defaults=_SEG_DEFAULTS)
         @app.get("/audio/cseg/<int:physical_index>.ts", defaults={"mode": "global", "origin_loop": None})
@@ -3873,6 +4141,13 @@ def main() -> int:
         "threaded/async server (held responses) -- not the default sync gunicorn worker.",
     )
     parser.add_argument(
+        "--ll-hls",
+        action="store_true",
+        help="Low-latency HLS (Apple LL-HLS): HLS media playlists advertise parts, a preload hint, rendition reports "
+        "and blocking reload; parts are the baked chunks, served at .../seg/<n>.<k>.m4s and held until due. Needs a "
+        "package baked with `bake.py --chunk-duration` and --hls-format cmaf, and a threaded/async server.",
+    )
+    parser.add_argument(
         "--ll-optin",
         action="store_true",
         help="Low-latency DASH delivery is available (as with --ll-dash) but an MPD only advertises it "
@@ -3965,6 +4240,7 @@ def main() -> int:
         ll_utc_timing_url=args.ll_utc_timing_url,
         ll_utc_timing=args.ll_utc_timing,
         ll_optin=args.ll_optin,
+        ll_hls=args.ll_hls,
         timeshift=TimeshiftConfig(
             timeshift=args.timeshift,
             overrides=args.query_overrides,
