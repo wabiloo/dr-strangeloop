@@ -68,6 +68,10 @@ def cmd_run(args) -> int:
         target = with_queries(target, args.hls_query, args.dash_query)
     if args.no_timeline:
         target.timeline_url = None
+    profile = load_profile(Path(args.profile) if args.profile else None)
+    changes = {k: v for k, v in (("max_live_latency_s", args.max_latency), ("latency_settle_s", args.latency_settle)) if v is not None}
+    if changes:
+        profile = profile.with_default(**changes)
     cfg = RunConfig(
         target=target,
         players=args.players.split(","),
@@ -77,7 +81,7 @@ def cmd_run(args) -> int:
         max_s=args.max_seconds,
         settle_s=args.settle,
         headless=not args.headed,
-        profile=load_profile(Path(args.profile) if args.profile else None),
+        profile=profile,
         trace=args.trace,
         out_dir=Path(args.out_dir) if args.out_dir else None,
     )
@@ -129,6 +133,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--max-seconds", type=float, default=600)
     r.add_argument("--settle", type=float, default=40, help="max seconds to wait for players to reach the boundaries")
     r.add_argument("--profile", help="TOML thresholds file")
+    r.add_argument("--max-latency", type=float, metavar="SECONDS", help="fail a case whose median live latency (after settling) exceeds this; "
+                   "latency is always reported when the player gives it (needs this machine's clock to be accurate)")
+    r.add_argument("--latency-settle", type=float, metavar="SECONDS", help="ignore latency samples this long after startup (default 30)")
     r.add_argument("--headed", action="store_true", help="show the browser window")
     r.add_argument("--ffmpeg", type=float, metavar="SECONDS", help="also demux each manifest with ffmpeg for SECONDS (informational: does not affect the exit code)")
     r.add_argument("--out-dir", help="write the report (and screenshots) here instead of a timestamped folder")

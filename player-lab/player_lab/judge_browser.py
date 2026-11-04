@@ -10,7 +10,7 @@ import datetime as dt
 import json
 from pathlib import Path
 
-from .profile import Profile, judge
+from .profile import Profile, judge, summarize_live
 
 
 def judge_payload(payload: dict, profile: Profile, out_dir: Path | None = None) -> dict:
@@ -22,7 +22,9 @@ def judge_payload(payload: dict, profile: Profile, out_dir: Path | None = None) 
         crossed = crossed_by.get(fmt)
         case = dict(item.get("snapshot") or {})
         case.update(player=player, format=fmt, crossed=crossed, network=None)
-        case["failures"] = judge(case, crossed, profile.for_player(player, fmt))
+        th = profile.for_player(player, fmt)
+        case["live"] = summarize_live(case, th)
+        case["failures"] = judge(case, crossed, th)
         case["pass"] = not case["failures"]
         cases.append(case)
     target = payload.get("target") or {}

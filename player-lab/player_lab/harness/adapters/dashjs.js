@@ -17,4 +17,11 @@ export default {
     p.initialize(video, url, true);
     this.handle = p;
   },
+  // Live latency: dash.js' own number and target, plus the playhead's wall-clock time.
+  live() {
+    const p = this.handle;
+    if (!p || !p.isReady() || !p.isDynamic()) return null;
+    const utc = p.timeAsUTC();
+    return { playheadDateMs: utc > 1e9 ? utc * 1000 : null, latencyS: p.getCurrentLiveLatency(), targetS: p.getTargetLiveDelay() };
+  },
 };

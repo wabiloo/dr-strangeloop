@@ -12,7 +12,7 @@ from pathlib import Path
 from . import keys, paths
 from .boundaries import BoundaryTracker, fetch_timeline
 from .harness_server import HarnessServer
-from .profile import Profile, judge
+from .profile import Profile, judge, summarize_live
 from .targets import Target
 
 # player id -> formats it can play (mirrors harness/adapters/*.js)
@@ -187,6 +187,7 @@ def run(cfg: RunConfig) -> dict:
             th = cfg.profile.for_player(player, fmt)
             case = dict(snap)
             case.update(player=player, format=fmt, crossed=crossed, network=net.summary())
+            case["live"] = summarize_live(case, th)
             case["failures"] = judge(case, crossed, th)
             if net.http_errors:
                 case["warnings"] = [f"{len(net.http_errors)} HTTP error response(s) from the channel"]

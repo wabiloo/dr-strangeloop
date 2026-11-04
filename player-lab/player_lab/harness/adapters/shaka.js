@@ -18,4 +18,12 @@ export default {
     await p.load(url);
     this.handle = p;
   },
+  // Live latency: the playhead's wall-clock time (Shaka's own figure, when it has one, is kept alongside).
+  live() {
+    const p = this.handle;
+    const d = p && p.isLive() ? p.getPlayheadTimeAsDate() : null;
+    if (!d) return null;
+    const s = p.getStats();
+    return { playheadDateMs: d.getTime(), latencyS: s && typeof s.liveLatency === 'number' ? s.liveLatency : null, targetS: null };
+  },
 };

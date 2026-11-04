@@ -57,8 +57,19 @@ Needs the installed Google Chrome (H.264) and Node/npm for `setup`. Exit code 0
   audio playlists, so a problem there is not by itself a channel defect.
 - Profile TOML: top-level thresholds (`max_startup_s`, `max_stall_count`,
   `max_stall_seconds`, `max_errors`, `max_dropped_frame_ratio`,
-  `boundary_tolerance`), per-player overrides in `[player.<id>]` or
-  `[player."<id>:<fmt>"]`.
+  `boundary_tolerance`, and the live-latency ones below), per-player overrides
+  in `[player.<id>]` or `[player."<id>:<fmt>"]`.
+- **Live latency** (low-latency channels; reported whenever a player can, judged only if a limit is set).
+  An adapter's optional `live()` returns `{playheadDateMs, latencyS, targetS}` (dash.js, hls.js and Shaka have
+  one; Video.js and Bitmovin report none). Once a second after startup the observer records the primary figure,
+  **wall-clock latency = `Date.now()` minus the wall-clock time of the playhead**, the same definition for every
+  player (so this machine's clock must be accurate), next to the player's own number and target and the playback rate.
+  `profile.summarize_live` skips the first `latency_settle_s` (30 s: players take a while to catch up) and reports
+  median / p5 / p95 / jitter (p95 - p5), the error against the player's own target, how long it took to get within 0.5 s
+  of it, and the playback-rate range and time off 1.0x. Limits: `max_live_latency_s`, `max_latency_target_error_s`,
+  `max_latency_jitter_s` (or `--max-latency S` / `--latency-settle S` on the CLI). A limit with fewer than 5 samples
+  after settling fails ("run longer"), so use `--duration` of at least settle + 30 s. Works in the in-browser mode
+  too (same harness, same `judge`). Igor's panel does not draw the new `live` block yet.
 
 ## Commercial players (Bitmovin)
 
@@ -72,7 +83,7 @@ Bitmovin dashboard. Transitions: its `SegmentPlayback` event carries `periodId` 
 ## Adding a player
 
 Add `harness/adapters/<id>.js` (copy the closest one; set `formats` and
-`reports`), register the id in `PLAYERS` in `runner.py`, add its npm package to
+`reports`; add a `live()` if the player can say where its playhead is in wall-clock time), register the id in `PLAYERS` in `runner.py`, add its npm package to
 `vendor/package.json`. Keys for commercial players (phase 3) come from env vars
 or `~/.dr-strangeloop/config.toml [keys]`, never from the repo.
 

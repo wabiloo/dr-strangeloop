@@ -8,14 +8,21 @@ def _cell(v) -> str:
 
 
 def format_table(report: dict) -> str:
-    rows = [("player", "fmt", "ver", "start", "stalls", "stall s", "errors", "periods", "expect", "result")]
+    with_live = any(c.get("live") for c in report["cases"])
+    head = ["player", "fmt", "ver", "start", "stalls", "stall s", "errors", "periods", "expect"]
+    rows = [tuple(head + (["latency", "target", "jitter", "rate"] if with_live else []) + ["result"])]
     for c in report["cases"]:
-        rows.append((
+        live = c.get("live") or {}
+        rate = live.get("playbackRate") or {}
+        extra = [
+            _cell(live.get("medianS")), _cell(live.get("targetS")), _cell(live.get("jitterS")),
+            f"{rate['min']:g}-{rate['max']:g}" if rate else "-",
+        ] if with_live else []
+        rows.append(tuple([
             c["player"], c["format"], _cell(c.get("version")), _cell(c.get("startedAfterS")),
             _cell(c.get("stallCount")), _cell(c.get("stallSeconds")), _cell(c.get("fatalErrors")),
             _cell(c.get("periodTransitions")), _cell(c.get("crossed")),
-            "PASS" if c["pass"] else "FAIL",
-        ))
+        ] + extra + ["PASS" if c["pass"] else "FAIL"]))
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     lines = ["  ".join(v.ljust(w) for v, w in zip(r, widths)).rstrip() for r in rows]
     lines.insert(1, "  ".join("-" * w for w in widths))

@@ -50,7 +50,7 @@ const lab = (window.__lab = {
 try {
   adapter = (await import(`./adapters/${playerId}.js`)).default;
   if (!adapter.formats.includes(format)) throw new Error(`${playerId} does not support ${format}`);
-  observer = createObserver(() => document.querySelector('video'), clock);
+  observer = createObserver(() => document.querySelector('video'), clock, () => (adapter && adapter.live ? adapter.live() : null));
   await adapter.load({ video, url, format, emit });
   lab.ready = true;
 } catch (e) {
@@ -59,5 +59,7 @@ try {
 }
 setInterval(() => {
   const s = lab.snapshot();
-  statusEl.textContent = `t=${s.elapsedS} playhead=${s.playhead} started=${s.startedAfterS} stalls=${s.stallCount} errors=${s.errors.length} periods=${s.periodTransitions}`;
+  const lat = s.latencyTrace && s.latencyTrace.length ? s.latencyTrace[s.latencyTrace.length - 1] : null;
+  const live = lat ? ` latency=${lat[1] !== null ? lat[1] : lat[2]}s rate=${lat[4]}` : '';
+  statusEl.textContent = `t=${s.elapsedS} playhead=${s.playhead} started=${s.startedAfterS} stalls=${s.stallCount} errors=${s.errors.length} periods=${s.periodTransitions}${live}`;
 }, 1000);
