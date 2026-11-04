@@ -164,6 +164,16 @@ export function lowLatencyIssues(f: LowLatencyForm): { part: LowLatencyPart; mes
   return out
 }
 
+/** Whether the manifest at `url` advertises low latency, given the channel's mode for that format: `on` unless the
+ * URL turns it off, `optin` only when the URL asks for it (the `low_latency` parameter, behind the channel's query
+ * prefix). The players use this to follow the manifest's own latency target instead of a fixed one. */
+export function advertisesLowLatency(mode: string | undefined, url: string | null | undefined, prefix = ''): boolean {
+  if (!url || (mode !== 'on' && mode !== 'optin')) return false
+  const name = `${prefix}low_latency`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const asked = new RegExp(`[?&]${name}=(true|false)(?:&|$)`).exec(url)?.[1]
+  return mode === 'on' ? asked !== 'false' : asked === 'true'
+}
+
 export function lowLatencyProblems(f: LowLatencyForm): string[] {
   return lowLatencyIssues(f).map((i) => i.message)
 }

@@ -19,6 +19,9 @@ const props = defineProps<{
    * corresponds to. 0 for the normal live MPD (availabilityStartTime is
    * the unix epoch); a time-shifted MPD is anchored at its range start. */
   dashClockOffsetSeconds?: number
+  /** Whether the manifest being played advertises low latency (per format). Then the player follows the target the
+   * manifest itself carries (LL-HLS PART-HOLD-BACK, the MPD's ServiceDescription) instead of the fixed delay below. */
+  lowLatency?: { hls?: boolean; dash?: boolean }
 }>()
 
 const toast = useToast()
@@ -32,6 +35,12 @@ const DASH_CDN = 'https://cdn.dashjs.org/latest/dash.all.min.js'
 // defaults don't actually agree (15s vs 10s here) and drift apart further
 // if segment duration or the manifest ever change independently.
 const TARGET_LIVE_DELAY_SECONDS = 10
+// A low-latency manifest states its own target, so the players' defaults are right for it: hls.js reads
+// PART-HOLD-BACK, dash.js the MPD's ServiceDescription latency and turns its low-latency catch-up on by itself. The
+// fixed delay above would override both and park the player 10 s behind. Not used for startover/catchup, which never
+// chases the live edge.
+const hlsFollowsManifest = () => !!props.lowLatency?.hls && !props.startFromBeginning
+const dashFollowsManifest = () => !!props.lowLatency?.dash && !props.startFromBeginning
 
 const hlsVideo = ref<HTMLVideoElement | null>(null)
 const dashVideo = ref<HTMLVideoElement | null>(null)
@@ -853,7 +862,9 @@ async function playHls() {
       // immediately instead of waiting for a slow multi-minute gradual
       // catch-up at a capped, mild speed-up.
       hlsInstance = new Hls(
-        props.startFromBeginning
+        hlsFollowsManifest()
+          ? { lowLatencyMode: true }
+          : props.startFromBeginning
           ? {
               // Startover: begin at the start of the playlist and never
               // seek/speed up towards the live edge.
@@ -978,18 +989,20 @@ async function playDash() {
     // recovering from a big one-off stall (a rebuffer, a slow segment
     // fetch) at a capped ~1.05x can take minutes. Past maxDrift seconds
     // behind target, dash.js seeks forward immediately instead.
-    dashInstance.updateSettings({
-      streaming: {
-        delay: { liveDelay: TARGET_LIVE_DELAY_SECONDS },
-        liveCatchup: props.startFromBeginning
-          ? { enabled: false }
-          : {
-              enabled: true,
-              maxDrift: TARGET_LIVE_DELAY_SECONDS * 2,
-              playbackRate: { min: -0.5, max: 0.5 },
-            },
-      },
-    })
+    if (!dashFollowsManifest()) {
+      dashInstance.updateSettings({
+        streaming: {
+          delay: { liveDelay: TARGET_LIVE_DELAY_SECONDS },
+          liveCatchup: props.startFromBeginning
+            ? { enabled: false }
+            : {
+                enabled: true,
+                maxDrift: TARGET_LIVE_DELAY_SECONDS * 2,
+                playbackRate: { min: -0.5, max: 0.5 },
+              },
+        },
+      })
+    }
     // Startover/catchup MPDs are anchored at their own range start, so
     // offset 0 == the first segment; the default is to join near live.
     if (props.startFromBeginning) dashInstance.initialize(video, url, true, 0)
@@ -1284,7 +1297,10 @@ async function copyUrl(url?: string | null) {
     <div class="players-grid">
       <div v-if="hlsUrl" class="player-card">
         <div class="player-card-header">
-          <span class="font-semibold text-sm">HLS</span>
+          <span class="player-title">
+            <span class="font-semibold text-sm">HLS</span>
+            <span v-if="hlsFollowsManifest()" class="ll-pill" title="This playlist advertises Apple LL-HLS: the player follows its latency target (parts, blocking reload)."><i class="pi pi-bolt" />Low latency</span>
+          </span>
           <Button v-if="hlsPlaying" icon="pi pi-stop-circle" text size="small" severity="secondary" label="Stop" @click="destroyHls" />
         </div>
         <div v-if="hlsError" class="player-stack-error">
@@ -1404,7 +1420,10 @@ async function copyUrl(url?: string | null) {
 
       <div v-if="dashUrl" class="player-card">
         <div class="player-card-header">
-          <span class="font-semibold text-sm">DASH</span>
+          <span class="player-title">
+            <span class="font-semibold text-sm">DASH</span>
+            <span v-if="dashFollowsManifest()" class="ll-pill" title="This MPD advertises low latency: the player follows its latency target (chunked delivery)."><i class="pi pi-bolt" />Low latency</span>
+          </span>
           <Button v-if="dashPlaying" icon="pi pi-stop-circle" text size="small" severity="secondary" label="Stop" @click="destroyDash" />
         </div>
         <div v-if="dashError" class="player-stack-error">
@@ -1625,6 +1644,31 @@ async function copyUrl(url?: string | null) {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   padding: 0.75rem;
+}
+
+.player-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ll-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.55);
+}
+
+.ll-pill .pi {
+  font-size: 0.65rem;
 }
 
 .player-card-header {

@@ -18,6 +18,7 @@ import { useManifestCapture } from '../composables/useManifestCapture'
 import { getChannel, getChannelHealth, getChannelOutputs, getChannelStatus, getChannelSummary } from '../api/client'
 import type { ChannelHealth, ChannelListItem, ChannelOutputs, ChannelStatus } from '../api/types'
 import {
+  advertisesLowLatency,
   channelDefaultsByParam,
   formFieldsFromConfig,
   periodTypesFromConfig,
@@ -82,6 +83,15 @@ const timeshiftBuilt = ref<{ hlsUrl: string | null; dashUrl: string | null } | n
 watch([playbackHlsUrl, playbackDashUrl], () => (timeshiftPreview.value = null))
 const effectiveHlsUrl = computed(() => timeshiftPreview.value?.hlsUrl ?? playbackHlsUrl.value)
 const effectiveDashUrl = computed(() => timeshiftPreview.value?.dashUrl ?? playbackDashUrl.value)
+// Does the manifest the players load advertise low latency? Then they follow its target (PlaybackPanel).
+const playerLowLatency = computed(() => {
+  const f = formFieldsFromConfig(config.value ?? {})
+  const prefix = timeshiftParams.value.prefix
+  return {
+    hls: advertisesLowLatency(f.hls_low_latency, effectiveHlsUrl.value, prefix),
+    dash: advertisesLowLatency(f.dash_low_latency, effectiveDashUrl.value, prefix),
+  }
+})
 const testHlsUrl = computed(() => (timeshiftBuilt.value ? timeshiftBuilt.value.hlsUrl : effectiveHlsUrl.value))
 const testDashUrl = computed(() => (timeshiftBuilt.value ? timeshiftBuilt.value.dashUrl : effectiveDashUrl.value))
 
@@ -234,6 +244,7 @@ watch(() => props.name, reload)
       :dash-url="effectiveDashUrl"
       :start-from-beginning="timeshiftPreview?.startEpochSeconds != null"
       :dash-clock-offset-seconds="timeshiftPreview?.startEpochSeconds ?? 0"
+      :low-latency="playerLowLatency"
       :health="health"
       :health-error="['ecs-express', 'aws-lambda', 'local-docker'].includes(status?.backend ?? '') ? healthError : ''"
     />

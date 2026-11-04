@@ -10,6 +10,7 @@ import {
   channelDefaultsByParam,
   formFieldsFromConfig,
   lambdaFieldsFromConfig,
+  advertisesLowLatency,
   lowLatencyFromConfig,
   lowLatencyIssues,
   lowLatencyProblems,
@@ -444,4 +445,21 @@ test('lowLatencyIssues: each problem is attributed to the form group that shows 
   assert.equal(part({ target_latency: 500 }, /Target latency/), 'dash')
   assert.equal(part({ dash_low_latency: 'optin', query_overrides: false }, /Opt-in/), 'dash')
   assert.equal(part({ dash_low_latency: 'off', hls_low_latency: 'optin', query_overrides: false }, /Opt-in/), 'hls')
+})
+
+test('advertisesLowLatency: on follows the URL unless it turns it off; optin only when asked; prefix respected', () => {
+  const u = 'http://h/index.mpd'
+  assert.equal(advertisesLowLatency('on', u), true)
+  assert.equal(advertisesLowLatency('on', `${u}?low_latency=false`), false)
+  assert.equal(advertisesLowLatency('on', `${u}?a=1&low_latency=true`), true)
+  assert.equal(advertisesLowLatency('optin', u), false)
+  assert.equal(advertisesLowLatency('optin', `${u}?low_latency=true`), true)
+  assert.equal(advertisesLowLatency('optin', `${u}?low_latency=false`), false)
+  assert.equal(advertisesLowLatency('off', `${u}?low_latency=true`), false)
+  assert.equal(advertisesLowLatency(undefined, u), false)
+  assert.equal(advertisesLowLatency('on', null), false)
+  // a prefixed channel: the bare name is not its parameter
+  assert.equal(advertisesLowLatency('optin', `${u}?low_latency=true`, 'dsl_'), false)
+  assert.equal(advertisesLowLatency('optin', `${u}?dsl_low_latency=true`, 'dsl_'), true)
+  assert.equal(advertisesLowLatency('optin', `${u}?x_low_latency=true`), false)
 })
