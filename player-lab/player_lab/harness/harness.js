@@ -51,7 +51,8 @@ try {
   adapter = (await import(`./adapters/${playerId}.js`)).default;
   if (!adapter.formats.includes(format)) throw new Error(`${playerId} does not support ${format}`);
   observer = createObserver(() => document.querySelector('video'), clock, () => (adapter && adapter.live ? adapter.live() : null));
-  await adapter.load({ video, url, format, emit });
+  // `ll` = the manifest advertises low latency (the page knows it from the channel config)
+  await adapter.load({ video, url, format, emit, lowLatency: params.get('ll') === '1' });
   lab.ready = true;
 } catch (e) {
   emit('error', { message: String((e && e.message) || e), fatal: true, where: 'load' });

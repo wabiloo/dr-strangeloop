@@ -98,31 +98,52 @@ const copyUrl = async (btn, text) => {
 const configUrl = postUrl && postUrl.includes('/playback-test/channels/')
   ? postUrl.replace('/playback-test/channels/', '/channels/').replace(/\/browser-results$/, '')
   : null;
+// The channel config is nested by table ([packaging.hls] container, [packaging.dash] addressing, ...); the flat
+// names of older configs are still read.
+const llModeOf = (v) => (v === true || v === 'on' ? 'on' : v === 'optin' ? 'optin' : 'off');
+// Does the manifest we play advertise low latency? "on" unless the URL turns it off; "optin" only when it asks.
+const advertisesLl = (fmt, cfg) => {
+  const mode = llModeOf(((cfg.packaging || {})[fmt] || {}).low_latency);
+  const asked = /[?&][\w.]*low_latency=(true|false)(?:&|$)/.exec(urls[fmt] || '');
+  return mode === 'on' ? !(asked && asked[1] === 'false') : mode === 'optin' ? !!(asked && asked[1] === 'true') : false;
+};
 const configChips = (fmt, cfg) => {
-  const pk = cfg.packaging || {}, tl = cfg.timeline || {};
+  const pk = cfg.packaging || {}, tl = cfg.timeline || {}, hls = pk.hls || {}, dash = pk.dash || {};
   const chips = [];
   if (fmt === 'hls') {
-    chips.push(['segments', pk.hls_format === 'ts' ? `MPEG-TS${pk.hls_ts_mux_audio === false ? ', separate audio' : ', muxed audio'}` : 'CMAF']);
+    const ts = (hls.container ?? pk.hls_format) === 'ts';
+    chips.push(['segments', ts ? `MPEG-TS${(hls.mux_audio ?? pk.hls_ts_mux_audio) === false ? ', separate audio' : ', muxed audio'}` : 'CMAF']);
   } else {
-    chips.push(['segments', 'CMAF'], ['addressing', pk.dash_addressing === 'time' ? '$Time$' : '$Number$'], ['SegmentTimeline', pk.dash_timeline === 'compact' ? 'compact (@r)' : 'full']);
+    chips.push(['segments', 'CMAF'], ['addressing', (dash.addressing ?? pk.dash_addressing) === 'time' ? '$Time$' : '$Number$'], ['SegmentTimeline', (dash.timeline_style ?? pk.dash_timeline) === 'compact' ? 'compact (@r)' : 'full']);
   }
   if (pk.segment_duration != null) chips.push(['segment', `${pk.segment_duration} s`]);
-  if (pk.dvr_window_seconds != null) chips.push(['DVR window', `${pk.dvr_window_seconds} s`]);
+  const dvr = pk.dvr_window ?? pk.dvr_window_seconds;
+  if (dvr != null) chips.push(['DVR window', `${dvr} s`]);
   chips.push(['timeline', tl.continuous ? 'continuous' : (fmt === 'hls' ? 'discontinuity per loop' : 'Period per loop')]);
+  const mode = llModeOf((fmt === 'hls' ? hls : dash).low_latency);
+  if (mode !== 'off') {
+    const chunk = pk.chunk_duration != null ? `, ${pk.chunk_duration} s chunks` : '';
+    chips.push(['low latency', advertisesLl(fmt, cfg) ? `${mode === 'optin' ? 'opt-in, requested' : 'on'}${chunk}` : `${mode === 'optin' ? 'opt-in, not requested' : 'on, turned off by the URL'}`]);
+  }
   return chips;
 };
-if (configUrl) {
-  fetch(configUrl, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((cfg) => {
-    if (!cfg) return;
-    for (const fmt of Object.keys(panelCfg)) {
-      for (const [k, v] of configChips(fmt, cfg)) {
-        const c = el('span', 'cfg-chip');
-        c.append(el('span', null, k), el('b', 'mono', String(v)));
-        panelCfg[fmt].append(c);
-      }
+// Fetched once: the chips use it, and so do the players (Shaka needs to know before it loads).
+const configPromise = configUrl
+  ? Promise.race([
+      fetch(configUrl, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      sleep(3000).then(() => null),
+    ])
+  : Promise.resolve(null);
+configPromise.then((cfg) => {
+  if (!cfg) return;
+  for (const fmt of Object.keys(panelCfg)) {
+    for (const [k, v] of configChips(fmt, cfg)) {
+      const c = el('span', 'cfg-chip' + (k === 'low latency' ? ' ll' : ''));
+      c.append(el('span', null, k), el('b', 'mono', String(v)));
+      panelCfg[fmt].append(c);
     }
-  }).catch(() => { /* config is only a reminder */ });
-}
+  }
+});
 const playerTitle = (player) => {
   const title = el('span');
   const logo = el('img', 'logo');
@@ -156,7 +177,6 @@ entries.forEach(({ player, fmt, active }) => {
   const f = document.createElement('iframe');
   f.allow = 'autoplay';
   f.title = `${player} ${fmt}`;
-  f.src = `./index.html?${new URLSearchParams({ player, format: fmt, url: urls[fmt], embed: '1' })}`;
   wrap.append(f);
   const meta = el('div', 'playback-meta-panel');
   const chips = {
@@ -167,21 +187,40 @@ entries.forEach(({ player, fmt, active }) => {
     seen: chip('⇄', fmt === 'hls' ? 'Discontinuities' : 'Periods'),
     playhead: chip('▶', 'Playhead'),
     buffer: chip('▤', 'Buffer'),
+    latency: chip('⚡', 'Latency'),
   };
   const left = el('div', 'meta-col');
   const right = el('div', 'meta-col');
-  [chips.startup, chips.playhead, chips.buffer, chips.seen].forEach((c) => left.append(c.root));
+  [chips.startup, chips.playhead, chips.buffer, chips.latency, chips.seen].forEach((c) => left.append(c.root));
   [chips.stalls, chips.stalled, chips.errors].forEach((c) => right.append(c.root));
   meta.append(left, right);
   const details = el('div', 'failures');
   card.append(head, wrap, meta, details);
   panelGrids[fmt].append(card);
-  cards.push({ card, verdict, frame: f, wrap, chips, details });
+  cards.push({ card, verdict, frame: f, wrap, chips, details, player, fmt });
 });
 const frames = cards.map((c) => c.frame);
 const snaps = () => frames.map((f) => (f.contentWindow && f.contentWindow.__lab && f.contentWindow.__lab.snapshot()) || {});
 
 const fmtS = (v, d = 1) => (v == null ? '–' : `${Number(v).toFixed(d)} s`);
+// Live latency: wall-clock based where the player gives a playhead date (otherwise the player's own figure),
+// against the target the player holds, and the playback rate when it is chasing it.
+const latencyText = (trace) => {
+  const last = trace && trace.length ? trace[trace.length - 1] : null;
+  if (!last) return null;
+  const [, wall, own, target, rate] = last;
+  const lat = wall != null ? wall : own;
+  if (lat == null) return null;
+  return `${Number(lat).toFixed(1)} s${target != null ? ` (target ${Number(target).toFixed(1)})` : ''}${rate && Math.abs(rate - 1) > 0.005 ? ` ${rate}×` : ''}`;
+};
+// Start the player frames once the channel config is known (Shaka needs to know if the manifest is low-latency).
+async function startFrames() {
+  const cfg = await configPromise;
+  cards.forEach((c) => {
+    const ll = cfg && advertisesLl(c.fmt, cfg) ? '1' : '0';
+    c.frame.src = `./index.html?${new URLSearchParams({ player: c.player, format: c.fmt, url: urls[c.fmt], embed: '1', ll })}`;
+  });
+}
 function renderCards(s) {
   s.forEach((x, i) => {
     const c = cards[i].chips;
@@ -192,6 +231,7 @@ function renderCards(s) {
     c.seen.set(x.periodTransitions == null ? 'n/a' : String(x.periodTransitions));
     c.playhead.set(fmtS(x.playhead || 0));
     c.buffer.set(x.maxBufferAheadS == null ? '–' : fmtS(x.maxBufferAheadS));
+    c.latency.set(latencyText(x.latencyTrace) || 'n/a');
   });
 }
 function renderResult(report) {
@@ -240,6 +280,7 @@ const countNew = (all, base) => [...all].filter((x) => !base.has(x)).length;
 const crossed = (fmt) => (fmt === 'hls' ? countNew(discs, baseDiscs) : countNew(periods, basePeriods));
 
 async function main() {
+  await startFrames();
   const startedAt = new Date().toISOString();
   const t0 = performance.now();
   const formatsRun = [...new Set(cases.map((c) => c[1]))];
