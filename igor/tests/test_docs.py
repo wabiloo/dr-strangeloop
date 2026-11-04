@@ -54,3 +54,42 @@ def test_igor_openapi_is_served_under_api():
     assert resp.status_code == 200
     assert "/api/v1/docs/pages/{slug}" in resp.json()["paths"]
     assert client.get("/api/docs").status_code == 200
+
+
+# ── docs/low-latency.md: every relative link and anchor must resolve ──────────────────────────
+
+import re  # noqa: E402
+
+
+def _slug(heading: str) -> str:
+    """GitHub-style heading anchor, as frontend/src/utils/markdown.ts `slugify` makes it."""
+    text = re.sub(r"[`*]", "", heading).strip().lower()  # markup is not part of the rendered heading text
+    text = re.sub(r"[^\w\s-]", "", text)
+    return re.sub(r"\s", "-", text)
+
+
+def _anchors(path):
+    return {_slug(m.group(1)) for m in re.finditer(r"^#{1,6}\s+(.+?)\s*$", path.read_text(encoding="utf-8"), re.M)}
+
+
+def test_the_low_latency_page_is_catalogued_and_its_links_resolve():
+    page = REPO_ROOT / "docs" / "low-latency.md"
+    assert page.is_file()
+    assert docs.read_page("low-latency") is not None
+    text = page.read_text(encoding="utf-8")
+    catalogued = {e.path for s in docs.CATALOG for e in s.entries}
+    bad = []
+    for target in re.findall(r"\]\(([^)\s]+)\)", text):
+        if target.startswith(("http://", "https://", "mailto:")):
+            continue
+        path_part, _, anchor = target.partition("#")
+        dest = page if not path_part else (page.parent / path_part).resolve()
+        if not dest.is_file():
+            bad.append(f"{target}: no such file")
+            continue
+        if anchor and anchor not in _anchors(dest):
+            bad.append(f"{target}: no heading '{anchor}' in {dest.name}")
+        rel = dest.relative_to(REPO_ROOT.resolve()).as_posix()
+        if path_part and rel not in catalogued and not rel.endswith((".yaml",)):
+            bad.append(f"{target}: {rel} is not in the Docs menu (the viewer cannot open it)")
+    assert not bad, "\n".join(bad)

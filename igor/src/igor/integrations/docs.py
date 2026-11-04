@@ -34,6 +34,10 @@ CATALOG: tuple[DocSection, ...] = (
         DocEntry("agents", "Agent entrypoint", "Pipeline architecture, config locations and per-tool pointers.", "AGENTS.md"),
         DocEntry("docker-local", "Run Igor via Docker", "No toolchain install: everything in a container.", "DOCKER_LOCAL.md"),
     )),
+    DocSection("low-latency", "Low latency", (
+        DocEntry("low-latency", "Low-latency DASH", "How it works, how to turn it on, per-request overrides, clock sync, backends, limits.", "docs/low-latency.md"),
+        DocEntry("player-lab-agents", "player-lab", "Play a channel in several players and measure latency, stalls and errors.", "player-lab/AGENTS.md"),
+    )),
     DocSection("franken-ts", "Content authoring: franken-ts", (
         DocEntry("franken-ts-readme", "franken-ts", "Build a .ts with SCTE-35 from a YAML playlist.", "franken-ts/README.md"),
         DocEntry("franken-ts-agents", "franken-ts reference", "YAML schema, marker types and CLI.", "franken-ts/AGENTS.md"),

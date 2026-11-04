@@ -56,7 +56,9 @@ and running state as each channel's summary arrives.
 its `.hls`/`.dash` sub-tables, `[query]`, `[timeshift]`, `[markers]` and its
 `.hls`/`.dash` sub-tables). The same groups appear in the read-only
 configuration panel and the edit form. Field-by-field reference:
-[its-a-live AGENTS](../its-a-live/AGENTS.md).
+[its-a-live AGENTS](../its-a-live/AGENTS.md). *Packaging · DASH* includes the
+low-latency settings (only for backends that support them; settings a request can
+override carry an `&` badge): see [Low-latency DASH](./low-latency.md).
 
 **Detail page.**
 

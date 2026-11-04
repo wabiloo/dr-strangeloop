@@ -161,7 +161,7 @@ exactly one its-a-live TOML table, named after it**:
 | `[timeline]` | Timeline | `epoch`, `continuous` |
 | `[packaging]` | Packaging | `segment_duration`, `dvr_window` |
 | `[packaging.hls]` | Packaging · HLS | `container`, `mux_audio` |
-| `[packaging.dash]` | Packaging · DASH | `timeline_style`, `addressing` |
+| `[packaging.dash]` | Packaging · DASH | `timeline_style`, `addressing`, and the low-latency keys `low_latency`, `chunk_duration`, `target_latency`, `utc_timing`, `utc_timing_url` (their API/form fields keep the TOML names; written to the file only when `low_latency` is not `off`; the form shows them for `ecs-express`/`local-docker` only, via `components/LowLatencyFields.vue`; rules in `validate_low_latency`, mirrored from `its-a-live/_packaging_cfg.py` and kept in step by a test). See [`docs/low-latency.md`](../docs/low-latency.md) |
 | `[query]` | Query | `timeshift`, `overrides`, `prefix`, `start_param`, `end_param` |
 | `[timeshift]` | Timeshift | `max_span_seconds` |
 | `[markers]` | Markers | `increment_event_ids`, `split_on` |

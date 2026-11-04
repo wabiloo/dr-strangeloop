@@ -328,6 +328,8 @@ always `http://localhost:<channel.port>/...`.
 
 ## Low-latency DASH
 
+Overview, measured results and limits: [`docs/low-latency.md`](../docs/low-latency.md).
+
 ecs-express and local-docker channels can serve low-latency DASH (CMAF chunked delivery; details in
 `loop-dee-loop/README.md` "Low-latency DASH"). Set it per channel under `[packaging.dash]` (keys in `config.toml`):
 

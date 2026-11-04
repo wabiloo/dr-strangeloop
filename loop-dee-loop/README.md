@@ -282,6 +282,8 @@ continuous across the new Period.
 
 ### Low-latency DASH (CMAF chunked delivery)
 
+The overview, how to turn it on per channel, measured results and limits are in [`docs/low-latency.md`](../docs/low-latency.md); this section is the flag and delivery reference.
+
 Bake the loop with `bake.py --chunk-duration 0.5` (shorter than `--segment-duration`): every segment then holds
 several `moof`+`mdat` chunks, each with its own `tfdt`. Serve it with `serve.py --ll-dash` (or `--ll-optin`):
 

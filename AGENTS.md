@@ -28,6 +28,7 @@ names or CLI flags from this file alone.
 | Startover / catchup (past-range playback via `?start=&end=` on the normal manifest URLs) | `loop-dee-loop/` (`serve.py --timeshift`; on by default via `[query]` in the its-a-live TOML) | [`loop-dee-loop/README.md`](./loop-dee-loop/README.md) "Startover & catchup", `loop-dee-loop/SCOPE.md` §13 |
 | Web UI over all of the above (playlists, archive imports, VOD manifest imports, channels); its **Docs** menu browses all the documentation and API docs | `igor/` | [`igor/AGENTS.md`](./igor/AGENTS.md) |
 | Overview, Igor tour, CLI & API cheatsheet | `docs/` | [`docs/overview.md`](./docs/overview.md), [`docs/igor-guide.md`](./docs/igor-guide.md), [`docs/cli-reference.md`](./docs/cli-reference.md) |
+| Low-latency DASH (chunked delivery; `[packaging.dash] low_latency`, `?low_latency=` overrides; `ecs-express`/`local-docker`) | `loop-dee-loop/` (`bake.py --chunk-duration`, `serve.py --ll-dash`), `its-a-live/` (config + deploy), `player-lab/` (latency metrics) | [`docs/low-latency.md`](./docs/low-latency.md) -- start here; it links to each tool's reference |
 
 ## Architecture
 
