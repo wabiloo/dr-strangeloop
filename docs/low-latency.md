@@ -248,11 +248,14 @@ tens of milliseconds, not a segment.
 
 - **No LL-HLS delta updates.** `_HLS_skip` is accepted and ignored
   (`CAN-SKIP-UNTIL` is not advertised), so every playlist reload is a full one.
-- **Apple's validator needs HTTP/2.** `mediastreamvalidator` expects HTTP/2 from an
-  LL-HLS origin, which the Flask server does not speak (CloudFront does for the
-  viewer). In a partial run it reported an unsupported URL on reloads from the
-  multivariant playlist; whether that is a validator quirk with relative URIs was
-  not settled, so a full validator pass is still open.
+- **Apple's validator.** `mediastreamvalidator` expects an HTTP/2 origin; the Flask server speaks HTTP/1.1, but
+  CloudFront and a tunnel such as tuns.sh provide HTTP/2 in front of it. Run through an HTTP/2 tunnel it
+  completed blocking reloads (`_HLS_msn`/`_HLS_part`) and part fetches against a media playlist with no protocol error.
+  Started from the *multivariant* playlist (relative media URIs, as ours are) it stops with "unsupported URL" before
+  its first reload; the same playlists with absolute URIs validate. That looks like a limitation of the validator, not
+  of the playlists, but it was not confirmed with Apple's documentation. One finding stays open: it measured a peak
+  bitrate about 24 % above the multivariant `BANDWIDTH` (4.7 Mb/s against 3.82). The declared value comes from the bake
+  and applies to plain HLS as well; whether parts make the measured peak worse was not checked.
 - **Short loops in a periodic timeline.** There `seg/<n>` is the same URL every
   loop, so near the wrap the server cannot always tell a finished part from the
   upcoming one of the same index, and in a loop shorter than about two segments it

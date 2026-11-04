@@ -242,6 +242,18 @@ def test_ll_hls_needs_cmaf_and_chunks(pkg, tmp_path_factory):
         Channel(serve.LoopPackage(plain), 0, ll_hls=True)
 
 
+def test_ll_hls_refuses_a_chunked_package_baked_before_the_part_target_was_recorded(pkg):
+    """Otherwise `--ll-hls` starts and every playlist silently stays plain (no PART-TARGET to advertise)."""
+    path, _, _ = pkg
+    old = serve.LoopPackage(path)
+    for rendition in old.video_renditions:
+        rendition.max_chunk_ticks = 0  # what a package baked by an earlier version loads as
+    assert old.part_target_seconds is None
+    with pytest.raises(ValueError, match="baked by an older version"):
+        Channel(old, 0, ll_hls=True)
+    Channel(old, 0, ll_dash=True)  # DASH never needed it
+
+
 def test_requesting_low_latency_on_an_mpeg_ts_playlist_is_refused_not_ignored(pkg):
     path, _, _ = pkg
     package = serve.LoopPackage(path)

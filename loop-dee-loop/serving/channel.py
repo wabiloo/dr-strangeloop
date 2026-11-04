@@ -74,8 +74,15 @@ class Channel(VariantsMixin, TimelinePlanMixin, HlsMixin, DashMixin, WindowJsonM
             raise ValueError("low-latency HLS needs CMAF segments (hls_format 'cmaf'): MPEG-TS cannot carry parts")
         if (ll_dash or ll_optin or ll_hls) and package_chunk is None:
             raise ValueError(
-                "low-latency DASH needs a package baked with `bake.py --chunk-duration` "
+                "low latency needs a package baked with `bake.py --chunk-duration` "
                 "(this one has a single chunk per segment)"
+            )
+        if ll_hls and getattr(package, "part_target_seconds", 1.0) is None:
+            # Chunked, but baked before the longest chunk was recorded: without it there is no PART-TARGET, and the
+            # playlists would silently stay plain.
+            raise ValueError(
+                "low-latency HLS needs the longest chunk recorded by the bake (`max_chunk_ticks`); this package was "
+                "baked by an older version. Bake it again with `bake.py --chunk-duration`"
             )
         if dash_timeline not in DASH_TIMELINE_CHOICES:
             raise ValueError(f"dash_timeline must be one of {DASH_TIMELINE_CHOICES}, got {dash_timeline!r}")
