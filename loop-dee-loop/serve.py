@@ -1769,6 +1769,7 @@ class Channel:
                     "segmentation_type_id": m.get("segmentation_type_id"),
                     "upid_type": m.get("upid_type"),
                     "upid_hex": m.get("upid_hex"),
+                    "unique_program_id": m.get("unique_program_id"),
                     "assets": list(m.get("assets") or []),
                     "segments": seg_range(max(g_first, first), min(g_last, last)),
                     "starts_before_range": g_first < first,

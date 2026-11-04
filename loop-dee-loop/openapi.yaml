@@ -759,6 +759,12 @@ components:
           type: [integer, "null"]
         upid_hex:
           type: [string, "null"]
+        unique_program_id:
+          type: [string, "null"]
+          description: >-
+            `splice_insert` only: the SCTE-35 `unique_program_id` as a hex
+            string such as `0x002A`. Null for `time_signal`, and for packages
+            baked from a `markers.json` that predates the field.
         assets:
           type: array
           description: Asset ids the marker refers to, as authored.
