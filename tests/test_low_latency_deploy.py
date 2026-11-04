@@ -15,7 +15,6 @@ sys.path.insert(0, str(ITS_A_LIVE))
 
 pytest.importorskip("boto3")
 import botocore.exceptions  # noqa: E402
-
 import channel  # noqa: E402
 
 CFG = {
@@ -126,7 +125,7 @@ segment_duration = 2
 
 def _command(dash: str, public_host: str | None) -> list[str]:
     cdk = pytest.importorskip("aws_cdk")
-    import aws_cdk.assertions as assertions
+    from aws_cdk import assertions
     from loop_stack import LoopStack
 
     stack = LoopStack(

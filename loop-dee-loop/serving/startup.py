@@ -17,7 +17,7 @@ def resolve_epoch_ticks(epoch_utc: str, timescale: int) -> int:
     callers should do this exactly once and feed the result into every
     subsequent request's arithmetic, never recompute it via accumulation."""
     epoch_dt = _dt.datetime.strptime(epoch_utc, "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=_dt.timezone.utc
+        tzinfo=_dt.UTC
     )
     return round(epoch_dt.timestamp() * timescale)
 

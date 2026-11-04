@@ -244,7 +244,7 @@ class ChannelCreatePayload(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _validate_timeshift_names_distinct(self) -> "ChannelCreatePayload":
+    def _validate_timeshift_names_distinct(self) -> ChannelCreatePayload:
         # Every other query parameter has a fixed name; with the prefix applied
         # to all of them, every on-the-wire name must still be distinct.
         validate_query_names(self.timeshift_start_param, self.timeshift_end_param, self.query_prefix)
@@ -258,7 +258,7 @@ class ChannelCreatePayload(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _validate_low_latency(self) -> "ChannelCreatePayload":
+    def _validate_low_latency(self) -> ChannelCreatePayload:
         validate_low_latency(
             backend=self.backend, low_latency=self.low_latency, segment_duration=self.segment_duration,
             chunk_duration=self.chunk_duration, target_latency=self.target_latency, utc_timing=self.utc_timing,
@@ -267,7 +267,7 @@ class ChannelCreatePayload(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_port_backend(self) -> "ChannelCreatePayload":
+    def _validate_port_backend(self) -> ChannelCreatePayload:
         if self.port == "auto" and self.backend != "local-docker":
             raise ValueError("port: 'auto' is only supported for the local-docker backend")
         if self.bundle_content and self.backend != "local-docker":

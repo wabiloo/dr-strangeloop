@@ -30,7 +30,7 @@ class Profile:
     default: Thresholds = field(default_factory=Thresholds)
     per_player: dict[str, dict] = field(default_factory=dict)
 
-    def with_default(self, **changes) -> "Profile":
+    def with_default(self, **changes) -> Profile:
         """This profile with some default thresholds replaced (per-player overrides still win)."""
         return replace(self, default=replace(self.default, **changes))
 

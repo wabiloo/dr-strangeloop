@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 class VariantsMixin:
     """Per-request variants of a Channel (`with_*`): each returns a shallow copy with one setting changed,"""
 
-    def for_mode(self, continuous: bool) -> "Channel":
+    def for_mode(self, continuous: bool) -> Channel:
         """This channel, but serving in the requested continuity mode
         (SCOPE.md §13.5). Channel is immutable after construction, so a
         shallow copy with the flag flipped is a safe per-request variant.
@@ -37,7 +37,7 @@ class VariantsMixin:
         variant.continuous_error = None if continuous else self.continuous_error
         return variant
 
-    def with_offset(self, offset_ticks: int) -> "Channel":
+    def with_offset(self, offset_ticks: int) -> Channel:
         """This channel as if "now" were `offset_ticks` later (negative:
         earlier) -- SCOPE.md §13.7. The epoch is untouched and every
         timestamp stays true content time: the live edge (and the DVR window
@@ -52,7 +52,7 @@ class VariantsMixin:
             raise TimeshiftError("offset puts 'now' before the channel epoch (nothing existed yet)")
         return variant
 
-    def with_epoch(self, epoch_ticks: int) -> "Channel":
+    def with_epoch(self, epoch_ticks: int) -> Channel:
         """This channel as if its epoch (loop 0's start) were `epoch_ticks`:
         loop numbers, PROGRAM-DATE-TIME, Period starts, availabilityStartTime
         and global segment numbers all derive from it. Unlike `with_offset`
@@ -71,7 +71,7 @@ class VariantsMixin:
         if self.now_ticks() < self.epoch_ticks:
             raise TimeshiftError("epoch is in the future (nothing existed yet)")
 
-    def with_window_segments(self, window_segments: int) -> "Channel":
+    def with_window_segments(self, window_segments: int) -> Channel:
         if window_segments < 1:
             raise TimeshiftError("the DVR window must cover at least one segment")
         if window_segments == self.window_segments:
@@ -80,7 +80,7 @@ class VariantsMixin:
         variant.window_segments = window_segments
         return variant
 
-    def with_dash_style(self, addressing: str | None = None, timeline_style: str | None = None) -> "Channel":
+    def with_dash_style(self, addressing: str | None = None, timeline_style: str | None = None) -> Channel:
         """DASH SegmentTemplate addressing (`number` | `time`) and
         SegmentTimeline style (`full` | `compact`) for this request."""
         addressing = addressing or self.dash_addressing
@@ -98,7 +98,7 @@ class VariantsMixin:
         target_latency: float | None = None,
         utc_timing: str | None = None,
         fmt: str = "dash",
-    ) -> "Channel":
+    ) -> Channel:
         """Per-request low-latency settings. `low_latency` is whether THIS response (the MPD for fmt "dash", an HLS
         playlist for "hls") advertises it; the target and the clock source are DASH-only. `low_latency=True` needs
         a channel that delivers low latency at all (`--ll-dash` / `--ll-hls` / `--ll-optin`, on a package baked
@@ -122,7 +122,7 @@ class VariantsMixin:
             variant.ll_utc_timing = utc_timing
         return variant
 
-    def with_ll_utc_timing_url(self, url: str) -> "Channel":
+    def with_ll_utc_timing_url(self, url: str) -> Channel:
         """Low-latency MPD's UTCTiming endpoint for `http` mode, when none was configured."""
         if self.ll_utc_timing_url or not self.ll_dash or self.ll_utc_timing != "http":
             return self
@@ -130,7 +130,7 @@ class VariantsMixin:
         variant.ll_utc_timing_url = url
         return variant
 
-    def with_split_on(self, type_ids: frozenset[int]) -> "Channel":
+    def with_split_on(self, type_ids: frozenset[int]) -> Channel:
         """Force a Period / #EXT-X-DISCONTINUITY at markers of these
         segmentation_type_ids for this request (replaces the channel's
         configured set; empty = none)."""
@@ -165,7 +165,7 @@ class VariantsMixin:
         signal_format: str | None = None,
         max_height: int | None = None,
         max_bitrate: int | None = None,
-    ) -> "Channel":
+    ) -> Channel:
         """This channel with per-request SCTE-35 signaling / ladder settings
         replacing the package's baked defaults. Everything here is derived
         from data the package already carries (markers.json plus both the

@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from loop_math import segment_index_for_position, ticks_to_wall_clock_seconds
-from scte35_signaling import build_event_id_map, is_instant_segmentation, is_out_marker, reencode_event_ids
+from scte35_signaling import (
+    build_event_id_map,
+    is_instant_segmentation,
+    is_out_marker,
+    reencode_event_ids,
+)
 from timeshift import TimeWindow
 
 from serving.markers import _marker_durations_ticks
@@ -13,7 +18,7 @@ from serving.timeline import compute_discontinuity_sequence
 class WindowJsonMixin:
     """The JSON view of the current window (/timeline.json)."""
 
-    def build_window_json(self, window: "TimeWindow | None" = None, scope: str = "window") -> dict:
+    def build_window_json(self, window: TimeWindow | None = None, scope: str = "window") -> dict:
         """JSON view of the current window (openapi.yaml `WindowDocument`):
         periods, discontinuities, assets and markers overlapping the same
         segments the HLS media playlist advertises (trailing window ending

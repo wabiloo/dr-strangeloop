@@ -5,9 +5,8 @@ from __future__ import annotations
 import mimetypes
 from pathlib import Path
 
-from flask import Response, send_file
-
 import package_io
+from flask import Response, send_file
 
 
 def _is_loopback_host(host: str) -> bool:

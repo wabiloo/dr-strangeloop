@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-
 ENTRYPOINT = Path(__file__).resolve().parents[1] / "docker-entrypoint.sh"
 
 
@@ -126,7 +125,7 @@ def _local_imports(path: Path, local: set[str]) -> set[str]:
     import re
 
     source = path.read_text(encoding="utf-8")
-    return set(re.findall(r"^\s*(?:import|from) (\w+)", source, re.M)) & local
+    return set(re.findall(r"^\s*(?:import|from) (\w+)", source, re.MULTILINE)) & local
 
 
 @pytest.mark.parametrize("dockerfile_name", ["Dockerfile", "Dockerfile.lambda"])
@@ -139,7 +138,7 @@ def test_dockerfile_copies_every_module_serve_imports(dockerfile_name):
     root = ENTRYPOINT.parent
     dockerfile = (root / dockerfile_name).read_text(encoding="utf-8")
     copied: set[str] = set()
-    for line in re.findall(r"^COPY (.*?) \./(?:\S*)$", dockerfile, re.M):
+    for line in re.findall(r"^COPY (.*?) \./(?:\S*)$", dockerfile, re.MULTILINE):
         copied.update(line.split())
     modules = {p.stem for p in root.glob("*.py")}
     packages = {p.name for p in root.iterdir() if p.is_dir() and (p / "__init__.py").is_file()}

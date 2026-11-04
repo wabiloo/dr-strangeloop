@@ -69,7 +69,7 @@ def _slug(heading: str) -> str:
 
 
 def _anchors(path):
-    return {_slug(m.group(1)) for m in re.finditer(r"^#{1,6}\s+(.+?)\s*$", path.read_text(encoding="utf-8"), re.M)}
+    return {_slug(m.group(1)) for m in re.finditer(r"^#{1,6}\s+(.+?)\s*$", path.read_text(encoding="utf-8"), re.MULTILINE)}
 
 
 def test_the_low_latency_page_is_catalogued_and_its_links_resolve():

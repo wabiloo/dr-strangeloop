@@ -18,9 +18,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import serve  # noqa: E402
-from serving import constants  # noqa: E402
 from scte35_signaling import build_cue_breaks  # noqa: E402
+from serving import constants  # noqa: E402
 from test_serve_window_json import LOOP, MARKERS, _channel  # noqa: E402
 from timeshift import TimeWindow  # noqa: E402
 

@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import bisect
 import dataclasses
-import datetime as _dt
 import re
 from collections.abc import Callable
 
 import lowlatency
-from loop_math import program_date_time_ticks, segment_index_for_position, ticks_to_wall_clock_seconds
+from loop_math import (
+    program_date_time_ticks,
+    segment_index_for_position,
+    ticks_to_wall_clock_seconds,
+)
 from scte35_signaling import (
+    SignalingMarker,
     build_cue_in_tag,
     build_cue_out_cont_tag,
     build_cue_out_tag,
@@ -18,11 +22,10 @@ from scte35_signaling import (
     build_event_id_map,
     build_grouped_daterange_tags,
     markers_to_signaling,
-    SignalingMarker,
 )
-from serving import constants
 from timeshift import TimeWindow
 
+from serving import constants
 from serving.constants import LL_HLS_PART_SEGMENTS
 from serving.markers import (
     _asset_ids_starting_in_segment,
@@ -31,7 +34,7 @@ from serving.markers import (
     _remap_signaling_markers,
 )
 from serving.package import LoopPackage
-from serving.timeline import compute_discontinuity_sequence
+from serving.timeline import compute_discontinuity_sequence, utc_naive_datetime
 
 
 @dataclasses.dataclass(frozen=True)
@@ -39,8 +42,8 @@ class _HlsLL:
     """What an LL-HLS media playlist needs besides its own boundaries: how to get the parts of one of its segments,
     and the other playlists (name, boundaries, parts) to point `EXT-X-RENDITION-REPORT` at."""
 
-    chunks: Callable[[int], "list[lowlatency.Chunk]"]
-    others: "list[tuple[str, list[int], Callable[[int], list[lowlatency.Chunk]]]]"
+    chunks: Callable[[int], list[lowlatency.Chunk]]
+    others: list[tuple[str, list[int], Callable[[int], list[lowlatency.Chunk]]]]
 
 
 def _part_uri(segment_uri: str, part: int) -> str:
@@ -51,17 +54,17 @@ def _part_uri(segment_uri: str, part: int) -> str:
 class HlsMixin:
     """HLS playlists (classic and Apple LL-HLS): the multivariant playlist and every media playlist."""
 
-    def hls_ll_live(self, window: "TimeWindow | None") -> bool:
+    def hls_ll_live(self, window: TimeWindow | None) -> bool:
         """Whether an HLS media playlist for this request is a low-latency one: advertised, live (no startover or
         catchup range, no `offset`), and the package has chunks to make parts of."""
         return (
             self.ll_hls and window is None and self.offset_ticks == 0 and self.package.part_target_seconds is not None
         )
 
-    def _ll_chunks(self, rendition_name: str | None, boundary_ticks: list[int]) -> Callable[[int], "list[lowlatency.Chunk]"]:
+    def _ll_chunks(self, rendition_name: str | None, boundary_ticks: list[int]) -> Callable[[int], list[lowlatency.Chunk]]:
         pkg = self.package
 
-        def chunks(local_index: int) -> "list[lowlatency.Chunk]":
+        def chunks(local_index: int) -> list[lowlatency.Chunk]:
             end = boundary_ticks[local_index + 1] if local_index + 1 < len(boundary_ticks) else pkg.total_loop_duration_ticks
             return pkg.chunk_table(rendition_name, local_index, end - boundary_ticks[local_index])
 
@@ -418,7 +421,7 @@ class HlsMixin:
                     loop_start_seconds = ticks_to_wall_clock_seconds(
                         loop_start_ticks, pkg.timescale
                     )
-                    loop_start_datetime = _dt.datetime.utcfromtimestamp(loop_start_seconds)
+                    loop_start_datetime = utc_naive_datetime(loop_start_seconds)
                     signaling_markers = markers_to_signaling(
                         _hls_payload_markers(matching_markers, pkg.daterange_mode),
                         all_markers=_hls_payload_markers(pkg.markers, pkg.daterange_mode),
@@ -520,7 +523,7 @@ class HlsMixin:
                 program_date_ticks, pkg.timescale
             )
             program_date_str = (
-                _dt.datetime.utcfromtimestamp(program_date_seconds).strftime(
+                utc_naive_datetime(program_date_seconds).strftime(
                     "%Y-%m-%dT%H:%M:%S.%f"
                 )[:-3]
                 + "Z"

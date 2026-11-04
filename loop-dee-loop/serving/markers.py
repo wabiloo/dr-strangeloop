@@ -6,13 +6,13 @@ from __future__ import annotations
 import dataclasses
 
 from scte35_signaling import (
+    SignalingMarker,
     _segmentation_code,
     build_event_id_map,
     is_instant_segmentation,
     is_out_marker,
     markers_to_signaling,
     reencode_event_ids,
-    SignalingMarker,
 )
 
 

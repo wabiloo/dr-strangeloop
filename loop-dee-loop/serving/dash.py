@@ -7,23 +7,27 @@ import math
 
 from loop_math import ticks_to_wall_clock_seconds
 from scte35_signaling import (
+    SCTE35_XML_NAMESPACE,
     build_event_id_map,
     build_scte35_full_xml,
     is_instant_segmentation,
     is_out_marker,
     reencode_event_ids,
-    SCTE35_XML_NAMESPACE,
 )
-from serving import constants
 from timeshift import TimeWindow
 
+from serving import constants
 from serving.dash_render import (
     _join_events,
     render_audio_adaptation_set,
     render_segment_timeline,
     render_video_representations,
 )
-from serving.markers import _asset_ids_starting_in_segment, _dash_event_comment, _marker_covers_segment
+from serving.markers import (
+    _asset_ids_starting_in_segment,
+    _dash_event_comment,
+    _marker_covers_segment,
+)
 
 
 class DashMixin:
@@ -36,10 +40,10 @@ class DashMixin:
             return ""
         return f' availabilityTimeOffset="{self.ll_ato_seconds}" availabilityTimeComplete="false"'
 
-    def _ll_live(self, window: "TimeWindow | None") -> bool:
+    def _ll_live(self, window: TimeWindow | None) -> bool:
         return self.ll_dash and window is None
 
-    def _service_description_xml(self, window: "TimeWindow | None") -> str:
+    def _service_description_xml(self, window: TimeWindow | None) -> str:
         """DASH-IF LL `ServiceDescription`: the latency the player should hold
         (target, with a band it may catch up or slow down within)."""
         if not self._ll_live(window):
@@ -52,7 +56,7 @@ class DashMixin:
             "  </ServiceDescription>\n"
         )
 
-    def _utc_timing_xml(self, window: "TimeWindow | None") -> str:
+    def _utc_timing_xml(self, window: TimeWindow | None) -> str:
         """A dynamic MPD's players derive the live edge from their own clock.
         With an `offset` (SCOPE.md §13.7) "now" is not the client's now, so
         tell it what "now" is via a direct UTCTiming value -- the standard
@@ -82,7 +86,7 @@ class DashMixin:
     def _mpd_open_tag(
         self,
         *,
-        window: "TimeWindow | None",
+        window: TimeWindow | None,
         window_segments: int,
         origin_abs_ticks: int = 0,
         duration_ticks: int = 0,
@@ -261,7 +265,8 @@ class DashMixin:
             origin_local = real_sorted[_real_span_index(span_start_local)]
             real_span_index = _real_span_index(span_start_local)
 
-            def _extra_pto_attr(boundary_ticks: list[int], base_pto: int) -> str:
+            # (Helpers take this iteration's values as parameters instead of closing over the loop variables.)
+            def _extra_pto_attr(boundary_ticks: list[int], base_pto: int, span_start_local: int, origin_local: int) -> str:
                 total = base_pto + boundary_ticks[span_start_local] - boundary_ticks[origin_local]
                 return f' presentationTimeOffset="{total}"' if total else ""
 
@@ -323,7 +328,12 @@ class DashMixin:
             # belongs to). Not on later asset-span Periods of the same loop.
             emit_loop_comment = span_start_local == 0 or period_number == 0
 
-            def _segment_timeline_xml(entries: list[tuple[int, int, int]]) -> str:
+            def _segment_timeline_xml(
+                entries: list[tuple[int, int, int]],
+                loop_number: int,
+                emit_loop_comment: bool,
+                asset_ids_by_local_index: dict[int, list[str]],
+            ) -> str:
                 items: list[tuple] = []
                 if emit_loop_comment:
                     items.append(("c", f"loop {self._loop_label(loop_number)}"))
@@ -473,8 +483,8 @@ class DashMixin:
                 entries = _period_entries(
                     rendition.segment_boundary_ticks, local_indices, origin_local
                 )
-                timeline_lines = _segment_timeline_xml(entries)
-                pto_attr = _extra_pto_attr(rendition.segment_boundary_ticks, pto_ticks)
+                timeline_lines = _segment_timeline_xml(entries, loop_number, emit_loop_comment, asset_ids_by_local_index)
+                pto_attr = _extra_pto_attr(rendition.segment_boundary_ticks, pto_ticks, span_start_local, origin_local)
                 v = rendition.video_variant
                 # A sparse (self-initializing) rendition's segments carry
                 # their own moov (SCOPE.md §11) -- there's no shared init
@@ -508,9 +518,11 @@ class DashMixin:
                     pkg.audio_rendition.audio_segment_boundary_ticks, local_indices, origin_local
                 )
                 audio_pto_attr = _extra_pto_attr(
-                    pkg.audio_rendition.audio_segment_boundary_ticks, pto_ticks
+                    pkg.audio_rendition.audio_segment_boundary_ticks, pto_ticks, span_start_local, origin_local
                 )
-                audio_timeline_lines = _segment_timeline_xml(audio_entries)
+                audio_timeline_lines = _segment_timeline_xml(
+                    audio_entries, loop_number, emit_loop_comment, asset_ids_by_local_index
+                )
                 audio_adaptation_set = render_audio_adaptation_set(
                     a, audio_media, audio_init, audio_timeline_lines, pkg.timescale,
                     start_number_attr, audio_pto_attr, self.dash_timeline == "compact",

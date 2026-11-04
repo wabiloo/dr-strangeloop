@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
-import datetime as _dt
 import time
 from pathlib import Path
 
 from loop_math import compute_loop_position, ticks_to_wall_clock_seconds
 
-from serving.constants import DASH_ADDRESSING_CHOICES, DASH_TIMELINE_CHOICES, LL_UTC_TIMING_CHOICES
+from serving.constants import (
+    DASH_ADDRESSING_CHOICES,
+    DASH_TIMELINE_CHOICES,
+    LL_UTC_TIMING_CHOICES,
+)
 from serving.dash import DashMixin
 from serving.hls import HlsMixin
-from serving.package import _cmaf_tfdt_version, _first_present_segment, LoopPackage
+from serving.package import LoopPackage, _cmaf_tfdt_version, _first_present_segment
 from serving.plan import TimelinePlanMixin
-from serving.timeline import compute_signal_breaks, expand_segmentation_pairs
+from serving.timeline import (
+    compute_signal_breaks,
+    expand_segmentation_pairs,
+    utc_naive_datetime,
+)
 from serving.variants import VariantsMixin
 from serving.window_json import WindowJsonMixin
 
@@ -69,7 +76,8 @@ class Channel(VariantsMixin, TimelinePlanMixin, HlsMixin, DashMixin, WindowJsonM
         if dash_addressing not in DASH_ADDRESSING_CHOICES:
             raise ValueError(f"dash_addressing must be one of {DASH_ADDRESSING_CHOICES}, got {dash_addressing!r}")
         if not isinstance(epoch_ticks, int):
-            raise ValueError("epoch_ticks must be int")
+            # ValueError (not TypeError) is this constructor's existing contract for every bad argument.
+            raise ValueError("epoch_ticks must be int")  # noqa: TRY004
         if window_segments < 1:
             raise ValueError("window_segments must be >= 1")
         self.continuous_error: str | None = None
@@ -151,7 +159,7 @@ class Channel(VariantsMixin, TimelinePlanMixin, HlsMixin, DashMixin, WindowJsonM
         return self._period_starts(self.signal_breaks)
 
     @staticmethod
-    def _validate_continuous(package: "LoopPackage") -> None:
+    def _validate_continuous(package: LoopPackage) -> None:
         if package.boundaries != {0}:
             raise RuntimeError(
                 f"continuity mode (--continuous-timeline) does not support "
@@ -189,10 +197,10 @@ class Channel(VariantsMixin, TimelinePlanMixin, HlsMixin, DashMixin, WindowJsonM
             version = _cmaf_tfdt_version(representative)
             if version != 1:
                 raise RuntimeError(
-                    f"continuity mode requires a 64-bit (v1) tfdt for the "
-                    f"shared audio track too, same reasoning as the video "
-                    f"check above -- rebake with a GPAC/ffmpeg invocation "
-                    f"that emits v1 tfdt boxes (SCOPE.md §12.4)."
+                    "continuity mode requires a 64-bit (v1) tfdt for the "
+                    "shared audio track too, same reasoning as the video "
+                    "check above -- rebake with a GPAC/ffmpeg invocation "
+                    "that emits v1 tfdt boxes (SCOPE.md §12.4)."
                 )
 
     def now_ticks(self) -> int:
@@ -207,7 +215,7 @@ class Channel(VariantsMixin, TimelinePlanMixin, HlsMixin, DashMixin, WindowJsonM
 
     def _iso_ticks(self, ticks: int) -> str:
         seconds = ticks_to_wall_clock_seconds(ticks, self.package.timescale)
-        return _dt.datetime.utcfromtimestamp(seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        return utc_naive_datetime(seconds).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
     def segment_bytes_path(self, rendition_name: str, physical_index: int) -> Path:
         return self.package.rendition_by_name(rendition_name).segment_path_for_index(physical_index)

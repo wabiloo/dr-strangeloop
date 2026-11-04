@@ -570,10 +570,10 @@ def test_generated_toml_passes_its_a_live_version_check():
 
 
 def _ll_payload(**kw):
-    base = dict(
-        name="test-channel", backend="local-docker", region="eu-west-1", bucket_name="b", content_folder="c",
-        source_path="outputs/test.ts", segment_duration=2.0,
-    )
+    base = {
+        "name": "test-channel", "backend": "local-docker", "region": "eu-west-1", "bucket_name": "b", "content_folder": "c",
+        "source_path": "outputs/test.ts", "segment_duration": 2.0,
+    }
     return ChannelCreatePayload(**{**base, **kw})
 
 
@@ -606,17 +606,17 @@ def test_low_latency_http_with_an_explicit_url_and_the_defaults():
 @pytest.mark.parametrize(
     "kw,message",
     [
-        (dict(low_latency="on", backend="aws-lambda"), "not supported"),
-        (dict(low_latency="on", backend="aws-media"), "not supported"),
-        (dict(low_latency="on", chunk_duration=2.0), "chunk_duration"),  # not shorter than the 2 s segment
-        (dict(low_latency="on", chunk_duration=0), "chunk_duration"),
-        (dict(low_latency="on", target_latency=0), "target_latency"),
-        (dict(low_latency="on", target_latency=121), "target_latency"),
-        (dict(low_latency="optin", query_overrides=False), "optin"),
-        (dict(low_latency="on", utc_timing="direct", utc_timing_url="https://t.example/time"), "utc_timing_url"),
-        (dict(low_latency="on", utc_timing="http", utc_timing_url="/time"), "absolute"),
-        (dict(low_latency="fast"), "low_latency"),
-        (dict(utc_timing="ntp"), "utc_timing"),
+        ({"low_latency": "on", "backend": "aws-lambda"}, "not supported"),
+        ({"low_latency": "on", "backend": "aws-media"}, "not supported"),
+        ({"low_latency": "on", "chunk_duration": 2.0}, "chunk_duration"),  # not shorter than the 2 s segment
+        ({"low_latency": "on", "chunk_duration": 0}, "chunk_duration"),
+        ({"low_latency": "on", "target_latency": 0}, "target_latency"),
+        ({"low_latency": "on", "target_latency": 121}, "target_latency"),
+        ({"low_latency": "optin", "query_overrides": False}, "optin"),
+        ({"low_latency": "on", "utc_timing": "direct", "utc_timing_url": "https://t.example/time"}, "utc_timing_url"),
+        ({"low_latency": "on", "utc_timing": "http", "utc_timing_url": "/time"}, "absolute"),
+        ({"low_latency": "fast"}, "low_latency"),
+        ({"utc_timing": "ntp"}, "utc_timing"),
     ],
 )
 def test_low_latency_combinations_its_a_live_would_refuse_are_rejected_up_front(kw, message):
@@ -647,10 +647,10 @@ def test_the_rules_match_its_a_live():
     finally:
         sys.path.remove(str(root))
     cases = [
-        dict(low_latency="on"), dict(low_latency="optin"), dict(low_latency="on", chunk_duration=2.0),
-        dict(low_latency="on", target_latency=200), dict(low_latency="on", utc_timing="http", utc_timing_url="/x"),
-        dict(low_latency="on", utc_timing="direct", utc_timing_url="https://x/t"), dict(low_latency="on", backend="aws-lambda"),
-        dict(low_latency="optin", query_overrides=False), dict(),
+        {"low_latency": "on"}, {"low_latency": "optin"}, {"low_latency": "on", "chunk_duration": 2.0},
+        {"low_latency": "on", "target_latency": 200}, {"low_latency": "on", "utc_timing": "http", "utc_timing_url": "/x"},
+        {"low_latency": "on", "utc_timing": "direct", "utc_timing_url": "https://x/t"}, {"low_latency": "on", "backend": "aws-lambda"},
+        {"low_latency": "optin", "query_overrides": False}, {},
     ]
     for kw in cases:
         igor_ok = True

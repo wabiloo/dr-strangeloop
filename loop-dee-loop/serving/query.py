@@ -25,14 +25,6 @@ from timeshift import (
     MAX_BITRATE_PARAM,
     MAX_HEIGHT_PARAM,
     OFFSET_PARAM,
-    parse_bool,
-    parse_choice,
-    parse_duration_seconds,
-    parse_instant_ticks,
-    parse_offset_ticks,
-    parse_positive_int,
-    parse_split_on,
-    parse_timeline,
     SIGNAL_FORMAT_PARAM,
     SIGNAL_FORMAT_VALUES,
     SPLIT_ON_PARAM,
@@ -41,12 +33,20 @@ from timeshift import (
     TIMELINE_STYLE_VALUES,
     TimeshiftConfig,
     TimeshiftError,
+    parse_bool,
+    parse_choice,
+    parse_duration_seconds,
+    parse_instant_ticks,
+    parse_offset_ticks,
+    parse_positive_int,
+    parse_split_on,
+    parse_timeline,
 )
 
 from serving.channel import Channel
 
 
-def resolve_request_channel(channel: "Channel", args, cfg: TimeshiftConfig, fmt: str = "hls") -> "Channel":
+def resolve_request_channel(channel: Channel, args, cfg: TimeshiftConfig, fmt: str = "hls") -> Channel:
     """The per-request `Channel` variant selected by the query parameters in
     `args` (any mapping with `.get`). `fmt` is the format being answered --
     `hls`, `dash` or `json` (/timeline.json) -- because some settings differ

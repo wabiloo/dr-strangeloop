@@ -545,7 +545,6 @@ def cmd_create(cfg, config_path, extra_args):
     if extra_args:
         sys.exit("`create` does not take extra arguments")
 
-    import subprocess
 
     if _backend(cfg) in _NO_STACK_BACKENDS:
         print("Sparking (staging content) ...")
@@ -573,7 +572,6 @@ def cmd_redeploy(cfg, config_path, extra_args):
     if extra_args:
         sys.exit("`redeploy` does not take extra arguments")
 
-    import subprocess
 
     if _backend(cfg) in _NO_STACK_BACKENDS:
         # No CloudFormation stack to fix up -- just recreate the local

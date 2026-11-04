@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from flask import abort, Flask, request
-
-from serving.httputil import _is_loopback_host
-from serving.package import LoopPackage
+from flask import Flask, abort, request
 
 from serving.context import ServeContext
+from serving.httputil import _is_loopback_host
+from serving.package import LoopPackage
 
 
 def register(app: Flask, ctx: ServeContext) -> None:

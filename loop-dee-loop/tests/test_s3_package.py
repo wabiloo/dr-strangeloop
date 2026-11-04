@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -15,8 +16,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import package_io  # noqa: E402
-import serve  # noqa: E402
-import time
 from s3_package import S3Package, parse_s3_uri  # noqa: E402
 from serve import create_app  # noqa: E402
 from test_serve_continuity import _write_continuous_package  # noqa: E402

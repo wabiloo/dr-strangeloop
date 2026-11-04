@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from flask import abort, Flask
-
-from serving.httputil import _send_package_file
+from flask import Flask, abort
 from timeshift import TimeshiftError
 
 from serving.context import SEG_DEFAULTS, ServeContext
+from serving.httputil import _send_package_file
 
 
 def register(app: Flask, ctx: ServeContext) -> None:

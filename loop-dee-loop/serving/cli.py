@@ -6,12 +6,20 @@ import argparse
 import logging
 from pathlib import Path
 
-from serving.constants import DASH_ADDRESSING_CHOICES, DASH_TIMELINE_CHOICES, LL_UTC_TIMING_CHOICES
-from serving.timeline import parse_segmentation_type_ids
 from timeshift import TimeshiftConfig
 
 from serving.app import create_app
-from serving.startup import read_package_descriptor, resolve_epoch_ticks, resolve_window_segments
+from serving.constants import (
+    DASH_ADDRESSING_CHOICES,
+    DASH_TIMELINE_CHOICES,
+    LL_UTC_TIMING_CHOICES,
+)
+from serving.startup import (
+    read_package_descriptor,
+    resolve_epoch_ticks,
+    resolve_window_segments,
+)
+from serving.timeline import parse_segmentation_type_ids
 
 logger = logging.getLogger("serve")
 

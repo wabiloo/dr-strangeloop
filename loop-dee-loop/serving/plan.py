@@ -13,7 +13,7 @@ from loop_math import (
     segment_index_for_position,
     ticks_to_wall_clock_seconds,
 )
-from timeshift import resolve_window, TimeWindow
+from timeshift import TimeWindow, resolve_window
 
 from serving.markers import _marker_covers_segment
 from serving.timeline import WindowRange
@@ -22,7 +22,7 @@ from serving.timeline import WindowRange
 class TimelinePlanMixin:
     """The shared timeline plan: window range, segment starts, marker anchors, Period grouping and URIs. Used"""
 
-    def segment_uris(self, first: int, last: int, window: "TimeWindow | None") -> dict:
+    def segment_uris(self, first: int, last: int, window: TimeWindow | None) -> dict:
         """First/last video segment URI per format, for the reference
         rendition, relative to the manifest. Built from the same `segment_uri`
         the HLS playlist uses (periodic `/seg/<local>`, continuous
@@ -88,7 +88,7 @@ class TimelinePlanMixin:
         return loop_number * pkg.segments_per_loop + i
 
     def segment_uri(
-        self, template: str, global_index: int, local_index: int, window: "TimeWindow | None"
+        self, template: str, global_index: int, local_index: int, window: TimeWindow | None
     ) -> str:
         """Segment URI for a manifest entry (SCOPE.md §13.5). `template`
         contains `/seg/{index}`. Default mode: `/seg/<local>`. Continuity:
@@ -134,7 +134,7 @@ class TimelinePlanMixin:
         return loop_number * self.package.total_loop_duration_ticks
 
     def window_range(
-        self, window: "TimeWindow | None" = None, window_segments: int | None = None, now: int | None = None
+        self, window: TimeWindow | None = None, window_segments: int | None = None, now: int | None = None
     ) -> WindowRange:
         """The window's global segment range. Live: the last `window_segments`
         up to the live edge (the segment containing "now"; clamped to 0 in the
@@ -301,7 +301,7 @@ class TimelinePlanMixin:
         the DASH Period start carry it."""
         return self._iso_ticks(self.loop_tick(loop_number, marker["pts_time_ticks"]))
 
-    def _header_comments(self, window: "TimeWindow | None") -> list[str]:
+    def _header_comments(self, window: TimeWindow | None) -> list[str]:
         """Comment text (no comment syntax) for the top of a manifest: live
         vs startover/catchup, and the time anchors loop start times derive
         from (the epoch, plus the clock offset if one is applied)."""

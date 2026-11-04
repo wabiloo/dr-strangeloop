@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import time
 
-from flask import abort, request, Response
-
 import cmaf
 import continuity
 import lowlatency
 import package_io
+from flask import Response, abort, request
+
 from serving.channel import Channel
 
 

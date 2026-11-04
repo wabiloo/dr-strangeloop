@@ -4,9 +4,16 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime as _dt
 
 from loop_math import LoopPosition, segment_index_for_position
 from scte35_signaling import SEGMENTATION_END_TYPE_ID
+
+
+def utc_naive_datetime(seconds: float) -> _dt.datetime:
+    """A UTC wall-clock instant as a *naive* datetime: what the manifest formatting and the SCTE-35 helpers
+    take. The same value `datetime.utcfromtimestamp` returns, which is deprecated since Python 3.12."""
+    return _dt.datetime.fromtimestamp(seconds, _dt.UTC).replace(tzinfo=None)
 
 
 @dataclasses.dataclass(frozen=True)

@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from flask import Flask
-
 from timeshift import TimeshiftConfig
 
 from serving.context import ServeContext

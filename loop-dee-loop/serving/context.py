@@ -5,24 +5,23 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlencode
 
-from flask import abort, request, Response
-
 import continuity
 import package_io
+from flask import Response, abort, request
+from timeshift import (
+    FULL_LOOPS_PARAM,
+    TimeshiftConfig,
+    TimeshiftError,
+    TimeWindow,
+    parse_bool,
+    parse_instant_ticks,
+)
+
 from serving.channel import Channel
 from serving.httputil import _send_package_file
 from serving.ll_http import LowLatencyHttpMixin
 from serving.package import LoopPackage
 from serving.query import resolve_request_channel
-from timeshift import (
-    FULL_LOOPS_PARAM,
-    parse_bool,
-    parse_instant_ticks,
-    TimeshiftConfig,
-    TimeshiftError,
-    TimeWindow,
-)
-
 
 # Flask `defaults=` for the plain and the continuous segment URL forms (SCOPE.md §13.5).
 SEG_DEFAULTS = {"mode": "local", "origin_loop": None}
@@ -140,7 +139,7 @@ class ServeContext(LowLatencyHttpMixin):
         ts: bool,
         shift_ticks: int | None,
         sequence_number: int = 0,
-        pace: "tuple[int, int, int] | None" = None,
+        pace: tuple[int, int, int] | None = None,
     ):
         """Shared byte-serving tail for every segment route (SCOPE.md §12):
         the untouched static-file response in default mode, or a per-

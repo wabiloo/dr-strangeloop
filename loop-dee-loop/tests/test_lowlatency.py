@@ -4,6 +4,7 @@ schedule, pacing on a fake clock, the MPD attributes, and that the default
 
 from __future__ import annotations
 
+import itertools
 import json
 import shutil
 import subprocess
@@ -16,10 +17,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import time
+
 import cmaf  # noqa: E402
 import lowlatency  # noqa: E402
 import serve  # noqa: E402
-import time
 from serve import Channel, create_app  # noqa: E402
 from test_serve_continuity import _write_continuous_package  # noqa: E402
 
@@ -180,7 +182,7 @@ def chunked(tmp_path):
 
 @pytestmark_ffmpeg
 def test_ll_mpd_advertises_early_availability_latency_and_clock(chunked, monkeypatch):
-    path, seg, loop = chunked
+    path, seg, _ = chunked
     monkeypatch.setattr(Channel, "now_ticks", lambda self: seg + seg // 2)
     app = create_app(path, epoch_ticks=0, window_segments=4, ll_dash=True, ll_utc_timing="http")
     mpd = app.test_client().get("/index.mpd").get_data(as_text=True)
@@ -228,7 +230,7 @@ def test_configured_utc_timing_url_wins(chunked, monkeypatch):
 
 @pytestmark_ffmpeg
 def test_time_endpoint_is_uncached_and_in_the_channel_clock(chunked, monkeypatch):
-    path, seg, _ = chunked
+    path, _, _ = chunked
     monkeypatch.setattr(Channel, "now_ticks", lambda self: 90_000 * 3600)
     resp = create_app(path, epoch_ticks=0).test_client().get("/time")
     assert resp.get_data(as_text=True) == "1970-01-01T01:00:00.000Z"
@@ -237,7 +239,7 @@ def test_time_endpoint_is_uncached_and_in_the_channel_clock(chunked, monkeypatch
 
 @pytestmark_ffmpeg
 def test_in_progress_segment_streams_one_chunk_per_release_time(chunked, monkeypatch):
-    path, seg, loop = chunked
+    path, seg, _ = chunked
     clock = [seg // 10]  # 0.2 s into segment 0
 
     monkeypatch.setattr(Channel, "now_ticks", lambda self: clock[0])
@@ -281,7 +283,7 @@ def _utc_timing(mpd: str):
 
 @pytestmark_ffmpeg
 def test_utc_timing_direct_writes_the_time_and_is_never_cached(chunked, monkeypatch):
-    path, seg, _ = chunked
+    path, _, _ = chunked
     monkeypatch.setattr(Channel, "now_ticks", lambda self: 90_000 * 3600)
     resp = create_app(path, epoch_ticks=0, ll_dash=True, ll_utc_timing="direct").test_client().get("/index.mpd")
     timing = _utc_timing(resp.get_data(as_text=True))
@@ -446,7 +448,7 @@ def test_chunk_table_tiles_the_segment_and_follows_the_real_timestamps(chunked):
     assert [c.start_ticks for c in table] == [0, *(sum(c.duration_ticks for c in table[:i]) for i in range(1, 4))]
     # byte spans tile the file: no gap, no overlap, the first one carries anything ahead of the first moof
     assert table[0].byte_start == 0 and table[-1].byte_end == len(data)
-    assert all(a.byte_end == b.byte_start for a, b in zip(table, table[1:]))
+    assert all(a.byte_end == b.byte_start for a, b in itertools.pairwise(table))
     assert all(c.independent for c in table)  # the fixture cuts a fragment at every keyframe
     # the spans reproduce the chunks the pacer streams
     assert [data[c.byte_start : c.byte_end] for c in table][1:] == [c for c, _ in lowlatency.split_chunks(data)][1:]

@@ -14,9 +14,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import time
+
 import lowlatency  # noqa: E402
 import serve  # noqa: E402
-import time
 from serve import Channel, create_app  # noqa: E402
 from test_lowlatency import TS, _write_chunked_package  # noqa: E402
 from timeshift import TimeshiftConfig, TimeshiftError  # noqa: E402

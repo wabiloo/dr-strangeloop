@@ -12,7 +12,10 @@ import lowlatency
 import package_io
 from scte35_signaling import build_cue_breaks
 
-from serving.timeline import compute_asset_boundary_set, compute_declared_offset_ticks_by_local_index
+from serving.timeline import (
+    compute_asset_boundary_set,
+    compute_declared_offset_ticks_by_local_index,
+)
 
 
 def _numeric_segment_index(path: Path) -> int:
@@ -331,9 +334,9 @@ class LoopPackage:
                 ts_segments = package_dir / "hls-ts" / rendition.name
                 if len(list(ts_segments.glob("*.ts"))) != self.segments_per_loop:
                     raise RuntimeError(f"Missing HLS TS segments for rendition {rendition.name!r}")
-            if self.has_audio and not self.hls_ts_mux_audio and not self.audio_rendition.audio_sparse:
-                if len(list((package_dir / "hls-ts" / "audio").glob("*.ts"))) != self.segments_per_loop:
-                    raise RuntimeError("Missing separate HLS TS audio segments")
+            separate_ts_audio = self.has_audio and not self.hls_ts_mux_audio and not self.audio_rendition.audio_sparse
+            if separate_ts_audio and len(list((package_dir / "hls-ts" / "audio").glob("*.ts"))) != self.segments_per_loop:
+                raise RuntimeError("Missing separate HLS TS audio segments")
 
         # Reference rendition for boundary-tick-derived quantities that are
         # conceptually shared across the whole ladder (ad-decision timeline,
@@ -423,7 +426,7 @@ class LoopPackage:
             return None
         return math.ceil(longest * 1000 / self.timescale) / 1000
 
-    def video_track_timescale(self, rendition: "VideoRendition") -> int:
+    def video_track_timescale(self, rendition: VideoRendition) -> int:
         """The video track's own media timescale (its init's mdhd), which its `tfdt`s are written in."""
         cache = self.__dict__.setdefault("_video_timescales", {})
         if rendition.name not in cache:
@@ -436,7 +439,7 @@ class LoopPackage:
             cache[rendition.name] = found or self.timescale
         return cache[rendition.name]
 
-    def chunk_table(self, rendition_name: str | None, local_index: int, duration_ticks: int) -> "list[lowlatency.Chunk]":
+    def chunk_table(self, rendition_name: str | None, local_index: int, duration_ticks: int) -> list[lowlatency.Chunk]:
         """The chunks (LL-HLS parts) of one baked segment; `rendition_name` None = the audio track. Read lazily from
         the segment file and cached: the files are immutable, so the cache never goes stale and a package baked
         before LL-HLS existed needs no re-bake."""
@@ -458,7 +461,7 @@ class LoopPackage:
         return cache[key]
 
 
-def _first_present_segment(files: "list[Path | None]", label: str) -> Path:
+def _first_present_segment(files: list[Path | None], label: str) -> Path:
     """First non-None entry of a (possibly sparse, SCOPE.md §11) segment
     file list -- used by continuity mode's startup tfdt check, which only
     needs one representative real segment, not index 0 specifically (index

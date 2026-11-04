@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flask import abort, Flask, jsonify, request, Response, send_file
-
-from serving.constants import _DOCS_HTML
+from flask import Flask, Response, abort, jsonify, request, send_file
 from timeshift import FULL_LOOPS_PARAM, OFFSET_PARAM, TIMELINE_PARAM
 
+from serving.constants import _DOCS_HTML
 from serving.context import ServeContext
 
 
