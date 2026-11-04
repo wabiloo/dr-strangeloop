@@ -372,8 +372,9 @@ Everything else about HLS is unchanged, and with `--ll-hls` off the playlists ar
 Known edge: in a *periodic* timeline (not the default) `seg/<local>` is the same URL every loop. Near the loop wrap the
 server cannot tell a *finished* old segment or part from the *upcoming* occurrence of the same index, and in a loop shorter
 than about two segments it may hold a request for the finished one for up to a segment. A continuous timeline names the
-loop in the URL and has no such ambiguity. Apple's tooling also expects HTTP/2 from an LL-HLS origin; Flask's dev server speaks
-HTTP/1.1 (a CDN such as CloudFront provides HTTP/2 to the viewer).
+loop in the URL and has no such ambiguity. The LL-HLS server profile (RFC 8216bis, Appendix B.1) asks for HTTP/2 or HTTP/3 delivery, and Apple's
+tooling checks it; Flask's server speaks HTTP/1.1, so it does not meet that profile on its own (a CDN such as CloudFront, or a
+tunnel, provides HTTP/2 in front of it).
 
 ### Query parameters: startover, catchup and per-request overrides (SCOPE.md §13)
 

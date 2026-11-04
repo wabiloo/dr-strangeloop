@@ -248,8 +248,12 @@ tens of milliseconds, not a segment.
 
 - **No LL-HLS delta updates.** `_HLS_skip` is accepted and ignored
   (`CAN-SKIP-UNTIL` is not advertised), so every playlist reload is a full one.
-- **Apple's validator.** `mediastreamvalidator` expects an HTTP/2 origin; the Flask server speaks HTTP/1.1, but
-  CloudFront and a tunnel such as tuns.sh provide HTTP/2 in front of it. Run through an HTTP/2 tunnel it
+- **HTTP/2 is part of the LL-HLS profile.** RFC 8216bis's Low-Latency Server Configuration Profile (Appendix B.1)
+  asks for playlists and segments delivered over HTTP/2 or HTTP/3 (and TLS 1.3 or later). `serve.py` and the
+  `local-docker` container speak plain HTTP/1.1, so they do not meet it on their own; `ecs-express` does, because
+  CloudFront provides HTTP/2 to the viewer, and so does a tunnel such as tuns.sh in front of a local server. hls.js,
+  Shaka and dash.js play fine over HTTP/1.1, but Apple's `mediastreamvalidator` expects the profile. Run through an
+  HTTP/2 tunnel it
   completed blocking reloads (`_HLS_msn`/`_HLS_part`) and part fetches against a media playlist with no protocol error.
   Started from the *multivariant* playlist (relative media URIs, as ours are) it stops with "unsupported URL" before
   its first reload; the same playlists with absolute URIs validate. That looks like a limitation of the validator, not
