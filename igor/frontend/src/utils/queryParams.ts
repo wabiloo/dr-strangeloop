@@ -164,6 +164,34 @@ export const QP_SPECS: QpSpec[] = [
     placeholder: 'bits per second, e.g. 2000000',
     help: 'Keep only renditions up to this bandwidth. 400 if none is left.',
   },
+  {
+    name: 'low_latency',
+    label: 'Low latency',
+    kind: 'bool',
+    formats: ['dash'],
+    options: BOOL,
+    help: 'Whether this MPD advertises low latency (availabilityTimeOffset, a latency target, a clock source). 400 on true if the channel does not deliver low latency (not enabled, or the package was baked without chunks).',
+  },
+  {
+    name: 'll_target_latency',
+    label: 'Low-latency target',
+    kind: 'duration',
+    formats: ['dash'],
+    placeholder: 'seconds, e.g. 2',
+    help: 'The latency the low-latency MPD asks players to hold (ServiceDescription / Latency). At most 120 seconds; has no effect unless the MPD advertises low latency.',
+  },
+  {
+    name: 'll_utc_timing',
+    label: 'Low-latency clock sync',
+    kind: 'choice',
+    formats: ['dash'],
+    options: [
+      { label: 'direct (the time in the MPD, served no-store)', value: 'direct' },
+      { label: 'http (a polled /time endpoint)', value: 'http' },
+      { label: 'none (the player’s own clock)', value: 'none' },
+    ],
+    help: 'How a low-latency MPD lets players sync their clock. The UTCTiming URL itself is configuration only, not a parameter.',
+  },
 ]
 
 export const QP_NAMES = QP_SPECS.map((s) => s.name)
@@ -183,6 +211,9 @@ export const FIELD_OVERRIDES: Record<string, { name: string; formats: QpFormat[]
   period_on_segmentation: { name: 'split_on', formats: ['hls', 'dash'] },
   dash_addressing: { name: 'addressing', formats: ['dash'] },
   dash_timeline: { name: 'timeline_style', formats: ['dash'] },
+  low_latency: { name: 'low_latency', formats: ['dash'] },
+  target_latency: { name: 'll_target_latency', formats: ['dash'] },
+  utc_timing: { name: 'll_utc_timing', formats: ['dash'] },
   daterange_mode: { name: 'descriptor_grouping', formats: ['hls'] },
   dash_descriptor_mode: { name: 'descriptor_grouping', formats: ['dash'] },
   cue_tags: { name: 'cue_tags', formats: ['hls'] },

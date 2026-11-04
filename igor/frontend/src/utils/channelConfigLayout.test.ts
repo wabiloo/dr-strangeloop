@@ -10,6 +10,8 @@ import {
   channelDefaultsByParam,
   formFieldsFromConfig,
   lambdaFieldsFromConfig,
+  lowLatencyFromConfig,
+  lowLatencyProblems,
   periodTypesFromConfig,
   usesChannelSection,
 } from './channelConfigLayout.ts'
@@ -44,6 +46,11 @@ test('formFieldsFromConfig reads every setting from its new table', () => {
     hls_ts_mux_audio: false,
     dash_addressing: 'time',
     dash_timeline: 'compact',
+    low_latency: 'off',
+    chunk_duration: 0.5,
+    target_latency: null,
+    utc_timing: 'direct',
+    utc_timing_url: '',
     epoch_utc: '2026-03-04T05:06:07Z',
     continuous: false,
     period_on_segmentation: ['0x22', '0x30'],
@@ -70,6 +77,11 @@ test('formFieldsFromConfig: an empty config gives its-a-live defaults', () => {
     hls_ts_mux_audio: true,
     dash_addressing: 'number',
     dash_timeline: 'full',
+    low_latency: 'off',
+    chunk_duration: 0.5,
+    target_latency: null,
+    utc_timing: 'direct',
+    utc_timing_url: '',
     epoch_utc: '2026-01-01T00:00:00Z',
     continuous: true,
     period_on_segmentation: [],
@@ -144,7 +156,7 @@ test('buildConfigSections: one group per table, same keys as the TOML', () => {
   assert.deepEqual(rows('timeline'), { epoch_utc: '2026-03-04T05:06:07Z', continuous: 'no' })
   assert.deepEqual(rows('packaging'), { segment_duration: '2', dvr_window_seconds: '45' })
   assert.deepEqual(rows('packaging.hls'), { hls_format: 'ts', hls_ts_mux_audio: 'no' })
-  assert.deepEqual(rows('packaging.dash'), { dash_addressing: 'time', dash_timeline: 'compact' })
+  assert.deepEqual(rows('packaging.dash'), { dash_addressing: 'time', dash_timeline: 'compact', low_latency: 'off' })
   assert.deepEqual(rows('query'), {
     timeshift_enabled: 'yes', query_overrides: 'no', query_prefix: 'dsl_', timeshift_start_param: 'from',
     timeshift_end_param: 'to',
@@ -221,6 +233,9 @@ test('channelDefaultsByParam: the channel value of every overridable setting, by
     dvr_window: '45',
     timeline_style: 'compact',
     addressing: 'time',
+    low_latency: 'off (not enabled)',
+    ll_target_latency: 'automatic',
+    ll_utc_timing: 'direct',
     cue_tags: 'alongside',
     descriptor_grouping: 'HLS grouped, DASH narrowed',
     increment_event_ids: 'on',
@@ -287,4 +302,88 @@ test('aws-lambda: has its own infrastructure section, no port, plus the shared s
   )
   assert.equal(CONFIG_SECTION_TITLE['infrastructure.lambda'], 'Infrastructure · Lambda')
   assert.ok(usesChannelSection('aws-lambda') && !usesChannelSection('aws-media'))
+})
+
+
+// ── low-latency DASH ───────────────────────────────────────────────────────
+
+const withDash = (dash: Record<string, unknown>, backend = 'ecs-express', extra: Record<string, unknown> = {}) => ({
+  ...FULL,
+  deploy: { name: 'demo', backend },
+  packaging: { ...FULL.packaging, dash },
+  ...extra,
+})
+
+test('lowLatencyFromConfig: the choices, the TOML booleans, and junk reads as off', () => {
+  assert.equal(lowLatencyFromConfig('on'), 'on')
+  assert.equal(lowLatencyFromConfig('optin'), 'optin')
+  assert.equal(lowLatencyFromConfig(true), 'on')
+  for (const v of [false, undefined, null, 'off', 'fast', 3]) assert.equal(lowLatencyFromConfig(v), 'off')
+})
+
+test('formFieldsFromConfig reads the low-latency keys of [packaging.dash]', () => {
+  const f = formFieldsFromConfig(
+    withDash({ low_latency: 'optin', chunk_duration: 0.25, target_latency: 1.5, utc_timing: 'http', utc_timing_url: 'https://t.example/time' }),
+  )
+  assert.deepEqual(
+    [f.low_latency, f.chunk_duration, f.target_latency, f.utc_timing, f.utc_timing_url],
+    ['optin', 0.25, 1.5, 'http', 'https://t.example/time'],
+  )
+  assert.equal(formFieldsFromConfig(withDash({ low_latency: true })).low_latency, 'on')
+  assert.equal(formFieldsFromConfig(withDash({ low_latency: 'on' })).target_latency, null) // absent = automatic
+})
+
+test('buildConfigSections: low latency rows appear only when it is on, and not for aws-lambda', () => {
+  const rows = (cfg: object) => {
+    const s = buildConfigSections(cfg as never).find((x) => x.id === 'packaging.dash')
+    return Object.fromEntries((s?.rows ?? []).map((r) => [r.key, r.value]))
+  }
+  assert.equal(rows(withDash({})).low_latency, 'off')
+  assert.equal(rows(withDash({})).chunk_duration, undefined)
+  assert.deepEqual(rows(withDash({ low_latency: 'on', chunk_duration: 0.5, target_latency: 2 })), {
+    dash_addressing: 'number', dash_timeline: 'full', low_latency: 'on', chunk_duration: '0.5', target_latency: '2',
+    utc_timing: 'direct',
+  })
+  // the URL row is only for "http", and says when it is automatic
+  assert.equal(rows(withDash({ low_latency: 'on', utc_timing: 'http' })).utc_timing_url, 'automatic (set at deploy)')
+  assert.equal(rows(withDash({ low_latency: 'on', utc_timing: 'http', utc_timing_url: 'https://t/x' })).utc_timing_url, 'https://t/x')
+  assert.equal(rows(withDash({ low_latency: 'on', utc_timing: 'none' })).utc_timing_url, undefined)
+  const lambda = rows(withDash({ low_latency: 'on' }, 'aws-lambda', { infrastructure: LAMBDA.infrastructure }))
+  assert.equal(lambda.low_latency, undefined) // not offered there
+})
+
+test('channelDefaultsByParam: what a request gets without the low-latency parameters', () => {
+  const d = (dash: object) => channelDefaultsByParam(formFieldsFromConfig(withDash(dash)))
+  assert.equal(d({ low_latency: 'on' }).low_latency, 'on')
+  assert.equal(d({ low_latency: 'optin' }).low_latency, 'off (opt-in)')
+  assert.equal(d({}).low_latency, 'off (not enabled)')
+  assert.equal(d({ target_latency: 3 }).ll_target_latency, '3')
+  assert.equal(d({ utc_timing: 'none' }).ll_utc_timing, 'none')
+})
+
+const LLF = {
+  backend: 'local-docker' as const, low_latency: 'on' as const, segment_duration: 2, chunk_duration: 0.5, target_latency: null,
+  utc_timing: 'direct' as const, utc_timing_url: '', query_overrides: true,
+}
+
+test('lowLatencyProblems: a valid setup, and off needs nothing', () => {
+  assert.deepEqual(lowLatencyProblems(LLF), [])
+  assert.deepEqual(lowLatencyProblems({ ...LLF, low_latency: 'off', chunk_duration: 99 }), []) // ignored while off
+  assert.deepEqual(lowLatencyProblems({ ...LLF, low_latency: 'optin' }), [])
+})
+
+test('lowLatencyProblems: each rule the server enforces', () => {
+  const has = (f: object, text: RegExp) => lowLatencyProblems({ ...LLF, ...f }).some((p) => text.test(p))
+  assert.ok(has({ backend: 'aws-lambda' }, /not supported on the aws-lambda/))
+  assert.ok(has({ backend: 'aws-media' }, /not supported/))
+  assert.ok(has({ chunk_duration: 2 }, /shorter than the segment duration/)) // not below the 2 s segment
+  assert.ok(has({ chunk_duration: 0 }, /Chunk duration/))
+  assert.ok(has({ low_latency: 'optin', query_overrides: false }, /Opt-in needs/))
+  assert.ok(has({ target_latency: 0 }, /Target latency/))
+  assert.ok(has({ target_latency: 121 }, /Target latency/))
+  assert.ok(has({ utc_timing: 'direct', utc_timing_url: 'https://t/x' }, /only applies to clock sync/))
+  assert.ok(has({ utc_timing: 'http', utc_timing_url: '/time' }, /absolute http\(s\) URL/))
+  assert.deepEqual(lowLatencyProblems({ ...LLF, utc_timing: 'http', utc_timing_url: 'https://t.example/time' }), [])
+  // the target / URL rules apply even with low latency off, like the server's
+  assert.ok(has({ low_latency: 'off', target_latency: 500 }, /Target latency/))
 })

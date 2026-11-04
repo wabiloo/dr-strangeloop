@@ -44,6 +44,52 @@ QUERY_FIXED_PARAMS = (
 _QUERY_PREFIX_RE = re.compile(r"^[A-Za-z0-9_.~-]*$")
 
 
+# [packaging.dash] low latency (its-a-live/_packaging_cfg.py is the authority; its-a-live has its own venv and is not
+# imported here, so the rules are mirrored and a test keeps the two in step).
+LOW_LATENCY_VALUES = ("off", "on", "optin")
+UTC_TIMING_VALUES = ("direct", "http", "none")
+LOW_LATENCY_BACKENDS = ("ecs-express", "local-docker")
+MAX_TARGET_LATENCY = 120
+
+
+def validate_low_latency(
+    *,
+    backend: str,
+    low_latency: str,
+    segment_duration: float,
+    chunk_duration: float,
+    target_latency: float | None,
+    utc_timing: str,
+    utc_timing_url: str,
+    query_overrides: bool,
+) -> None:
+    """Raise ValueError for a low-latency combination its-a-live would refuse (see _packaging_cfg.py)."""
+    if low_latency not in LOW_LATENCY_VALUES:
+        raise ValueError("low_latency must be 'off', 'on' or 'optin'")
+    if utc_timing not in UTC_TIMING_VALUES:
+        raise ValueError("utc_timing must be 'direct', 'http' or 'none'")
+    if target_latency is not None and not 0 < target_latency <= MAX_TARGET_LATENCY:
+        raise ValueError(f"target_latency must be > 0 and at most {MAX_TARGET_LATENCY} seconds")
+    if utc_timing_url:
+        if utc_timing != "http":
+            raise ValueError("utc_timing_url only applies to utc_timing 'http'")
+        if not utc_timing_url.startswith(("http://", "https://")):
+            raise ValueError("utc_timing_url must be an absolute http(s) URL (DASH does not allow a relative one)")
+    if low_latency == "off":
+        return
+    if backend not in LOW_LATENCY_BACKENDS:
+        raise ValueError(
+            f"low latency is not supported on the {backend} backend (only {', '.join(LOW_LATENCY_BACKENDS)}): "
+            "its responses are held open while chunks are released"
+        )
+    if not 0 < chunk_duration < segment_duration:
+        raise ValueError(
+            f"chunk_duration must be > 0 and shorter than segment_duration ({segment_duration:g}), got {chunk_duration:g}"
+        )
+    if low_latency == "optin" and not query_overrides:
+        raise ValueError("low_latency 'optin' needs query overrides enabled (?low_latency=true)")
+
+
 def validate_query_prefix(value: str) -> str:
     """`[query] prefix`: prepended to every query parameter name, so it must be URL-safe."""
     if not isinstance(value, str) or not _QUERY_PREFIX_RE.match(value):
@@ -153,7 +199,7 @@ mux_audio = {hls_ts_mux_audio}
 
 [packaging.dash]
 timeline_style = "{dash_timeline}"
-addressing = "{dash_addressing}"
+addressing = "{dash_addressing}"{low_latency_extra}
 
 [timeline]
 epoch = "{epoch_utc}"
@@ -210,6 +256,11 @@ def generate_toml(
     hls_ts_mux_audio: bool = True,
     dash_addressing: str = "number",
     dash_timeline: str = "full",
+    low_latency: str = "off",
+    chunk_duration: float = 0.5,
+    target_latency: float | None = None,
+    utc_timing: str = "direct",
+    utc_timing_url: str = "",
     continuous: bool = False,
     period_on_segmentation: list[str] | None = None,
     timeshift_enabled: bool = True,
@@ -259,6 +310,21 @@ def generate_toml(
         raise ValueError("dash_descriptor_mode must be 'shared' or 'narrowed'")
     validate_query_prefix(query_prefix)
     validate_query_names(timeshift_start_param, timeshift_end_param, query_prefix)
+    validate_low_latency(
+        backend=backend, low_latency=low_latency, segment_duration=segment_duration, chunk_duration=chunk_duration,
+        target_latency=target_latency, utc_timing=utc_timing, utc_timing_url=utc_timing_url,
+        query_overrides=query_overrides,
+    )
+    # Only written when low latency is on: the keys are bake-time/serve-time settings of a feature most channels
+    # do not use, and their absence keeps every other channel's TOML exactly as it was.
+    low_latency_extra = ""
+    if low_latency != "off":
+        low_latency_extra = f'\nlow_latency = "{low_latency}"\nchunk_duration = {chunk_duration:g}'
+        if target_latency is not None:
+            low_latency_extra += f"\ntarget_latency = {target_latency:g}"
+        low_latency_extra += f'\nutc_timing = "{utc_timing}"'
+        if utc_timing_url:
+            low_latency_extra += f"\nutc_timing_url = {json.dumps(utc_timing_url)}"
     period_ids = [int(str(i), 0) for i in (period_on_segmentation or [])]
     if any(not 0 <= i <= 0xFF for i in period_ids):
         raise ValueError("period_on_segmentation entries must be segmentation_type_ids (0..255)")
@@ -291,7 +357,7 @@ def generate_toml(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
-            dash_addressing=dash_addressing, dash_timeline=dash_timeline,
+            dash_addressing=dash_addressing, dash_timeline=dash_timeline, low_latency_extra=low_latency_extra,
             continuous=str(continuous).lower(),
         )
 

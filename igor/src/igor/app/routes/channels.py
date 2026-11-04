@@ -19,6 +19,7 @@ from igor.integrations.its_a_live import (
     DEFAULT_DATERANGE_ID_FORMAT,
     DEFAULT_EPOCH_UTC,
     validate_daterange_id_format,
+    validate_low_latency,
     validate_epoch_utc,
     validate_query_names,
     validate_query_prefix,
@@ -69,6 +70,17 @@ class ChannelCreatePayload(BaseModel):
     # <S>, a SegmentTemplate per representation) or "compact" (implicit @t + @r,
     # one shared SegmentTemplate). ecs-express/local-docker only.
     dash_timeline: Literal["full", "compact"] = "full"
+    # [packaging.dash] low latency (loop-dee-loop/README.md "Low-latency DASH"; ecs-express/local-docker only).
+    # low_latency: "off", "on" (every MPD advertises it) or "optin" (?low_latency=true). chunk_duration is a bake-time
+    # setting (seconds, shorter than segment_duration). target_latency (seconds, optional) and utc_timing are also
+    # per-request query parameters (ll_target_latency, ll_utc_timing). utc_timing_url (only with "http", absolute
+    # http(s)) is configuration only: a query parameter must not choose viewers' clock source. With "http" and no
+    # URL, its-a-live sets it automatically at deploy time. Written to the TOML only when low_latency != "off".
+    low_latency: Literal["off", "on", "optin"] = "off"
+    chunk_duration: float = 0.5
+    target_latency: float | None = None
+    utc_timing: Literal["direct", "http", "none"] = "direct"
+    utc_timing_url: str = ""
     # loop-dee-loop/SCOPE.md §12: default on -- serve.py rewrites each
     # segment's own timestamps per request (header patch, never a re-mux)
     # so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the
@@ -244,6 +256,15 @@ class ChannelCreatePayload(BaseModel):
         if v == 0 or v < -1:
             raise ValueError("lambda_reserved_concurrency must be >= 1, or -1 for no reservation")
         return v
+
+    @model_validator(mode="after")
+    def _validate_low_latency(self) -> "ChannelCreatePayload":
+        validate_low_latency(
+            backend=self.backend, low_latency=self.low_latency, segment_duration=self.segment_duration,
+            chunk_duration=self.chunk_duration, target_latency=self.target_latency, utc_timing=self.utc_timing,
+            utc_timing_url=self.utc_timing_url, query_overrides=self.query_overrides,
+        )
+        return self
 
     @model_validator(mode="after")
     def _validate_port_backend(self) -> "ChannelCreatePayload":

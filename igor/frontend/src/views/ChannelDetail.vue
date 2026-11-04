@@ -16,6 +16,7 @@ import BackendBadge from '../components/BackendBadge.vue'
 import JobPanel from '../components/JobPanel.vue'
 import EpochFields from '../components/EpochFields.vue'
 import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
+import LowLatencyFields from '../components/LowLatencyFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
 import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
 import { timeshiftParamsFromConfig } from '../utils/timeshift'
@@ -32,6 +33,7 @@ import {
   configVersionOf,
   formFieldsFromConfig,
   lambdaFieldsFromConfig,
+  lowLatencyProblems,
 } from '../utils/channelConfigLayout'
 import { alignConfirmPopup } from '../utils/confirmPopup'
 import {
@@ -121,6 +123,11 @@ const editForm = reactive<ChannelCreatePayload>({
   hls_ts_mux_audio: true,
   dash_addressing: 'number',
   dash_timeline: 'full',
+  low_latency: 'off',
+  chunk_duration: 0.5,
+  target_latency: null,
+  utc_timing: 'direct',
+  utc_timing_url: '',
   continuous: false,
   period_on_segmentation: [],
   timeshift_enabled: true,
@@ -273,6 +280,11 @@ function cancelEdit() {
 }
 
 async function saveEdit() {
+  const llProblems = lowLatencyProblems(editForm)
+  if (llProblems.length) {
+    editError.value = llProblems.join(' ')
+    return
+  }
   editSaving.value = true
   editError.value = ''
   try {
@@ -1305,6 +1317,7 @@ watch(() => props.name, reload)
                   <Select v-model="editForm.dash_timeline" :options="dashTimelineOptions" option-label="label" option-value="value" fluid />
                 </div>
               </div>
+              <div class="grid mt-1"><LowLatencyFields :form="editForm" id-prefix="edit" /></div>
             </section>
 
             <section class="config-group">

@@ -518,6 +518,13 @@ export interface ChannelCreatePayload {
   dash_addressing?: 'number' | 'time'
   /** [packaging.dash].timeline_style -- SegmentTimeline `full` (@t and @d on every S, a SegmentTemplate per representation) or `compact` (implicit @t + @r, one shared SegmentTemplate when the video renditions match). */
   dash_timeline?: 'full' | 'compact'
+  // [packaging.dash] low latency (loop-dee-loop/README.md "Low-latency DASH"; ecs-express and local-docker only).
+  // Written to the TOML only when low_latency is not 'off'. utc_timing_url is configuration only.
+  low_latency?: 'off' | 'on' | 'optin'
+  chunk_duration?: number
+  target_latency?: number | null
+  utc_timing?: 'direct' | 'http' | 'none'
+  utc_timing_url?: string
   /** loop-dee-loop/SCOPE.md §12: default true -- no #EXT-X-DISCONTINUITY /
    * DASH Period restart at the loop wrap (serve.py rewrites each segment's
    * own timestamps per request instead). ecs-express/local-docker only. */

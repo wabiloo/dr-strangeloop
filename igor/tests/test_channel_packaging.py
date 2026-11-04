@@ -564,3 +564,105 @@ def test_generated_toml_passes_its_a_live_version_check():
     for backend in ("ecs-express", "local-docker"):
         config = tomllib.loads(generate_toml(**_payload(backend=backend).model_dump()))
         _legacy_cfg.check_config_version(config, "igor.toml")  # does not raise
+
+
+# ── [packaging.dash] low latency ────────────────────────────────────────────
+
+
+def _ll_payload(**kw):
+    base = dict(
+        name="test-channel", backend="local-docker", region="eu-west-1", bucket_name="b", content_folder="c",
+        source_path="outputs/test.ts", segment_duration=2.0,
+    )
+    return ChannelCreatePayload(**{**base, **kw})
+
+
+def _dash(payload):
+    return tomllib.loads(generate_toml(**payload.model_dump()))["packaging"]["dash"]
+
+
+def test_low_latency_off_adds_nothing_to_the_toml():
+    assert _dash(_ll_payload()) == {"timeline_style": "full", "addressing": "number"}
+
+
+@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("mode", ["on", "optin"])
+def test_low_latency_roundtrip(backend, mode):
+    dash = _dash(_ll_payload(backend=backend, low_latency=mode, chunk_duration=0.25, target_latency=1.5, utc_timing="none"))
+    assert dash == {
+        "timeline_style": "full", "addressing": "number", "low_latency": mode, "chunk_duration": 0.25,
+        "target_latency": 1.5, "utc_timing": "none",
+    }
+
+
+def test_low_latency_http_with_an_explicit_url_and_the_defaults():
+    dash = _dash(_ll_payload(low_latency="on", utc_timing="http", utc_timing_url="https://t.example/time?a=1"))
+    assert dash["utc_timing"] == "http" and dash["utc_timing_url"] == "https://t.example/time?a=1"
+    plain = _dash(_ll_payload(low_latency="on"))
+    assert plain["utc_timing"] == "direct" and plain["chunk_duration"] == 0.5 and "target_latency" not in plain
+    assert "utc_timing_url" not in plain
+
+
+@pytest.mark.parametrize(
+    "kw,message",
+    [
+        (dict(low_latency="on", backend="aws-lambda"), "not supported"),
+        (dict(low_latency="on", backend="aws-media"), "not supported"),
+        (dict(low_latency="on", chunk_duration=2.0), "chunk_duration"),  # not shorter than the 2 s segment
+        (dict(low_latency="on", chunk_duration=0), "chunk_duration"),
+        (dict(low_latency="on", target_latency=0), "target_latency"),
+        (dict(low_latency="on", target_latency=121), "target_latency"),
+        (dict(low_latency="optin", query_overrides=False), "optin"),
+        (dict(low_latency="on", utc_timing="direct", utc_timing_url="https://t.example/time"), "utc_timing_url"),
+        (dict(low_latency="on", utc_timing="http", utc_timing_url="/time"), "absolute"),
+        (dict(low_latency="fast"), "low_latency"),
+        (dict(utc_timing="ntp"), "utc_timing"),
+    ],
+)
+def test_low_latency_combinations_its_a_live_would_refuse_are_rejected_up_front(kw, message):
+    with pytest.raises(ValueError, match=message):
+        _ll_payload(**kw)
+
+
+def test_generate_toml_checks_too_for_programmatic_callers():
+    with pytest.raises(ValueError, match="not supported"):
+        generate_toml(
+            name="x", backend="aws-lambda", region="r", bucket_name="b", content_folder="c", source_path="p",
+            low_latency="on",
+        )
+
+
+def test_the_rules_match_its_a_live():
+    """igor mirrors _packaging_cfg.py (separate venv): feed the same configs to both and compare the verdicts."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "its-a-live"
+    sys.path.insert(0, str(root))
+    try:
+        spec = importlib.util.spec_from_file_location("_packaging_cfg_under_test", root / "_packaging_cfg.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path.remove(str(root))
+    cases = [
+        dict(low_latency="on"), dict(low_latency="optin"), dict(low_latency="on", chunk_duration=2.0),
+        dict(low_latency="on", target_latency=200), dict(low_latency="on", utc_timing="http", utc_timing_url="/x"),
+        dict(low_latency="on", utc_timing="direct", utc_timing_url="https://x/t"), dict(low_latency="on", backend="aws-lambda"),
+        dict(low_latency="optin", query_overrides=False), dict(),
+    ]
+    for kw in cases:
+        igor_ok = True
+        try:
+            _ll_payload(**kw)
+        except ValueError:
+            igor_ok = False
+        dash = {k: kw[k] for k in ("low_latency", "chunk_duration", "target_latency", "utc_timing", "utc_timing_url") if k in kw}
+        cfg = {"packaging": {"segment_duration": 2.0, "dash": dash}, "query": {"overrides": kw.get("query_overrides", True)}}
+        try:
+            mod.check_low_latency(cfg, kw.get("backend", "local-docker"))
+            its_ok = True
+        except ValueError:
+            its_ok = False
+        assert igor_ok == its_ok, kw

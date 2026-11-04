@@ -16,9 +16,10 @@ import FieldHelp from '../components/FieldHelp.vue'
 import QpBadge from '../components/QpBadge.vue'
 import EpochFields from '../components/EpochFields.vue'
 import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
+import LowLatencyFields from '../components/LowLatencyFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
 import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
-import { CONFIG_FIELD_LABEL as L, CONFIG_SECTION_TITLE as T, deriveSourceKind, formFieldsFromConfig } from '../utils/channelConfigLayout'
+import { CONFIG_FIELD_LABEL as L, CONFIG_SECTION_TITLE as T, deriveSourceKind, formFieldsFromConfig, lowLatencyProblems } from '../utils/channelConfigLayout'
 import type { ArchiveListItem, ChannelCreatePayload, Job, ManifestListItem, PlaylistListItem } from '../api/types'
 
 const router = useRouter()
@@ -147,6 +148,11 @@ const form = reactive<ChannelCreatePayload>({
   hls_ts_mux_audio: true,
   dash_addressing: 'number',
   dash_timeline: 'full',
+  low_latency: 'off',
+  chunk_duration: 0.5,
+  target_latency: null,
+  utc_timing: 'direct',
+  utc_timing_url: '',
   continuous: false,
   period_on_segmentation: [],
   timeshift_enabled: true,
@@ -326,6 +332,11 @@ const dashDescriptorModeOptions = [
 
 async function submit() {
   if (nameError.value) return
+  const llProblems = lowLatencyProblems(form)
+  if (llProblems.length) {
+    error.value = llProblems.join(' ')
+    return
+  }
   saving.value = true
   error.value = ''
   try {
@@ -608,6 +619,7 @@ async function submit() {
           <div class="flex align-items-center"><label for="dash-timeline">{{ L.dash_timeline }}</label><QpBadge field="dash_timeline" :form="form" /></div>
           <Select id="dash-timeline" v-model="form.dash_timeline" :options="dashTimelineOptions" option-label="label" option-value="value" />
         </div>
+        <LowLatencyFields :form="form" id-prefix="new" />
       </div>
 
       <h4 class="mb-0 mt-2">{{ T.query }}</h4>

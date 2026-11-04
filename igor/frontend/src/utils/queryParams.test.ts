@@ -22,6 +22,7 @@ test('registry: the override names, in the order loop-dee-loop documents them', 
   assert.deepEqual(QP_NAMES, [
     'timeline_mode', 'epoch', 'dvr_window', 'timeline_style', 'addressing', 'cue_tags', 'descriptor_grouping',
     'increment_event_ids', 'signal_format', 'id_template', 'split_on', 'max_height', 'max_bitrate',
+    'low_latency', 'll_target_latency', 'll_utc_timing',
   ])
   assert.equal(new Set(QP_NAMES).size, QP_NAMES.length)
 })
@@ -34,7 +35,7 @@ test('registry: the startover parameters are not overrides (they have their own 
 test('registry: per-format applicability matches the server', () => {
   const only = (fmt: 'hls' | 'dash') => QP_SPECS.filter((s) => s.formats.length === 1 && s.formats[0] === fmt).map((s) => s.name)
   assert.deepEqual(only('hls'), ['cue_tags', 'id_template'])
-  assert.deepEqual(only('dash'), ['timeline_style', 'addressing', 'signal_format'])
+  assert.deepEqual(only('dash'), ['timeline_style', 'addressing', 'signal_format', 'low_latency', 'll_target_latency', 'll_utc_timing'])
 })
 
 test('qpSpec: lookup and unknown', () => {
