@@ -78,14 +78,14 @@ uv run python loop-dee-loop/serve.py PKG_DIR --epoch-utc 2026-01-01T00:00:00Z [o
 grave-robber segment-list `manifest.json`. Notable options:
 `--segment-duration`, `--hls-format cmaf|ts`, `--daterange-mode`,
 `--cue-tags`, `--increment-event-ids`, `--dash-signal-format`,
-`--allow-missing-segments`, and for [low-latency DASH](./low-latency.md)
+`--allow-missing-segments`, and for [low latency](./low-latency.md)
 `--chunk-duration`.
 
 `serve.py` notable options: `--port`, `--channel-name`,
 `--dvr-window-seconds`, `--continuous-timeline`, `--dash-addressing number|time`, `--dash-timeline full|compact`, `--period-on-segmentation`,
 `--timeshift` (+ `--timeshift-start-param`, `--timeshift-end-param`,
-`--timeshift-max-span-seconds`), and for [low-latency DASH](./low-latency.md)
-`--ll-dash` / `--ll-optin`, `--ll-target-latency`, `--ll-utc-timing direct|http|none`,
+`--timeshift-max-span-seconds`), and for [low latency](./low-latency.md)
+`--ll-dash` / `--ll-hls` / `--ll-optin`, `--ll-target-latency`, `--ll-utc-timing direct|http|none`,
 `--ll-utc-timing-url`.
 
 Reference: [loop-dee-loop README](../loop-dee-loop/README.md),

@@ -58,7 +58,7 @@ its `.hls`/`.dash` sub-tables, `[query]`, `[timeshift]`, `[markers]` and its
 configuration panel and the edit form. Field-by-field reference:
 [its-a-live AGENTS](../its-a-live/AGENTS.md). *Packaging · DASH* includes the
 low-latency settings (only for backends that support them; settings a request can
-override carry an `&` badge): see [Low-latency DASH](./low-latency.md).
+override carry an `&` badge): see [Low latency (DASH and HLS)](./low-latency.md).
 
 **Detail page.**
 

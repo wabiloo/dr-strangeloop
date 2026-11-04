@@ -60,9 +60,10 @@ channel TOML. There is a single CLI regardless of backend.
 - **Startover / catchup**: past-range playback with `?start=&end=` on the
   normal manifest URLs. See the "Startover & catchup" section of the
   [loop-dee-loop README](../loop-dee-loop/README.md).
-- **Low latency**: DASH delivered chunk by chunk so players can sit a second or
-  two behind live (`ecs-express` and `local-docker`, off by default). See
-  [Low-latency DASH](./low-latency.md).
+- **Low latency**: DASH chunked delivery and Apple LL-HLS (parts, blocking
+  reload), so players can sit a few seconds or less behind live (`ecs-express`
+  and `local-docker`, each format off by default). See
+  [Low latency (DASH and HLS)](./low-latency.md).
 
 ## Where files live
 
@@ -89,4 +90,4 @@ uv run python galvanise.py data/playlists/my-stream.yaml --backend ecs-express
 and generates the channel TOML for you. Or do the same visually in Igor:
 create a playlist, build it, create a channel, start it.
 
-Next: [CLI & API reference](./cli-reference.md), or [Low-latency DASH](./low-latency.md).
+Next: [CLI & API reference](./cli-reference.md), or [Low latency (DASH and HLS)](./low-latency.md).

@@ -1,14 +1,16 @@
-# Low-latency DASH
+# Low latency (DASH and HLS)
 
 A looping channel normally sits two to four segments behind the live edge. With
 low latency on, `loop-dee-loop` delivers the segment *in progress* chunk by
 chunk, each chunk released at the moment it would have existed on a real live
-encoder, and the MPD tells players they may ask for it early. A player can then
-sit about a second or two behind live.
+encoder. For DASH the MPD tells players they may ask for it early; for HLS the
+media playlists become Apple LL-HLS playlists (parts, preload hint, blocking
+reload). A player can then sit a few seconds, or about a second or two with DASH,
+behind live. Both formats are made from the same baked chunks.
 
-**Status.** DASH only (HLS low latency is planned). Off by default. Supported on
-the `ecs-express` and `local-docker` backends; `aws-lambda` and `aws-media` are
-not (see [Backends and CDN](#backends-and-cdn)).
+**Status.** DASH and HLS, each switched on independently. Off by default.
+Supported on the `ecs-express` and `local-docker` backends; `aws-lambda` and
+`aws-media` are not (see [Backends and CDN](#backends-and-cdn)).
 
 ## What you get
 
@@ -22,8 +24,15 @@ of the playhead, the same definition for every player (see
 | dash.js 5.2 | 4.5 s | **2.0 s** (the MPD's target) |
 | Shaka 5.2 | 3.1 s | **1.0 s** |
 
-No stalls or errors in either, including across the loop wrap. The numbers are a
-sanity check of the mechanism, not a benchmark: they are local, single runs, and
+No stalls or errors in either, including across the loop wrap.
+
+LL-HLS was verified with hls.js and Shaka (playing, no stalls or errors, parts and
+blocking reload exercised). One number was kept: hls.js settled at about 3.1 s
+against the 1.8 s its own configuration targets, a stable offset that was **not
+tuned**. Apple's `mediastreamvalidator` was run only partially (see
+[Known limits](#known-limits)).
+
+The numbers are a sanity check of the mechanism, not a benchmark: they are local, single runs, and
 each player's own live-edge logic decides where it settles.
 
 ## How it works
@@ -54,7 +63,30 @@ a 2 s segment, baked as four chunks (moof+mdat), each with its own tfdt
    clock source.
 4. **Sync the clock.** See [Clock sync](#clock-sync-utctiming).
 
-Segment bytes never change: only *when* they are sent, and what the MPD says.
+Segment bytes never change: only *when* they are sent, and what the manifest says.
+
+### HLS: Apple LL-HLS
+
+The HLS side is Apple's low-latency HLS as folded into RFC 8216bis, not the older
+community "LHLS". A *part* is one baked chunk, so nothing extra is baked, and a
+package that is already chunked for DASH needs no re-bake. It needs CMAF segments
+(MPEG-TS cannot carry parts). A live media playlist then carries:
+
+- `EXT-X-VERSION:9`, `EXT-X-SERVER-CONTROL` (`CAN-BLOCK-RELOAD`, `PART-HOLD-BACK`
+  of three part targets) and `EXT-X-PART-INF`. The part target must cover every
+  part and never change, so the bake records the longest chunk it actually made.
+- `EXT-X-PART` lines for the newest three segments (`INDEPENDENT=YES` on parts that
+  start with a sync sample); the segment in progress lists only the parts released
+  so far.
+- An `EXT-X-PRELOAD-HINT` for the next part and an `EXT-X-RENDITION-REPORT` per
+  other playlist.
+
+Parts are separate URLs (`.../seg/<n>.<k>.m4s`). A request for a part that is not
+complete yet is **held** until its wall-clock end, which is how the preload hint is
+answered. **Blocking playlist reload** (`?_HLS_msn=<n>&_HLS_part=<k>`) holds the
+playlist until that part exists; a malformed value or one more than two segments
+ahead is a `400`. These two parameters are protocol parameters, not overrides:
+never prefixed, and a CDN must key on them (its-a-live does).
 
 ## Turn it on
 
@@ -63,65 +95,79 @@ Segment bytes never change: only *when* they are sent, and what the MPD says.
 ```toml
 [packaging]
 segment_duration = 2          # shorter segments sit better with chunks
+chunk_duration = 0.5          # seconds, shorter than segment_duration; shared by both formats
+
+[packaging.hls]
+container = "cmaf"            # LL-HLS needs CMAF
+low_latency = "on"            # "off" | "on" | "optin"
 
 [packaging.dash]
 low_latency = "on"            # "off" | "on" | "optin"
-chunk_duration = 0.5          # seconds, shorter than segment_duration
 # target_latency = 2          # optional; default 4 chunks, at least 1 s
 # utc_timing = "direct"       # "direct" (default) | "http" | "none"
 ```
 
-It decides how the loop is **baked**, so run `spark` again after turning it on or
-off (nothing detects a stale bake). Then `create`/`redeploy` and `start` as
+Either format can be on without the other. It decides how the loop is **baked**, so
+run `spark` again after turning it on or off (nothing detects a stale bake). Then `create`/`redeploy` and `start` as
 usual. Every key is documented in [its-a-live AGENTS](../its-a-live/AGENTS.md)
 and the [its-a-live README](../its-a-live/README.md#low-latency-dash-and-hls).
 
 ### In Igor
 
-The **New channel** form and the **Edit** form on a channel's page have a
-low-latency setting in the *Packaging · DASH* group (only for backends that can
-do it). The read-only configuration panel shows it, and the settings that a
+The **New channel** form and the **Edit** form on a channel's page have the
+settings in the table each one is stored in: the chunk size under *Packaging*,
+*Low-latency HLS* under *Packaging · HLS* (CMAF only) and *Low-latency DASH* with
+its target latency and clock sync under *Packaging · DASH* (only for backends that
+can do it). The read-only configuration panel shows it, and the settings that a
 request can override carry the `&` badge. See [Using Igor](./igor-guide.md#channels).
 
 ### By hand
 
 ```bash
 uv run python loop-dee-loop/bake.py outputs/x.ts --output PKG --segment-duration 2 --chunk-duration 0.5
-uv run python loop-dee-loop/serve.py PKG --epoch-utc 2026-01-01T00:00:00Z --ll-dash
+uv run python loop-dee-loop/serve.py PKG --epoch-utc 2026-01-01T00:00:00Z --ll-dash --ll-hls
 ```
 
 Flags and the full list are in the
 [loop-dee-loop README](../loop-dee-loop/README.md#low-latency-dash-cmaf-chunked-delivery)
+(DASH) and [its HLS section](../loop-dee-loop/README.md#low-latency-hls-apple-ll-hls),
 and the [CLI reference](./cli-reference.md#loop-dee-loop-bake-and-serve).
 
 ## Settings
 
-| Config key `[packaging.dash]` | Meaning | Default | Query parameter | Flag |
+| Config key | Meaning | Default | Query parameter | Flag |
 |---|---|---|---|---|
-| `low_latency` | `off`; `on` (every MPD advertises it); `optin` (delivered, advertised only on `?low_latency=true`) | `off` | `low_latency` | `--ll-dash` / `--ll-optin` |
-| `chunk_duration` | Seconds per baked chunk; shorter than the segment | `0.5` | no (baked) | `bake.py --chunk-duration` |
-| `target_latency` | Latency the MPD asks players to hold (at most 120 s) | 4 chunks, at least 1 s | `ll_target_latency` | `--ll-target-latency` |
-| `utc_timing` | Clock sync: `direct`, `http`, `none` | `direct` | `ll_utc_timing` | `--ll-utc-timing` |
-| `utc_timing_url` | Absolute URL of `/time` for `http` | set automatically | **never** | `--ll-utc-timing-url` |
+| `[packaging.dash] low_latency` | `off`; `on` (every MPD advertises it); `optin` (delivered, advertised only on `?low_latency=true`) | `off` | `low_latency` | `--ll-dash` / `--ll-optin` |
+| `[packaging.hls] low_latency` | The same for HLS media playlists; needs `container = "cmaf"` | `off` | `low_latency` | `--ll-hls` / `--ll-optin` |
+| `[packaging] chunk_duration` | Seconds per baked chunk (a DASH chunk and an HLS part); shorter than the segment | `0.5` | no (baked) | `bake.py --chunk-duration` |
+| `[packaging.dash] target_latency` | Latency the MPD asks players to hold (at most 120 s) | 4 chunks, at least 1 s | `ll_target_latency` | `--ll-target-latency` |
+| `[packaging.dash] utc_timing` | Clock sync: `direct`, `http`, `none` | `direct` | `ll_utc_timing` | `--ll-utc-timing` |
+| `[packaging.dash] utc_timing_url` | Absolute URL of `/time` for `http` | set automatically | **never** | `--ll-utc-timing-url` |
 
+The target latency and clock sync are DASH-only. `--ll-optin` delivers both formats and
+advertises only on request; it is what `optin` on either format turns on.
 `optin` needs `[query] overrides = true`, since that is how a viewer asks.
 
 ## Per-request overrides
 
-With `[query] overrides` on, the MPD accepts three parameters (the channel's
-prefix, if any, goes in front):
+With `[query] overrides` on, the manifests accept these parameters (the channel's
+prefix, if any, goes in front). `low_latency` applies to the MPD and to HLS
+playlists alike (a multivariant playlist passes it on to the media playlists); the
+other two are MPD-only:
 
 ```
 …/index.mpd?low_latency=false            a plain MPD from a low-latency channel
-…/index.mpd?low_latency=true             opt in on an `optin` channel
+…/index.m3u8?low_latency=true            opt in on an `optin` channel (also for the MPD)
 …/index.mpd?ll_target_latency=3          ask players to hold 3 s
 …/index.mpd?ll_utc_timing=none           no clock source
 ```
 
 `low_latency=true` is a `400` on a channel that does not deliver low latency.
 Segment delivery is a *server* property (segment URLs carry no query string), so
-`low_latency=false` only changes what the MPD advertises; an in-progress segment
-is still streamed in chunks.
+`low_latency=false` only changes what the manifest advertises; an in-progress
+segment is still streamed in chunks. `low_latency=true` on HLS is also a `400`
+when the channel's HLS is MPEG-TS. A startover/catchup range or an `offset` is
+never low-latency.
 
 Two things are deliberately **not** overridable: the chunk size (it is baked into
 the files), and the `UTCTiming` URL. If a link could set that URL, anyone could
@@ -167,7 +213,7 @@ dash.js tolerates them). its-a-live fills it in at deploy time:
 | Backend | Low latency | Notes |
 |---|---|---|
 | `local-docker` | yes | Fewest moving parts; start here. |
-| `ecs-express` | yes | Behind CloudFront: segments cached as usual, `/time` and (with `direct`) the MPD are not. The container runs gunicorn `gthread` workers. |
+| `ecs-express` | yes | Behind CloudFront: segments and parts cached as usual, `/time` and (with `direct`) the MPD are not. The manifest cache key includes the whole query string, which already covers `_HLS_msn`/`_HLS_part`; a channel with a narrow custom query-name list gets those names added. The container runs gunicorn `gthread` workers. |
 | `aws-lambda` | **no** | A held response occupies an invocation and bills while it waits. A config error. |
 | `aws-media` | **no** | MediaPackage v1 has no low-latency output (v2 would be a separate project). A config error. |
 
@@ -200,8 +246,19 @@ tens of milliseconds, not a segment.
 
 ## Known limits
 
-- **DASH only.** LL-HLS (parts, blocking reload) is not implemented; the HLS
-  output is unchanged.
+- **No LL-HLS delta updates.** `_HLS_skip` is accepted and ignored
+  (`CAN-SKIP-UNTIL` is not advertised), so every playlist reload is a full one.
+- **Apple's validator needs HTTP/2.** `mediastreamvalidator` expects HTTP/2 from an
+  LL-HLS origin, which the Flask server does not speak (CloudFront does for the
+  viewer). In a partial run it reported an unsupported URL on reloads from the
+  multivariant playlist; whether that is a validator quirk with relative URIs was
+  not settled, so a full validator pass is still open.
+- **Short loops in a periodic timeline.** There `seg/<n>` is the same URL every
+  loop, so near the wrap the server cannot always tell a finished part from the
+  upcoming one of the same index, and in a loop shorter than about two segments it
+  may hold a request for a finished one. The default continuous timeline has no
+  such ambiguity.
+- **hls.js latency not tuned** (see [What you get](#what-you-get)).
 - **Source GOP length** decides where segments can start (a remux, no transcode).
   Chunks work with any GOP, but only a chunk that begins on a keyframe is a
   random-access point, so join time depends on the source's GOP.
@@ -221,7 +278,8 @@ tens of milliseconds, not a segment.
 
 | Symptom | Likely cause |
 |---|---|
-| `low_latency=true` returns `400` | The channel does not deliver low latency: it is off, or the package was baked without chunks. Re-spark with it on. |
+| `low_latency=true` returns `400` | The channel does not deliver low latency: it is off, the package was baked without chunks, or (HLS) the container is MPEG-TS. Re-spark with it on. |
+| A blocking reload (`_HLS_msn`) returns `400` | The value is malformed, negative, past the segment's last part, or more than two segments ahead of the live edge. |
 | `serve.py` refuses to start with "needs a package baked with `--chunk-duration`" | Same: bake with `--chunk-duration` first. |
 | Latency stays at the old value | The player is ignoring `ServiceDescription` (not every player reads it), or the MPD is cached: look for `availabilityTimeOffset` in the response. |
 | Chunks all arrive at the segment end | Something in the path buffers responses; test the origin directly. |
@@ -230,7 +288,7 @@ tens of milliseconds, not a segment.
 
 ## Where the details live
 
-- [loop-dee-loop README](../loop-dee-loop/README.md#low-latency-dash-cmaf-chunked-delivery): flags, the delivery model, query parameters.
+- [loop-dee-loop README](../loop-dee-loop/README.md#low-latency-dash-cmaf-chunked-delivery): flags, the delivery model, query parameters; [its HLS section](../loop-dee-loop/README.md#low-latency-hls-apple-ll-hls).
 - [its-a-live AGENTS](../its-a-live/AGENTS.md) and [its-a-live README](../its-a-live/README.md#low-latency-dash-and-hls): the channel config keys and deploy behaviour.
 - [loop-dee-loop AGENTS](../loop-dee-loop/AGENTS.md): module map (`lowlatency.py`) and what an agent must not get wrong.
 - [DASH conformance review](../loop-dee-loop/DASH_CONFORMANCE.md): the MPD checks this builds on.

@@ -35,7 +35,7 @@ CATALOG: tuple[DocSection, ...] = (
         DocEntry("docker-local", "Run Igor via Docker", "No toolchain install: everything in a container.", "DOCKER_LOCAL.md"),
     )),
     DocSection("low-latency", "Low latency", (
-        DocEntry("low-latency", "Low-latency DASH", "How it works, how to turn it on, per-request overrides, clock sync, backends, limits.", "docs/low-latency.md"),
+        DocEntry("low-latency", "Low latency (DASH and HLS)", "How it works, how to turn it on, per-request overrides, clock sync, backends, limits.", "docs/low-latency.md"),
         DocEntry("player-lab-agents", "player-lab", "Play a channel in several players and measure latency, stalls and errors.", "player-lab/AGENTS.md"),
     )),
     DocSection("franken-ts", "Content authoring: franken-ts", (
