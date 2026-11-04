@@ -7,6 +7,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 ENTRYPOINT = Path(__file__).resolve().parents[1] / "docker-entrypoint.sh"
 
@@ -119,19 +121,49 @@ def test_production_entrypoint_forwards_timeshift_options(tmp_path: Path):
     }
 
 
-def test_dockerfile_copies_every_module_serve_imports():
-    """serve.py/wsgi.py import sibling modules; the image copies files by
-    name, so a new module that isn't listed fails at container start."""
+def _local_imports(path: Path, local: set[str]) -> set[str]:
+    """The sibling modules / packages (names in `local`) a source file imports, at any indentation."""
     import re
 
-    dockerfile = (ENTRYPOINT.parent / "Dockerfile").read_text(encoding="utf-8")
-    copied = set(re.search(r"^COPY (bake\.py .*?) \./$", dockerfile, re.M).group(1).split())
-    local_modules = {p.stem for p in ENTRYPOINT.parent.glob("*.py")}
-    for entry in ("serve.py", "wsgi.py"):
-        source = (ENTRYPOINT.parent / entry).read_text(encoding="utf-8")
-        imported = set(re.findall(r"^(?:import|from) (\w+)", source, re.M))
-        for module in imported & local_modules:
-            assert f"{module}.py" in copied, f"{entry} imports {module}.py but the Dockerfile does not COPY it"
+    source = path.read_text(encoding="utf-8")
+    return set(re.findall(r"^\s*(?:import|from) (\w+)", source, re.M)) & local
+
+
+@pytest.mark.parametrize("dockerfile_name", ["Dockerfile", "Dockerfile.lambda"])
+def test_dockerfile_copies_every_module_serve_imports(dockerfile_name):
+    """serve.py/wsgi.py and the `serving/` package import sibling modules; an image copies files by name, so a
+    module that isn't listed fails at container start. Walks the whole import graph (a module imported only by
+    `serving/` counts) and understands a copied package directory."""
+    import re
+
+    root = ENTRYPOINT.parent
+    dockerfile = (root / dockerfile_name).read_text(encoding="utf-8")
+    copied: set[str] = set()
+    for line in re.findall(r"^COPY (.*?) \./(?:\S*)$", dockerfile, re.M):
+        copied.update(line.split())
+    modules = {p.stem for p in root.glob("*.py")}
+    packages = {p.name for p in root.iterdir() if p.is_dir() and (p / "__init__.py").is_file()}
+    local = modules | packages
+
+    pending = [root / "serve.py", root / "wsgi.py"]
+    seen: set[Path] = set()
+    needed: dict[str, Path] = {}
+    while pending:
+        path = pending.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        for name in _local_imports(path, local):
+            needed.setdefault(name, path)
+            if name in packages:
+                pending.extend(sorted((root / name).rglob("*.py")))
+            else:
+                pending.append(root / f"{name}.py")
+    for name, importer in sorted(needed.items()):
+        if name in packages:
+            assert f"{name}/" in copied, f"{importer.name} imports package {name}/ but {dockerfile_name} does not COPY it"
+        else:
+            assert f"{name}.py" in copied, f"{importer.name} imports {name}.py but {dockerfile_name} does not COPY it"
 
 
 def test_s3_store_entrypoint_skips_sync_and_runs_one_threaded_worker(tmp_path: Path):

@@ -25,6 +25,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt boto3
 
 COPY serve.py wsgi.py scte35_signaling.py scte35_table23_data.py loop_math.py cmaf.py continuity.py lowlatency.py timeshift.py package_io.py s3_package.py openapi.yaml pyproject.toml ./
+COPY serving/ ./serving/
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
