@@ -74,4 +74,5 @@ app = create_app(
     ll_dash=os.environ.get("LL_DASH", "").lower() in ("1", "true", "yes"),
     ll_target_latency=float(os.environ["LL_TARGET_LATENCY"]) if os.environ.get("LL_TARGET_LATENCY") else None,
     ll_utc_timing_url=os.environ.get("LL_UTC_TIMING_URL", ""),
+    ll_utc_timing=os.environ.get("LL_UTC_TIMING") or "http",
 )

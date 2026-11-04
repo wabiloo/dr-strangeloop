@@ -262,3 +262,46 @@ def test_without_ll_a_segment_is_one_plain_response(chunked, monkeypatch):
     monkeypatch.setattr(serve.time, "sleep", lambda s: pytest.fail("must not pace"))
     resp = create_app(path, epoch_ticks=0).test_client().get("/1080p/seg/0.m4s")
     assert resp.get_data() == (path / "segments" / "1080p" / "seg_track1_0.m4s").read_bytes()
+
+
+# ── --ll-utc-timing modes ──────────────────────────────────────────────────
+
+
+def _utc_timing(mpd: str):
+    return ET.fromstring(mpd).find("d:UTCTiming", NS)
+
+
+@pytestmark_ffmpeg
+def test_utc_timing_direct_writes_the_time_and_is_never_cached(chunked, monkeypatch):
+    path, seg, _ = chunked
+    monkeypatch.setattr(Channel, "now_ticks", lambda self: 90_000 * 3600)
+    resp = create_app(path, epoch_ticks=0, ll_dash=True, ll_utc_timing="direct").test_client().get("/index.mpd")
+    timing = _utc_timing(resp.get_data(as_text=True))
+    assert timing.get("schemeIdUri") == "urn:mpeg:dash:utc:direct:2014"
+    assert timing.get("value") == "1970-01-01T01:00:00.000Z"
+    assert resp.headers["Cache-Control"] == "no-store"
+
+
+@pytestmark_ffmpeg
+def test_utc_timing_none_omits_it(chunked, monkeypatch):
+    path, seg, _ = chunked
+    monkeypatch.setattr(Channel, "now_ticks", lambda self: seg + seg // 2)
+    resp = create_app(path, epoch_ticks=0, ll_dash=True, ll_utc_timing="none").test_client().get("/index.mpd")
+    assert _utc_timing(resp.get_data(as_text=True)) is None
+    assert "Cache-Control" not in resp.headers or "no-store" not in resp.headers["Cache-Control"]
+
+
+@pytestmark_ffmpeg
+def test_utc_timing_http_is_the_default_and_leaves_the_mpd_cacheable(chunked, monkeypatch):
+    path, seg, _ = chunked
+    monkeypatch.setattr(Channel, "now_ticks", lambda self: seg + seg // 2)
+    resp = create_app(path, epoch_ticks=0, ll_dash=True).test_client().get("/index.mpd")
+    assert _utc_timing(resp.get_data(as_text=True)).get("schemeIdUri") == "urn:mpeg:dash:utc:http-xsdate:2014"
+    assert "no-store" not in resp.headers.get("Cache-Control", "")
+
+
+@pytestmark_ffmpeg
+def test_utc_timing_rejects_unknown_mode(chunked):
+    path, _, _ = chunked
+    with pytest.raises(ValueError, match="ll_utc_timing"):
+        create_app(path, epoch_ticks=0, ll_dash=True, ll_utc_timing="ntp")

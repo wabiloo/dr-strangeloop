@@ -353,6 +353,7 @@ def compute_discontinuity_sequence(
 
 DASH_ADDRESSING_CHOICES = ("number", "time")
 DASH_TIMELINE_CHOICES = ("full", "compact")
+LL_UTC_TIMING_CHOICES = ("http", "direct", "none")
 
 
 def render_segment_timeline(items: list[tuple], compact: bool) -> str:
@@ -1010,7 +1011,10 @@ class Channel:
         ll_dash: bool = False,
         ll_target_latency: float | None = None,
         ll_utc_timing_url: str = "",
+        ll_utc_timing: str = "http",
     ):
+        if ll_utc_timing not in LL_UTC_TIMING_CHOICES:
+            raise ValueError(f"ll_utc_timing must be one of {LL_UTC_TIMING_CHOICES}, got {ll_utc_timing!r}")
         package_chunk = getattr(package, "chunk_duration_seconds", None)
         if ll_dash and package_chunk is None:
             raise ValueError(
@@ -1074,6 +1078,10 @@ class Channel:
         self.ll_ato_seconds = round(max(0.0, package.segment_duration_seconds - chunk), 3) if ll_dash else 0.0
         self.ll_target_latency_seconds = ll_target_latency or max(4 * chunk, 1.0)
         self.ll_utc_timing_url = ll_utc_timing_url
+        # How a low-latency MPD lets the player sync its clock: "http" (a polled
+        # /time endpoint), "direct" (the time written into the MPD, which must
+        # then never be cached) or "none" (trust the player's own clock).
+        self.ll_utc_timing = ll_utc_timing
 
     def _period_starts(self, signal_breaks: frozenset[int]) -> frozenset[int]:
         """Local segment indices that open a new Period / discontinuity in
@@ -1309,7 +1317,7 @@ class Channel:
     def with_ll_utc_timing_url(self, url: str) -> "Channel":
         """Low-latency MPD's UTCTiming endpoint, derived from the request when
         none was configured."""
-        if self.ll_utc_timing_url or not self.ll_dash:
+        if self.ll_utc_timing_url or not self.ll_dash or self.ll_utc_timing != "http":
             return self
         variant = copy.copy(self)
         variant.ll_utc_timing_url = url
@@ -2353,13 +2361,20 @@ class Channel:
         tell it what "now" is via a direct UTCTiming value -- the standard
         DASH mechanism -- and it plays as the stream would have then. Empty
         for plain live and for static (ended) MPDs."""
-        if self._ll_live(window) and self.offset_ticks == 0 and self.ll_utc_timing_url:
-            # Low latency needs the player's clock within tens of ms of ours:
-            # a polled endpoint, not a value baked into a cacheable MPD.
-            return (
-                '  <UTCTiming schemeIdUri="urn:mpeg:dash:utc:http-xsdate:2014" '
-                f'value="{self.ll_utc_timing_url}"/>\n'
-            )
+        if self._ll_live(window) and self.offset_ticks == 0:
+            # Low latency needs the player's clock within tens of ms of ours.
+            if self.ll_utc_timing == "http" and self.ll_utc_timing_url:
+                return (
+                    '  <UTCTiming schemeIdUri="urn:mpeg:dash:utc:http-xsdate:2014" '
+                    f'value="{self.ll_utc_timing_url}"/>\n'
+                )
+            if self.ll_utc_timing == "direct":
+                # Only as accurate as the MPD is fresh: served no-store (see dash_manifest).
+                return (
+                    '  <UTCTiming schemeIdUri="urn:mpeg:dash:utc:direct:2014" '
+                    f'value="{self._iso_ticks(self.now_ticks())}"/>\n'
+                )
+            return ""
         if self.offset_ticks == 0 or (window is not None and window.ended):
             return ""
         return (
@@ -3260,6 +3275,7 @@ def create_app(
     ll_dash: bool = False,
     ll_target_latency: float | None = None,
     ll_utc_timing_url: str = "",
+    ll_utc_timing: str = "http",
 ) -> Flask:
     ts_cfg = timeshift or TimeshiftConfig()
     package = LoopPackage(package_dir)
@@ -3275,6 +3291,7 @@ def create_app(
         ll_dash=ll_dash,
         ll_target_latency=ll_target_latency,
         ll_utc_timing_url=ll_utc_timing_url,
+        ll_utc_timing=ll_utc_timing,
     )
     process_start_ticks = channel.now_ticks()
 
@@ -3506,7 +3523,11 @@ def create_app(
     def dash_manifest():
         ch, window, _query = _request_view("dash")
         ch = ch.with_ll_utc_timing_url(request.url_root + "time")
-        return _manifest_response(ch.build_dash_manifest(window=window), "application/dash+xml", window)
+        resp = _manifest_response(ch.build_dash_manifest(window=window), "application/dash+xml", window)
+        if ch.ll_dash and ch.ll_utc_timing == "direct" and window is None and ch.offset_ticks == 0:
+            # The MPD carries the current time: a cached copy would be a wrong clock.
+            resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     @app.get("/time")
     def server_time():
@@ -3803,6 +3824,14 @@ def main() -> int:
         help="Latency the low-latency MPD asks players to hold (default: 4 x chunk, at least 1 s).",
     )
     parser.add_argument(
+        "--ll-utc-timing",
+        choices=LL_UTC_TIMING_CHOICES,
+        default="http",
+        help="How the low-latency MPD lets players sync their clock: http (a polled /time "
+        "endpoint; default), direct (the time written into the MPD, which is then served "
+        "no-store -- accurate only while the MPD is not cached) or none (the player's own clock).",
+    )
+    parser.add_argument(
         "--ll-utc-timing-url",
         default="",
         metavar="URL",
@@ -3870,6 +3899,7 @@ def main() -> int:
         ll_dash=args.ll_dash,
         ll_target_latency=args.ll_target_latency,
         ll_utc_timing_url=args.ll_utc_timing_url,
+        ll_utc_timing=args.ll_utc_timing,
         timeshift=TimeshiftConfig(
             timeshift=args.timeshift,
             overrides=args.query_overrides,
