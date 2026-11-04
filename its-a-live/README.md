@@ -170,7 +170,8 @@ start_param = "start"        # e.g. https://<cdn>/index.m3u8?start=2026-09-30T08
 end_param = "end"
 # The other parameters have fixed names: full_loops (bool), timeline_mode (default|continuous|periodic), offset
 # (e.g. -PT1H), epoch, dvr_window, split_on, timeline_style, addressing, cue_tags, descriptor_grouping,
-# increment_event_ids, signal_format, id_template, max_height, max_bitrate.
+# increment_event_ids, signal_format, id_template, max_height, max_bitrate, low_latency, ll_target_latency,
+# ll_utc_timing (DASH low latency, loop-dee-loop/README.md "Low-latency DASH").
 # All these names (prefixed) are also what CloudFront keys manifest caching on --
 # redeploy (`channel.py redeploy`) after changing them.
 

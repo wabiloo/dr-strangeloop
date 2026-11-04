@@ -98,7 +98,8 @@ continuous = true   # default true -- serve.py rewrites each segment's own times
 # offset. Per-request overrides of how the manifest is rendered: timeline_mode
 # (default|continuous|periodic, overrides [timeline].continuous), epoch, dvr_window,
 # split_on, timeline_style, addressing, cue_tags, descriptor_grouping,
-# increment_event_ids, signal_format, id_template, max_height, max_bitrate. Only
+# increment_event_ids, signal_format, id_template, max_height, max_bitrate, and (DASH, low latency)
+# low_latency, ll_target_latency, ll_utc_timing. Only
 # manifests change, never segment bytes. Two independent, TOML-only switches (they gate
 # the parameters, so they are not parameters themselves): `timeshift` and `overrides`. The
 # whole table is optional (missing = both on, with these defaults).

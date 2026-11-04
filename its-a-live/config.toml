@@ -93,7 +93,7 @@ continuous = true # default -- no discontinuity/Period restart at the loop wrap 
 # full_loops, offset) and per-request overrides (timeline_mode, epoch,
 # dvr_window, split_on, timeline_style, addressing, cue_tags,
 # descriptor_grouping, increment_event_ids, signal_format, id_template,
-# max_height, max_bitrate). ecs-express/local-docker only.
+# max_height, max_bitrate, low_latency, ll_target_latency, ll_utc_timing). ecs-express/local-docker only.
 # [query]
 # timeshift = true    # startover/catchup: start, end, full_loops, offset. false: those are ignored (live only)
 # overrides = true    # per-request overrides of how a manifest is rendered (every other parameter).

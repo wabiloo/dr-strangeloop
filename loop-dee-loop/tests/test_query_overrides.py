@@ -103,7 +103,7 @@ def test_fixed_parameter_names_are_the_decided_ones():
     assert FIXED_PARAMS == (
         "full_loops", "timeline_mode", "offset", "epoch", "dvr_window", "timeline_style", "addressing",
         "cue_tags", "descriptor_grouping", "increment_event_ids", "signal_format", "id_template",
-        "split_on", "max_height", "max_bitrate",
+        "split_on", "max_height", "max_bitrate", "low_latency", "ll_target_latency", "ll_utc_timing",
     )
 
 
@@ -752,8 +752,11 @@ def test_each_manifest_path_lists_the_parameters_it_honours(path):
               "max_height", "max_bitrate", "descriptor_grouping", "increment_event_ids"}
     assert always <= listed
     hls_only, dash_only = {"cue_tags", "id_template"}, {"timeline_style", "addressing", "signal_format"}
+    ll_only = {"low_latency", "ll_target_latency", "ll_utc_timing"}  # change the MPD only
     assert (hls_only <= listed) == (path != "/index.mpd")
     assert (dash_only <= listed) == (path != "/index.m3u8")
+    assert (ll_only <= listed) == (path == "/index.mpd")
+    assert not ll_only & listed or path == "/index.mpd"
     assert ("scope" in listed) == (path == "/timeline.json")
 
 
@@ -830,7 +833,7 @@ def test_overrides_off_over_http(tmp_path):
 def test_health_reports_the_overrides_switch(tmp_path):
     on, *_ = _app(tmp_path)
     ts = on.get("/health").get_json()["query"]
-    assert ts["overrides"] is True and len(ts["params"]) == 17
+    assert ts["overrides"] is True and len(ts["params"]) == 20
     off, *_ = _app(tmp_path / "off", overrides=False) if (tmp_path / "off").mkdir() is None else (None,)
     ts = off.get("/health").get_json()["query"]
     assert ts["overrides"] is False and ts["params"] == ["start", "end", "full_loops", "offset"]

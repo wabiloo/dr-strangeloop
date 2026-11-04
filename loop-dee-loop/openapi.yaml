@@ -19,7 +19,7 @@ info:
     `split_on`), the DASH style (`timeline_style`, `addressing`), the SCTE-35
     signalling (`cue_tags`, `descriptor_grouping`, `increment_event_ids`,
     `signal_format`, `id_template`) and the ladder (`max_height`,
-    `max_bitrate`). Only the manifests change; segment bytes never do. A channel
+    `max_bitrate`) and, for the MPD, low latency (`low_latency`, `ll_target_latency`, `ll_utc_timing`). Only the manifests change; segment bytes never do. A channel
     may give every name a common prefix (`[query] prefix`) so they cannot clash
     with a caller's own parameters, and may switch startover/catchup
     (`[query] timeshift`: `start`, `end`, `full_loops`, `offset`) and the overrides
@@ -196,6 +196,9 @@ paths:
         - $ref: "#/components/parameters/TimelineStyle"
         - $ref: "#/components/parameters/Addressing"
         - $ref: "#/components/parameters/SignalFormat"
+        - $ref: "#/components/parameters/LowLatency"
+        - $ref: "#/components/parameters/LlTargetLatency"
+        - $ref: "#/components/parameters/LlUtcTiming"
       responses:
         "200":
           description: MPD.
@@ -223,6 +226,9 @@ paths:
         - $ref: "#/components/parameters/TimelineStyle"
         - $ref: "#/components/parameters/Addressing"
         - $ref: "#/components/parameters/SignalFormat"
+        - $ref: "#/components/parameters/LowLatency"
+        - $ref: "#/components/parameters/LlTargetLatency"
+        - $ref: "#/components/parameters/LlUtcTiming"
       responses:
         "200":
           description: MPD.
@@ -388,6 +394,34 @@ components:
       schema:
         type: string
         enum: [binary, xml]
+    LowLatency:
+      name: low_latency
+      in: query
+      required: false
+      description: >-
+        DASH MPD only. Whether this MPD advertises low latency (`availabilityTimeOffset` + `availabilityTimeComplete=false`,
+        a `ServiceDescription/Latency`, a clock source and a shorter presentation delay). `true` is a `400` unless the channel
+        delivers low latency (`--ll-dash` / `--ll-optin` on a package baked with `--chunk-duration`). Segment bytes never change;
+        with low-latency delivery on, an in-progress segment is streamed chunk by chunk whichever MPD asked for it.
+      schema:
+        type: boolean
+    LlTargetLatency:
+      name: ll_target_latency
+      in: query
+      required: false
+      description: DASH MPD only. The latency the low-latency MPD asks players to hold, in seconds (or an ISO 8601 duration), at most 120. No effect unless the MPD advertises low latency.
+      schema:
+        type: string
+    LlUtcTiming:
+      name: ll_utc_timing
+      in: query
+      required: false
+      description: >-
+        DASH MPD only. How a low-latency MPD lets players sync their clock: `http` (a polled `/time`), `direct` (the current time in the
+        MPD, which is then served `Cache-Control: no-store`) or `none`. The UTCTiming URL itself is deliberately not overridable.
+      schema:
+        type: string
+        enum: [http, direct, none]
   schemas:
     SegmentRange:
       type: object

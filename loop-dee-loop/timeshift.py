@@ -45,12 +45,21 @@ SPLIT_ON_PARAM = "split_on"
 # Ladder filtering.
 MAX_HEIGHT_PARAM = "max_height"
 MAX_BITRATE_PARAM = "max_bitrate"
+# Low-latency DASH (affects the MPD only: ignored for HLS and /timeline.json). The chunk size is baked
+# and the UTCTiming URL is deliberately NOT overridable (a link must not pick the viewers' clock source).
+LOW_LATENCY_PARAM = "low_latency"
+LL_TARGET_LATENCY_PARAM = "ll_target_latency"
+LL_UTC_TIMING_PARAM = "ll_utc_timing"
+LL_UTC_TIMING_VALUES = ("http", "direct", "none")
+# Sanity bound for ll_target_latency, seconds.
+LL_MAX_TARGET_LATENCY_SECONDS = 120
 # Every fixed-name parameter, in documentation order.
 FIXED_PARAMS = (
     FULL_LOOPS_PARAM, TIMELINE_PARAM, OFFSET_PARAM, EPOCH_PARAM, DVR_WINDOW_PARAM,
     TIMELINE_STYLE_PARAM, ADDRESSING_PARAM, CUE_TAGS_PARAM, DESCRIPTOR_GROUPING_PARAM,
     INCREMENT_EVENT_IDS_PARAM, SIGNAL_FORMAT_PARAM, ID_TEMPLATE_PARAM, SPLIT_ON_PARAM,
     MAX_HEIGHT_PARAM, MAX_BITRATE_PARAM,
+    LOW_LATENCY_PARAM, LL_TARGET_LATENCY_PARAM, LL_UTC_TIMING_PARAM,
 )
 # The two kinds, each behind its own TOML-only switch: startover/catchup
 # (`start`/`end` plus these two) behind `timeshift`, and the overrides of how a

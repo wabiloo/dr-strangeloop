@@ -124,6 +124,7 @@ case "$SUBCOMMAND" in
             LL_TARGET_LATENCY=""
             LL_UTC_TIMING_URL=""
             LL_UTC_TIMING=""
+            LL_OPTIN="false"
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --host) HOST="$2"; shift 2 ;;
@@ -146,6 +147,7 @@ case "$SUBCOMMAND" in
                     --ll-target-latency) LL_TARGET_LATENCY="$2"; shift 2 ;;
                     --ll-utc-timing-url) LL_UTC_TIMING_URL="$2"; shift 2 ;;
                     --ll-utc-timing) LL_UTC_TIMING="$2"; shift 2 ;;
+                    --ll-optin) LL_OPTIN="true"; shift ;;
                     *)
                         log "ERROR: unrecognized serve.py flag in production mode: $1"
                         exit 2
@@ -162,7 +164,7 @@ case "$SUBCOMMAND" in
             export PERIOD_ON_SEGMENTATION CHANNEL_NAME DASH_ADDRESSING DASH_TIMELINE
             export TIMESHIFT TIMESHIFT_START_PARAM TIMESHIFT_END_PARAM
             export TIMESHIFT_MAX_SPAN_SECONDS QUERY_PREFIX QUERY_OVERRIDES
-            export LL_DASH LL_TARGET_LATENCY LL_UTC_TIMING_URL LL_UTC_TIMING
+            export LL_DASH LL_TARGET_LATENCY LL_UTC_TIMING_URL LL_UTC_TIMING LL_OPTIN
             if [[ "${LOOP_PACKAGE_STORE:-}" == "s3" ]]; then
                 # One execution environment handles one request at a time
                 # (Lambda), so one worker; threads cover the Web Adapter's
@@ -174,7 +176,7 @@ case "$SUBCOMMAND" in
                     --access-logformat '%(h)s "%(r)s" %(s)s %(b)s "%(a)s"' \
                     wsgi:app
             fi
-            if [[ "$LL_DASH" == "true" ]]; then
+            if [[ "$LL_DASH" == "true" || "$LL_OPTIN" == "true" ]]; then
                 # Low-latency responses are held open (chunks released on the
                 # wall clock), which would starve sync workers: threaded ones.
                 log "low-latency DASH: gthread workers"

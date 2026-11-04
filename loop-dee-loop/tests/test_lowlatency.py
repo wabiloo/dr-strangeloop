@@ -305,3 +305,101 @@ def test_utc_timing_rejects_unknown_mode(chunked):
     path, _, _ = chunked
     with pytest.raises(ValueError, match="ll_utc_timing"):
         create_app(path, epoch_ticks=0, ll_dash=True, ll_utc_timing="ntp")
+
+
+# ── per-request overrides (?low_latency=, ?ll_target_latency=, ?ll_utc_timing=) ───────────────
+
+
+def _qapp(path, monkeypatch, seg, **kw):
+    from timeshift import TimeshiftConfig
+
+    monkeypatch.setattr(Channel, "now_ticks", lambda self: seg + seg // 2)
+    overrides = kw.pop("overrides", True)
+    return create_app(path, epoch_ticks=0, window_segments=4, timeshift=TimeshiftConfig(overrides=overrides), **kw).test_client()
+
+
+def _is_ll(mpd: str) -> bool:
+    return "availabilityTimeOffset" in mpd and "ServiceDescription" in mpd
+
+
+@pytestmark_ffmpeg
+def test_low_latency_false_turns_an_ll_channel_into_a_plain_mpd(chunked, monkeypatch):
+    path, seg, _ = chunked
+    c = _qapp(path, monkeypatch, seg, ll_dash=True)
+    assert _is_ll(c.get("/index.mpd").get_data(as_text=True))
+    plain = c.get("/index.mpd?low_latency=false").get_data(as_text=True)
+    assert not _is_ll(plain) and "http-xsdate" not in plain and "availabilityTimeComplete" not in plain
+
+
+@pytestmark_ffmpeg
+def test_optin_channel_advertises_only_when_asked_but_always_paces(chunked, monkeypatch):
+    path, seg, _ = chunked
+    clock = [seg // 10]
+    monkeypatch.setattr(serve.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + round(s * TS)))
+    c = _qapp(path, monkeypatch, seg, ll_optin=True)
+    monkeypatch.setattr(Channel, "now_ticks", lambda self: clock[0])
+    assert not _is_ll(c.get("/index.mpd").get_data(as_text=True))
+    assert _is_ll(c.get("/index.mpd?low_latency=true").get_data(as_text=True))
+    resp = c.get("/1080p/seg/0.m4s", buffered=False)  # delivery is a server capability, not per MPD
+    assert "Content-Length" not in resp.headers
+    assert b"".join(resp.response) == (path / "segments" / "1080p" / "seg_track1_0.m4s").read_bytes()
+
+
+@pytestmark_ffmpeg
+def test_low_latency_true_is_a_400_where_the_channel_has_none(chunked, monkeypatch):
+    path, seg, _ = chunked
+    c = _qapp(path, monkeypatch, seg)  # LL not enabled
+    resp = c.get("/index.mpd?low_latency=true")
+    assert resp.status_code == 400 and "low latency is not available" in resp.get_data(as_text=True)
+    assert c.get("/index.mpd?low_latency=false").status_code == 200  # harmless
+    assert c.get("/index.m3u8?low_latency=true").status_code == 400  # validated for every format
+
+
+@pytestmark_ffmpeg
+def test_ll_target_latency_override_and_bounds(chunked, monkeypatch):
+    path, seg, _ = chunked
+    c = _qapp(path, monkeypatch, seg, ll_dash=True)
+    mpd = c.get("/index.mpd?ll_target_latency=3").get_data(as_text=True)
+    latency = ET.fromstring(mpd).find("d:ServiceDescription/d:Latency", NS)
+    assert latency.get("target") == "3000" and latency.get("min") == "1500" and latency.get("max") == "6000"
+    assert 'suggestedPresentationDelay="PT3S"' in mpd
+    assert c.get("/index.mpd?ll_target_latency=PT2.5S").status_code == 200
+    for bad in ("0", "-1", "soon", "121"):
+        assert c.get(f"/index.mpd?ll_target_latency={bad}").status_code == 400, bad
+
+
+@pytestmark_ffmpeg
+def test_ll_utc_timing_override(chunked, monkeypatch):
+    path, seg, _ = chunked
+    c = _qapp(path, monkeypatch, seg, ll_dash=True)
+    direct = c.get("/index.mpd?ll_utc_timing=direct")
+    assert _utc_timing(direct.get_data(as_text=True)).get("schemeIdUri") == "urn:mpeg:dash:utc:direct:2014"
+    assert direct.headers["Cache-Control"] == "no-store"
+    assert _utc_timing(c.get("/index.mpd?ll_utc_timing=none").get_data(as_text=True)) is None
+    assert c.get("/index.mpd?ll_utc_timing=ntp").status_code == 400
+
+
+@pytestmark_ffmpeg
+def test_the_utc_timing_url_is_not_overridable(chunked, monkeypatch):
+    path, seg, _ = chunked
+    c = _qapp(path, monkeypatch, seg, ll_dash=True, ll_utc_timing_url="https://good.example/time")
+    mpd = c.get("/index.mpd?ll_utc_timing_url=https://evil.example/time&utc_timing_url=https://evil.example/time").get_data(as_text=True)
+    assert "evil.example" not in mpd and 'value="https://good.example/time"' in mpd
+
+
+@pytestmark_ffmpeg
+def test_overrides_off_ignores_the_ll_parameters(chunked, monkeypatch):
+    path, seg, _ = chunked
+    c = _qapp(path, monkeypatch, seg, ll_dash=True, overrides=False)
+    mpd = c.get("/index.mpd?low_latency=false&ll_utc_timing=none&ll_target_latency=9").get_data(as_text=True)
+    assert _is_ll(mpd) and _utc_timing(mpd) is not None and 'target="4000"' not in mpd.replace("target=\"1000\"", "")
+
+
+@pytestmark_ffmpeg
+def test_hls_and_timeline_json_accept_but_ignore_the_ll_parameters(chunked, monkeypatch):
+    path, seg, _ = chunked
+    c = _qapp(path, monkeypatch, seg, ll_dash=True)
+    q = "?low_latency=false&ll_target_latency=3&ll_utc_timing=none"
+    # The master playlist passes the request's query on to its child playlist URLs; nothing else differs.
+    assert c.get("/index.m3u8" + q).get_data().replace(q.encode(), b"") == c.get("/index.m3u8").get_data()
+    assert c.get("/timeline.json" + q).get_json() == c.get("/timeline.json").get_json()

@@ -62,6 +62,7 @@ match, fix the upstream franken-ts input instead.
 | `loop_math.py` | Integer epoch/loop_number/position_in_loop arithmetic — the drift-freedom guarantee (`SCOPE.md` §4.2/§5). No floats in persisted timing state, ever. |
 | `serve.py` | Stateless HTTP serving of manifests + segments per request. |
 | `continuity.py` | Opt-in `--continuous-timeline` mode (`SCOPE.md` §12): per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite so the channel has no discontinuity/Period-restart at the loop wrap — header patch only, never a re-mux. |
+| `lowlatency.py` | Low-latency DASH (README "Low-latency DASH"): splits a baked segment into its `moof`+`mdat` chunks, computes each chunk's wall-clock release tick from the real `tfdt`s (integer ticks), the pacing generator, and which occurrence of a looping segment is still in progress. `serve.py` streams in-progress segments through it when `--ll-dash`/`--ll-optin`; `bake.py --chunk-duration` produces the chunks. |
 | `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig` (the parameter names + prefix), the per-request override parsers (`parse_choice`, `parse_duration_seconds`, `parse_split_on`, ...) and integer-tick `resolve_window` (segment snapping, `full_loops` widening, max-span cap). Pure ints, no Flask. |
 | `Dockerfile` / `Dockerfile.baked` / `docker-entrypoint.sh` | `Dockerfile`: code-only image shared by every channel (content comes from S3 or a bind mount). `Dockerfile.baked`: layers one channel's loop package on top for a self-contained, shareable image (`LOOP_PACKAGE_BAKED=1`, local-docker `bundle_content` only — see `its-a-live/AGENTS.md`). The entrypoint picks S3 / baked / passthrough mode from env vars. |
 | `load_test.py` | Concurrent-viewer load generator (see `PERFS.md`). |
@@ -121,7 +122,8 @@ normal `index.m3u8` / `index.mpd` accept `start`, `end`, `full_loops`, `offset` 
 past range, startover = live-style from a past point — plus per-request overrides of
 the rendering (`epoch`, `dvr_window`, `split_on`, `timeline_style`, `addressing`,
 `signal_format`, `descriptor_grouping`, `cue_tags`, `increment_event_ids`,
-`id_template`, `max_height`, `max_bitrate`; `SCOPE.md` §13.8), all behind an optional
+`id_template`, `max_height`, `max_bitrate`, and for low-latency DASH `low_latency`, `ll_target_latency`,
+`ll_utc_timing`; `SCOPE.md` §13.8), all behind an optional
 `--query-prefix`. Adding one means: a name in `timeshift.FIXED_PARAMS`, its parsing
 and a `Channel.with_*` variant in `resolve_request_channel` (`serve.py`), an entry in
 `openapi.yaml`, and the same name in its-a-live's `_query_cfg.FIXED_PARAMS` and Igor's

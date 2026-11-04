@@ -39,6 +39,7 @@ QUERY_FIXED_PARAMS = (
     "timeline_style", "addressing", "cue_tags", "descriptor_grouping",
     "increment_event_ids", "signal_format", "id_template", "split_on",
     "max_height", "max_bitrate",
+    "low_latency", "ll_target_latency", "ll_utc_timing",
 )
 _QUERY_PREFIX_RE = re.compile(r"^[A-Za-z0-9_.~-]*$")
 

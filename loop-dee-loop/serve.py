@@ -58,6 +58,11 @@ from timeshift import (
     HLS_DESCRIPTOR_GROUPING_VALUES,
     ID_TEMPLATE_PARAM,
     INCREMENT_EVENT_IDS_PARAM,
+    LL_MAX_TARGET_LATENCY_SECONDS,
+    LL_TARGET_LATENCY_PARAM,
+    LL_UTC_TIMING_PARAM,
+    LL_UTC_TIMING_VALUES,
+    LOW_LATENCY_PARAM,
     MAX_BITRATE_PARAM,
     MAX_HEIGHT_PARAM,
     OFFSET_PARAM,
@@ -1012,11 +1017,12 @@ class Channel:
         ll_target_latency: float | None = None,
         ll_utc_timing_url: str = "",
         ll_utc_timing: str = "http",
+        ll_optin: bool = False,
     ):
         if ll_utc_timing not in LL_UTC_TIMING_CHOICES:
             raise ValueError(f"ll_utc_timing must be one of {LL_UTC_TIMING_CHOICES}, got {ll_utc_timing!r}")
         package_chunk = getattr(package, "chunk_duration_seconds", None)
-        if ll_dash and package_chunk is None:
+        if (ll_dash or ll_optin) and package_chunk is None:
             raise ValueError(
                 "low-latency DASH needs a package baked with `bake.py --chunk-duration` "
                 "(this one has a single chunk per segment)"
@@ -1073,9 +1079,13 @@ class Channel:
         # for a segment `ll_ato_seconds` early. ATO = segment - chunk, so the
         # first chunk is due right when it is requested (a little before for
         # uneven or marker-shortened segments, where the server simply holds).
+        # `ll_dash`: this MPD advertises low latency. `ll_capable`: the server delivers in-progress segments paced
+        # (a server property -- segment URLs carry no query string). `ll_optin`: capable, but an MPD only
+        # advertises LL when asked (`?low_latency=true`).
         self.ll_dash = ll_dash
+        self.ll_capable = ll_dash or ll_optin
         chunk = package_chunk or 0.0
-        self.ll_ato_seconds = round(max(0.0, package.segment_duration_seconds - chunk), 3) if ll_dash else 0.0
+        self.ll_ato_seconds = round(max(0.0, package.segment_duration_seconds - chunk), 3) if (ll_dash or ll_optin) else 0.0
         self.ll_target_latency_seconds = ll_target_latency or max(4 * chunk, 1.0)
         self.ll_utc_timing_url = ll_utc_timing_url
         # How a low-latency MPD lets the player sync its clock: "http" (a polled
@@ -1312,6 +1322,26 @@ class Channel:
         variant = copy.copy(self)
         variant.dash_addressing = addressing
         variant.dash_timeline = timeline_style
+        return variant
+
+    def with_ll(
+        self, low_latency: bool | None = None, target_latency: float | None = None, utc_timing: str | None = None
+    ) -> "Channel":
+        """Per-request low-latency settings (DASH MPD only). `low_latency=True` needs a channel that delivers
+        low latency at all (`--ll-dash` / `--ll-optin`, on a package baked with `--chunk-duration`)."""
+        if low_latency is None and target_latency is None and utc_timing is None:
+            return self
+        if low_latency and not self.ll_capable:
+            raise TimeshiftError(
+                "low latency is not available on this channel (not enabled, or the package was baked without chunks)"
+            )
+        variant = copy.copy(self)
+        if low_latency is not None:
+            variant.ll_dash = low_latency
+        if target_latency is not None:
+            variant.ll_target_latency_seconds = target_latency
+        if utc_timing is not None:
+            variant.ll_utc_timing = utc_timing
         return variant
 
     def with_ll_utc_timing_url(self, url: str) -> "Channel":
@@ -3225,6 +3255,18 @@ def resolve_request_channel(channel: "Channel", args, cfg: TimeshiftConfig, fmt:
     if raw is not None:
         ch = ch.with_split_on(parse_split_on(raw, name(SPLIT_ON_PARAM)))
 
+    raw_ll, raw_target, raw_clock = arg(LOW_LATENCY_PARAM), arg(LL_TARGET_LATENCY_PARAM), arg(LL_UTC_TIMING_PARAM)
+    target = None
+    if raw_target is not None:
+        target = float(parse_duration_seconds(raw_target, name(LL_TARGET_LATENCY_PARAM)))
+        if target > LL_MAX_TARGET_LATENCY_SECONDS:
+            raise TimeshiftError(f"'{name(LL_TARGET_LATENCY_PARAM)}' is limited to {LL_MAX_TARGET_LATENCY_SECONDS} seconds")
+    ch = ch.with_ll(
+        parse_bool(raw_ll, name(LOW_LATENCY_PARAM)) if raw_ll is not None else None,
+        target,
+        parse_choice(raw_clock, name(LL_UTC_TIMING_PARAM), LL_UTC_TIMING_VALUES) if raw_clock is not None else None,
+    )
+
     overrides: dict = {}
     raw = arg(CUE_TAGS_PARAM)
     if raw is not None:
@@ -3276,6 +3318,7 @@ def create_app(
     ll_target_latency: float | None = None,
     ll_utc_timing_url: str = "",
     ll_utc_timing: str = "http",
+    ll_optin: bool = False,
 ) -> Flask:
     ts_cfg = timeshift or TimeshiftConfig()
     package = LoopPackage(package_dir)
@@ -3292,6 +3335,7 @@ def create_app(
         ll_target_latency=ll_target_latency,
         ll_utc_timing_url=ll_utc_timing_url,
         ll_utc_timing=ll_utc_timing,
+        ll_optin=ll_optin,
     )
     process_start_ticks = channel.now_ticks()
 
@@ -3364,7 +3408,7 @@ def create_app(
     def _ll_pace(boundaries: list[int], local_index: int, track_timescale: int, mode: str, index: int):
         """(start_tick, duration_ticks, track_timescale) when this segment is
         still in progress on the wall clock (low-latency DASH only), else None."""
-        if not channel.ll_dash or local_index >= len(boundaries):
+        if not channel.ll_capable or local_index >= len(boundaries):
             return None
         end = boundaries[local_index + 1] if local_index + 1 < len(boundaries) else package.total_loop_duration_ticks
         duration = end - boundaries[local_index]
@@ -3618,7 +3662,7 @@ def create_app(
         rendition = package.rendition_by_name(rendition_name)
         pace = (
             _ll_pace(rendition.segment_boundary_ticks, local_index, _video_timescale(rendition), mode, physical_index)
-            if channel.ll_dash
+            if channel.ll_capable
             else None
         )
         return _serve_segment(
@@ -3685,7 +3729,7 @@ def create_app(
                     audio.audio_segment_boundary_ticks, local_index, audio.audio_timescale(package.timescale),
                     mode, physical_index,
                 )
-                if channel.ll_dash
+                if channel.ll_capable
                 else None
             )
             return _serve_segment(
@@ -3817,6 +3861,12 @@ def main() -> int:
         "threaded/async server (held responses) -- not the default sync gunicorn worker.",
     )
     parser.add_argument(
+        "--ll-optin",
+        action="store_true",
+        help="Low-latency DASH delivery is available (as with --ll-dash) but an MPD only advertises it "
+        "when asked with ?low_latency=true (needs --query-overrides). Implied by --ll-dash, which advertises by default.",
+    )
+    parser.add_argument(
         "--ll-target-latency",
         type=float,
         default=None,
@@ -3900,6 +3950,7 @@ def main() -> int:
         ll_target_latency=args.ll_target_latency,
         ll_utc_timing_url=args.ll_utc_timing_url,
         ll_utc_timing=args.ll_utc_timing,
+        ll_optin=args.ll_optin,
         timeshift=TimeshiftConfig(
             timeshift=args.timeshift,
             overrides=args.query_overrides,

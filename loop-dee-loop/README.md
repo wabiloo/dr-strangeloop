@@ -280,6 +280,37 @@ those `segmentation_type_id`s, in either timeline mode and in HLS and DASH
 alike. It is signal only: with `--continuous-timeline` the timestamps stay
 continuous across the new Period.
 
+### Low-latency DASH (CMAF chunked delivery)
+
+Bake the loop with `bake.py --chunk-duration 0.5` (shorter than `--segment-duration`): every segment then holds
+several `moof`+`mdat` chunks, each with its own `tfdt`. Serve it with `serve.py --ll-dash` (or `--ll-optin`):
+
+- the segment **in progress** on the wall clock is streamed with chunked transfer encoding, each chunk released at its
+  own wall-clock end (derived from the baked `tfdt`s in integer ticks, so it cannot drift; `lowlatency.py`). Completed
+  segments are served at once, as before; a request for the upcoming segment (also across the loop wrap) is held until
+  its first chunk is due;
+- the MPD advertises it: `availabilityTimeOffset` (segment - chunk) with `availabilityTimeComplete="false"` on each
+  `SegmentTemplate`, `ServiceDescription/Latency` (target `--ll-target-latency`, default 4 chunks, at least 1 s;
+  min = half, max = double), a shorter `suggestedPresentationDelay` / `minBufferTime`, and a clock source (below).
+
+| Flag | Meaning |
+|---|---|
+| `--ll-dash` | Deliver low latency **and** advertise it in every MPD. Refused (`ValueError`) on a package baked without chunks. |
+| `--ll-optin` | Deliver it, but an MPD advertises it only when asked (`?low_latency=true`, needs `--query-overrides`). |
+| `--ll-target-latency S` | Latency the MPD asks players to hold. |
+| `--ll-utc-timing http\|direct\|none` | Clock source: `http` (default; a polled `/time`, `Cache-Control: no-store`), `direct` (the time written into the MPD, which is then served `no-store`: only as accurate as the MPD is fresh), `none` (the player's own clock; dash.js falls back to the response `Date` header). |
+| `--ll-utc-timing-url URL` | Absolute URL of `/time` for `http`. Default: derived from each request, wrong behind a proxy that rewrites the host (the spec wants an absolute `http(s)` URL; relative values are not valid). Never overridable per request. |
+
+Per request (behind `--query-overrides`, MPD only; HLS and `/timeline.json` accept and ignore them):
+`low_latency=true|false`, `ll_target_latency=<seconds>` (at most 120), `ll_utc_timing=http|direct|none`. `low_latency=true`
+is a `400` on a channel that does not deliver low latency. Not overridable: the chunk size (baked), the `UTCTiming` URL
+(a link must not choose viewers' clock source). Segment bytes never change, only when they are sent.
+
+Needs a threaded or async server: responses are held open, so `docker-entrypoint.sh` uses gunicorn `gthread` workers
+(`GUNICORN_THREADS`, default 32) when `--ll-dash`/`--ll-optin` is set, and the Flask dev server runs threaded. The
+`aws-lambda` backend (one request per environment, billed while held) is not a fit. Measure with
+`player-lab run --max-latency S` (wall-clock latency per player; `player-lab/AGENTS.md`).
+
 ### Query parameters: startover, catchup and per-request overrides (SCOPE.md §13)
 
 The normal manifest URLs take query parameters (opt in with `serve.py --timeshift`,
@@ -350,6 +381,14 @@ curl 'http://localhost:8080/index.m3u8?offset=-PT1H'
 | Param | Meaning |
 |---|---|
 | `max_height` / `max_bitrate` | Keep only renditions up to this height (pixels) / bandwidth (bits per second) in the master playlist, the MPD and `/timeline.json`. `400` (listing the ladder) if none is left. Media playlist names (`video_2.m3u8`, ...) keep their original numbers. |
+
+**Low latency (DASH MPD only; see "Low-latency DASH")**
+
+| Param | Meaning |
+|---|---|
+| `low_latency` | Boolean. Whether this MPD advertises low latency. `true` is a `400` where the channel does not deliver it. |
+| `ll_target_latency` | Seconds (or ISO 8601), at most 120: the latency the MPD asks players to hold. |
+| `ll_utc_timing` | `http`, `direct` (served `no-store`) or `none`: how players sync their clock. The URL itself is not overridable. |
 
 Only the `start` and `end` names are configurable
 (`--timeshift-start-param`, `--timeshift-end-param`;
