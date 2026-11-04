@@ -15,9 +15,9 @@ const props = defineProps<{
    * beginning of the range instead of joining near the live edge, and
    * don't chase the live edge afterwards. */
   startFromBeginning?: boolean
-  /** Wall-clock instant (epoch seconds) that DASH presentation time 0
-   * corresponds to. 0 for the normal live MPD (availabilityStartTime is
-   * the unix epoch); a time-shifted MPD is anchored at its range start. */
+  /** Fallback wall-clock instant (epoch seconds) that DASH presentation time 0 corresponds to, used until dash.js
+   * has loaded the MPD and we can read its own availabilityStartTime (the channel epoch, or a time-shifted MPD's
+   * range start). */
   dashClockOffsetSeconds?: number
   /** Whether the manifest being played advertises low latency (per format). Then the player follows the target the
    * manifest itself carries (LL-HLS PART-HOLD-BACK, the MPD's ServiceDescription) instead of the fixed delay below. */
@@ -60,6 +60,8 @@ const hlsVolume = ref(1)
 const hlsFullscreen = ref(false)
 const hlsPlayheadTime = ref('')
 const dashPlayheadTime = ref('')
+// availabilityStartTime of the MPD dash.js last loaded (epoch seconds): presentation time 0 is this wall-clock instant.
+let dashAvailabilityStartSeconds: number | null = null
 const hlsDvrWindowSeconds = computed(() => Math.max(0, hlsSeekMax.value - hlsSeekMin.value))
 const dashDvrWindowSeconds = computed(() => Math.max(0, dashSeekMax.value - dashSeekMin.value))
 
@@ -502,7 +504,9 @@ function syncDashVideoState() {
   dashMuted.value = video.muted
   dashVolume.value = video.volume
   if (Number.isFinite(video.currentTime) && video.currentTime > 0) {
-    const wallSeconds = video.currentTime + (props.dashClockOffsetSeconds ?? 0)
+    // The MPD's own availabilityStartTime when dash.js has told us (it is the channel's epoch, not 1970, and a
+    // time-shifted MPD's range start); the parent's offset until the manifest has loaded.
+    const wallSeconds = video.currentTime + (dashAvailabilityStartSeconds ?? props.dashClockOffsetSeconds ?? 0)
     dashPlayheadTime.value = new Date(wallSeconds * 1000).toISOString().replace('T', ' ')
   }
   updateDashDvrRange()
@@ -948,12 +952,16 @@ async function playDash() {
     const video = dashVideo.value
     if (!video) return
     dashInstance = dashjs.MediaPlayer().create()
-    // Playhead position (wall-clock): our MPD's availabilityStartTime is
-    // 1970-01-01 (unix epoch) by construction (see loop-dee-loop/serve.py),
-    // so video.currentTime for a dash.js-driven <video> IS already real
-    // Unix epoch seconds directly -- no fragment-metadata mapping needed
-    // here, unlike hls.js (see playHls()), whose currentTime lives on its
-    // own internal, non-epoch timeline.
+    dashAvailabilityStartSeconds = null
+    dashInstance.on(dashjs.MediaPlayer.events.MANIFEST_LOADED, (e: { data?: { availabilityStartTime?: Date | string } }) => {
+      const ast = e?.data?.availabilityStartTime
+      const ms = ast instanceof Date ? ast.getTime() : typeof ast === 'string' ? Date.parse(ast) : NaN
+      if (Number.isFinite(ms)) dashAvailabilityStartSeconds = ms / 1000
+    })
+    // Playhead position (wall-clock): video.currentTime of a dash.js-driven <video> is seconds since the MPD's
+    // availabilityStartTime, which is the channel's epoch (configurable; a time-shifted MPD uses its range start),
+    // not 1970. We read it from the loaded manifest (MANIFEST_LOADED below) -- no fragment-metadata mapping needed,
+    // unlike hls.js (see playHls()), whose currentTime lives on its own internal, non-epoch timeline.
     video.addEventListener('timeupdate', onDashTimeUpdate)
     video.addEventListener('play', syncDashVideoState)
     video.addEventListener('playing', syncDashVideoState)
