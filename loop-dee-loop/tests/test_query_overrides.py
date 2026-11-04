@@ -25,6 +25,7 @@ from serve import Channel, LoopPackage, create_app, resolve_request_channel  # n
 from test_serve_continuity import _write_continuous_package  # noqa: E402
 from test_serve_window_json import MARKERS, _channel  # noqa: E402
 from timeshift import (  # noqa: E402
+    LL_HLS_PROTOCOL_PARAMS,
     FIXED_PARAMS,
     TimeshiftConfig,
     TimeshiftError,
@@ -740,7 +741,8 @@ def _spec():
 def test_every_parameter_is_documented_in_the_openapi_spec():
     spec = _spec()
     documented = {p["name"] for p in spec["components"]["parameters"].values()}
-    assert documented == {"start", "end", "scope", *FIXED_PARAMS}
+    # the LL-HLS blocking-reload parameters are documented but are protocol parameters, not overrides
+    assert documented == {"start", "end", "scope", *FIXED_PARAMS, *LL_HLS_PROTOCOL_PARAMS}
 
 
 @pytest.mark.parametrize("path", ["/index.m3u8", "/index.mpd", "/timeline.json"])
@@ -752,11 +754,13 @@ def test_each_manifest_path_lists_the_parameters_it_honours(path):
               "max_height", "max_bitrate", "descriptor_grouping", "increment_event_ids"}
     assert always <= listed
     hls_only, dash_only = {"cue_tags", "id_template"}, {"timeline_style", "addressing", "signal_format"}
-    ll_only = {"low_latency", "ll_target_latency", "ll_utc_timing"}  # change the MPD only
+    ll_dash_only = {"ll_target_latency", "ll_utc_timing"}  # the MPD's latency target and clock source
     assert (hls_only <= listed) == (path != "/index.mpd")
     assert (dash_only <= listed) == (path != "/index.m3u8")
-    assert (ll_only <= listed) == (path == "/index.mpd")
-    assert not ll_only & listed or path == "/index.mpd"
+    assert (ll_dash_only <= listed) == (path == "/index.mpd")
+    assert not ll_dash_only & listed or path == "/index.mpd"
+    assert ("low_latency" in listed) == (path != "/timeline.json")  # both manifests (the master passes it on); not the JSON
+    assert not set(LL_HLS_PROTOCOL_PARAMS) & listed  # those belong to the media playlists, not these
     assert ("scope" in listed) == (path == "/timeline.json")
 
 
@@ -956,3 +960,24 @@ def test_the_payload_check_is_skipped_for_packages_without_the_attribute():
     """Fakes in unit tests carry both forms; only a real LoopPackage can say otherwise."""
     ch = _fake()
     assert _resolve(ch, "descriptor_grouping=narrowed", fmt="dash").package.dash_descriptor_mode == "narrowed"
+
+
+# ── the LL-HLS blocking-reload parameters in the OpenAPI spec ────────────────────────────────────────────────
+
+
+def test_the_media_playlist_and_part_paths_are_documented():
+    spec = _spec()
+    components = spec["components"]["parameters"]
+    playlist = spec["paths"]["/{media_playlist}.m3u8"]["get"]
+    listed = {components[r["$ref"].rsplit("/", 1)[1]]["name"] for r in playlist["parameters"] if "$ref" in r}
+    assert set(LL_HLS_PROTOCOL_PARAMS) | {"low_latency"} <= listed
+    assert any(r.get("name") == "media_playlist" and r["in"] == "path" for r in playlist["parameters"])
+    part = spec["paths"]["/{rendition}/seg/{index}.{part}.m4s"]["get"]
+    assert {r["name"] for r in part["parameters"]} == {"rendition", "index", "part"}
+    assert "404" in part["responses"]
+    # the names in the spec are the names the server reads
+    from serving import ll_http
+
+    source = Path(ll_http.__file__).read_text(encoding="utf-8")
+    assert "LL_HLS_MSN_PARAM" in source and "LL_HLS_PART_PARAM" in source
+    assert {components[k]["name"] for k in ("HlsMsn", "HlsPart", "HlsSkip")} == set(LL_HLS_PROTOCOL_PARAMS)

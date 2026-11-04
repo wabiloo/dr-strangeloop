@@ -44,6 +44,8 @@ servers:
 tags:
   - name: Manifests
     description: The viewer-facing HLS/DASH contract (players use these, not the JSON).
+  - name: Segments
+    description: Segment and part bytes. Players fetch these through the manifests; only the low-latency part URL is described here.
   - name: Timeline
     description: Machine-readable view of the window of content the manifests describe right now.
   - name: Monitoring
@@ -143,6 +145,7 @@ paths:
         - $ref: "#/components/parameters/IncrementEventIds"
         - $ref: "#/components/parameters/CueTags"
         - $ref: "#/components/parameters/IdTemplate"
+        - $ref: "#/components/parameters/LowLatency"
       responses:
         "200":
           description: Multivariant playlist; the media playlists are linked from it.
@@ -169,12 +172,76 @@ paths:
         - $ref: "#/components/parameters/IncrementEventIds"
         - $ref: "#/components/parameters/CueTags"
         - $ref: "#/components/parameters/IdTemplate"
+        - $ref: "#/components/parameters/LowLatency"
       responses:
         "200":
           description: Multivariant playlist; the media playlists are linked from it.
           content:
             application/vnd.apple.mpegurl:
               schema: { type: string }
+  /{media_playlist}.m3u8:
+    get:
+      summary: "HLS media playlist (video rendition or audio), incl. Apple LL-HLS"
+      description: >-
+        The playlists the multivariant playlist links to (`video`, `video_<rendition>`, `audio`). They accept the same query
+        parameters as the multivariant playlist; the ones below are what they add. With low latency advertised
+        (`--ll-dash`/`--ll-hls`/`--ll-optin`, `?low_latency=true`) a live playlist is an Apple LL-HLS playlist:
+        `EXT-X-VERSION:9`, `EXT-X-SERVER-CONTROL` (`CAN-BLOCK-RELOAD`, `PART-HOLD-BACK` = 3 part targets), `EXT-X-PART-INF`,
+        `EXT-X-PART`s for the newest three segments (`INDEPENDENT=YES` on parts starting with a sync sample), the segment in
+        progress with only its released parts and no `EXTINF`, an `EXT-X-PRELOAD-HINT` for the next part and an
+        `EXT-X-RENDITION-REPORT` per other playlist. A startover/catchup range or an `offset` is never low-latency.
+      tags: [Manifests]
+      operationId: getHlsMediaPlaylist
+      parameters:
+        - name: media_playlist
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+        - $ref: "#/components/parameters/LowLatency"
+        - $ref: "#/components/parameters/HlsMsn"
+        - $ref: "#/components/parameters/HlsPart"
+        - $ref: "#/components/parameters/HlsSkip"
+      responses:
+        "200":
+          description: The media playlist (held first when `_HLS_msn` / `_HLS_part` name a part that does not exist yet).
+          content:
+            application/vnd.apple.mpegurl:
+              schema: { type: string }
+        "400":
+          description: A malformed, negative or too-far-ahead `_HLS_msn` / `_HLS_part`, or `low_latency=true` where the channel has none.
+  /{rendition}/seg/{index}.{part}.m4s:
+    get:
+      summary: "LL-HLS part (a baked chunk of a segment)"
+      description: >-
+        One part of segment `index` (`/seg/` loop-local, or `/cseg/` with the global index under a continuous timeline;
+        `audio` for the audio track). The parts of a segment, joined, are the segment. A part that is not complete yet is
+        held until it is (the answer to a preload hint), up to three target durations; a finished one is served at once.
+        `404` for a part index the segment does not have, or where low latency is not delivered.
+      tags: [Segments]
+      operationId: getHlsPart
+      parameters:
+        - name: rendition
+          in: path
+          required: true
+          schema: { type: string }
+        - name: index
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0 }
+        - name: part
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: The part's `moof` + `mdat` bytes (the first part also carries any `styp`/`sidx`).
+          content:
+            video/iso.segment:
+              schema: { type: string, format: binary }
+        "404":
+          description: No such part, or low latency is not delivered.
   /index.mpd:
     get:
       summary: "/index.mpd — DASH manifest"
@@ -399,12 +466,43 @@ components:
       in: query
       required: false
       description: >-
-        DASH MPD only. Whether this MPD advertises low latency (`availabilityTimeOffset` + `availabilityTimeComplete=false`,
-        a `ServiceDescription/Latency`, a clock source and a shorter presentation delay). `true` is a `400` unless the channel
-        delivers low latency (`--ll-dash` / `--ll-optin` on a package baked with `--chunk-duration`). Segment bytes never change;
-        with low-latency delivery on, an in-progress segment is streamed chunk by chunk whichever MPD asked for it.
+        Whether THIS response advertises low latency. For the MPD: `availabilityTimeOffset` + `availabilityTimeComplete=false`,
+        a `ServiceDescription/Latency`, a clock source and a shorter presentation delay. For an HLS media playlist (Apple LL-HLS):
+        `EXT-X-PART`s, a preload hint, rendition reports and blocking reload (a multivariant playlist passes the parameter on to
+        the media playlists it links). `true` is a `400` unless the channel delivers low latency (`--ll-dash` / `--ll-hls` /
+        `--ll-optin` on a package baked with `--chunk-duration`; for HLS also CMAF segments). Segment bytes never change; with
+        low-latency delivery on, an in-progress segment is streamed chunk by chunk whichever manifest asked for it.
       schema:
         type: boolean
+    HlsMsn:
+      name: _HLS_msn
+      in: query
+      required: false
+      description: >-
+        LL-HLS blocking playlist reload (RFC 8216bis): hold the response until the playlist holds media sequence number
+        `_HLS_msn` (with `_HLS_part`, that part; without it, the whole segment). A spec-fixed name, never prefixed and not a
+        per-request override. `400` if more than two segments ahead of the live edge, negative or not an integer. Ignored
+        unless the playlist is low-latency and live.
+      schema:
+        type: integer
+        minimum: 0
+    HlsPart:
+      name: _HLS_part
+      in: query
+      required: false
+      description: >-
+        LL-HLS blocking reload: the part index within `_HLS_msn`. `400` without `_HLS_msn`, or beyond the segment's last part.
+      schema:
+        type: integer
+        minimum: 0
+    HlsSkip:
+      name: _HLS_skip
+      in: query
+      required: false
+      description: LL-HLS delta update request. Accepted and ignored (`CAN-SKIP-UNTIL` is not advertised), so a full playlist is returned.
+      schema:
+        type: string
+        enum: ["YES", "v2"]
     LlTargetLatency:
       name: ll_target_latency
       in: query

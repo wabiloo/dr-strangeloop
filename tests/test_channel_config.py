@@ -485,6 +485,13 @@ def test_fixed_params_match_loop_dee_loop():
     assert _query_cfg.OVERRIDE_PARAMS == loop_timeshift.OVERRIDE_PARAMS
 
 
+def test_ll_hls_protocol_parameters_match_what_the_server_reads():
+    """The CDN keys manifest caching on these names; if the server read others, every blocking reload would be
+    answered with one cached playlist. They are protocol parameters: not overrides, never prefixed."""
+    assert _query_cfg.LL_HLS_PROTOCOL_PARAMS == loop_timeshift.LL_HLS_PROTOCOL_PARAMS == ("_HLS_msn", "_HLS_part", "_HLS_skip")
+    assert not set(loop_timeshift.LL_HLS_PROTOCOL_PARAMS) & set(loop_timeshift.FIXED_PARAMS)
+
+
 @pytest.mark.parametrize(
     "query",
     [

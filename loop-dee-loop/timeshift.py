@@ -53,6 +53,12 @@ LL_UTC_TIMING_PARAM = "ll_utc_timing"
 LL_UTC_TIMING_VALUES = ("http", "direct", "none")
 # Sanity bound for ll_target_latency, seconds.
 LL_MAX_TARGET_LATENCY_SECONDS = 120
+# Apple LL-HLS blocking playlist reload (RFC 8216bis). Spec-fixed names: never prefixed and not per-request
+# overrides (so not in FIXED_PARAMS), but a CDN must key and forward them. Mirrors its-a-live/_query_cfg.py.
+LL_HLS_MSN_PARAM = "_HLS_msn"
+LL_HLS_PART_PARAM = "_HLS_part"
+LL_HLS_SKIP_PARAM = "_HLS_skip"
+LL_HLS_PROTOCOL_PARAMS = (LL_HLS_MSN_PARAM, LL_HLS_PART_PARAM, LL_HLS_SKIP_PARAM)
 # Every fixed-name parameter, in documentation order.
 FIXED_PARAMS = (
     FULL_LOOPS_PARAM, TIMELINE_PARAM, OFFSET_PARAM, EPOCH_PARAM, DVR_WINDOW_PARAM,

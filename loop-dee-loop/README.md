@@ -282,7 +282,7 @@ continuous across the new Period.
 
 ### Low-latency DASH (CMAF chunked delivery)
 
-The overview, how to turn it on per channel, measured results and limits are in [`docs/low-latency.md`](../docs/low-latency.md); this section is the flag and delivery reference.
+The overview, how to turn it on per channel, measured results and limits are in [`docs/low-latency.md`](../docs/low-latency.md); this section is the flag and delivery reference for DASH, the next one for HLS. Both are made from the same baked chunks.
 
 Bake the loop with `bake.py --chunk-duration 0.5` (shorter than `--segment-duration`): every segment then holds
 several `moof`+`mdat` chunks, each with its own `tfdt`. Serve it with `serve.py --ll-dash` (or `--ll-optin`):
@@ -298,20 +298,61 @@ several `moof`+`mdat` chunks, each with its own `tfdt`. Serve it with `serve.py 
 | Flag | Meaning |
 |---|---|
 | `--ll-dash` | Deliver low latency **and** advertise it in every MPD. Refused (`ValueError`) on a package baked without chunks. |
-| `--ll-optin` | Deliver it, but an MPD advertises it only when asked (`?low_latency=true`, needs `--query-overrides`). |
+| `--ll-optin` | Deliver low latency (DASH **and** HLS), but advertise it only when asked (`?low_latency=true`, needs `--query-overrides`). Implied by `--ll-dash` / `--ll-hls`, which advertise by default. |
 | `--ll-target-latency S` | Latency the MPD asks players to hold. |
 | `--ll-utc-timing direct\|http\|none` | Clock source in the MPD. `direct` (default): the current time written into the MPD, which is then served `Cache-Control: no-store` (a cached copy would be a wrong clock; needs no URL, but the MPD is never CDN-cached). `http`: a polled `/time` (`no-store`), the MPD stays cacheable. `none`: the player's own clock (dash.js falls back to the response `Date` header). |
 | `--ll-utc-timing-url URL` | Absolute URL of `/time` for `http` (the spec wants an absolute `http(s)` URL; relative values are not valid). Without it the URL is derived from the request **only when it is addressed to localhost**; for any other `Host` no `UTCTiming` is written (a `Host` header is client-controlled and a shared cache could keep a forged one). Never overridable per request. |
 
-Per request (behind `--query-overrides`, MPD only; HLS and `/timeline.json` accept and ignore them):
-`low_latency=true|false`, `ll_target_latency=<seconds>` (at most 120), `ll_utc_timing=http|direct|none`. `low_latency=true`
+Per request (behind `--query-overrides`): `low_latency=true|false` applies to the MPD and to HLS media playlists alike (a
+multivariant playlist passes it on); `ll_target_latency=<seconds>` (at most 120) and `ll_utc_timing=http|direct|none` are MPD-only
+(HLS and `/timeline.json` accept and ignore them). `low_latency=true`
 is a `400` on a channel that does not deliver low latency. Not overridable: the chunk size (baked), the `UTCTiming` URL
 (a link must not choose viewers' clock source). Segment bytes never change, only when they are sent.
 
 Needs a threaded or async server: responses are held open, so `docker-entrypoint.sh` uses gunicorn `gthread` workers
-(`GUNICORN_THREADS`, default 32) when `--ll-dash`/`--ll-optin` is set, and the Flask dev server runs threaded. The
+(`GUNICORN_THREADS`, default 32) when `--ll-dash`/`--ll-hls`/`--ll-optin` is set, and the Flask dev server runs threaded. The
 `aws-lambda` backend (one request per environment, billed while held) is not a fit. Measure with
 `player-lab run --max-latency S` (wall-clock latency per player; `player-lab/AGENTS.md`).
+
+### Low-latency HLS (Apple LL-HLS)
+
+`serve.py --ll-hls` makes the HLS **media playlists** low-latency, in the form Apple has specified since 2020 and folded
+into the HLS spec (RFC 8216bis); not HTTP/2 push, not the older community "LHLS". A package baked with `--chunk-duration`
+and `--hls-format cmaf` is enough: a *part* is one baked chunk, so there is nothing else to bake (and a package that is
+already chunked for DASH needs no re-bake; its parts are read lazily from the segment files and cached). MPEG-TS cannot
+carry parts, so `--ll-hls` is refused for `--hls-format ts` (and `?low_latency=true` on such a channel is a `400`).
+
+A live low-latency media playlist carries:
+
+- `EXT-X-VERSION:9`, `EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=<3 x part target>` and
+  `EXT-X-PART-INF:PART-TARGET=<seconds>`. The part target must cover every part and never change, so `bake.py` records the
+  true longest chunk (`max_chunk_ticks`; GPAC cut a 0.5 s target into a 0.60 s first chunk) and serving rounds it up to a
+  millisecond;
+- `EXT-X-PART` lines for the newest three segments (`INDEPENDENT=YES` on a part whose first sample is a sync sample, read
+  from the `moof`), then that segment's `EXTINF` + URI; the segment **in progress** lists only the parts released so far and
+  has no `EXTINF`/URI yet;
+- `EXT-X-PRELOAD-HINT:TYPE=PART` for the next part, and an `EXT-X-RENDITION-REPORT` (`LAST-MSN` / `LAST-PART`) for every other
+  playlist (the other renditions and the audio playlist), carrying the request's query like every child URI does.
+
+Part URLs are separate objects, `.../seg/<n>.<k>.m4s` (`/cseg/<global>.<k>.m4s` under a continuous timeline; `audio/` for the
+audio track): the parts of a segment, joined, are the segment, and a finished part is immutable, so a CDN caches it like a
+segment. A request for a part that is **not complete yet is held** until its wall-clock end, which is what answers a preload
+hint; it is released within a few milliseconds, at most three target durations later.
+
+**Blocking playlist reload**: `?_HLS_msn=<n>[&_HLS_part=<k>]` holds the response until the playlist contains that segment
+(part). `400` for a negative or non-integer value, an `_HLS_part` without `_HLS_msn` or past the segment's last part, or an
+`_HLS_msn` more than two segments ahead of the live edge. `_HLS_skip` (delta updates) is accepted and ignored:
+`CAN-SKIP-UNTIL` is not advertised. These are protocol parameters, not overrides: never prefixed, not in the override list,
+and a CDN must key and forward them (its-a-live does, see `_packaging_cfg.cdn_query_names`).
+
+A startover/catchup range or an `offset` is never low-latency (an ended or growing past range has no live edge to hold at).
+Everything else about HLS is unchanged, and with `--ll-hls` off the playlists are byte-identical.
+
+Known edge: in a *periodic* timeline (not the default) `seg/<local>` is the same URL every loop. Near the loop wrap the
+server cannot tell a *finished* old segment or part from the *upcoming* occurrence of the same index, and in a loop shorter
+than about two segments it may hold a request for the finished one for up to a segment. A continuous timeline names the
+loop in the URL and has no such ambiguity. Apple's tooling also expects HTTP/2 from an LL-HLS origin; Flask's dev server speaks
+HTTP/1.1 (a CDN such as CloudFront provides HTTP/2 to the viewer).
 
 ### Query parameters: startover, catchup and per-request overrides (SCOPE.md §13)
 
