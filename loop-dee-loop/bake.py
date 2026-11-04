@@ -1702,6 +1702,7 @@ def bake_one_rendition(
     dry_run: bool,
     include_audio: bool,
     daterange_mode: str = "shared",
+    chunk_duration_seconds: float | None = None,
 ) -> dict | None:
     """Bake a single rendition's .ts into its own segment set under
     `<output_package_dir>/segments/<name>/`. Returns a rendition result
@@ -1781,6 +1782,7 @@ def bake_one_rendition(
         cues_xml_path,
         rendition_dir,
         segment_duration_seconds=segment_duration_seconds,
+        chunk_duration_seconds=chunk_duration_seconds,
         dry_run=dry_run,
     )
 
@@ -1853,6 +1855,7 @@ def bake(
     hls_ts_mux_audio: bool = True,
     dash_signal_format: str = DASH_SIGNAL_FORMAT_DEFAULT,
     dash_descriptor_mode: str = DASH_DESCRIPTOR_MODE_DEFAULT,
+    chunk_duration_seconds: float | None = None,
 ) -> None:
     """Bake phase entrypoint (SCOPE.md §4.1), generalized to a rendition
     ladder auto-discovered from disk (see discover_renditions()).
@@ -1875,6 +1878,11 @@ def bake(
 
     if hls_format not in ("cmaf", "ts"):
         raise ValidationError("hls_format must be 'cmaf' or 'ts'")
+    if chunk_duration_seconds is not None and not 0 < chunk_duration_seconds < segment_duration_seconds:
+        raise ValidationError(
+            f"chunk_duration_seconds ({chunk_duration_seconds}) must be > 0 and shorter than "
+            f"segment_duration_seconds ({segment_duration_seconds})"
+        )
 
     try:
         validate_daterange_id_format(daterange_id_format)
@@ -1916,6 +1924,7 @@ def bake(
             dry_run=dry_run,
             include_audio=(i == 0),
             daterange_mode=daterange_mode,
+            chunk_duration_seconds=chunk_duration_seconds,
         )
         if dry_run:
             continue
@@ -1984,6 +1993,9 @@ def bake(
         "source_markers_json": str(markers_json),
         "source_timeline_json": str(timeline_json) if timeline_json else None,
     }
+    if chunk_duration_seconds is not None:
+        # Absent (not null) for ordinary packages, so their descriptors stay unchanged.
+        loop_descriptor["chunk_duration_seconds"] = chunk_duration_seconds
     descriptor_path = output_package_dir / "loop_descriptor.json"
     with descriptor_path.open("w", encoding="utf-8") as f:
         json.dump(loop_descriptor, f, indent=2)
@@ -2035,6 +2047,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", type=Path, required=True, help="Output loop package directory")
     parser.add_argument("--segment-duration", type=float, default=4.0)
+    parser.add_argument(
+        "--chunk-duration",
+        type=float,
+        default=None,
+        help="Low-latency: split every segment into CMAF chunks (`moof`+`mdat`) of "
+        "about this many seconds (e.g. 0.5), each with its own tfdt, so serve.py can "
+        "release them progressively. Default: one chunk per segment (not low-latency). "
+        "Must be shorter than --segment-duration.",
+    )
     parser.add_argument("--hls-format", choices=("cmaf", "ts"), default="cmaf")
     parser.add_argument("--hls-ts-mux-audio", action=argparse.BooleanOptionalAction, default=True,
                         help="For HLS TS, mux audio with video (default) or serve a separate TS audio playlist")
@@ -2154,6 +2175,7 @@ def main(argv: list[str] | None = None) -> int:
                 hls_ts_mux_audio=args.hls_ts_mux_audio,
                 dash_signal_format=args.dash_signal_format,
                 dash_descriptor_mode=args.dash_descriptor_mode,
+                chunk_duration_seconds=args.chunk_duration,
             )
     except ValidationError as exc:
         logger.error("VALIDATION FAILED: %s", exc)

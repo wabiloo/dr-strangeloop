@@ -201,6 +201,7 @@ def run_gpac_dasher(
     output_dir: Path,
     *,
     segment_duration_seconds: float = 4.0,
+    chunk_duration_seconds: float | None = None,
     hls: bool = True,
     dash: bool = True,
     extra_args: list[str] | None = None,
@@ -228,6 +229,13 @@ def run_gpac_dasher(
     check_gpac_available()
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Low-latency: several `moof`+`mdat` chunks per segment (`cdur`). GPAC
+    # then writes `tfdt` only on a segment's first fragment unless told
+    # otherwise; every chunk must carry its own (CMAF, and bake.py's
+    # trailing-fragment repair drops any `moof` without one).
+    chunk_seconds = chunk_duration_seconds or segment_duration_seconds
+    chunked = chunk_duration_seconds is not None and chunk_duration_seconds < segment_duration_seconds
+
     def _build_cmd(manifest_path: Path) -> list[str]:
         return [
             "gpac",
@@ -235,9 +243,10 @@ def run_gpac_dasher(
             "scte35dec:mode=passthrough",
             "@",
             f"dasher:cues={cues_xml}:segdur={segment_duration_seconds}"
-            f":cdur={segment_duration_seconds}:profile=live",
+            f":cdur={chunk_seconds}:profile=live",
             "-o", str(manifest_path),
             "--mp4mx@tfdt64",
+            *(["--mp4mx@tfdt_traf"] if chunked else []),
             *(extra_args or []),
         ]
 
