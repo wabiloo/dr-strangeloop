@@ -118,21 +118,29 @@ bucket_name = "bkt"
 content_folder = "f"
 [packaging]
 segment_duration = 2
+[packaging.hls]
+{hls}
 [packaging.dash]
 {dash}
+{query}
 """
 
 
-def _command(dash: str, public_host: str | None) -> list[str]:
+def _resources(dash: str = "", public_host: str | None = None, *, hls: str = "", query: str = "") -> dict:
     cdk = pytest.importorskip("aws_cdk")
     from aws_cdk import assertions
     from loop_stack import LoopStack
 
+    config = tomllib.loads(STACK_CONFIG.format(dash=dash, hls=hls, query=query))
     stack = LoopStack(
-        cdk.App(), "S", config=tomllib.loads(STACK_CONFIG.format(dash=dash)), public_host=public_host,
+        cdk.App(), "S", config=config, public_host=public_host,
         env=cdk.Environment(account="123456789012", region="eu-west-1"),
     )
-    res = assertions.Template.from_stack(stack).to_json()["Resources"]
+    return assertions.Template.from_stack(stack).to_json()["Resources"]
+
+
+def _command(dash: str, public_host: str | None, *, hls: str = "") -> list[str]:
+    res = _resources(dash, public_host, hls=hls)
     (svc,) = [r["Properties"] for r in res.values() if r["Type"] == "AWS::ECS::ExpressGatewayService"]
     return svc["PrimaryContainer"]["Command"]
 
@@ -152,3 +160,44 @@ def test_container_command_defaults_to_direct_and_off_adds_nothing():
     cmd = _command('low_latency = "on"', None)
     assert "--ll-dash" in cmd and cmd[cmd.index("--ll-utc-timing") + 1] == "direct" and "--ll-utc-timing-url" not in cmd
     assert not [a for a in _command("", "d111.cloudfront.net") if a.startswith("--ll")]
+
+
+def test_container_command_for_low_latency_hls_has_only_the_hls_flag():
+    cmd = _command("", "d111.cloudfront.net", hls='low_latency = "on"')
+    assert "--ll-hls" in cmd
+    assert not {"--ll-dash", "--ll-optin", "--ll-utc-timing", "--ll-target-latency"} & set(cmd)  # DASH-only settings
+
+
+# ── CloudFront: the blocking-reload parameters must reach the origin and be part of the cache key ────────────────
+
+
+def _manifest_policies(res: dict) -> list[dict]:
+    return [r["Properties"]["CachePolicyConfig"] for r in res.values() if r["Type"] == "AWS::CloudFront::CachePolicy"]
+
+
+def _allow_list(policy: dict) -> list[str]:
+    q = policy["ParametersInCacheKeyAndForwardedToOrigin"]["QueryStringsConfig"]
+    assert q["QueryStringBehavior"] == "whitelist"
+    return q["QueryStrings"]
+
+
+def test_default_query_channels_share_the_default_policy_with_or_without_low_latency_hls():
+    # the default policy keys on the whole query string, which already covers _HLS_msn / _HLS_part
+    assert _manifest_policies(_resources("", "d.cloudfront.net")) == []
+    assert _manifest_policies(_resources("", "d.cloudfront.net", hls='low_latency = "on"')) == []
+
+
+def test_a_narrow_query_channel_with_low_latency_hls_keys_on_the_blocking_parameters():
+    narrow = "[query]\noverrides = false"
+    plain = _manifest_policies(_resources("", "d.cloudfront.net", query=narrow))
+    assert len(plain) == 1 and not [n for n in _allow_list(plain[0]) if n.startswith("_HLS_")]  # not low latency: unchanged
+    ll = _manifest_policies(_resources("", "d.cloudfront.net", hls='low_latency = "on"', query=narrow))
+    assert len(ll) == 1
+    names = _allow_list(ll[0])
+    assert {"_HLS_msn", "_HLS_part", "_HLS_skip", "start", "end"} <= set(names)
+
+
+def test_even_a_channel_with_no_query_parameters_at_all_keys_on_the_blocking_parameters():
+    none = "[query]\noverrides = false\ntimeshift = false"
+    ll = _manifest_policies(_resources("", "d.cloudfront.net", hls='low_latency = "on"', query=none))
+    assert len(ll) == 1 and sorted(_allow_list(ll[0])) == ["_HLS_msn", "_HLS_part", "_HLS_skip"]

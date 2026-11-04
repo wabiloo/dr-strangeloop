@@ -566,56 +566,85 @@ def test_generated_toml_passes_its_a_live_version_check():
         _legacy_cfg.check_config_version(config, "igor.toml")  # does not raise
 
 
-# ── [packaging.dash] low latency ────────────────────────────────────────────
+# ── low latency ([packaging] chunk_duration, [packaging.dash|hls] low_latency) ─────────────────────────────
 
 
 def _ll_payload(**kw):
     base = {
-        "name": "test-channel", "backend": "local-docker", "region": "eu-west-1", "bucket_name": "b", "content_folder": "c",
-        "source_path": "outputs/test.ts", "segment_duration": 2.0,
+        "name": "test-channel", "backend": "local-docker", "region": "eu-west-1", "bucket_name": "b",
+        "content_folder": "c", "source_path": "outputs/test.ts", "segment_duration": 2.0,
     }
     return ChannelCreatePayload(**{**base, **kw})
 
 
-def _dash(payload):
-    return tomllib.loads(generate_toml(**payload.model_dump()))["packaging"]["dash"]
+def _packaging(payload):
+    return tomllib.loads(generate_toml(**payload.model_dump()))["packaging"]
 
 
 def test_low_latency_off_adds_nothing_to_the_toml():
-    assert _dash(_ll_payload()) == {"timeline_style": "full", "addressing": "number"}
+    p = _packaging(_ll_payload())
+    assert p["dash"] == {"timeline_style": "full", "addressing": "number"}
+    assert p["hls"] == {"container": "cmaf", "mux_audio": True} and "chunk_duration" not in p
 
 
 @pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
 @pytest.mark.parametrize("mode", ["on", "optin"])
-def test_low_latency_roundtrip(backend, mode):
-    dash = _dash(_ll_payload(backend=backend, low_latency=mode, chunk_duration=0.25, target_latency=1.5, utc_timing="none"))
-    assert dash == {
-        "timeline_style": "full", "addressing": "number", "low_latency": mode, "chunk_duration": 0.25,
-        "target_latency": 1.5, "utc_timing": "none",
+def test_dash_low_latency_roundtrip(backend, mode):
+    p = _packaging(_ll_payload(
+        backend=backend, dash_low_latency=mode, chunk_duration=0.25, target_latency=1.5, utc_timing="none",
+    ))
+    assert p["chunk_duration"] == 0.25  # shared, so at [packaging]
+    assert p["dash"] == {
+        "timeline_style": "full", "addressing": "number", "low_latency": mode, "target_latency": 1.5,
+        "utc_timing": "none",
     }
+    assert "low_latency" not in p["hls"]
+
+
+@pytest.mark.parametrize("backend", ["ecs-express", "local-docker"])
+@pytest.mark.parametrize("mode", ["on", "optin"])
+def test_hls_low_latency_roundtrip(backend, mode):
+    p = _packaging(_ll_payload(backend=backend, hls_low_latency=mode))
+    assert p["chunk_duration"] == 0.5 and p["hls"]["low_latency"] == mode
+    assert "low_latency" not in p["dash"] and "utc_timing" not in p["dash"]  # DASH settings are written only for DASH
+
+
+def test_both_formats_share_one_chunk_duration():
+    p = _packaging(_ll_payload(dash_low_latency="on", hls_low_latency="on", chunk_duration=0.4))
+    assert p["chunk_duration"] == 0.4
+    assert p["dash"]["low_latency"] == "on" and p["hls"]["low_latency"] == "on"
+
+
+def test_dash_clock_settings_are_dropped_when_dash_low_latency_is_off():
+    p = _packaging(_ll_payload(hls_low_latency="on", target_latency=2, utc_timing="none"))
+    assert "target_latency" not in p["dash"] and "utc_timing" not in p["dash"]
 
 
 def test_low_latency_http_with_an_explicit_url_and_the_defaults():
-    dash = _dash(_ll_payload(low_latency="on", utc_timing="http", utc_timing_url="https://t.example/time?a=1"))
+    dash = _packaging(_ll_payload(dash_low_latency="on", utc_timing="http", utc_timing_url="https://t.example/time?a=1"))["dash"]
     assert dash["utc_timing"] == "http" and dash["utc_timing_url"] == "https://t.example/time?a=1"
-    plain = _dash(_ll_payload(low_latency="on"))
-    assert plain["utc_timing"] == "direct" and plain["chunk_duration"] == 0.5 and "target_latency" not in plain
-    assert "utc_timing_url" not in plain
+    plain = _packaging(_ll_payload(dash_low_latency="on"))
+    assert plain["dash"]["utc_timing"] == "direct" and plain["chunk_duration"] == 0.5
+    assert "target_latency" not in plain["dash"] and "utc_timing_url" not in plain["dash"]
 
 
 @pytest.mark.parametrize(
     "kw,message",
     [
-        ({"low_latency": "on", "backend": "aws-lambda"}, "not supported"),
-        ({"low_latency": "on", "backend": "aws-media"}, "not supported"),
-        ({"low_latency": "on", "chunk_duration": 2.0}, "chunk_duration"),  # not shorter than the 2 s segment
-        ({"low_latency": "on", "chunk_duration": 0}, "chunk_duration"),
-        ({"low_latency": "on", "target_latency": 0}, "target_latency"),
-        ({"low_latency": "on", "target_latency": 121}, "target_latency"),
-        ({"low_latency": "optin", "query_overrides": False}, "optin"),
-        ({"low_latency": "on", "utc_timing": "direct", "utc_timing_url": "https://t.example/time"}, "utc_timing_url"),
-        ({"low_latency": "on", "utc_timing": "http", "utc_timing_url": "/time"}, "absolute"),
-        ({"low_latency": "fast"}, "low_latency"),
+        ({"dash_low_latency": "on", "backend": "aws-lambda"}, "not supported"),
+        ({"hls_low_latency": "on", "backend": "aws-lambda"}, "not supported"),
+        ({"dash_low_latency": "on", "backend": "aws-media"}, "not supported"),
+        ({"dash_low_latency": "on", "chunk_duration": 2.0}, "chunk_duration"),  # not shorter than the 2 s segment
+        ({"hls_low_latency": "on", "chunk_duration": 0}, "chunk_duration"),
+        ({"dash_low_latency": "on", "target_latency": 0}, "target_latency"),
+        ({"dash_low_latency": "on", "target_latency": 121}, "target_latency"),
+        ({"dash_low_latency": "optin", "query_overrides": False}, "optin"),
+        ({"hls_low_latency": "optin", "query_overrides": False}, "optin"),
+        ({"dash_low_latency": "on", "utc_timing": "direct", "utc_timing_url": "https://t.example/time"}, "utc_timing_url"),
+        ({"dash_low_latency": "on", "utc_timing": "http", "utc_timing_url": "/time"}, "absolute"),
+        ({"hls_low_latency": "on", "hls_format": "ts"}, "cmaf"),  # MPEG-TS cannot carry parts
+        ({"dash_low_latency": "fast"}, "dash_low_latency"),
+        ({"hls_low_latency": "fast"}, "hls_low_latency"),
         ({"utc_timing": "ntp"}, "utc_timing"),
     ],
 )
@@ -624,11 +653,15 @@ def test_low_latency_combinations_its_a_live_would_refuse_are_rejected_up_front(
         _ll_payload(**kw)
 
 
+def test_dash_low_latency_is_fine_with_a_ts_hls_container():
+    _ll_payload(dash_low_latency="on", hls_format="ts")  # only LL-HLS needs CMAF
+
+
 def test_generate_toml_checks_too_for_programmatic_callers():
     with pytest.raises(ValueError, match="not supported"):
         generate_toml(
             name="x", backend="aws-lambda", region="r", bucket_name="b", content_folder="c", source_path="p",
-            low_latency="on",
+            hls_low_latency="on",
         )
 
 
@@ -647,10 +680,14 @@ def test_the_rules_match_its_a_live():
     finally:
         sys.path.remove(str(root))
     cases = [
-        {"low_latency": "on"}, {"low_latency": "optin"}, {"low_latency": "on", "chunk_duration": 2.0},
-        {"low_latency": "on", "target_latency": 200}, {"low_latency": "on", "utc_timing": "http", "utc_timing_url": "/x"},
-        {"low_latency": "on", "utc_timing": "direct", "utc_timing_url": "https://x/t"}, {"low_latency": "on", "backend": "aws-lambda"},
-        {"low_latency": "optin", "query_overrides": False}, {},
+        {"dash_low_latency": "on"}, {"dash_low_latency": "optin"}, {"hls_low_latency": "on"}, {"hls_low_latency": "optin"},
+        {"dash_low_latency": "on", "hls_low_latency": "on"}, {"dash_low_latency": "on", "chunk_duration": 2.0},
+        {"hls_low_latency": "on", "chunk_duration": 0}, {"dash_low_latency": "on", "target_latency": 200},
+        {"dash_low_latency": "on", "utc_timing": "http", "utc_timing_url": "/x"},
+        {"dash_low_latency": "on", "utc_timing": "direct", "utc_timing_url": "https://x/t"},
+        {"dash_low_latency": "on", "backend": "aws-lambda"}, {"hls_low_latency": "on", "backend": "aws-lambda"},
+        {"dash_low_latency": "optin", "query_overrides": False}, {"hls_low_latency": "optin", "query_overrides": False},
+        {"hls_low_latency": "on", "hls_format": "ts"}, {"dash_low_latency": "on", "hls_format": "ts"}, {},
     ]
     for kw in cases:
         igor_ok = True
@@ -658,11 +695,39 @@ def test_the_rules_match_its_a_live():
             _ll_payload(**kw)
         except ValueError:
             igor_ok = False
-        dash = {k: kw[k] for k in ("low_latency", "chunk_duration", "target_latency", "utc_timing", "utc_timing_url") if k in kw}
-        cfg = {"packaging": {"segment_duration": 2.0, "dash": dash}, "query": {"overrides": kw.get("query_overrides", True)}}
+        packaging = {"segment_duration": 2.0, "dash": {}, "hls": {}}
+        if "chunk_duration" in kw:
+            packaging["chunk_duration"] = kw["chunk_duration"]
+        packaging["dash"]["low_latency"] = kw.get("dash_low_latency", "off")
+        packaging["hls"]["low_latency"] = kw.get("hls_low_latency", "off")
+        if "hls_format" in kw:
+            packaging["hls"]["container"] = kw["hls_format"]
+        for key in ("target_latency", "utc_timing", "utc_timing_url"):
+            if key in kw:
+                packaging["dash"][key] = kw[key]
+        cfg = {"packaging": packaging, "query": {"overrides": kw.get("query_overrides", True)}}
         try:
+            mod.packaging_settings(cfg)
             mod.check_low_latency(cfg, kw.get("backend", "local-docker"))
             its_ok = True
         except ValueError:
             its_ok = False
         assert igor_ok == its_ok, kw
+
+
+@pytest.mark.parametrize("fmt", ["dash", "hls"])
+def test_the_generated_low_latency_toml_is_accepted_by_its_a_live(fmt):
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "its-a-live"
+    sys.path.insert(0, str(root))
+    try:
+        import _packaging_cfg
+    finally:
+        sys.path.remove(str(root))
+    config = tomllib.loads(generate_toml(**_ll_payload(**{f"{fmt}_low_latency": "on"}).model_dump()))
+    settings = _packaging_cfg.packaging_settings(config)  # raises on anything its-a-live refuses
+    assert settings[fmt]["low_latency"] == "on" and settings["chunk_duration"] == 0.5
+    assert "--chunk-duration" in _packaging_cfg.packaging_bake_args(config)
+    assert f"--ll-{fmt}" in _packaging_cfg.ll_serve_args(config)

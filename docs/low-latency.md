@@ -74,7 +74,7 @@ chunk_duration = 0.5          # seconds, shorter than segment_duration
 It decides how the loop is **baked**, so run `spark` again after turning it on or
 off (nothing detects a stale bake). Then `create`/`redeploy` and `start` as
 usual. Every key is documented in [its-a-live AGENTS](../its-a-live/AGENTS.md)
-and the [its-a-live README](../its-a-live/README.md#low-latency-dash).
+and the [its-a-live README](../its-a-live/README.md#low-latency-dash-and-hls).
 
 ### In Igor
 
@@ -231,7 +231,7 @@ tens of milliseconds, not a segment.
 ## Where the details live
 
 - [loop-dee-loop README](../loop-dee-loop/README.md#low-latency-dash-cmaf-chunked-delivery): flags, the delivery model, query parameters.
-- [its-a-live AGENTS](../its-a-live/AGENTS.md) and [its-a-live README](../its-a-live/README.md#low-latency-dash): the channel config keys and deploy behaviour.
+- [its-a-live AGENTS](../its-a-live/AGENTS.md) and [its-a-live README](../its-a-live/README.md#low-latency-dash-and-hls): the channel config keys and deploy behaviour.
 - [loop-dee-loop AGENTS](../loop-dee-loop/AGENTS.md): module map (`lowlatency.py`) and what an agent must not get wrong.
 - [DASH conformance review](../loop-dee-loop/DASH_CONFORMANCE.md): the MPD checks this builds on.
 - [player-lab AGENTS](../player-lab/AGENTS.md): measuring latency.

@@ -77,18 +77,20 @@ signal_format       = "binary"  # "binary" | "xml" -- EventStream encoding of th
 segment_duration = 4.0   # nominal bake segment duration, seconds
 dvr_window       = 30    # serve.py sliding-window size, seconds (also a query parameter)
 
-# [packaging.hls]        # decided at bake time -- no query parameter
+# chunk_duration = 0.5   # low latency (either format): seconds, shorter than segment_duration. Segments are baked as chunks of this length; low-latency DASH sends them chunk by chunk and LL-HLS serves each as a part. Bake time -- TOML only, no query parameter. Re-spark after changing it or turning low latency on/off.
+
+# [packaging.hls]        # decided at bake time -- no query parameter (except low_latency)
 # container = "cmaf"     # "cmaf" | "ts" (DASH is always CMAF)
 # mux_audio = true       # TS only: mux audio into each video rendition, or a separate audio playlist
+# low_latency = "off"    # Apple LL-HLS (parts, preload hint, blocking reload). "off" | "on" (every media playlist advertises it) | "optin" (delivered, but advertised only on ?low_latency=true; needs [query] overrides). Needs container = "cmaf". ecs-express/local-docker only. Also a query parameter.
 
 # [packaging.dash]       # also query parameters of the same name
 # timeline_style = "full"  # "full" (every <S> has @t and @d, a SegmentTemplate per representation) | "compact" (implicit @t, @r runs, one shared SegmentTemplate)
 # addressing     = "number"  # "number" ($Number$) | "time" ($Time$)
 #
-# Low-latency DASH (loop-dee-loop/README.md "Low-latency DASH"); ecs-express and local-docker only.
-# low_latency    = "off"     # "off" | "on" (every MPD advertises it) | "optin" (delivered, but an MPD advertises it only on ?low_latency=true; needs [query] overrides). Also a query parameter. Changing it from/to "off" needs a re-spark: it decides how the loop is baked.
-# chunk_duration = 0.5       # seconds, shorter than segment_duration: segments are baked as chunks this long. Bake time -- no query parameter.
-# target_latency = 2         # optional, seconds (at most 120): the latency the MPD asks players to hold; default 4 chunks, at least 1 s. Also a query parameter.
+# Low-latency DASH (docs/low-latency.md); ecs-express and local-docker only.
+# low_latency    = "off"     # "off" | "on" (every MPD advertises it) | "optin" (delivered, but an MPD advertises it only on ?low_latency=true; needs [query] overrides). Also a query parameter.
+# target_latency = 2         # optional, seconds (at most 120): the latency the MPD asks players to hold; default 4 chunks, at least 1 s. Also a query parameter. DASH only.
 # utc_timing     = "direct"  # how the MPD lets players sync their clock. "direct" (default): the time written into the MPD, which is then served no-store (never CDN-cached; no URL needed). "http": a polled /time -- its URL is set automatically at deploy time (local-docker: http://localhost:<port>/time; ecs-express: the CloudFront domain or the service endpoint, via one extra deploy for a new channel). "none": the player's own clock. Also a query parameter.
 # utc_timing_url = "https://time.example/time"  # optional, absolute http(s), only with utc_timing = "http": use this instead of the automatic one (e.g. a tunnel, a custom domain). Configuration only -- never a query parameter.
 
@@ -100,7 +102,8 @@ continuous = true # default -- no discontinuity/Period restart at the loop wrap 
 # full_loops, offset) and per-request overrides (timeline_mode, epoch,
 # dvr_window, split_on, timeline_style, addressing, cue_tags,
 # descriptor_grouping, increment_event_ids, signal_format, id_template,
-# max_height, max_bitrate, low_latency, ll_target_latency, ll_utc_timing). ecs-express/local-docker only.
+# max_height, max_bitrate, low_latency, ll_target_latency, ll_utc_timing). ecs-express/local-docker only. (LL-HLS's
+# blocking-reload parameters _HLS_msn/_HLS_part/_HLS_skip are not overrides: the CDN keys on them automatically.)
 # [query]
 # timeshift = true    # startover/catchup: start, end, full_loops, offset. false: those are ignored (live only)
 # overrides = true    # per-request overrides of how a manifest is rendered (every other parameter).

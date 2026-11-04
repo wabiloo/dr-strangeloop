@@ -81,18 +81,21 @@ signal_format = "binary"         # "binary" (default; <scte35:Binary> splice_inf
 segment_duration = 4.0
 dvr_window = 30              # seconds -- serve.py sliding-window size (also the `dvr_window` query parameter)
 
-[packaging.hls]              # decided at bake time: TOML only, no query parameter
+chunk_duration = 0.5         # low latency (either format): seconds, > 0 and shorter than segment_duration; the baked chunks are shared by low-latency DASH and LL-HLS. Bake time, TOML only. Only used when a format's low_latency is not "off" -- re-spark after changing it or turning low latency on/off.
+
+[packaging.hls]              # decided at bake time: TOML only, no query parameter (except low_latency)
 container = "cmaf"           # "cmaf" (default) | "ts"; HLS only, DASH remains CMAF
 mux_audio = true             # TS only: true muxes audio with each video rendition; false uses a separate audio TS playlist
+# Apple LL-HLS (docs/low-latency.md); ecs-express and local-docker only (aws-lambda/aws-media: a config error); needs container = "cmaf".
+low_latency = "off"          # "off" (default) | "on" (every media playlist advertises parts, a preload hint, rendition reports and blocking reload) | "optin" (delivered; advertised only on ?low_latency=true, needs [query] overrides = true). Also a query parameter.
 
 [packaging.dash]             # also query parameters of the same name; ecs-express/aws-lambda/local-docker, serve.py flags
 timeline_style = "full"      # "full" (default; every <S> has @t and @d, a SegmentTemplate per representation) | "compact" (implicit @t where contiguous + @r for equal @d, one shared SegmentTemplate)
 addressing = "number"        # "number" (default; $Number$ + startNumber) | "time" ($Time$ = each <S t>); applied on create/redeploy
-# Low-latency DASH (loop-dee-loop/README.md "Low-latency DASH"); ecs-express and local-docker only (aws-lambda/aws-media: a config error).
-low_latency = "off"          # "off" (default) | "on" (every MPD advertises it) | "optin" (delivered; an MPD advertises it only on ?low_latency=true, needs [query] overrides = true). Also a query parameter. Decides how the loop is BAKED (chunks): re-spark after changing it from/to "off".
-chunk_duration = 0.5         # seconds, > 0 and shorter than [packaging] segment_duration; bake time, TOML only
-# target_latency = 2         # optional, seconds, at most 120; the latency the MPD asks players to hold (default 4 chunks, at least 1 s). Also a query parameter.
-utc_timing = "direct"        # "direct" (default: the time in the MPD, served no-store, no URL) | "http" (a polled /time, URL set automatically at deploy) | "none". Also a query parameter.
+# Low-latency DASH (docs/low-latency.md); ecs-express and local-docker only (aws-lambda/aws-media: a config error).
+low_latency = "off"          # "off" (default) | "on" (every MPD advertises it) | "optin" (delivered; an MPD advertises it only on ?low_latency=true, needs [query] overrides = true). Also a query parameter.
+# target_latency = 2         # optional, seconds, at most 120; the latency the MPD asks players to hold (default 4 chunks, at least 1 s). Also a query parameter. DASH only.
+utc_timing = "direct"        # "direct" (default: the time in the MPD, served no-store, no URL) | "http" (a polled /time, URL set automatically at deploy) | "none". Also a query parameter. DASH only.
 # utc_timing_url = "https://t.example/time"  # only with "http": replaces the automatic URL. Configuration only, never a query parameter (a link must not choose viewers' clock source).
 
 [timeline]                  # ecs-express/aws-lambda/local-docker only
@@ -105,7 +108,8 @@ continuous = true   # default true -- serve.py rewrites each segment's own times
 # (default|continuous|periodic, overrides [timeline].continuous), epoch, dvr_window,
 # split_on, timeline_style, addressing, cue_tags, descriptor_grouping,
 # increment_event_ids, signal_format, id_template, max_height, max_bitrate, and (DASH, low latency)
-# low_latency, ll_target_latency, ll_utc_timing. Only
+# low_latency, ll_target_latency, ll_utc_timing. (LL-HLS's _HLS_msn/_HLS_part/_HLS_skip are protocol parameters, not overrides:
+# a low-latency HLS channel's CloudFront manifest policy keys on them automatically -- see _packaging_cfg.cdn_query_names.) Only
 # manifests change, never segment bytes. Two independent, TOML-only switches (they gate
 # the parameters, so they are not parameters themselves): `timeshift` and `overrides`. The
 # whole table is optional (missing = both on, with these defaults).

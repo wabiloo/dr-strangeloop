@@ -18,8 +18,8 @@ from _host_paths import to_host_path
 from _epoch_cfg import config_epoch_utc
 from _infra_cfg import infra_table
 from _markers_cfg import split_on_serve_args
-from _packaging_cfg import dash_serve_args, dvr_window_seconds as config_dvr_window_seconds
-from _query_cfg import query_param_names, query_serve_args
+from _packaging_cfg import cdn_query_names, dash_serve_args, ll_serve_args, dvr_window_seconds as config_dvr_window_seconds
+from _query_cfg import query_serve_args
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 
@@ -220,7 +220,8 @@ class LoopStack(Stack):
                     "--channel-name", config.get("deploy", {}).get("name", "default"),
                     *(["--continuous-timeline"] if continuous else []),
                     *split_on_serve_args(config),
-                    *dash_serve_args(config, public_url=f"https://{public_host}" if public_host else None),
+                    *dash_serve_args(config),
+                    *ll_serve_args(config, public_url=f"https://{public_host}" if public_host else None),
                     *query_serve_args(config),
                 ],
                 environment=[
@@ -258,7 +259,7 @@ class LoopStack(Stack):
                 manifest_cache_policy = cdn.import_policy(self, "ManifestCachePolicy", SHARED_BACKEND, "manifests")
             else:
                 manifest_cache_policy = cdn.manifest_policy(
-                    self, "ManifestCachePolicy", f"loop-dee-loop-{name}-manifests", query_param_names(config),
+                    self, "ManifestCachePolicy", f"loop-dee-loop-{name}-manifests", cdn_query_names(config),
                     default_ttl=Duration.seconds(0), max_ttl=Duration.seconds(1),
                 )
 

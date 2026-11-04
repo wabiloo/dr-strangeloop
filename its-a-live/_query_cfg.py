@@ -49,6 +49,11 @@ FIXED_PARAMS = (
 TIMESHIFT_FIXED_PARAMS = ("full_loops", "offset")
 OVERRIDE_PARAMS = tuple(p for p in FIXED_PARAMS if p not in TIMESHIFT_FIXED_PARAMS)
 
+# Apple LL-HLS blocking playlist reload parameters (RFC 8216bis). Spec-fixed names: never prefixed, never a
+# per-request *override* (so not in FIXED_PARAMS), but a CDN must key and forward them for a low-latency HLS
+# channel or a blocking reload is answered with the wrong playlist. Mirrors loop-dee-loop/timeshift.py.
+LL_HLS_PROTOCOL_PARAMS = ("_HLS_msn", "_HLS_part", "_HLS_skip")
+
 _PREFIX = re.compile(r"^[A-Za-z0-9_.~-]*$")
 
 # CloudFront rejects a cache-policy query-string allow-list longer than this

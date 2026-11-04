@@ -55,7 +55,9 @@ MAX_TARGET_LATENCY = 120
 def validate_low_latency(
     *,
     backend: str,
-    low_latency: str,
+    dash_low_latency: str,
+    hls_low_latency: str,
+    hls_format: str,
     segment_duration: float,
     chunk_duration: float,
     target_latency: float | None,
@@ -64,8 +66,9 @@ def validate_low_latency(
     query_overrides: bool,
 ) -> None:
     """Raise ValueError for a low-latency combination its-a-live would refuse (see _packaging_cfg.py)."""
-    if low_latency not in LOW_LATENCY_VALUES:
-        raise ValueError("low_latency must be 'off', 'on' or 'optin'")
+    for name, mode in (("dash_low_latency", dash_low_latency), ("hls_low_latency", hls_low_latency)):
+        if mode not in LOW_LATENCY_VALUES:
+            raise ValueError(f"{name} must be 'off', 'on' or 'optin'")
     if utc_timing not in UTC_TIMING_VALUES:
         raise ValueError("utc_timing must be 'direct', 'http' or 'none'")
     if target_latency is not None and not 0 < target_latency <= MAX_TARGET_LATENCY:
@@ -75,7 +78,7 @@ def validate_low_latency(
             raise ValueError("utc_timing_url only applies to utc_timing 'http'")
         if not utc_timing_url.startswith(("http://", "https://")):
             raise ValueError("utc_timing_url must be an absolute http(s) URL (DASH does not allow a relative one)")
-    if low_latency == "off":
+    if dash_low_latency == "off" and hls_low_latency == "off":
         return
     if backend not in LOW_LATENCY_BACKENDS:
         raise ValueError(
@@ -86,8 +89,10 @@ def validate_low_latency(
         raise ValueError(
             f"chunk_duration must be > 0 and shorter than segment_duration ({segment_duration:g}), got {chunk_duration:g}"
         )
-    if low_latency == "optin" and not query_overrides:
+    if "optin" in (dash_low_latency, hls_low_latency) and not query_overrides:
         raise ValueError("low_latency 'optin' needs query overrides enabled (?low_latency=true)")
+    if hls_low_latency != "off" and hls_format != "cmaf":
+        raise ValueError("hls_low_latency needs hls_format 'cmaf' (MPEG-TS segments cannot carry parts)")
 
 
 def validate_query_prefix(value: str) -> str:
@@ -191,15 +196,15 @@ max_span_seconds = {max_span_seconds}
 _PACKAGING_EXTRA = """
 [packaging]
 segment_duration = {segment_duration}
-dvr_window = {dvr_window_seconds}
+dvr_window = {dvr_window_seconds}{chunk_extra}
 
 [packaging.hls]
 container = "{hls_format}"
-mux_audio = {hls_ts_mux_audio}
+mux_audio = {hls_ts_mux_audio}{hls_ll_extra}
 
 [packaging.dash]
 timeline_style = "{dash_timeline}"
-addressing = "{dash_addressing}"{low_latency_extra}
+addressing = "{dash_addressing}"{dash_ll_extra}
 
 [timeline]
 epoch = "{epoch_utc}"
@@ -256,7 +261,8 @@ def generate_toml(
     hls_ts_mux_audio: bool = True,
     dash_addressing: str = "number",
     dash_timeline: str = "full",
-    low_latency: str = "off",
+    dash_low_latency: str = "off",
+    hls_low_latency: str = "off",
     chunk_duration: float = 0.5,
     target_latency: float | None = None,
     utc_timing: str = "direct",
@@ -311,20 +317,23 @@ def generate_toml(
     validate_query_prefix(query_prefix)
     validate_query_names(timeshift_start_param, timeshift_end_param, query_prefix)
     validate_low_latency(
-        backend=backend, low_latency=low_latency, segment_duration=segment_duration, chunk_duration=chunk_duration,
-        target_latency=target_latency, utc_timing=utc_timing, utc_timing_url=utc_timing_url,
-        query_overrides=query_overrides,
+        backend=backend, dash_low_latency=dash_low_latency, hls_low_latency=hls_low_latency, hls_format=hls_format,
+        segment_duration=segment_duration, chunk_duration=chunk_duration, target_latency=target_latency,
+        utc_timing=utc_timing, utc_timing_url=utc_timing_url, query_overrides=query_overrides,
     )
     # Only written when low latency is on: the keys are bake-time/serve-time settings of a feature most channels
-    # do not use, and their absence keeps every other channel's TOML exactly as it was.
-    low_latency_extra = ""
-    if low_latency != "off":
-        low_latency_extra = f'\nlow_latency = "{low_latency}"\nchunk_duration = {chunk_duration:g}'
+    # do not use, and their absence keeps every other channel's TOML exactly as it was. chunk_duration is shared
+    # by both formats ([packaging]); target latency and the clock source are DASH-only.
+    chunk_extra = f"\nchunk_duration = {chunk_duration:g}" if "off" != dash_low_latency or "off" != hls_low_latency else ""
+    hls_ll_extra = f'\nlow_latency = "{hls_low_latency}"' if hls_low_latency != "off" else ""
+    dash_ll_extra = ""
+    if dash_low_latency != "off":
+        dash_ll_extra = f'\nlow_latency = "{dash_low_latency}"'
         if target_latency is not None:
-            low_latency_extra += f"\ntarget_latency = {target_latency:g}"
-        low_latency_extra += f'\nutc_timing = "{utc_timing}"'
+            dash_ll_extra += f"\ntarget_latency = {target_latency:g}"
+        dash_ll_extra += f'\nutc_timing = "{utc_timing}"'
         if utc_timing_url:
-            low_latency_extra += f"\nutc_timing_url = {json.dumps(utc_timing_url)}"
+            dash_ll_extra += f"\nutc_timing_url = {json.dumps(utc_timing_url)}"
     period_ids = [int(str(i), 0) for i in (period_on_segmentation or [])]
     if any(not 0 <= i <= 0xFF for i in period_ids):
         raise ValueError("period_on_segmentation entries must be segmentation_type_ids (0..255)")
@@ -357,7 +366,8 @@ def generate_toml(
             segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
             epoch_utc=epoch_utc,
             hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
-            dash_addressing=dash_addressing, dash_timeline=dash_timeline, low_latency_extra=low_latency_extra,
+            dash_addressing=dash_addressing, dash_timeline=dash_timeline, dash_ll_extra=dash_ll_extra,
+            hls_ll_extra=hls_ll_extra, chunk_extra=chunk_extra,
             continuous=str(continuous).lower(),
         )
 

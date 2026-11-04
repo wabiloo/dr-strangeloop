@@ -139,9 +139,10 @@ def test_packaging_defaults():
     assert p == {
         "segment_duration": 4.0,
         "dvr_window": 30.0,
-        "hls": {"container": "cmaf", "mux_audio": True},
+        "chunk_duration": 0.5,
+        "hls": {"container": "cmaf", "mux_audio": True, "low_latency": "off"},
         "dash": {
-            "timeline_style": "full", "addressing": "number", "low_latency": "off", "chunk_duration": 0.5,
+            "timeline_style": "full", "addressing": "number", "low_latency": "off",
             "target_latency": None, "utc_timing": "direct", "utc_timing_url": "",
         },
     }
@@ -190,67 +191,96 @@ def test_packaging_values_are_validated(packaging, message):
         _packaging_cfg.packaging_settings({"packaging": packaging})
 
 
-# ── [packaging.dash] low latency ────────────────────────────────────────────
+# ── low latency ([packaging] chunk_duration, [packaging.dash|hls] low_latency) ──────────────────
 
 
-def ll(**dash):
-    return {"packaging": {"segment_duration": 2, "dash": {"low_latency": "on", **dash}}}
+def ll(dash="on", hls="off", **packaging):
+    """A channel config with segment_duration 2 and the given low-latency modes (`dash`/`hls` are the modes; any
+    other keyword is a [packaging] key, or `dash_<key>` / `hls_<key>` for a key of that table)."""
+    tables = {"dash": {}, "hls": {}}
+    top = {"segment_duration": 2}
+    for key, value in packaging.items():
+        (tables["dash"] if key.startswith("dash_") else tables["hls"] if key.startswith("hls_") else top)[
+            key.split("_", 1)[1] if key.startswith(("dash_", "hls_")) else key
+        ] = value
+    tables["dash"]["low_latency"], tables["hls"]["low_latency"] = dash, hls
+    return {"packaging": {**top, "dash": tables["dash"], "hls": tables["hls"]}}
 
 
 def test_low_latency_is_off_by_default_and_adds_no_flags():
     assert "--chunk-duration" not in _packaging_cfg.packaging_bake_args({})
-    assert not [a for a in _packaging_cfg.dash_serve_args({}) if a.startswith("--ll")]
+    assert _packaging_cfg.ll_serve_args({}) == []
 
 
-def test_low_latency_on_chunks_the_bake_and_enables_serving_with_direct_timing_by_default():
+def test_dash_low_latency_chunks_the_bake_and_enables_serving_with_direct_timing_by_default():
     cfg = ll()
     assert _flags(_packaging_cfg.packaging_bake_args(cfg))["--chunk-duration"] == "0.5"
-    args = _packaging_cfg.dash_serve_args(cfg)
+    args = _packaging_cfg.ll_serve_args(cfg)
     assert _flags(args) == {"--ll-dash": None, "--ll-utc-timing": "direct"}
     assert "--ll-utc-timing-url" not in args  # direct needs no URL
 
 
-def test_low_latency_settings_become_flags():
-    cfg = ll(chunk_duration=0.25, target_latency=1.5, utc_timing="none")
+def test_hls_low_latency_chunks_the_bake_and_needs_no_dash_flags():
+    cfg = ll(dash="off", hls="on")
+    assert _flags(_packaging_cfg.packaging_bake_args(cfg))["--chunk-duration"] == "0.5"
+    assert _packaging_cfg.ll_serve_args(cfg) == ["--ll-hls"]  # the DASH-only target / clock flags do not apply
+
+
+def test_both_formats_and_the_shared_chunk_size():
+    cfg = ll(dash="on", hls="on", chunk_duration=0.25, dash_target_latency=1.5, dash_utc_timing="none")
     assert _flags(_packaging_cfg.packaging_bake_args(cfg))["--chunk-duration"] == "0.25"
-    assert _flags(_packaging_cfg.dash_serve_args(cfg)) == {
-        "--ll-dash": None, "--ll-target-latency": "1.5", "--ll-utc-timing": "none",
+    assert _flags(_packaging_cfg.ll_serve_args(cfg)) == {
+        "--ll-dash": None, "--ll-hls": None, "--ll-target-latency": "1.5", "--ll-utc-timing": "none",
     }
 
 
-def test_low_latency_optin_and_boolean_spellings():
-    optin = {"packaging": {"segment_duration": 2, "dash": {"low_latency": "optin"}}, "query": {"overrides": True}}
-    assert "--ll-optin" in _packaging_cfg.dash_serve_args(optin) and "--ll-dash" not in _packaging_cfg.dash_serve_args(optin)
-    assert "--ll-dash" in _packaging_cfg.dash_serve_args(ll(low_latency=True))  # TOML true == "on"
-    assert _packaging_cfg.packaging_settings(ll(low_latency=False))["dash"]["low_latency"] == "off"
+def test_optin_either_format_delivers_without_advertising():
+    overrides = {"query": {"overrides": True}}
+    for dash, hls in (("optin", "off"), ("off", "optin"), ("optin", "optin")):
+        args = _packaging_cfg.ll_serve_args({**ll(dash=dash, hls=hls), **overrides})
+        assert "--ll-optin" in args and "--ll-dash" not in args and "--ll-hls" not in args
+    mixed = _packaging_cfg.ll_serve_args({**ll(dash="on", hls="optin"), **overrides})
+    assert "--ll-dash" in mixed and "--ll-optin" in mixed and "--ll-hls" not in mixed
+
+
+def test_boolean_spellings_and_mode_off_for_each_format():
+    assert "--ll-dash" in _packaging_cfg.ll_serve_args(ll(dash=True))  # TOML true == "on"
+    assert "--ll-hls" in _packaging_cfg.ll_serve_args(ll(dash="off", hls=True))
+    p = _packaging_cfg.packaging_settings(ll(dash=False, hls=False))
+    assert p["dash"]["low_latency"] == "off" and p["hls"]["low_latency"] == "off"
 
 
 def test_http_timing_uses_the_configured_url_else_the_public_one_when_known():
-    cfg = ll(utc_timing="http")
+    cfg = ll(dash_utc_timing="http")
     assert _packaging_cfg.needs_public_url(cfg)
-    assert "--ll-utc-timing-url" not in _packaging_cfg.dash_serve_args(cfg)  # not known yet: nothing guessed
-    assert _flags(_packaging_cfg.dash_serve_args(cfg, public_url="https://d1.cloudfront.net/"))["--ll-utc-timing-url"] == (
+    assert "--ll-utc-timing-url" not in _packaging_cfg.ll_serve_args(cfg)  # not known yet: nothing guessed
+    assert _flags(_packaging_cfg.ll_serve_args(cfg, public_url="https://d1.cloudfront.net/"))["--ll-utc-timing-url"] == (
         "https://d1.cloudfront.net/time"
     )
-    explicit = ll(utc_timing="http", utc_timing_url="https://time.example/t")
+    explicit = ll(dash_utc_timing="http", dash_utc_timing_url="https://time.example/t")
     assert not _packaging_cfg.needs_public_url(explicit)
-    assert _flags(_packaging_cfg.dash_serve_args(explicit, public_url="https://ignored"))["--ll-utc-timing-url"] == "https://time.example/t"
-    assert not _packaging_cfg.needs_public_url(ll(utc_timing="direct"))
-    assert not _packaging_cfg.needs_public_url({"packaging": {"dash": {"utc_timing": "http"}}})  # LL off
+    assert _flags(_packaging_cfg.ll_serve_args(explicit, public_url="https://ignored"))["--ll-utc-timing-url"] == "https://time.example/t"
+    assert not _packaging_cfg.needs_public_url(ll(dash_utc_timing="direct"))
+    assert not _packaging_cfg.needs_public_url(ll(dash="off", hls="on", dash_utc_timing="http"))  # DASH low latency is off
+    assert not _packaging_cfg.needs_public_url({"packaging": {"dash": {"utc_timing": "http"}}})
 
 
 @pytest.mark.parametrize(
     "cfg,message",
     [
-        (ll(low_latency="fast"), "low_latency"),
+        (ll(dash="fast"), r"\[packaging.dash\] low_latency"),
+        (ll(dash="off", hls="fast"), r"\[packaging.hls\] low_latency"),
         (ll(chunk_duration=2), "chunk_duration"),  # not shorter than the 2 s segment
-        (ll(chunk_duration=0), "chunk_duration"),
-        (ll(target_latency=0), "target_latency"),
-        (ll(target_latency=121), "target_latency"),
-        (ll(utc_timing="ntp"), "utc_timing"),
-        (ll(utc_timing="direct", utc_timing_url="https://x/t"), "only applies"),
-        (ll(utc_timing="http", utc_timing_url="/time"), "absolute"),
-        ({"packaging": {"dash": {"low_latency": "optin"}}, "query": {"overrides": False}}, "overrides"),
+        (ll(dash="off", hls="on", chunk_duration=0), "chunk_duration"),
+        (ll(dash_target_latency=0), "target_latency"),
+        (ll(dash_target_latency=121), "target_latency"),
+        (ll(dash_utc_timing="ntp"), "utc_timing"),
+        (ll(dash_utc_timing="direct", dash_utc_timing_url="https://x/t"), "only applies"),
+        (ll(dash_utc_timing="http", dash_utc_timing_url="/time"), "absolute"),
+        ({**ll(dash="optin"), "query": {"overrides": False}}, r"\[packaging.dash\].*overrides"),
+        ({**ll(dash="off", hls="optin"), "query": {"overrides": False}}, r"\[packaging.hls\].*overrides"),
+        (ll(dash="off", hls="on", hls_container="ts"), "cmaf"),  # MPEG-TS cannot carry parts
+        ({"packaging": {"dash": {"chunk_duration": 0.5}}}, "moved to"),  # the old, unreleased location
     ],
 )
 def test_low_latency_values_are_validated(cfg, message):
@@ -258,13 +288,57 @@ def test_low_latency_values_are_validated(cfg, message):
         _packaging_cfg.packaging_settings(cfg)
 
 
+def test_dash_low_latency_works_with_a_ts_hls_container_only_hls_needs_cmaf():
+    _packaging_cfg.packaging_settings(ll(dash="on", hls="off", hls_container="ts"))  # DASH is always CMAF
+
+
 def test_low_latency_only_on_backends_that_can_hold_responses():
     for backend in ("ecs-express", "local-docker"):
         _packaging_cfg.check_low_latency(ll(), backend)
+        _packaging_cfg.check_low_latency(ll(dash="off", hls="on"), backend)
     for backend in ("aws-lambda", "aws-media"):
-        with pytest.raises(ValueError, match="not supported"):
-            _packaging_cfg.check_low_latency(ll(), backend)
+        for cfg in (ll(), ll(dash="off", hls="on")):
+            with pytest.raises(ValueError, match="not supported"):
+                _packaging_cfg.check_low_latency(cfg, backend)
     _packaging_cfg.check_low_latency({}, "aws-lambda")  # off is fine anywhere
+
+
+# the CDN must key and forward the blocking-reload parameters of a low-latency HLS channel
+
+
+def test_cdn_names_add_the_blocking_reload_parameters_only_for_low_latency_hls():
+    base = _query_cfg.query_param_names({})
+    assert _packaging_cfg.cdn_query_names({}) == base
+    assert _packaging_cfg.cdn_query_names(ll(dash="on", hls="off")) == base  # DASH low latency has no such parameters
+    hls = _packaging_cfg.cdn_query_names(ll(dash="off", hls="on"))
+    assert hls == [*base, "_HLS_msn", "_HLS_part", "_HLS_skip"]
+
+
+def test_the_blocking_parameters_survive_a_narrow_allow_list_and_are_never_prefixed():
+    narrow = {"query": {"overrides": False, "timeshift": False, "prefix": "dsl_"}}  # no names at all otherwise
+    assert _query_cfg.query_param_names({**narrow}) == []
+    names = _packaging_cfg.cdn_query_names({**ll(dash="off", hls="on"), **narrow})
+    assert names == ["_HLS_msn", "_HLS_part", "_HLS_skip"]  # spec-fixed: the prefix does not apply
+
+
+def test_a_low_latency_hls_channel_still_shares_the_default_cache_policy_when_its_keying_is_the_same():
+    cdn = pytest.importorskip("_cdn_policies")  # needs aws_cdk (the its-a-live venv)
+    assert cdn.uses_default_query({})
+    assert cdn.uses_default_query(ll(dash="off", hls="on"))  # both key on the whole query string
+    # a narrow allow-list is a genuinely different policy, with or without the HLS parameters
+    assert not cdn.uses_default_query({"query": {"overrides": False}})
+    assert not cdn.uses_default_query({**ll(dash="off", hls="on"), "query": {"overrides": False}})
+
+
+def test_local_docker_serve_args_carry_the_low_latency_flags_and_its_own_time_url():
+    import _local_docker_ops
+
+    cfg = ll(hls="on", dash_utc_timing="http", dash_target_latency=2)
+    flags = _flags(_local_docker_ops._serve_args(cfg, "chan", 8123, "2026-01-01T00:00:00Z"))
+    assert flags["--ll-dash"] is None and flags["--ll-hls"] is None and flags["--ll-utc-timing"] == "http"
+    assert flags["--ll-utc-timing-url"] == "http://localhost:8123/time" and flags["--ll-target-latency"] == "2"
+    off = _local_docker_ops._serve_args({}, "chan", 8123, "2026-01-01T00:00:00Z")
+    assert not [a for a in off if a.startswith("--ll")]
 
 
 # ── [timeline] ──────────────────────────────────────────────────────────────
@@ -442,9 +516,10 @@ def test_every_flag_its_a_live_emits_exists_in_serve_and_bake():
             "hls": {"cue_tags": "alongside"}, "dash": {"signal_format": "xml"},
         },
         "packaging": {
-            "hls": {"container": "ts", "mux_audio": False},
+            "chunk_duration": 0.25,
+            "hls": {"container": "cmaf", "mux_audio": False, "low_latency": "on"},
             "dash": {
-                "addressing": "time", "timeline_style": "compact", "low_latency": "on", "chunk_duration": 0.25,
+                "addressing": "time", "timeline_style": "compact", "low_latency": "on",
                 "target_latency": 2, "utc_timing": "http", "utc_timing_url": "https://t.example/time",
             },
         },
@@ -453,11 +528,11 @@ def test_every_flag_its_a_live_emits_exists_in_serve_and_bake():
     optin = {"packaging": {"dash": {"low_latency": "optin"}}}
     serve_flags = {
         *_flags(_markers_cfg.split_on_serve_args(cfg)), *_flags(_packaging_cfg.dash_serve_args(cfg)),
-        *_flags(_packaging_cfg.dash_serve_args(optin)),
+        *_flags(_packaging_cfg.ll_serve_args(cfg)), *_flags(_packaging_cfg.ll_serve_args(optin)),
         *_flags(_query_cfg.query_serve_args(cfg)), "--dvr-window-seconds",
     }
     assert {"--timeshift", "--query-overrides", "--query-prefix"} <= serve_flags
-    assert {"--ll-dash", "--ll-optin", "--ll-target-latency", "--ll-utc-timing", "--ll-utc-timing-url"} <= serve_flags
+    assert {"--ll-dash", "--ll-hls", "--ll-optin", "--ll-target-latency", "--ll-utc-timing", "--ll-utc-timing-url"} <= serve_flags
     bake_flags = {*_flags(_markers_cfg.markers_bake_args(cfg)), *_flags(_packaging_cfg.packaging_bake_args(cfg))}
     assert "--chunk-duration" in bake_flags
     serve_help, bake_help = _help("serve.py"), _help("bake.py")
@@ -875,14 +950,3 @@ def test_galvanise_generated_config_uses_the_current_keys(backend):
     if backend == "ecs-express":
         assert cfg["packaging"]["dvr_window"] == 30
 
-
-def test_local_docker_serve_args_carry_the_low_latency_flags_and_its_own_time_url():
-    import _local_docker_ops
-
-    cfg = ll(utc_timing="http", target_latency=2)
-    args = _local_docker_ops._serve_args(cfg, "chan", 8123, "2026-01-01T00:00:00Z")
-    flags = _flags(args)
-    assert flags["--ll-dash"] is None and flags["--ll-utc-timing"] == "http"
-    assert flags["--ll-utc-timing-url"] == "http://localhost:8123/time" and flags["--ll-target-latency"] == "2"
-    off = _local_docker_ops._serve_args({}, "chan", 8123, "2026-01-01T00:00:00Z")
-    assert not [a for a in off if a.startswith("--ll")]

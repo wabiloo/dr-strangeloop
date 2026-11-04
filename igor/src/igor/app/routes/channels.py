@@ -70,13 +70,16 @@ class ChannelCreatePayload(BaseModel):
     # <S>, a SegmentTemplate per representation) or "compact" (implicit @t + @r,
     # one shared SegmentTemplate). ecs-express/local-docker only.
     dash_timeline: Literal["full", "compact"] = "full"
-    # [packaging.dash] low latency (loop-dee-loop/README.md "Low-latency DASH"; ecs-express/local-docker only).
-    # low_latency: "off", "on" (every MPD advertises it) or "optin" (?low_latency=true). chunk_duration is a bake-time
-    # setting (seconds, shorter than segment_duration). target_latency (seconds, optional) and utc_timing are also
-    # per-request query parameters (ll_target_latency, ll_utc_timing). utc_timing_url (only with "http", absolute
-    # http(s)) is configuration only: a query parameter must not choose viewers' clock source. With "http" and no
-    # URL, its-a-live sets it automatically at deploy time. Written to the TOML only when low_latency != "off".
-    low_latency: Literal["off", "on", "optin"] = "off"
+    # Low latency (docs/low-latency.md; ecs-express/local-docker only). dash_low_latency is [packaging.dash]
+    # low_latency and hls_low_latency is [packaging.hls] low_latency (LL-HLS, needs hls_format "cmaf"): each "off",
+    # "on" (every manifest of that format advertises it) or "optin" (?low_latency=true); both map to the query
+    # parameter low_latency, per format. chunk_duration is [packaging] chunk_duration, a bake-time setting shared by
+    # both (seconds, shorter than segment_duration). target_latency and utc_timing are DASH-only and also per-request
+    # query parameters (ll_target_latency, ll_utc_timing). utc_timing_url (only with "http", absolute http(s)) is
+    # configuration only: a query parameter must not choose viewers' clock source; with "http" and no URL,
+    # its-a-live sets it automatically at deploy time. Written to the TOML only when a format's low latency is on.
+    dash_low_latency: Literal["off", "on", "optin"] = "off"
+    hls_low_latency: Literal["off", "on", "optin"] = "off"
     chunk_duration: float = 0.5
     target_latency: float | None = None
     utc_timing: Literal["direct", "http", "none"] = "direct"
@@ -260,9 +263,10 @@ class ChannelCreatePayload(BaseModel):
     @model_validator(mode="after")
     def _validate_low_latency(self) -> ChannelCreatePayload:
         validate_low_latency(
-            backend=self.backend, low_latency=self.low_latency, segment_duration=self.segment_duration,
-            chunk_duration=self.chunk_duration, target_latency=self.target_latency, utc_timing=self.utc_timing,
-            utc_timing_url=self.utc_timing_url, query_overrides=self.query_overrides,
+            backend=self.backend, dash_low_latency=self.dash_low_latency, hls_low_latency=self.hls_low_latency,
+            hls_format=self.hls_format, segment_duration=self.segment_duration, chunk_duration=self.chunk_duration,
+            target_latency=self.target_latency, utc_timing=self.utc_timing, utc_timing_url=self.utc_timing_url,
+            query_overrides=self.query_overrides,
         )
         return self
 

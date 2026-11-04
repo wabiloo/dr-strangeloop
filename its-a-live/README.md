@@ -326,30 +326,39 @@ and `outputs` don't apply (igor hides all three for local-docker channels
 rather than showing an inapplicable control), and playback URLs are
 always `http://localhost:<channel.port>/...`.
 
-## Low-latency DASH
+## Low latency (DASH and HLS)
 
 Overview, measured results and limits: [`docs/low-latency.md`](../docs/low-latency.md).
 
-ecs-express and local-docker channels can serve low-latency DASH (CMAF chunked delivery; details in
-`loop-dee-loop/README.md` "Low-latency DASH"). Set it per channel under `[packaging.dash]` (keys in `config.toml`):
+ecs-express and local-docker channels can serve low-latency DASH (CMAF chunked delivery) and Apple LL-HLS (parts,
+preload hint, blocking reload); details in `loop-dee-loop/README.md` "Low-latency DASH" and "Low-latency HLS". Both
+are made from the same baked chunks. Set them per channel (keys in `config.toml`):
 
 ```toml
 [packaging]
 segment_duration = 2          # shorter segments sit better with chunks
+chunk_duration = 0.5          # shared by both formats
 
 [packaging.dash]
 low_latency = "on"            # "off" | "on" | "optin" (advertised only on ?low_latency=true)
-chunk_duration = 0.5
 # utc_timing = "direct"       # default: the time in the MPD (served no-store); "http" | "none"
+
+[packaging.hls]
+low_latency = "on"            # needs container = "cmaf" (the default)
 ```
 
 - It decides how the loop is **baked** (chunks), so run `spark` again after turning it on or off.
-- `utc_timing = "http"` needs the channel's own `/time` URL. It is filled in automatically: for local-docker
+- `utc_timing = "http"` (DASH) needs the channel's own `/time` URL. It is filled in automatically: for local-docker
   `http://localhost:<port>/time`; for ecs-express the CloudFront domain (or the service endpoint without a CDN),
   which only exists once the stack does, so `create` (and `redeploy` of a channel not deployed yet) deploys a second
   time to set it. Set `utc_timing_url` for a tunnel or a custom domain. The URL is never a query parameter.
+- LL-HLS blocking reload (`_HLS_msn`, `_HLS_part`) must reach the origin and be part of CloudFront's cache key. A
+  default channel's manifest policy already keys on the whole query string; a channel on a narrower allow-list gets
+  its own policy that adds those names. LL-HLS blocking responses are held up to three target durations, within
+  CloudFront's origin read timeout.
 - Not supported on aws-lambda (responses are held open) or aws-media: a config error.
-- `low_latency`, `target_latency` and `utc_timing` are also per-request query parameters (`[query] overrides`).
+- `low_latency` (per format), `target_latency` and `utc_timing` are also per-request query parameters
+  (`[query] overrides`).
 - Measure it with `player-lab run --max-latency S` (see `player-lab/AGENTS.md`).
 
 ## Notes / gotchas

@@ -14,6 +14,7 @@ import aws_cdk as cdk
 from aws_cdk import Duration, Fn, aws_cloudfront as cloudfront
 from constructs import Construct
 
+from _packaging_cfg import cdn_query_names
 from _query_cfg import CLOUDFRONT_MAX_ALLOW_LIST, query_param_names
 
 KINDS = ("segments", "status", "manifests")
@@ -28,8 +29,20 @@ def default_query_names() -> list[str]:
     return query_param_names({})
 
 
+def _effective_keys(names: list[str]):
+    """What a manifest policy actually keys on: the whole query string once the names outgrow CloudFront's
+    allow-list (see _query_strings), else exactly those names."""
+    return "all" if len(names) > CLOUDFRONT_MAX_ALLOW_LIST else tuple(sorted(names))
+
+
 def uses_default_query(config: dict) -> bool:
-    return sorted(query_param_names(config)) == sorted(default_query_names())
+    """Whether this channel's manifests can share the account-wide default policy. Same names as the default (a
+    custom prefix or key set still gets its own policy). A low-latency HLS channel with the default names adds the
+    blocking-reload parameters, which a whole-query-string policy already keys on, so it shares the default too;
+    one on a narrow allow-list does not (see `_packaging_cfg.cdn_query_names`)."""
+    if sorted(query_param_names(config)) != sorted(default_query_names()):
+        return False
+    return _effective_keys(cdn_query_names(config)) == _effective_keys(default_query_names())
 
 
 def _query_strings(names: list[str]) -> cloudfront.CacheQueryStringBehavior:
