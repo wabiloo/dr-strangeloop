@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cmaf  # noqa: E402
 import lowlatency  # noqa: E402
 import serve  # noqa: E402
+import time
 from serve import Channel, create_app  # noqa: E402
 from test_serve_continuity import _write_continuous_package  # noqa: E402
 
@@ -240,7 +241,7 @@ def test_in_progress_segment_streams_one_chunk_per_release_time(chunked, monkeyp
     clock = [seg // 10]  # 0.2 s into segment 0
 
     monkeypatch.setattr(Channel, "now_ticks", lambda self: clock[0])
-    monkeypatch.setattr(serve.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + round(s * TS)))
+    monkeypatch.setattr(time, "sleep", lambda s: clock.__setitem__(0, clock[0] + round(s * TS)))
     app = create_app(path, epoch_ticks=0, window_segments=4, ll_dash=True)
 
     on_disk = (path / "segments" / "1080p" / "seg_track1_0.m4s").read_bytes()
@@ -266,7 +267,7 @@ def test_in_progress_segment_streams_one_chunk_per_release_time(chunked, monkeyp
 def test_without_ll_a_segment_is_one_plain_response(chunked, monkeypatch):
     path, seg, _ = chunked
     monkeypatch.setattr(Channel, "now_ticks", lambda self: seg // 10)
-    monkeypatch.setattr(serve.time, "sleep", lambda s: pytest.fail("must not pace"))
+    monkeypatch.setattr(time, "sleep", lambda s: pytest.fail("must not pace"))
     resp = create_app(path, epoch_ticks=0).test_client().get("/1080p/seg/0.m4s")
     assert resp.get_data() == (path / "segments" / "1080p" / "seg_track1_0.m4s").read_bytes()
 
@@ -362,7 +363,7 @@ def test_low_latency_false_turns_an_ll_channel_into_a_plain_mpd(chunked, monkeyp
 def test_optin_channel_advertises_only_when_asked_but_always_paces(chunked, monkeypatch):
     path, seg, _ = chunked
     clock = [seg // 10]
-    monkeypatch.setattr(serve.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + round(s * TS)))
+    monkeypatch.setattr(time, "sleep", lambda s: clock.__setitem__(0, clock[0] + round(s * TS)))
     c = _qapp(path, monkeypatch, seg, ll_optin=True)
     monkeypatch.setattr(Channel, "now_ticks", lambda self: clock[0])
     assert not _is_ll(c.get("/index.mpd").get_data(as_text=True))

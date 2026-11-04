@@ -4,6 +4,11 @@ Status: ready for implementation. This document is self-contained; the implement
 should not need the chat history that produced it, but should ask before deviating
 from any decision marked **DECIDED** below.
 
+> **Where the code is now.** This document was written when serving was one file. `serve.py` has since been
+> split into the `serving/` package (`serve.py` itself is a thin facade). Where this document names a `serve.py`
+> class or builder (`Channel`, `LoopPackage`, `build_*_manifest`, `create_app`, `resolve_request_channel`...), look
+> in `serving/`; the map is the "Module layout" table in `AGENTS.md`. The design below is unchanged.
+
 ## 1. Problem statement
 
 We want a self-hosted, non-commercial, cheap alternative to AWS MediaLive +
@@ -517,7 +522,7 @@ smallest possible change to `serve.py`'s serving path.
 physical segment bytes every loop iteration (immutable, byte-identical,
 trivially CDN-cacheable forever) and signaling the resulting timestamp
 restart with `#EXT-X-DISCONTINUITY` / a new DASH `<Period>` at every wrap
-(see the comments on that in `serve.py`'s `_build_hls_media_playlist` and
+(see the comments on that in `serving/hls.py`'s `_build_hls_media_playlist` and
 `build_dash_manifest`). This section adds an **opt-in, mutually exclusive**
 alternative, `--continuous-timeline`: instead of signaling the restart,
 rewrite the served bytes' own timestamps per request so the wrap never

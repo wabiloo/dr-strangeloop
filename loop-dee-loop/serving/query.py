@@ -46,7 +46,6 @@ from timeshift import (
 from serving.channel import Channel
 
 
-
 def resolve_request_channel(channel: "Channel", args, cfg: TimeshiftConfig, fmt: str = "hls") -> "Channel":
     """The per-request `Channel` variant selected by the query parameters in
     `args` (any mapping with `.get`). `fmt` is the format being answered --

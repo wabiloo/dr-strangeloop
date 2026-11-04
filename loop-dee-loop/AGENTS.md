@@ -6,7 +6,7 @@ self-hosted engine behind the `ecs-express`, `aws-lambda` and `local-docker` bac
 it forever as live-sliding HLS/DASH with zero drift. See
 [`README.md`](./README.md) for usage/module-layout and
 [`SCOPE.md`](./SCOPE.md) for full design rationale (read `SCOPE.md`
-before changing anything in `bake.py`/`serve.py`/`loop_math.py` — the
+before changing anything in `bake.py`/`serve.py` (the `serving/` package)/`loop_math.py` — the
 drift-freedom and GPAC-quirk constraints there are load-bearing, not
 stylistic).
 
@@ -60,7 +60,17 @@ match, fix the upstream franken-ts input instead.
 | `gpac_pipeline.py` | DASHCues XML construction + GPAC CLI invocation. |
 | `scte35_signaling.py` | Authors `EXT-X-DATERANGE`/DASH `<EventStream>` directly from `.markers.json` — never trust GPAC's own aggregation (unreliable for multi-marker content, see `SCOPE.md` §6). |
 | `loop_math.py` | Integer epoch/loop_number/position_in_loop arithmetic — the drift-freedom guarantee (`SCOPE.md` §4.2/§5). No floats in persisted timing state, ever. |
-| `serve.py` | Stateless HTTP serving of manifests + segments per request. |
+| `serve.py` | The entrypoint (`python serve.py`, and what `wsgi.py` imports). A thin facade: it re-exports every name the old single-file module defined, so imports keep working, and runs the CLI. The code lives in `serving/`. |
+| `serving/package.py` | The baked package as loaded: `VideoRendition`, `LoopPackage` (renditions, audio, markers, boundaries, the lazily cached chunk/part tables). Read-only. |
+| `serving/channel.py` | `Channel`: init, clock, validation. Composed of the mixins below; stateless per request. |
+| `serving/variants.py` | `Channel.with_*` / `for_mode`: per-request variants (a shallow copy with one setting changed, never a mutation). |
+| `serving/plan.py` | The shared timeline plan (window range, segment starts, marker anchors, Period grouping, segment URIs) used by the HLS and DASH builders **and** `build_window_json`, so the views cannot disagree. |
+| `serving/hls.py` · `dash.py` · `window_json.py` | The three builders: HLS (classic and LL-HLS), the MPD (periodic and continuous, low-latency attributes, clock sync), `/timeline.json`. |
+| `serving/dash_render.py` · `markers.py` · `timeline.py` · `constants.py` | Pure helpers: MPD fragment rendering, SCTE-35 marker helpers, window/discontinuity maths, the version stamp and shared choices. |
+| `serving/query.py` | `resolve_request_channel`: the query parameters of a request -> the `Channel` variant they select. |
+| `serving/app.py` · `context.py` · `ll_http.py` | `create_app`; `ServeContext` (the shared state and request helpers: resolving a request's channel, serving segment bytes, decoding segment URLs); the low-latency HTTP helpers (paced segments, LL-HLS parts, held requests, blocking reload). |
+| `serving/routes/` | One `register(app, ctx)` per concern: `meta` (health, `/timeline.json`, `/time`, OpenAPI, docs), `manifests`, `segments`, `lowlatency` (LL-HLS parts). Handlers bind the context state to local names and are otherwise ordinary Flask routes. |
+| `serving/cli.py` · `startup.py` | `main` (the argparse command line) and the startup helpers shared with `wsgi.py` (descriptor, epoch, DVR window). |
 | `continuity.py` | Opt-in `--continuous-timeline` mode (`SCOPE.md` §12): per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite so the channel has no discontinuity/Period-restart at the loop wrap — header patch only, never a re-mux. |
 | `lowlatency.py` | Low-latency DASH (README "Low-latency DASH"): splits a baked segment into its `moof`+`mdat` chunks, computes each chunk's wall-clock release tick from the real `tfdt`s (integer ticks), the pacing generator, and which occurrence of a looping segment is still in progress. `serve.py` streams in-progress segments through it when `--ll-dash`/`--ll-optin`; `bake.py --chunk-duration` produces the chunks. |
 | `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig` (the parameter names + prefix), the per-request override parsers (`parse_choice`, `parse_duration_seconds`, `parse_split_on`, ...) and integer-tick `resolve_window` (segment snapping, `full_loops` widening, max-span cap). Pure ints, no Flask. |
@@ -69,12 +79,12 @@ match, fix the upstream franken-ts input instead.
 
 ## Window JSON (`/timeline.json`)
 
-`serve.py` exposes `/timeline.json`, documented in
+`serve.py` (`serving/routes/meta.py`) exposes `/timeline.json`, documented in
 [`openapi.yaml`](./openapi.yaml) (served at `/openapi.yaml`, rendered at
 `/docs`). `Channel.build_window_json` shares its timeline maths with the
 HLS/DASH builders through `Channel` helpers (window range, segment times,
 discontinuities, Period grouping/ids, marker anchors -- see "shared timeline
-plan" in `serve.py`): change those in one place, not in a builder. Only the
+plan" in `serving/plan.py`): change those in one place, not in a builder. Only the
 marker/asset *span* is a JSON-vs-manifest difference. `tests/test_serve_window_json.py` (schema drift + HLS DATERANGE /
 DASH Period+Event consistency, both directions, with and without
 `increment_event_ids`, periodic and continuous) and
@@ -125,7 +135,7 @@ the rendering (`epoch`, `dvr_window`, `split_on`, `timeline_style`, `addressing`
 `id_template`, `max_height`, `max_bitrate`, and for low-latency DASH `low_latency`, `ll_target_latency`,
 `ll_utc_timing`; `SCOPE.md` §13.8), all behind an optional
 `--query-prefix`. Adding one means: a name in `timeshift.FIXED_PARAMS`, its parsing
-and a `Channel.with_*` variant in `resolve_request_channel` (`serve.py`), an entry in
+and a `Channel.with_*` variant (`serving/variants.py`) in `resolve_request_channel` (`serving/query.py`), an entry in
 `openapi.yaml`, and the same name in its-a-live's `_query_cfg.FIXED_PARAMS` and Igor's
 `QUERY_FIXED_PARAMS` (tests keep the three lists in lockstep). Full reference and
 examples: [`README.md`](./README.md) "Query parameters"; design:

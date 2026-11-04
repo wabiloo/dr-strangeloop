@@ -9,7 +9,6 @@ from loop_math import LoopPosition, segment_index_for_position
 from scte35_signaling import SEGMENTATION_END_TYPE_ID
 
 
-
 @dataclasses.dataclass(frozen=True)
 class WindowRange:
     """Global segment range of a manifest window (see Channel.window_range)."""

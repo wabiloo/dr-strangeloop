@@ -5,7 +5,6 @@ from __future__ import annotations
 from fractions import Fraction
 
 
-
 def _dash_frame_rate(frame_rate: float) -> str:
     """DASH ``@frameRate`` is ``N`` or ``N/D`` -- decimals like ``25.000`` are schema-invalid."""
     frac = Fraction(frame_rate).limit_denominator(1001)

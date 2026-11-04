@@ -459,7 +459,7 @@ not something to work around; see `SCOPE.md` §2 and §4.1 step 1.
 | `gpac_pipeline.py` | DASHCues XML construction + GPAC CLI invocation wrapper. |
 | `scte35_signaling.py` | Author `EXT-X-DATERANGE` / DASH `<EventStream>` directly from `.markers.json` (never trust GPAC's own aggregation — see `SCOPE.md` §6). |
 | `loop_math.py` | The epoch/loop_number/position_in_loop **integer** arithmetic that makes drift structurally impossible (`SCOPE.md` §4.2, §5). |
-| `serve.py` | Serve-phase entrypoint: stateless HTTP serving of manifests + segments. |
+| `serve.py` | Serve-phase entrypoint (a thin facade). The code is the `serving/` package: `package.py` (the baked package), `channel.py` + `variants.py` + `plan.py` (the channel and its timeline), `hls.py` / `dash.py` / `window_json.py` (the builders), `routes/` (the Flask routes), `cli.py`. Map in `AGENTS.md`. |
 | `continuity.py` | `--continuous-timeline` mode's per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite (`SCOPE.md` §12) -- a pure header patch, never a re-mux. |
 | `load_test.py` | Concurrent-viewer load generator used for the measurements in `PERFS.md`. |
 

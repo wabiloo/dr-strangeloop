@@ -34,7 +34,6 @@ from serving.package import LoopPackage
 from serving.timeline import compute_discontinuity_sequence
 
 
-
 @dataclasses.dataclass(frozen=True)
 class _HlsLL:
     """What an LL-HLS media playlist needs besides its own boundaries: how to get the parts of one of its segments,

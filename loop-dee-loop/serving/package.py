@@ -15,7 +15,6 @@ from scte35_signaling import build_cue_breaks
 from serving.timeline import compute_asset_boundary_set, compute_declared_offset_ticks_by_local_index
 
 
-
 def _numeric_segment_index(path: Path) -> int:
     stem = path.stem
     tail = stem.rsplit("_", 1)[-1]

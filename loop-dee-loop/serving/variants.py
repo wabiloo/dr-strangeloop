@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from serving.channel import Channel
 
 
-
 class VariantsMixin:
     """Per-request variants of a Channel (`with_*`): each returns a shallow copy with one setting changed,"""
 

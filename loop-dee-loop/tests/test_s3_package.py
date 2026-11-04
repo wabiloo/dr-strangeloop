@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import package_io  # noqa: E402
 import serve  # noqa: E402
+import time
 from s3_package import S3Package, parse_s3_uri  # noqa: E402
 from serve import create_app  # noqa: E402
 from test_serve_continuity import _write_continuous_package  # noqa: E402
@@ -98,7 +99,7 @@ def test_missing_descriptor_is_an_error(tmp_path):
 
 
 def test_s3_store_is_byte_identical_to_the_filesystem_store(tmp_path, monkeypatch):
-    monkeypatch.setattr(serve.time, "time", lambda: 1_800_000_000.0)
+    monkeypatch.setattr(time, "time", lambda: 1_800_000_000.0)
     src = tmp_path / "src"
     src.mkdir()
     _write_continuous_package(src)

@@ -16,7 +16,6 @@ from scte35_signaling import (
 )
 
 
-
 def _marker_type_code(marker: dict) -> str:
     """The marker's compact SCTE-35 code with direction suffix, as used for
     DATERANGE ids (`PPOs` = Provider Placement Opportunity Start, `PPOe` =

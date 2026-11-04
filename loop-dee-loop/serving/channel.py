@@ -18,7 +18,6 @@ from serving.variants import VariantsMixin
 from serving.window_json import WindowJsonMixin
 
 
-
 class Channel(VariantsMixin, TimelinePlanMixin, HlsMixin, DashMixin, WindowJsonMixin):
     """Fixed channel epoch + loop package. All request handling goes through
     this class's stateless methods -- no attribute here is ever mutated

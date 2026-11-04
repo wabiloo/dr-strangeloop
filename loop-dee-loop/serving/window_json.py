@@ -10,7 +10,6 @@ from serving.markers import _marker_durations_ticks
 from serving.timeline import compute_discontinuity_sequence
 
 
-
 class WindowJsonMixin:
     """The JSON view of the current window (/timeline.json)."""
 

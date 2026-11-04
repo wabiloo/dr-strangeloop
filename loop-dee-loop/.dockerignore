@@ -6,8 +6,10 @@
 
 loop-package*/
 tests/
-__pycache__/
-*.pyc
+# `**/`: the serving/ package (and serving/routes/) write their own __pycache__, which would otherwise be
+# hashed into the CDK image asset and change the image tag on every local run.
+**/__pycache__/
+**/*.pyc
 .venv/
 .git/
 *.md

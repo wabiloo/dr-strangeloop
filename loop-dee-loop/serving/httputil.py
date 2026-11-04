@@ -10,7 +10,6 @@ from flask import Response, send_file
 import package_io
 
 
-
 def _is_loopback_host(host: str) -> bool:
     """Whether a request's Host header names this machine (localhost / 127.0.0.1 / ::1, any port)."""
     name = host.strip().lower()

@@ -26,7 +26,6 @@ from serving.dash_render import (
 from serving.markers import _asset_ids_starting_in_segment, _dash_event_comment, _marker_covers_segment
 
 
-
 class DashMixin:
     """DASH MPDs (periodic and continuous timeline), including the low-latency attributes and clock sync."""
 

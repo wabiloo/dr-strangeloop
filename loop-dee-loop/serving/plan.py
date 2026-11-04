@@ -19,7 +19,6 @@ from serving.markers import _marker_covers_segment
 from serving.timeline import WindowRange
 
 
-
 class TimelinePlanMixin:
     """The shared timeline plan: window range, segment starts, marker anchors, Period grouping and URIs. Used"""
 

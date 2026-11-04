@@ -216,3 +216,13 @@ def test_s3_store_entrypoint_requires_a_uri(tmp_path: Path):
         env=env, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 2
+
+
+def test_dockerignore_skips_bytecode_at_any_depth():
+    """The serving/ package writes __pycache__ below the top level; the CDK image asset hashes this directory (see
+    .dockerignore), so nested bytecode must be ignored or the image tag would change on every local run."""
+    patterns = [
+        line.strip() for line in (ENTRYPOINT.parent / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert "**/__pycache__/" in patterns and "**/*.pyc" in patterns

@@ -43,7 +43,7 @@ Non-goals: no MediaLive/MediaPackage; no change to the loop package or to
 
 1. `[timeline] continuous = true` (the default) makes `serve.py` rewrite
    each segment's `tfdt`/`mfhd` (CMAF) or PTS/DTS/PCR (TS) **per request**
-   (`continuity.py`, `serve.py:_serve_segment`). A `/cseg/<global>` URL
+   (`continuity.py`, `serving/context.py:ServeContext.serve_segment`). A `/cseg/<global>` URL
    names a different byte string on every loop, so no static S3 object
    backs it.
 2. Even for the un-patched `/seg/<n>` URLs, the on-disk names

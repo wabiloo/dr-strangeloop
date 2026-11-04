@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import lowlatency  # noqa: E402
 import serve  # noqa: E402
+import time
 from serve import Channel, create_app  # noqa: E402
 from test_lowlatency import TS, _write_chunked_package  # noqa: E402
 from timeshift import TimeshiftConfig, TimeshiftError  # noqa: E402
@@ -40,7 +41,7 @@ def playlist_names(path: Path) -> list[str]:
 
 def client(path, clock, monkeypatch, *, timeshift=False, **kw):
     monkeypatch.setattr(Channel, "now_ticks", lambda self: clock[0])
-    monkeypatch.setattr(serve.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + round(s * TS)))
+    monkeypatch.setattr(time, "sleep", lambda s: clock.__setitem__(0, clock[0] + round(s * TS)))
     cfg = TimeshiftConfig(timeshift=timeshift, overrides=True)
     return create_app(path, epoch_ticks=0, window_segments=4, timeshift=cfg, **kw).test_client()
 
