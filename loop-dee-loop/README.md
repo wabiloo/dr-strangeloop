@@ -362,9 +362,17 @@ hint; it is released within a few milliseconds, at most three target durations l
 
 **Blocking playlist reload**: `?_HLS_msn=<n>[&_HLS_part=<k>]` holds the response until the playlist contains that segment
 (part). `400` for a negative or non-integer value, an `_HLS_part` without `_HLS_msn` or past the segment's last part, or an
-`_HLS_msn` more than two segments ahead of the live edge. `_HLS_skip` (delta updates) is accepted and ignored:
-`CAN-SKIP-UNTIL` is not advertised. These are protocol parameters, not overrides: never prefixed, not in the override list,
-and a CDN must key and forward them (its-a-live does, see `_packaging_cfg.cdn_query_names`).
+`_HLS_msn` more than two segments ahead of the live edge. These are protocol parameters, not overrides: never prefixed, not in
+the override list, and a CDN must key and forward them (its-a-live does, see `_packaging_cfg.cdn_query_names`).
+
+**Delta updates**: when a playlist has segments old enough to skip, `EXT-X-SERVER-CONTROL` carries `CAN-SKIP-UNTIL` (the Skip
+Boundary, six target durations, the spec's minimum). `?_HLS_skip=YES` then returns the playlist with every segment ending that
+far before the live edge replaced by one `EXT-X-SKIP:SKIPPED-SEGMENTS=n`; `EXT-X-MEDIA-SEQUENCE` and the discontinuity sequence
+still name the first segment of the full playlist, the newest segments and their parts are always kept, and **every
+`EXT-X-DATERANGE` is kept** (a delta that dropped one could not say whether it was skipped or removed; that is `v2`, which is
+not offered, and `CAN-SKIP-DATERANGES` is never written, since Shaka reads even `=NO` as support). It combines with `_HLS_msn` /
+`_HLS_part`. Any other `_HLS_skip` value, or a playlist with nothing to skip (a short DVR window), gets the full playlist. The saving
+grows with the DVR window (about 30 % at 30 s); hls.js, Shaka and Video.js use it on every reload.
 
 A startover/catchup range or an `offset` is never low-latency (an ended or growing past range has no live edge to hold at).
 Everything else about HLS is unchanged, and with `--ll-hls` off the playlists are byte-identical.
@@ -372,8 +380,9 @@ Everything else about HLS is unchanged, and with `--ll-hls` off the playlists ar
 Known edge: in a *periodic* timeline (not the default) `seg/<local>` is the same URL every loop. Near the loop wrap the
 server cannot tell a *finished* old segment or part from the *upcoming* occurrence of the same index, and in a loop shorter
 than about two segments it may hold a request for the finished one for up to a segment. A continuous timeline names the
-loop in the URL and has no such ambiguity. Apple's tooling also expects HTTP/2 from an LL-HLS origin; Flask's dev server speaks
-HTTP/1.1 (a CDN such as CloudFront provides HTTP/2 to the viewer).
+loop in the URL and has no such ambiguity. The LL-HLS server profile (RFC 8216bis, Appendix B.1) asks for HTTP/2 or HTTP/3 delivery, and Apple's
+tooling checks it; Flask's server speaks HTTP/1.1, so it does not meet that profile on its own (a CDN such as CloudFront, or a
+tunnel, provides HTTP/2 in front of it).
 
 ### Query parameters: startover, catchup and per-request overrides (SCOPE.md §13)
 

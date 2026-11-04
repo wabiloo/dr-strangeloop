@@ -529,7 +529,12 @@ components:
       name: _HLS_skip
       in: query
       required: false
-      description: LL-HLS delta update request. Accepted and ignored (`CAN-SKIP-UNTIL` is not advertised), so a full playlist is returned.
+      description: >-
+        LL-HLS delta update (RFC 8216bis 6.2.5.1). `YES` returns the playlist with the segments that end at least the
+        Skip Boundary (`CAN-SKIP-UNTIL`, six target durations) before the live edge replaced by one
+        `EXT-X-SKIP:SKIPPED-SEGMENTS=n`; every `EXT-X-DATERANGE` is kept. Honoured only where `CAN-SKIP-UNTIL` is
+        advertised (a low-latency live playlist with segments old enough to skip). `v2` (which also skips date ranges) is not
+        offered, and any other value is ignored: a full playlist is returned. May be combined with `_HLS_msn`/`_HLS_part`.
       schema:
         type: string
         enum: ["YES", "v2"]

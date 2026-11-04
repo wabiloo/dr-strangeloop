@@ -206,7 +206,14 @@ function hlsBehindLiveLabel(value: number): string {
   if (hlsClosed.value) {
     return `${formatClock(value - hlsSeekMin.value)} / ${formatClock(hlsSeekMax.value - hlsSeekMin.value)}`
   }
-  const behind = Math.max(0, hlsSeekMax.value - value)
+  let behind = Math.max(0, hlsSeekMax.value - value)
+  // A low-latency playlist keeps hls.js's buffer a fraction of a second ahead of the playhead, and the seekable end is
+  // the end of that buffer, so the difference above reads "LIVE" while the player is really a couple of seconds
+  // behind the playlist's live edge (parts included). hls.js's own latency is measured against that edge. Not while
+  // scrubbing: then the slider, not the playhead, says where we are.
+  if (hlsFollowsManifest() && !hlsSeekDragging.value && !hlsSeekPending.value) {
+    behind = Math.max(behind, hlsInstance?.latency ?? 0)
+  }
   return behind < 1 ? 'LIVE' : `-${behind.toFixed(1)}s`
 }
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from flask import Flask, abort, request
+from timeshift import LL_HLS_SKIP_PARAM
 
 from serving.context import ServeContext
 from serving.httputil import _is_loopback_host
@@ -15,6 +16,11 @@ def register(app: Flask, ctx: ServeContext) -> None:
     _manifest_response = ctx.manifest_response
     _request_view = ctx.request_view
     package = ctx.package
+
+    def _wants_delta() -> bool:
+        """LL-HLS delta update (RFC 8216bis 6.2.5.1). Only `YES`: `v2` (also skipping date ranges) is not offered, and
+        a value the server does not offer is ignored, which gives the full playlist."""
+        return request.args.get(LL_HLS_SKIP_PARAM) == "YES"
 
     @app.get(f"/{LoopPackage.INDEX_PLAYLIST}")
     @app.get(f"/{LoopPackage.HLS_ALIAS}")
@@ -42,7 +48,7 @@ def register(app: Flask, ctx: ServeContext) -> None:
         def view():
             ch, window, query = _request_view()
             _block_for_reload(ch, window, rendition.name)
-            body = ch.build_hls_manifest(rendition.name, window=window, query=query)
+            body = ch.build_hls_manifest(rendition.name, window=window, query=query, delta=_wants_delta())
             return _manifest_response(body, "application/vnd.apple.mpegurl", window)
 
         name = package.video_playlist_name(rendition)
@@ -58,6 +64,6 @@ def register(app: Flask, ctx: ServeContext) -> None:
                 abort(404)
             ch, window, query = _request_view()
             _block_for_reload(ch, window, None)
-            body = ch.build_hls_audio_manifest(window=window, query=query)
+            body = ch.build_hls_audio_manifest(window=window, query=query, delta=_wants_delta())
             return _manifest_response(body, "application/vnd.apple.mpegurl", window)
 
