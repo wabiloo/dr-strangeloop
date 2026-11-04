@@ -11,6 +11,7 @@ import {
   formFieldsFromConfig,
   lambdaFieldsFromConfig,
   lowLatencyFromConfig,
+  lowLatencyIssues,
   lowLatencyProblems,
   periodTypesFromConfig,
   usesChannelSection,
@@ -46,7 +47,8 @@ test('formFieldsFromConfig reads every setting from its new table', () => {
     hls_ts_mux_audio: false,
     dash_addressing: 'time',
     dash_timeline: 'compact',
-    low_latency: 'off',
+    dash_low_latency: 'off',
+    hls_low_latency: 'off',
     chunk_duration: 0.5,
     target_latency: null,
     utc_timing: 'direct',
@@ -77,7 +79,8 @@ test('formFieldsFromConfig: an empty config gives its-a-live defaults', () => {
     hls_ts_mux_audio: true,
     dash_addressing: 'number',
     dash_timeline: 'full',
-    low_latency: 'off',
+    dash_low_latency: 'off',
+    hls_low_latency: 'off',
     chunk_duration: 0.5,
     target_latency: null,
     utc_timing: 'direct',
@@ -156,7 +159,7 @@ test('buildConfigSections: one group per table, same keys as the TOML', () => {
   assert.deepEqual(rows('timeline'), { epoch_utc: '2026-03-04T05:06:07Z', continuous: 'no' })
   assert.deepEqual(rows('packaging'), { segment_duration: '2', dvr_window_seconds: '45' })
   assert.deepEqual(rows('packaging.hls'), { hls_format: 'ts', hls_ts_mux_audio: 'no' })
-  assert.deepEqual(rows('packaging.dash'), { dash_addressing: 'time', dash_timeline: 'compact', low_latency: 'off' })
+  assert.deepEqual(rows('packaging.dash'), { dash_addressing: 'time', dash_timeline: 'compact', dash_low_latency: 'off' })
   assert.deepEqual(rows('query'), {
     timeshift_enabled: 'yes', query_overrides: 'no', query_prefix: 'dsl_', timeshift_start_param: 'from',
     timeshift_end_param: 'to',
@@ -214,7 +217,8 @@ test('buildConfigSections: aws-media has no packaging/markers/query sections', (
 
 test('buildConfigSections: TS-only mux_audio row appears only for the ts container', () => {
   const cmaf = buildConfigSections({ deploy: { backend: 'local-docker' }, packaging: { hls: { container: 'cmaf', mux_audio: true } } })
-  assert.deepEqual(cmaf.find((s) => s.id === 'packaging.hls')!.rows.map((r) => r.key), ['hls_format'])
+  // a CMAF channel on a backend that can do low latency also shows the (off) low-latency row; no mux_audio row
+  assert.deepEqual(cmaf.find((s) => s.id === 'packaging.hls')!.rows.map((r) => r.key), ['hls_format', 'hls_low_latency'])
 })
 
 test('buildConfigSections: archive sources show "as source" instead of a segment duration', () => {
@@ -233,7 +237,7 @@ test('channelDefaultsByParam: the channel value of every overridable setting, by
     dvr_window: '45',
     timeline_style: 'compact',
     addressing: 'time',
-    low_latency: 'off (not enabled)',
+    low_latency: 'HLS off (not enabled), DASH off (not enabled)',
     ll_target_latency: 'automatic',
     ll_utc_timing: 'direct',
     cue_tags: 'alongside',
@@ -305,13 +309,22 @@ test('aws-lambda: has its own infrastructure section, no port, plus the shared s
 })
 
 
-// ── low-latency DASH ───────────────────────────────────────────────────────
+// ── low latency ───────────────────────────────────────────────────────────
 
-const withDash = (dash: Record<string, unknown>, backend = 'ecs-express', extra: Record<string, unknown> = {}) => ({
+const withLl = (
+  llDash: unknown,
+  llHls: unknown,
+  extra: { chunk?: number; backend?: string; container?: string; dash?: Record<string, unknown>; infra?: object } = {},
+) => ({
   ...FULL,
-  deploy: { name: 'demo', backend },
-  packaging: { ...FULL.packaging, dash },
-  ...extra,
+  deploy: { name: 'demo', backend: extra.backend ?? 'ecs-express' },
+  packaging: {
+    ...FULL.packaging,
+    ...(extra.chunk === undefined ? {} : { chunk_duration: extra.chunk }),
+    hls: { container: extra.container ?? 'cmaf', mux_audio: true, low_latency: llHls },
+    dash: { ...(llDash === undefined ? {} : { low_latency: llDash }), ...(extra.dash ?? {}) },
+  },
+  ...(extra.infra ?? {}),
 })
 
 test('lowLatencyFromConfig: the choices, the TOML booleans, and junk reads as off', () => {
@@ -321,69 +334,96 @@ test('lowLatencyFromConfig: the choices, the TOML booleans, and junk reads as of
   for (const v of [false, undefined, null, 'off', 'fast', 3]) assert.equal(lowLatencyFromConfig(v), 'off')
 })
 
-test('formFieldsFromConfig reads the low-latency keys of [packaging.dash]', () => {
+test('formFieldsFromConfig reads each format\'s low latency and the shared chunk duration from their tables', () => {
   const f = formFieldsFromConfig(
-    withDash({ low_latency: 'optin', chunk_duration: 0.25, target_latency: 1.5, utc_timing: 'http', utc_timing_url: 'https://t.example/time' }),
+    withLl('optin', 'on', { chunk: 0.25, dash: { target_latency: 1.5, utc_timing: 'http', utc_timing_url: 'https://t.example/time' } }),
   )
   assert.deepEqual(
-    [f.low_latency, f.chunk_duration, f.target_latency, f.utc_timing, f.utc_timing_url],
-    ['optin', 0.25, 1.5, 'http', 'https://t.example/time'],
+    [f.dash_low_latency, f.hls_low_latency, f.chunk_duration, f.target_latency, f.utc_timing, f.utc_timing_url],
+    ['optin', 'on', 0.25, 1.5, 'http', 'https://t.example/time'],
   )
-  assert.equal(formFieldsFromConfig(withDash({ low_latency: true })).low_latency, 'on')
-  assert.equal(formFieldsFromConfig(withDash({ low_latency: 'on' })).target_latency, null) // absent = automatic
+  assert.equal(formFieldsFromConfig(withLl(true, false)).dash_low_latency, 'on') // TOML booleans
+  assert.equal(formFieldsFromConfig(withLl('on', 'off')).target_latency, null) // absent = automatic
+  assert.equal(formFieldsFromConfig(withLl('on', 'off')).chunk_duration, 0.5)
 })
 
-test('buildConfigSections: low latency rows appear only when it is on, and not for aws-lambda', () => {
-  const rows = (cfg: object) => {
-    const s = buildConfigSections(cfg as never).find((x) => x.id === 'packaging.dash')
+test('buildConfigSections: low latency rows follow the table each key is stored in', () => {
+  const rows = (cfg: object, id: string) => {
+    const s = buildConfigSections(cfg as never).find((x) => x.id === id)
     return Object.fromEntries((s?.rows ?? []).map((r) => [r.key, r.value]))
   }
-  assert.equal(rows(withDash({})).low_latency, 'off')
-  assert.equal(rows(withDash({})).chunk_duration, undefined)
-  assert.deepEqual(rows(withDash({ low_latency: 'on', chunk_duration: 0.5, target_latency: 2 })), {
-    dash_addressing: 'number', dash_timeline: 'full', low_latency: 'on', chunk_duration: '0.5', target_latency: '2',
-    utc_timing: 'direct',
+  // off: one row per format, no chunk size
+  assert.equal(rows(withLl('off', 'off'), 'packaging.dash').dash_low_latency, 'off')
+  assert.equal(rows(withLl('off', 'off'), 'packaging.hls').hls_low_latency, 'off')
+  assert.equal(rows(withLl('off', 'off'), 'packaging').chunk_duration, undefined)
+  // DASH only: the chunk size is in [packaging], the DASH rows in [packaging.dash]
+  const dash = withLl('on', 'off', { chunk: 0.5, dash: { target_latency: 2 } })
+  assert.equal(rows(dash, 'packaging').chunk_duration, '0.5')
+  assert.deepEqual(rows(dash, 'packaging.dash'), {
+    dash_addressing: 'number', dash_timeline: 'full', dash_low_latency: 'on', target_latency: '2', utc_timing: 'direct',
   })
+  // HLS only: the chunk size shows, but no DASH detail rows
+  const hls = withLl('off', 'optin')
+  assert.equal(rows(hls, 'packaging').chunk_duration, '0.5')
+  assert.equal(rows(hls, 'packaging.hls').hls_low_latency, 'optin')
+  assert.equal(rows(hls, 'packaging.dash').utc_timing, undefined)
   // the URL row is only for "http", and says when it is automatic
-  assert.equal(rows(withDash({ low_latency: 'on', utc_timing: 'http' })).utc_timing_url, 'automatic (set at deploy)')
-  assert.equal(rows(withDash({ low_latency: 'on', utc_timing: 'http', utc_timing_url: 'https://t/x' })).utc_timing_url, 'https://t/x')
-  assert.equal(rows(withDash({ low_latency: 'on', utc_timing: 'none' })).utc_timing_url, undefined)
-  const lambda = rows(withDash({ low_latency: 'on' }, 'aws-lambda', { infrastructure: LAMBDA.infrastructure }))
-  assert.equal(lambda.low_latency, undefined) // not offered there
+  assert.equal(rows(withLl('on', 'off', { dash: { utc_timing: 'http' } }), 'packaging.dash').utc_timing_url, 'automatic (set at deploy)')
+  assert.equal(rows(withLl('on', 'off', { dash: { utc_timing: 'none' } }), 'packaging.dash').utc_timing_url, undefined)
+  // MPEG-TS cannot carry parts: no HLS row; and neither format is offered on aws-lambda
+  assert.equal(rows(withLl('off', 'off', { container: 'ts' }), 'packaging.hls').hls_low_latency, undefined)
+  const lambda = withLl('on', 'on', { backend: 'aws-lambda', infra: { infrastructure: LAMBDA.infrastructure } })
+  assert.equal(rows(lambda, 'packaging.dash').dash_low_latency, undefined)
+  assert.equal(rows(lambda, 'packaging.hls').hls_low_latency, undefined)
+  assert.equal(rows(lambda, 'packaging').chunk_duration, undefined)
 })
 
-test('channelDefaultsByParam: what a request gets without the low-latency parameters', () => {
-  const d = (dash: object) => channelDefaultsByParam(formFieldsFromConfig(withDash(dash)))
-  assert.equal(d({ low_latency: 'on' }).low_latency, 'on')
-  assert.equal(d({ low_latency: 'optin' }).low_latency, 'off (opt-in)')
-  assert.equal(d({}).low_latency, 'off (not enabled)')
-  assert.equal(d({ target_latency: 3 }).ll_target_latency, '3')
-  assert.equal(d({ utc_timing: 'none' }).ll_utc_timing, 'none')
+test('channelDefaultsByParam: what a request gets without the low-latency parameters, per format', () => {
+  const d = (dash: unknown, hls: unknown, extra: object = {}) => channelDefaultsByParam(formFieldsFromConfig(withLl(dash, hls, extra)))
+  assert.equal(d('on', 'off').low_latency, 'HLS off (not enabled), DASH on')
+  assert.equal(d('optin', 'on').low_latency, 'HLS on, DASH off (opt-in)')
+  assert.equal(d('off', 'off').low_latency, 'HLS off (not enabled), DASH off (not enabled)')
+  assert.equal(d('on', 'off', { dash: { target_latency: 3 } }).ll_target_latency, '3')
+  assert.equal(d('on', 'off', { dash: { utc_timing: 'none' } }).ll_utc_timing, 'none')
 })
 
 const LLF = {
-  backend: 'local-docker' as const, low_latency: 'on' as const, segment_duration: 2, chunk_duration: 0.5, target_latency: null,
-  utc_timing: 'direct' as const, utc_timing_url: '', query_overrides: true,
+  backend: 'local-docker' as const, dash_low_latency: 'on' as const, hls_low_latency: 'off' as const, hls_format: 'cmaf' as const,
+  segment_duration: 2, chunk_duration: 0.5, target_latency: null, utc_timing: 'direct' as const, utc_timing_url: '',
+  query_overrides: true,
 }
 
 test('lowLatencyProblems: a valid setup, and off needs nothing', () => {
   assert.deepEqual(lowLatencyProblems(LLF), [])
-  assert.deepEqual(lowLatencyProblems({ ...LLF, low_latency: 'off', chunk_duration: 99 }), []) // ignored while off
-  assert.deepEqual(lowLatencyProblems({ ...LLF, low_latency: 'optin' }), [])
+  assert.deepEqual(lowLatencyProblems({ ...LLF, dash_low_latency: 'off', chunk_duration: 99 }), []) // ignored while both are off
+  assert.deepEqual(lowLatencyProblems({ ...LLF, dash_low_latency: 'optin' }), [])
+  assert.deepEqual(lowLatencyProblems({ ...LLF, dash_low_latency: 'off', hls_low_latency: 'on' }), [])
 })
 
 test('lowLatencyProblems: each rule the server enforces', () => {
   const has = (f: object, text: RegExp) => lowLatencyProblems({ ...LLF, ...f }).some((p) => text.test(p))
   assert.ok(has({ backend: 'aws-lambda' }, /not supported on the aws-lambda/))
-  assert.ok(has({ backend: 'aws-media' }, /not supported/))
+  assert.ok(has({ backend: 'aws-media', dash_low_latency: 'off', hls_low_latency: 'on' }, /not supported/))
   assert.ok(has({ chunk_duration: 2 }, /shorter than the segment duration/)) // not below the 2 s segment
-  assert.ok(has({ chunk_duration: 0 }, /Chunk duration/))
-  assert.ok(has({ low_latency: 'optin', query_overrides: false }, /Opt-in needs/))
+  assert.ok(has({ dash_low_latency: 'off', hls_low_latency: 'on', chunk_duration: 0 }, /Chunk duration/)) // either format
+  assert.ok(has({ dash_low_latency: 'optin', query_overrides: false }, /Opt-in needs/))
+  assert.ok(has({ dash_low_latency: 'off', hls_low_latency: 'optin', query_overrides: false }, /Opt-in needs/))
+  assert.ok(has({ hls_low_latency: 'on', hls_format: 'ts' }, /needs the CMAF container/))
+  assert.ok(!has({ dash_low_latency: 'on', hls_format: 'ts' }, /CMAF/)) // DASH is always CMAF
   assert.ok(has({ target_latency: 0 }, /Target latency/))
   assert.ok(has({ target_latency: 121 }, /Target latency/))
   assert.ok(has({ utc_timing: 'direct', utc_timing_url: 'https://t/x' }, /only applies to clock sync/))
   assert.ok(has({ utc_timing: 'http', utc_timing_url: '/time' }, /absolute http\(s\) URL/))
   assert.deepEqual(lowLatencyProblems({ ...LLF, utc_timing: 'http', utc_timing_url: 'https://t.example/time' }), [])
   // the target / URL rules apply even with low latency off, like the server's
-  assert.ok(has({ low_latency: 'off', target_latency: 500 }, /Target latency/))
+  assert.ok(has({ dash_low_latency: 'off', target_latency: 500 }, /Target latency/))
+})
+
+test('lowLatencyIssues: each problem is attributed to the form group that shows it', () => {
+  const part = (f: object, text: RegExp) => lowLatencyIssues({ ...LLF, ...f }).find((i) => text.test(i.message))?.part
+  assert.equal(part({ chunk_duration: 2 }, /Chunk duration/), 'packaging')
+  assert.equal(part({ hls_low_latency: 'on', hls_format: 'ts' }, /CMAF/), 'hls')
+  assert.equal(part({ target_latency: 500 }, /Target latency/), 'dash')
+  assert.equal(part({ dash_low_latency: 'optin', query_overrides: false }, /Opt-in/), 'dash')
+  assert.equal(part({ dash_low_latency: 'off', hls_low_latency: 'optin', query_overrides: false }, /Opt-in/), 'hls')
 })

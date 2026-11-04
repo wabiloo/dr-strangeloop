@@ -159,9 +159,9 @@ exactly one its-a-live TOML table, named after it**:
 | `[infrastructure.s3]` | Infrastructure · S3 | `bucket_name`, `content_folder` (not local-docker) |
 | `[infrastructure.express]` / `[infrastructure.lambda]` / `[infrastructure.docker]` | Infrastructure · Express / Lambda / Docker | `port` (+ `cpu`, `memory`, `cdn` for express); `memory`, `timeout`, `reserved_concurrency`, `cache_mb`, `architecture` for lambda, whose API/form fields are `lambda_memory`, `lambda_timeout`, `lambda_reserved_concurrency`, `lambda_cache_mb`, `lambda_architecture` (mapping: `lambdaFieldsFromConfig` in `channelConfigLayout.ts`) |
 | `[timeline]` | Timeline | `epoch`, `continuous` |
-| `[packaging]` | Packaging | `segment_duration`, `dvr_window` |
-| `[packaging.hls]` | Packaging · HLS | `container`, `mux_audio` |
-| `[packaging.dash]` | Packaging · DASH | `timeline_style`, `addressing`, and the low-latency keys `low_latency`, `chunk_duration`, `target_latency`, `utc_timing`, `utc_timing_url` (their API/form fields keep the TOML names; written to the file only when `low_latency` is not `off`; the form shows them for `ecs-express`/`local-docker` only, via `components/LowLatencyFields.vue`; rules in `validate_low_latency`, mirrored from `its-a-live/_packaging_cfg.py` and kept in step by a test). See [`docs/low-latency.md`](../docs/low-latency.md) |
+| `[packaging]` | Packaging | `segment_duration`, `dvr_window`, and `chunk_duration` (shared by LL-DASH and LL-HLS; shown only when either is on) |
+| `[packaging.hls]` | Packaging · HLS | `container`, `mux_audio`, and `low_latency` (LL-HLS; API/form field `hls_low_latency`; offered only for the `cmaf` container) |
+| `[packaging.dash]` | Packaging · DASH | `timeline_style`, `addressing`, and the low-latency keys `low_latency` (API/form field `dash_low_latency`), `target_latency`, `utc_timing`, `utc_timing_url` (the others keep the TOML names). Low-latency keys are written to the file only when that format's `low_latency` is not `off`; the form shows them for `ecs-express`/`local-docker` only, one component, `components/LowLatencyFields.vue`, rendered once per group (`part=packaging|hls|dash`); rules in `validate_low_latency`, mirrored from `its-a-live/_packaging_cfg.py` and `lowLatencyIssues` in `channelConfigLayout.ts`, kept in step by tests. See [`docs/low-latency.md`](../docs/low-latency.md) |
 | `[query]` | Query | `timeshift`, `overrides`, `prefix`, `start_param`, `end_param` |
 | `[timeshift]` | Timeshift | `max_span_seconds` |
 | `[markers]` | Markers | `increment_event_ids`, `split_on` |

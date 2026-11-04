@@ -518,9 +518,12 @@ export interface ChannelCreatePayload {
   dash_addressing?: 'number' | 'time'
   /** [packaging.dash].timeline_style -- SegmentTimeline `full` (@t and @d on every S, a SegmentTemplate per representation) or `compact` (implicit @t + @r, one shared SegmentTemplate when the video renditions match). */
   dash_timeline?: 'full' | 'compact'
-  // [packaging.dash] low latency (loop-dee-loop/README.md "Low-latency DASH"; ecs-express and local-docker only).
-  // Written to the TOML only when low_latency is not 'off'. utc_timing_url is configuration only.
-  low_latency?: 'off' | 'on' | 'optin'
+  // Low latency (docs/low-latency.md; ecs-express and local-docker only). dash_low_latency is [packaging.dash]
+  // low_latency and hls_low_latency is [packaging.hls] low_latency (LL-HLS, needs hls_format 'cmaf'); chunk_duration is
+  // [packaging] chunk_duration, shared by both. Written to the TOML only when a format's low latency is not 'off'.
+  // target_latency / utc_timing / utc_timing_url are DASH-only; utc_timing_url is configuration only.
+  dash_low_latency?: 'off' | 'on' | 'optin'
+  hls_low_latency?: 'off' | 'on' | 'optin'
   chunk_duration?: number
   target_latency?: number | null
   utc_timing?: 'direct' | 'http' | 'none'

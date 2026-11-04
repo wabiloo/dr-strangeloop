@@ -123,7 +123,8 @@ const editForm = reactive<ChannelCreatePayload>({
   hls_ts_mux_audio: true,
   dash_addressing: 'number',
   dash_timeline: 'full',
-  low_latency: 'off',
+  dash_low_latency: 'off',
+  hls_low_latency: 'off',
   chunk_duration: 0.5,
   target_latency: null,
   utc_timing: 'direct',
@@ -1289,6 +1290,7 @@ watch(() => props.name, reload)
                   <InputNumber v-model="editForm.dvr_window_seconds" fluid />
                 </div>
               </div>
+              <div class="grid mt-1"><LowLatencyFields :form="editForm" id-prefix="edit" part="packaging" /></div>
             </section>
 
             <section class="config-group">
@@ -1303,6 +1305,7 @@ watch(() => props.name, reload)
                   <label for="edit-hls-ts-mux-audio" class="text-xs text-color-secondary">{{ L.hls_ts_mux_audio }}</label>
                 </div>
               </div>
+              <div class="grid mt-1"><LowLatencyFields :form="editForm" id-prefix="edit" part="hls" /></div>
             </section>
 
             <section class="config-group">
@@ -1317,7 +1320,7 @@ watch(() => props.name, reload)
                   <Select v-model="editForm.dash_timeline" :options="dashTimelineOptions" option-label="label" option-value="value" fluid />
                 </div>
               </div>
-              <div class="grid mt-1"><LowLatencyFields :form="editForm" id-prefix="edit" /></div>
+              <div class="grid mt-1"><LowLatencyFields :form="editForm" id-prefix="edit" part="dash" /></div>
             </section>
 
             <section class="config-group">

@@ -35,7 +35,7 @@ test('registry: the startover parameters are not overrides (they have their own 
 test('registry: per-format applicability matches the server', () => {
   const only = (fmt: 'hls' | 'dash') => QP_SPECS.filter((s) => s.formats.length === 1 && s.formats[0] === fmt).map((s) => s.name)
   assert.deepEqual(only('hls'), ['cue_tags', 'id_template'])
-  assert.deepEqual(only('dash'), ['timeline_style', 'addressing', 'signal_format', 'low_latency', 'll_target_latency', 'll_utc_timing'])
+  assert.deepEqual(only('dash'), ['timeline_style', 'addressing', 'signal_format', 'll_target_latency', 'll_utc_timing'])
 })
 
 test('qpSpec: lookup and unknown', () => {

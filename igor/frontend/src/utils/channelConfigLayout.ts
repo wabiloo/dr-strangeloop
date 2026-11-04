@@ -79,7 +79,8 @@ export const CONFIG_FIELD_LABEL = {
   hls_ts_mux_audio: 'Mux audio into each HLS TS video segment',
   dash_addressing: 'DASH segment addressing',
   dash_timeline: 'DASH SegmentTimeline style',
-  low_latency: 'Low-latency DASH',
+  dash_low_latency: 'Low-latency DASH',
+  hls_low_latency: 'Low-latency HLS',
   chunk_duration: 'Chunk duration (s)',
   target_latency: 'Target latency (s)',
   utc_timing: 'Clock sync (UTCTiming)',
@@ -110,8 +111,8 @@ export const LOW_LATENCY_BACKENDS: string[] = ['ecs-express', 'local-docker']
 export const DEFAULT_CHUNK_DURATION = 0.5
 export const MAX_TARGET_LATENCY = 120
 
-/** `[packaging.dash] low_latency` as the form's choice: the TOML booleans are accepted too (true = on). */
-export function lowLatencyFromConfig(value: unknown): NonNullable<ChannelCreatePayload['low_latency']> {
+/** A `low_latency` setting as the form's choice: the TOML booleans are accepted too (true = on). */
+export function lowLatencyFromConfig(value: unknown): NonNullable<ChannelCreatePayload['dash_low_latency']> {
   if (value === true) return 'on'
   if (value === false || value === undefined || value === null) return 'off'
   return value === 'on' || value === 'optin' ? value : 'off'
@@ -119,34 +120,48 @@ export function lowLatencyFromConfig(value: unknown): NonNullable<ChannelCreateP
 
 type LowLatencyForm = Pick<
   ChannelCreatePayload,
-  | 'backend' | 'low_latency' | 'segment_duration' | 'chunk_duration' | 'target_latency' | 'utc_timing' | 'utc_timing_url'
-  | 'query_overrides'
+  | 'backend' | 'dash_low_latency' | 'hls_low_latency' | 'hls_format' | 'segment_duration' | 'chunk_duration'
+  | 'target_latency' | 'utc_timing' | 'utc_timing_url' | 'query_overrides'
 >
 
-/** Why a low-latency combination would be refused (empty = fine). Mirrors the server's validate_low_latency
- * (igor/src/igor/integrations/its_a_live.py, itself mirroring its-a-live/_packaging_cfg.py) so the form can say
- * so before saving. The two utc_timing / target rules apply whether or not low latency is on, like the server's. */
-export function lowLatencyProblems(f: LowLatencyForm): string[] {
-  const out: string[] = []
+/** Which form group a low-latency problem belongs to (where the component shows it). */
+export type LowLatencyPart = 'packaging' | 'hls' | 'dash'
+
+/** Why a low-latency combination would be refused (empty = fine), and in which group of the form. Mirrors the
+ * server's validate_low_latency (igor/src/igor/integrations/its_a_live.py, itself mirroring
+ * its-a-live/_packaging_cfg.py) so the form can say so before saving. The utc_timing / target rules apply whether or
+ * not low latency is on, like the server's. */
+export function lowLatencyIssues(f: LowLatencyForm): { part: LowLatencyPart; message: string }[] {
+  const out: { part: LowLatencyPart; message: string }[] = []
+  const add = (part: LowLatencyPart, message: string) => out.push({ part, message })
   const url = (f.utc_timing_url ?? '').trim()
   if (f.target_latency != null && !(f.target_latency > 0 && f.target_latency <= MAX_TARGET_LATENCY)) {
-    out.push(`Target latency must be above 0 and at most ${MAX_TARGET_LATENCY} seconds.`)
+    add('dash', `Target latency must be above 0 and at most ${MAX_TARGET_LATENCY} seconds.`)
   }
   if (url) {
-    if (f.utc_timing !== 'http') out.push('A UTCTiming URL only applies to clock sync "http".')
-    else if (!/^https?:\/\//.test(url)) out.push('The UTCTiming URL must be an absolute http(s) URL (DASH does not allow a relative one).')
+    if (f.utc_timing !== 'http') add('dash', 'A UTCTiming URL only applies to clock sync "http".')
+    else if (!/^https?:\/\//.test(url)) add('dash', 'The UTCTiming URL must be an absolute http(s) URL (DASH does not allow a relative one).')
   }
-  if (!f.low_latency || f.low_latency === 'off') return out
+  const dash = f.dash_low_latency ?? 'off'
+  const hls = f.hls_low_latency ?? 'off'
+  if (dash === 'off' && hls === 'off') return out
   if (!LOW_LATENCY_BACKENDS.includes(f.backend)) {
-    out.push(`Low latency is not supported on the ${f.backend} backend (only ${LOW_LATENCY_BACKENDS.join(', ')}).`)
+    add(dash !== 'off' ? 'dash' : 'hls', `Low latency is not supported on the ${f.backend} backend (only ${LOW_LATENCY_BACKENDS.join(', ')}).`)
   }
   const seg = f.segment_duration ?? 4
   const chunk = f.chunk_duration ?? DEFAULT_CHUNK_DURATION
-  if (!(chunk > 0 && chunk < seg)) out.push(`Chunk duration must be above 0 and shorter than the segment duration (${seg} s).`)
-  if (f.low_latency === 'optin' && f.query_overrides === false) {
-    out.push('Opt-in needs per-request overrides enabled (the viewer asks with ?low_latency=true).')
+  if (!(chunk > 0 && chunk < seg)) add('packaging', `Chunk duration must be above 0 and shorter than the segment duration (${seg} s).`)
+  for (const [part, mode] of [['dash', dash], ['hls', hls]] as const) {
+    if (mode === 'optin' && f.query_overrides === false) {
+      add(part, 'Opt-in needs per-request overrides enabled (the viewer asks with ?low_latency=true).')
+    }
   }
+  if (hls !== 'off' && f.hls_format !== 'cmaf') add('hls', 'Low-latency HLS needs the CMAF container (MPEG-TS segments cannot carry parts).')
   return out
+}
+
+export function lowLatencyProblems(f: LowLatencyForm): string[] {
+  return lowLatencyIssues(f).map((i) => i.message)
 }
 
 export function usesChannelSection(backend: string | undefined): boolean {
@@ -232,7 +247,10 @@ export function periodTypesFromConfig(raw: unknown): string[] {
  *   [packaging] dvr_window                     -> dvr_window_seconds
  *   [packaging.hls] container, mux_audio       -> hls_format, hls_ts_mux_audio
  *   [packaging.dash] timeline_style, addressing -> dash_timeline, dash_addressing
- *   [packaging.dash] low_latency, chunk_duration, target_latency, utc_timing, utc_timing_url
+ *   [packaging] chunk_duration                  -> chunk_duration
+ *   [packaging.hls] low_latency                 -> hls_low_latency
+ *   [packaging.dash] low_latency                -> dash_low_latency
+ *   [packaging.dash] target_latency, utc_timing, utc_timing_url
  *                                              -> the same names (no older flat name to keep)
  *   [timeline] epoch                           -> epoch_utc
  *   [markers] split_on                         -> period_on_segmentation
@@ -250,7 +268,8 @@ export function formFieldsFromConfig(config: TomlConfig): Required<
     | 'dash_timeline' | 'epoch_utc' | 'continuous' | 'period_on_segmentation' | 'timeshift_enabled'
     | 'query_overrides' | 'query_prefix' | 'timeshift_start_param' | 'timeshift_end_param' | 'timeshift_max_span_seconds'
     | 'daterange_mode' | 'cue_tags' | 'increment_event_ids' | 'daterange_id_format' | 'dash_signal_format'
-    | 'dash_descriptor_mode' | 'low_latency' | 'chunk_duration' | 'target_latency' | 'utc_timing' | 'utc_timing_url'
+    | 'dash_descriptor_mode' | 'dash_low_latency' | 'hls_low_latency' | 'chunk_duration' | 'target_latency'
+    | 'utc_timing' | 'utc_timing_url'
   >
 > {
   const packaging = table(config, 'packaging')
@@ -268,8 +287,9 @@ export function formFieldsFromConfig(config: TomlConfig): Required<
     hls_ts_mux_audio: Boolean(hls.mux_audio ?? true),
     dash_addressing: (dash.addressing as ChannelCreatePayload['dash_addressing']) ?? 'number',
     dash_timeline: (dash.timeline_style as ChannelCreatePayload['dash_timeline']) ?? 'full',
-    low_latency: lowLatencyFromConfig(dash.low_latency),
-    chunk_duration: Number(dash.chunk_duration ?? DEFAULT_CHUNK_DURATION),
+    dash_low_latency: lowLatencyFromConfig(dash.low_latency),
+    hls_low_latency: lowLatencyFromConfig(hls.low_latency),
+    chunk_duration: Number(packaging.chunk_duration ?? DEFAULT_CHUNK_DURATION),
     target_latency: dash.target_latency === undefined || dash.target_latency === null ? null : Number(dash.target_latency),
     utc_timing: (dash.utc_timing as ChannelCreatePayload['utc_timing']) ?? 'direct',
     utc_timing_url: String(dash.utc_timing_url ?? ''),
@@ -291,6 +311,10 @@ export function formFieldsFromConfig(config: TomlConfig): Required<
   }
 }
 
+function lowLatencyDefault(mode: string | undefined): string {
+  return mode === 'on' ? 'on' : mode === 'optin' ? 'off (opt-in)' : 'off (not enabled)'
+}
+
 /** The channel's own value of each overridable setting, by query parameter name, as
  * display text -- what a request gets when it leaves that override out (shown as
  * "channel: X" in the playback panel). `descriptor_grouping` differs per format. */
@@ -301,9 +325,9 @@ export function channelDefaultsByParam(f: ReturnType<typeof formFieldsFromConfig
     dvr_window: String(f.dvr_window_seconds),
     timeline_style: f.dash_timeline,
     addressing: f.dash_addressing,
-    // What a request gets when it leaves the parameter out. "opt-in" channels deliver low latency but only
-    // advertise it on ?low_latency=true.
-    low_latency: f.low_latency === 'on' ? 'on' : f.low_latency === 'optin' ? 'off (opt-in)' : 'off (not enabled)',
+    // What a request gets when it leaves the parameter out, per format. "opt-in" channels deliver low latency but
+    // only advertise it on ?low_latency=true.
+    low_latency: `HLS ${lowLatencyDefault(f.hls_low_latency)}, DASH ${lowLatencyDefault(f.dash_low_latency)}`,
     ll_target_latency: f.target_latency === null ? 'automatic' : String(f.target_latency),
     ll_utc_timing: f.utc_timing,
     cue_tags: f.cue_tags,
@@ -383,6 +407,12 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
       ])
     }
     const f = formFieldsFromConfig(config)
+    // Low latency needs a long-lived server: shown for ecs-express and local-docker only, and its detail rows
+    // only when it is on (an "off" channel has just the one row per format).
+    const llBackend = LOW_LATENCY_BACKENDS.includes(backend)
+    const dashLlOn = llBackend && f.dash_low_latency !== 'off'
+    const hlsLlOn = llBackend && f.hls_format === 'cmaf' && f.hls_low_latency !== 'off'
+    const anyLlOn = dashLlOn || hlsLlOn
     add('timeline', [
       ['epoch_utc', f.epoch_utc],
       ['continuous', timeline.continuous],
@@ -391,23 +421,21 @@ export function buildConfigSections(config: TomlConfig): ConfigSection[] {
       // Archive/manifest segment lists keep each segment's own duration.
       ['segment_duration', sourceKind === 'playlist' ? packaging.segment_duration : 'as source'],
       ['dvr_window_seconds', packaging.dvr_window],
+      ['chunk_duration', anyLlOn ? f.chunk_duration : undefined],
     ])
     add('packaging.hls', [
       ['hls_format', packagingHls.container],
       ['hls_ts_mux_audio', packagingHls.container === 'ts' ? packagingHls.mux_audio : undefined],
+      // LL-HLS needs CMAF segments, so the row is offered only for the CMAF container
+      ['hls_low_latency', llBackend && f.hls_format === 'cmaf' ? f.hls_low_latency : undefined],
     ])
-    // Low latency needs a long-lived server: shown for ecs-express and local-docker only, and its detail
-    // rows only when it is on (an "off" channel has just the one row).
-    const llBackend = LOW_LATENCY_BACKENDS.includes(backend)
-    const llOn = llBackend && f.low_latency !== 'off'
     add('packaging.dash', [
       ['dash_addressing', f.dash_addressing],
       ['dash_timeline', f.dash_timeline],
-      ['low_latency', llBackend ? f.low_latency : undefined],
-      ['chunk_duration', llOn ? f.chunk_duration : undefined],
-      ['target_latency', llOn && f.target_latency !== null ? f.target_latency : undefined],
-      ['utc_timing', llOn ? f.utc_timing : undefined],
-      ['utc_timing_url', llOn && f.utc_timing === 'http' ? f.utc_timing_url || 'automatic (set at deploy)' : undefined],
+      ['dash_low_latency', llBackend ? f.dash_low_latency : undefined],
+      ['target_latency', dashLlOn && f.target_latency !== null ? f.target_latency : undefined],
+      ['utc_timing', dashLlOn ? f.utc_timing : undefined],
+      ['utc_timing_url', dashLlOn && f.utc_timing === 'http' ? f.utc_timing_url || 'automatic (set at deploy)' : undefined],
     ])
     // A channel written before [query] existed gets its-a-live's defaults
     // (enabled) -- show those rather than hiding the section.

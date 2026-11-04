@@ -148,7 +148,8 @@ const form = reactive<ChannelCreatePayload>({
   hls_ts_mux_audio: true,
   dash_addressing: 'number',
   dash_timeline: 'full',
-  low_latency: 'off',
+  dash_low_latency: 'off',
+  hls_low_latency: 'off',
   chunk_duration: 0.5,
   target_latency: null,
   utc_timing: 'direct',
@@ -595,6 +596,7 @@ async function submit() {
           <div class="flex align-items-center"><label for="dvr">{{ L.dvr_window_seconds }}</label><QpBadge field="dvr_window_seconds" :form="form" /></div>
           <InputNumber id="dvr" v-model="form.dvr_window_seconds" />
         </div>
+        <LowLatencyFields :form="form" id-prefix="new" part="packaging" />
       </div>
 
       <h4 class="mb-0 mt-2">{{ T['packaging.hls'] }}</h4>
@@ -607,6 +609,7 @@ async function submit() {
           <Checkbox v-model="form.hls_ts_mux_audio" binary input-id="hls-ts-mux-audio" />
           <label for="hls-ts-mux-audio">{{ L.hls_ts_mux_audio }}</label>
         </div>
+        <LowLatencyFields :form="form" id-prefix="new" part="hls" />
       </div>
 
       <h4 class="mb-0 mt-2">{{ T['packaging.dash'] }}</h4>
@@ -619,7 +622,7 @@ async function submit() {
           <div class="flex align-items-center"><label for="dash-timeline">{{ L.dash_timeline }}</label><QpBadge field="dash_timeline" :form="form" /></div>
           <Select id="dash-timeline" v-model="form.dash_timeline" :options="dashTimelineOptions" option-label="label" option-value="value" />
         </div>
-        <LowLatencyFields :form="form" id-prefix="new" />
+        <LowLatencyFields :form="form" id-prefix="new" part="dash" />
       </div>
 
       <h4 class="mb-0 mt-2">{{ T.query }}</h4>
