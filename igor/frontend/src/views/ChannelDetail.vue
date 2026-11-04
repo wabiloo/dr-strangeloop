@@ -1135,7 +1135,8 @@ watch(() => props.name, reload)
             <table class="text-sm config-table">
               <tbody>
                 <tr v-for="row in sec.rows" :key="row.key">
-                  <td class="pr-3 text-color-secondary vertical-align-top config-key" :title="row.label">{{ row.key }}<QpBadge :field="row.key" :prefix="timeshiftParams.prefix" :active="timeshiftParams.overrides" /></td>
+                  <td class="pr-3 text-color-secondary vertical-align-top config-key" :title="row.label">{{ row.key }}</td>
+                  <td class="config-badge vertical-align-top"><QpBadge :field="row.key" :prefix="timeshiftParams.prefix" :active="timeshiftParams.overrides" /></td>
                   <td class="font-mono config-value">{{ row.value }}</td>
                 </tr>
               </tbody>
@@ -1429,6 +1430,11 @@ watch(() => props.name, reload)
 .config-key {
   width: 11rem;
   overflow-wrap: anywhere;
+}
+
+.config-badge {
+  width: 2rem;
+  white-space: nowrap;
 }
 
 .config-value {
