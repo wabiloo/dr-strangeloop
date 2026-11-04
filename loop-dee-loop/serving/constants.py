@@ -37,3 +37,5 @@ LL_UTC_TIMING_CHOICES = ("http", "direct", "none")
 
 # LL-HLS lists the parts of this many newest segments (the live one included); older segments are plain.
 LL_HLS_PART_SEGMENTS = 3
+# LL-HLS delta updates: the Skip Boundary (CAN-SKIP-UNTIL) in target durations. RFC 8216bis 4.4.3.8 asks for at least six.
+LL_HLS_SKIP_BOUNDARY_TARGETS = 6

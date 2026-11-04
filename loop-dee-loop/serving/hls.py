@@ -26,7 +26,7 @@ from scte35_signaling import (
 from timeshift import TimeWindow
 
 from serving import constants
-from serving.constants import LL_HLS_PART_SEGMENTS
+from serving.constants import LL_HLS_PART_SEGMENTS, LL_HLS_SKIP_BOUNDARY_TARGETS
 from serving.markers import (
     _asset_ids_starting_in_segment,
     _describe_markers,
@@ -69,6 +69,27 @@ class HlsMixin:
             return pkg.chunk_table(rendition_name, local_index, end - boundary_ticks[local_index])
 
         return chunks
+
+    def _skippable_segments(self, boundary_ticks: list[int], first: int, newest: int, parts_from: int) -> int:
+        """How many of the oldest segments of a playlist (`first`..`newest`) a delta update may replace with
+        EXT-X-SKIP: those that end at least the Skip Boundary before the end of the newest one (RFC 8216bis 6.2.5.1).
+        Never one that still lists parts (`parts_from` is the first that does); the boundary is at least six target
+        durations, so the newest three segments are always kept anyway."""
+        pkg = self.package
+
+        def end(global_index: int) -> int:
+            local = global_index % pkg.segments_per_loop
+            seg_end = boundary_ticks[local + 1] if local + 1 < len(boundary_ticks) else pkg.total_loop_duration_ticks
+            return self.segment_start_ticks(global_index, boundary_ticks) + seg_end - boundary_ticks[local]
+
+        boundary = LL_HLS_SKIP_BOUNDARY_TARGETS * pkg.max_segment_duration_seconds_rounded_up
+        limit = end(newest) - boundary * pkg.timescale
+        count = 0
+        for global_index in range(first, parts_from):
+            if end(global_index) > limit:
+                break
+            count += 1
+        return count
 
     def _hls_ll(self, own: str | None) -> _HlsLL:
         """`own` is this playlist's rendition name, or None for the audio playlist."""
@@ -146,7 +167,7 @@ class HlsMixin:
 
     def build_hls_manifest(
         self, rendition_name: str, window_segments: int | None = None, window: TimeWindow | None = None,
-        query: str = "",
+        query: str = "", delta: bool = False,
     ) -> str:
         rendition = self.package.rendition_by_name(rendition_name)
         is_ts = self.package.hls_format == "ts"
@@ -164,10 +185,12 @@ class HlsMixin:
             window=window,
             ll=self._hls_ll(rendition.name) if self.hls_ll_live(window) and not rendition.sparse else None,
             query=query,
+            delta=delta,
         )
 
     def build_hls_audio_manifest(
-        self, window_segments: int | None = None, window: TimeWindow | None = None, query: str = ""
+        self, window_segments: int | None = None, window: TimeWindow | None = None, query: str = "",
+        delta: bool = False,
     ) -> str:
         pkg = self.package
         if not pkg.has_audio:
@@ -184,6 +207,7 @@ class HlsMixin:
             window=window,
             ll=self._hls_ll(None) if self.hls_ll_live(window) and not is_ts and not pkg.audio_rendition.audio_sparse else None,
             query=query,
+            delta=delta,
         )
 
     def _build_hls_media_playlist(
@@ -197,6 +221,7 @@ class HlsMixin:
         window: TimeWindow | None = None,
         ll: _HlsLL | None = None,
         query: str = "",
+        delta: bool = False,
     ) -> str:
         """Shared builder for every video rendition's HLS media playlist and
         for the (single, shared) audio HLS media playlist.
@@ -225,6 +250,17 @@ class HlsMixin:
         media_sequence = win.last
         ll_on = ll is not None and self.hls_ll_live(window)
         part_target = pkg.part_target_seconds if ll_on else None
+        # Delta updates (RFC 8216bis 6.2.5.1): offered when this playlist has segments old enough to replace, and
+        # then honoured for `_HLS_skip=YES`. Not with per-span inits (the MAP in force at the first kept segment would
+        # have to be repeated). Date ranges are never skipped (that is `v2`, which is not offered), so the server
+        # does not have to tell the client which ones were removed.
+        ll_first_part_segment = max(win.first, media_sequence - LL_HLS_PART_SEGMENTS + 1)
+        skip_count = (
+            self._skippable_segments(boundary_ticks, win.first, media_sequence, ll_first_part_segment)
+            if ll_on and span_init_uri is None
+            else 0
+        )
+        skip_until = win.first + skip_count if delta else win.first
 
         # Every physical segment file is reused, byte-for-byte, on every
         # loop iteration (SCOPE.md §4.1 step 6): its internal fMP4
@@ -288,7 +324,13 @@ class HlsMixin:
                 [
                     # Parts of the newest segments, a blocking playlist reload, a preload hint: Apple's LL-HLS
                     # (RFC 8216bis). PART-HOLD-BACK at 3 part targets is the spec's recommendation.
-                    f"#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK={3 * part_target:.3f}",
+                    "#EXT-X-SERVER-CONTROL:"
+                    + (
+                        f"CAN-SKIP-UNTIL={LL_HLS_SKIP_BOUNDARY_TARGETS * pkg.max_segment_duration_seconds_rounded_up:.3f},"
+                        if skip_count
+                        else ""
+                    )
+                    + f"CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK={3 * part_target:.3f}",
                     f"#EXT-X-PART-INF:PART-TARGET={part_target:.3f}",
                 ]
                 if ll_on
@@ -336,10 +378,12 @@ class HlsMixin:
         # `range(window_segments)` would overshoot past the live edge and
         # reintroduce future segments, the exact bug being fixed here.
         entries_in_window = media_sequence - first_global_index + 1
-        ll_first_part_segment = max(first_global_index, media_sequence - LL_HLS_PART_SEGMENTS + 1)
         ll_last: tuple[int, int, int] | None = None  # (segment, parts released, parts in it) of the newest segment
         discontinuities = set(self.hls_discontinuities(first_global_index, media_sequence))
+        skip_at = len(lines)  # where EXT-X-SKIP goes: after the header tags, before the first kept segment
+        kept_dateranges: list[str] = []
         for i in range(entries_in_window):
+            segment_lines_from = len(lines)
             global_index = first_global_index + i
             local_index = global_index % pkg.segments_per_loop
             local_loop_number = global_index // pkg.segments_per_loop
@@ -564,6 +608,15 @@ class HlsMixin:
                 # default mode's "one URL forever, cacheable across every loop
                 # iteration" property (SCOPE.md §4.2) for continuity mode.
                 lines.append(segment_uri)
+
+            if global_index < skip_until:
+                # Replaced by EXT-X-SKIP, with everything that belongs to it. Date ranges are not segment tags: the
+                # client cannot tell a skipped one from a removed one (that is `v2`), so they all stay.
+                kept_dateranges.extend(ln for ln in lines[segment_lines_from:] if ln.startswith("#EXT-X-DATERANGE:"))
+                del lines[segment_lines_from:]
+
+        if skip_until > first_global_index:
+            lines[skip_at:skip_at] = [f"#EXT-X-SKIP:SKIPPED-SEGMENTS={skip_until - first_global_index}", *kept_dateranges]
 
         if ll_on:
             # The next part to be released: the one after those listed, or the first of the next segment.

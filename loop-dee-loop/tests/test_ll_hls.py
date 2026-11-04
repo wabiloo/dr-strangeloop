@@ -292,3 +292,111 @@ def test_live_position_is_the_newest_part_that_exists():
     assert pos(1000) == (2, 0)
     assert pos(1210) == (2, 1)  # the next loop's first segment (msn 3) has released nothing: the previous loop's last part
     assert pos(1300) == (3, 0)
+
+
+# ── delta updates (RFC 8216bis 6.2.5.1) ────────────────────────────────────────────────────────
+
+# 1 s segments, a 12-segment window, the clock 20 s + INTO_SEGMENT_1 in: the window is segments 9..20 and segment 20 is
+# in progress (it ends at 21 s). The Skip Boundary is 6 target durations = 6 s, so a segment is skippable when it ends at
+# or before 21 - 6 = 15 s: segments 9..14 (six of them). Segments 15..20 are kept.
+DELTA_NOW = 20
+
+
+def delta_client(path, clock, monkeypatch, *, window=12, **kw):
+    monkeypatch.setattr(Channel, "now_ticks", lambda self: clock[0])
+    monkeypatch.setattr(time, "sleep", lambda s: clock.__setitem__(0, clock[0] + round(s * TS)))
+    cfg = TimeshiftConfig(timeshift=False, overrides=True)
+    return create_app(path, epoch_ticks=0, window_segments=window, timeshift=cfg, **kw).test_client()
+
+
+def segment_uris(out: list[str]) -> list[str]:
+    return [ln for ln in out if not ln.startswith("#") and ln.endswith(".m4s")]
+
+
+def delta_pair(pkg, monkeypatch, **kw):
+    path, seg, _ = pkg
+    clock = [DELTA_NOW * seg + INTO_SEGMENT_1]
+    client = delta_client(path, clock, monkeypatch, ll_hls=True, **kw)
+    name = playlist_names(path)[0]
+    return lines(client.get(f"/{name}")), lines(client.get(f"/{name}?_HLS_skip=YES")), client, name
+
+
+def test_delta_updates_are_offered_only_when_there_is_something_to_skip(pkg, monkeypatch):
+    full, _, _, _ = delta_pair(pkg, monkeypatch)
+    control = next(ln for ln in full if ln.startswith("#EXT-X-SERVER-CONTROL"))
+    assert control.startswith("#EXT-X-SERVER-CONTROL:CAN-SKIP-UNTIL=6.000,CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=")
+    assert not any("CAN-SKIP-DATERANGES" in ln for ln in full)  # v2 is not offered, and Shaka reads even "NO" as yes
+    # a 4-segment window is shorter than the Skip Boundary: nothing to skip, so nothing offered
+    short, _, _, _ = delta_pair(pkg, monkeypatch, window=4)
+    assert not any("SKIP" in ln for ln in short)
+
+
+def test_a_delta_replaces_the_old_segments_and_changes_nothing_else(pkg, monkeypatch):
+    full, delta, _, _ = delta_pair(pkg, monkeypatch)
+    skip = [ln for ln in delta if ln.startswith("#EXT-X-SKIP")]
+    assert skip == ["#EXT-X-SKIP:SKIPPED-SEGMENTS=6"]  # once, and six of the twelve
+    assert not any(ln.startswith("#EXT-X-SKIP") for ln in full)
+
+    # the counters name the first segment of the FULL playlist, so the client can splice the skipped ones back in
+    for tag in ("#EXT-X-MEDIA-SEQUENCE", "#EXT-X-DISCONTINUITY-SEQUENCE", "#EXT-X-TARGETDURATION", "#EXT-X-VERSION"):
+        assert [ln for ln in full if ln.startswith(tag)] == [ln for ln in delta if ln.startswith(tag)]
+
+    # the kept segments are the newest ones, byte for byte; the six oldest are gone (segment 20 has no URI yet)
+    assert len(segment_uris(full)) == 11 and len(segment_uris(delta)) == 5
+    assert segment_uris(full)[6:] == segment_uris(delta)
+    # parts, the preload hint and the rendition reports are untouched, and the skip sits before the first kept segment
+    for tag in ("#EXT-X-PART:", "#EXT-X-PRELOAD-HINT", "#EXT-X-RENDITION-REPORT"):
+        assert [ln for ln in full if ln.startswith(tag)] == [ln for ln in delta if ln.startswith(tag)]
+    assert delta.index(skip[0]) < next(i for i, ln in enumerate(delta) if ln.startswith("#EXT-X-PROGRAM-DATE-TIME"))
+
+    # apart from date ranges, everything after the skip is exactly the tail of the full playlist: what the client
+    # merges is what the full one would have said (discontinuities, program dates, durations, parts, hint, reports)
+    sixth_uri = [i for i, ln in enumerate(full) if ln.endswith(".m4s") and not ln.startswith("#")][5]
+    def not_ranges(ls):
+        return [ln for ln in ls if not ln.startswith("#EXT-X-DATERANGE:")]
+
+    assert not_ranges(full[sixth_uri + 1 :]) == not_ranges(delta[delta.index(skip[0]) + 1 :])
+    assert len([ln for ln in delta if ln.startswith("#EXT-X-PROGRAM-DATE-TIME")]) + 6 == len(
+        [ln for ln in full if ln.startswith("#EXT-X-PROGRAM-DATE-TIME")]
+    )
+
+
+def test_a_delta_never_drops_a_date_range(pkg, monkeypatch):
+    """`YES` cannot say which date ranges were removed (that is `v2`), so every one stays, after the skip."""
+    path = pkg[0]
+    from test_serve_continuity import _marker, _set_markers
+
+    _set_markers(path, [_marker("0x00000001", 0, "0x34", duration=45_000)])
+    full, delta, _, _ = delta_pair(pkg, monkeypatch)
+    full_ranges = [ln for ln in full if ln.startswith("#EXT-X-DATERANGE:")]
+    assert len(full_ranges) >= 4, "the marker recurs every loop: some are in the skipped region"
+    assert [ln for ln in delta if ln.startswith("#EXT-X-DATERANGE:")] == full_ranges
+    skip_at = next(i for i, ln in enumerate(delta) if ln.startswith("#EXT-X-SKIP"))
+    first_kept = next(i for i, ln in enumerate(delta) if ln.startswith("#EXT-X-PROGRAM-DATE-TIME"))
+    assert any(ln.startswith("#EXT-X-DATERANGE:") for ln in delta[skip_at:first_kept])  # those from skipped segments
+
+
+@pytest.mark.parametrize("value", ["v2", "NO", "yes", "", "1"])
+def test_a_directive_that_is_not_offered_is_ignored(pkg, monkeypatch, value):
+    full, _, client, name = delta_pair(pkg, monkeypatch)
+    out = lines(client.get(f"/{name}?_HLS_skip={value}"))
+    assert out == full and not any(ln.startswith("#EXT-X-SKIP") for ln in out)
+
+
+def test_a_delta_can_be_blocked_on_a_part_at_the_same_time(pkg, monkeypatch):
+    full, _, client, name = delta_pair(pkg, monkeypatch)
+    resp = client.get(f"/{name}?_HLS_msn={DELTA_NOW + 1}&_HLS_part=0&_HLS_skip=YES")
+    out = lines(resp)
+    assert resp.status_code == 200
+    assert any(ln.startswith("#EXT-X-SKIP") for ln in out)
+    # it waited for segment 21's first part, so the window has moved on by one (the full one began at segment 9)
+    assert "#EXT-X-MEDIA-SEQUENCE:10" in out and "#EXT-X-MEDIA-SEQUENCE:9" in full
+
+
+def test_a_playlist_that_is_not_low_latency_has_no_delta(pkg, monkeypatch):
+    path, seg, _ = pkg
+    clock = [DELTA_NOW * seg + INTO_SEGMENT_1]
+    client = delta_client(path, clock, monkeypatch, ll_hls=True)
+    name = playlist_names(path)[0]
+    out = lines(client.get(f"/{name}?low_latency=false&_HLS_skip=YES"))
+    assert not any("SKIP" in ln for ln in out) and not any(ln.startswith("#EXT-X-PART") for ln in out)

@@ -77,7 +77,7 @@ class LowLatencyHttpMixin:
     def block_for_reload(self, ch: Channel, window, rendition_name: str | None) -> None:
         """LL-HLS blocking playlist reload: `_HLS_msn` (and `_HLS_part`) ask for a playlist that already holds that
         segment (part); hold the request until it exists. Ignored unless this is a low-latency live playlist.
-        `_HLS_skip` (delta updates) is accepted and ignored: CAN-SKIP-UNTIL is not advertised."""
+        `_HLS_skip` (delta updates) does not change when the playlist is released, only what is in it."""
         raw_msn, raw_part = request.args.get(LL_HLS_MSN_PARAM), request.args.get(LL_HLS_PART_PARAM)
         if raw_part is not None and raw_msn is None:
             self.bad_request("'_HLS_part' needs '_HLS_msn'")
