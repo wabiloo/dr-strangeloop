@@ -953,6 +953,37 @@ def compute_event_id_step(base_event_ids: list[str]) -> int:
     return step
 
 
+def non_splice_insert_event_ids(markers: list[dict]) -> list[str]:
+    """Event ids of every marker that is not a bare `splice_insert` --
+    `cue_tags = "only"` needs this to be empty (no DATERANGE fallback exists
+    in that mode). Shared by bake-time and per-request validation."""
+    return sorted(m["event_id"] for m in markers if m.get("splice_type") != "splice_insert")
+
+
+def event_id_increment_problem(markers: list[dict]) -> str | None:
+    """Why `increment_event_ids = true` would silently do nothing for these
+    markers (the largest base id leaves no room under the 32-bit SCTE-35
+    ceiling for even one `compute_event_id_step` increment), or None when
+    it is fine. Shared by bake-time and per-request validation."""
+    event_ids = [m["event_id"] for m in markers]
+    if not event_ids:
+        return None
+    step = compute_event_id_step(event_ids)
+    max_base_id = max(int(eid, 16) for eid in event_ids)
+    if step <= SCTE35_EVENT_ID_MAX - max_base_id:
+        return None
+    return (
+        f"increment_event_ids=true derives step={step} (smallest power "
+        f"of 10 above the largest base event id, "
+        f"0x{max_base_id:08X}={max_base_id}), which leaves no room "
+        f"under the 32-bit SCTE-35 ceiling "
+        f"(0x{SCTE35_EVENT_ID_MAX:08X}={SCTE35_EVENT_ID_MAX}) for even "
+        f"one real increment -- every loop would silently emit the "
+        f"exact same id as loop 0. Base event ids are too close to the "
+        f"32-bit ceiling for this feature."
+    )
+
+
 def compute_incremented_event_id(base_event_id_hex: str, loop_number: int, step: int) -> str:
     """SCTE-35 `splice_event_id`/`segmentation_event_id` are 32-bit fields.
     Returns `base + loop_number * step` (see `compute_event_id_step` for

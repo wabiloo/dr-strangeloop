@@ -39,6 +39,7 @@ channel TOML. There is a single CLI regardless of backend.
 |---|---|---|
 | `aws-media` | MediaLive + MediaPackage v1: real live transcoding of the `.ts` | AWS account, CDK |
 | `ecs-express` | `loop-dee-loop` on ECS Express Mode behind CloudFront | AWS account, CDK |
+| `aws-lambda` | `loop-dee-loop` in a Lambda function behind CloudFront; no idle cost, the first viewer wakes it up | AWS account, CDK |
 | `local-docker` | `loop-dee-loop` in a container on your machine | Docker only; no CDK, no stack |
 
 ## Concepts
@@ -59,6 +60,10 @@ channel TOML. There is a single CLI regardless of backend.
 - **Startover / catchup**: past-range playback with `?start=&end=` on the
   normal manifest URLs. See the "Startover & catchup" section of the
   [loop-dee-loop README](../loop-dee-loop/README.md).
+- **Low latency**: DASH chunked delivery and Apple LL-HLS (parts, blocking
+  reload), so players can sit a few seconds or less behind live (`ecs-express`
+  and `local-docker`, each format off by default). See
+  [Low latency (DASH and HLS)](./low-latency.md).
 
 ## Where files live
 
@@ -68,6 +73,7 @@ channel TOML. There is a single CLI regardless of backend.
 | `data/channels/*.toml` | its-a-live channel configs |
 | `outputs/` | builds: `.ts`, `.markers.json`, HTML reports, frame timelines |
 | `data/archives/`, `data/manifests/` | captured HAR/Proxyman files and saved VOD manifest URLs |
+| `data/profiles/` | user-saved Igor output profiles (encoding settings / ABR ladders) |
 
 All of these locations can be relocated with an optional
 `~/.dr-strangeloop/config.toml` (or the file `$DR_STRANGELOOP_CONFIG` points
@@ -84,4 +90,4 @@ uv run python galvanise.py data/playlists/my-stream.yaml --backend ecs-express
 and generates the channel TOML for you. Or do the same visually in Igor:
 create a playlist, build it, create a channel, start it.
 
-Next: [CLI & API reference](./cli-reference.md).
+Next: [CLI & API reference](./cli-reference.md), or [Low latency (DASH and HLS)](./low-latency.md).

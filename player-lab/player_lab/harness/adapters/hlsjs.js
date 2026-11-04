@@ -23,4 +23,10 @@ export default {
     hls.attachMedia(video);
     this.handle = hls;
   },
+  // Live latency: hls.js' own number and target, plus the playhead's wall-clock time (PROGRAM-DATE-TIME).
+  live() {
+    const h = this.handle;
+    if (!h || !h.playingDate) return null;
+    return { playheadDateMs: h.playingDate.getTime(), latencyS: h.latency, targetS: h.targetLatency };
+  },
 };

@@ -74,6 +74,8 @@ def build_markers(
                 round(boundary.break_duration * PTS_CLOCK) if boundary.is_start else 0
             )
 
+            entry["unique_program_id"] = ab.unique_program_id
+
         if ab.splice_type == "time_signal" and ab.segmentation is not None:
             seg = ab.segmentation
             type_id = boundary.segmentation_type_id

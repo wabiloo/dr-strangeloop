@@ -13,8 +13,10 @@ uv sync --all-packages
 uv run player-lab setup          # npm install of the SDKs into ~/.dr-strangeloop/player-lab (or $PLAYER_LAB_HOME)
 
 uv run player-lab run --channel my-channel                    # data/channels/my-channel.toml, URLs via its-a-live status
-uv run player-lab run --hls http://host/index.m3u8 --dash http://host/stream.mpd
+uv run player-lab run --hls http://host/index.m3u8 --dash http://host/index.mpd
 uv run player-lab run ... --players dashjs,hlsjs --format dash --boundaries 3
+uv run player-lab run --channel my-channel --hls-query 'timeline_mode=continuous&dvr_window=60' --dash-query 'addressing=time'
+                                                              # per-request overrides: appended to the manifest URLs (and /timeline.json)
 uv run player-lab run ... --no-timeline --duration 120        # no /timeline.json (e.g. aws-media): generic checks only
 uv run player-lab run ... --profile profile.toml --ffmpeg 60 --trace
 ```
@@ -40,7 +42,7 @@ Needs the installed Google Chrome (H.264) and Node/npm for `setup`. Exit code 0
   signal-break Periods appear, so there is nothing to wait for: the run ends after `--duration` (120 s) instead of
   `--boundaries`, still judging whatever boundaries did show up (usually 0). `--boundaries 0` forces that
   fixed-duration mode on any channel. Igor's panel has a "Stop after boundaries / loops / duration (s)" choice with a value for
-  each; "boundaries" is disabled when none are expected (no timeline, or continuous without `period_on_segmentation`);
+  each; "boundaries" is disabled when none are expected (no timeline, or continuous without `[markers] split_on`);
   "loops" runs N x the loop duration (from `/health`) + 30 s as a fixed duration, and the hard cap (`--max-seconds`) grows to fit.
 - Period/discontinuity transitions come from each player's own mechanisms, never from the clock
   or the timeline: hls.js (`FRAG_CHANGED` continuity counter), dash.js (`PERIOD_SWITCH_COMPLETED`),
@@ -55,8 +57,19 @@ Needs the installed Google Chrome (H.264) and Node/npm for `setup`. Exit code 0
   audio playlists, so a problem there is not by itself a channel defect.
 - Profile TOML: top-level thresholds (`max_startup_s`, `max_stall_count`,
   `max_stall_seconds`, `max_errors`, `max_dropped_frame_ratio`,
-  `boundary_tolerance`), per-player overrides in `[player.<id>]` or
-  `[player."<id>:<fmt>"]`.
+  `boundary_tolerance`, and the live-latency ones below), per-player overrides
+  in `[player.<id>]` or `[player."<id>:<fmt>"]`.
+- **Live latency** (low-latency channels; reported whenever a player can, judged only if a limit is set).
+  An adapter's optional `live()` returns `{playheadDateMs, latencyS, targetS}` (dash.js, hls.js and Shaka have
+  one; Video.js and Bitmovin report none). Once a second after startup the observer records the primary figure,
+  **wall-clock latency = `Date.now()` minus the wall-clock time of the playhead**, the same definition for every
+  player (so this machine's clock must be accurate), next to the player's own number and target and the playback rate.
+  `profile.summarize_live` skips the first `latency_settle_s` (30 s: players take a while to catch up) and reports
+  median / p5 / p95 / jitter (p95 - p5), the error against the player's own target, how long it took to get within 0.5 s
+  of it, and the playback-rate range and time off 1.0x. Limits: `max_live_latency_s`, `max_latency_target_error_s`,
+  `max_latency_jitter_s` (or `--max-latency S` / `--latency-settle S` on the CLI). A limit with fewer than 5 samples
+  after settling fails ("run longer"), so use `--duration` of at least settle + 30 s. Works in the in-browser mode
+  too (same harness, same `judge`). Igor's panel does not draw the new `live` block yet.
 
 ## Commercial players (Bitmovin)
 
@@ -70,7 +83,7 @@ Bitmovin dashboard. Transitions: its `SegmentPlayback` event carries `periodId` 
 ## Adding a player
 
 Add `harness/adapters/<id>.js` (copy the closest one; set `formats` and
-`reports`), register the id in `PLAYERS` in `runner.py`, add its npm package to
+`reports`; add a `live()` if the player can say where its playhead is in wall-clock time), register the id in `PLAYERS` in `runner.py`, add its npm package to
 `vendor/package.json`. Keys for commercial players (phase 3) come from env vars
 or `~/.dr-strangeloop/config.toml [keys]`, never from the repo.
 
@@ -84,3 +97,5 @@ browser run needs a live channel, e.g. a local `loop-dee-loop/serve.py`).
 Igor's channel page has a **Playback test** panel that runs `player-lab run --channel` as a background job and renders `report.json` (code: `igor/src/igor/integrations/player_lab.py`, `igor/src/igor/app/routes/playback.py`, `igor/frontend/src/components/PlaybackTestPanel.vue`). Runs are stored under `outputs/player-lab/channels/<name>/<run_id>/`. It needs Chrome on the Igor host.
 
 The panel has a second mode, **In this browser**: Igor serves the harness and the vendor SDKs same-origin (`GET /api/v1/playback-test/harness/*`), the panel opens `harness/browser.html` in a new tab, which plays each case in an iframe (`index.html?embed=1`), tracks boundaries from `/timeline.json`, and POSTs the raw snapshots to `.../channels/{name}/browser-results`. Igor judges them with `player-lab judge` (stdin JSON, same `profile.judge` as the headless runner; `judge_browser.py`) and stores the same `report.json` (with `mode: "browser"` and the `userAgent`). The browser only measures; the tab must stay in the foreground (background tabs load no media), must be able to reach the channel URLs (mind HTTPS-vs-HTTP mixed content), and its codecs decide what plays.
+
+**Low latency in the page:** it fetches the channel config once (3 s timeout) before starting the players, shows a `low latency` chip per format (from `[packaging.<fmt>] low_latency` and `[packaging] chunk_duration`, and whether the played URL advertises it: `opt-in` only with `?low_latency=true`), and a `Latency` chip per player (wall-clock latency against the player's target, plus the playback rate when it is chasing). When the manifest advertises low latency the iframes get `ll=1`, which `harness.js` passes to the adapter as `lowLatency`; Shaka uses it to set `streaming.lowLatencyMode` (without it Shaka plays LL-HLS as a normal live stream). hls.js and dash.js need nothing: their defaults follow the manifest. The config chips read the nested tables (`[packaging.hls] container`, `[packaging.dash] addressing`/`timeline_style`, `[packaging] dvr_window`); the old flat names are still accepted.

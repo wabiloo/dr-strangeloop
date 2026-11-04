@@ -141,7 +141,7 @@ function runningStatusLabel(channel: ChannelListItem) {
   return PHASE_LABEL[phaseOf(channel)]
 }
 
-// aws-media/ecs-express: the CloudFormation stack name. local-docker has
+// aws-media/ecs-express/aws-lambda: the CloudFormation stack name. local-docker has
 // no stack -- its nearest equivalent identifier is the deterministic
 // local Docker container name (see channel.py's cmd_list).
 function stackOrContainerName(channel: ChannelListItem) {
@@ -297,7 +297,7 @@ async function confirmDelete(event: MouseEvent, channel: ChannelListItem) {
 // Start/Stop mirror ChannelDetail.vue's stream actions -- see there for
 // why the disabled conditions differ per backend (local-docker's `start`
 // creates the container fresh so it works from 'not-deployed' too;
-// aws-media/ecs-express's `start` reads stack outputs so it genuinely
+// aws-media/ecs-express/aws-lambda's `start` reads stack outputs so it genuinely
 // needs the stack deployed first).
 //
 // "Relevant" (shown vs. hidden-but-space-reserved) is purely phase/backend
@@ -545,6 +545,15 @@ onBeforeUnmount(() => {
       </template>
         <template #body="{ data }">
           <div class="flex gap-2" @click.stop>
+            <Button
+              icon="pi pi-eye"
+              severity="secondary"
+              text
+              :style="{ visibility: isStopRelevant(data) ? 'visible' : 'hidden' }"
+              title="Preview: players, startover / catchup, URL overrides, playback test"
+              data-testid="list-preview"
+              @click="router.push(`/channels/${data.name}/preview`)"
+            />
             <Button
               icon="pi pi-play"
               severity="success"

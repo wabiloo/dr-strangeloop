@@ -56,6 +56,26 @@ def test_start_dispatches_job_with_out_dir(outputs, monkeypatch):
     assert player_lab.run_id_of(Job(id="x", type="t", channel_name=None, command=cmd, cwd=".")) == body["run_id"]
 
 
+def test_start_passes_override_queries_to_player_lab(outputs, monkeypatch):
+    seen = {}
+
+    def fake_spawn(job_type, command, cwd, channel_name=None, env=None):
+        seen["command"] = command
+        return Job(id="abc", type=job_type, channel_name=channel_name, command=command, cwd=str(cwd))
+
+    monkeypatch.setattr(player_lab.runner, "spawn", fake_spawn)
+    monkeypatch.setattr(player_lab, "info", lambda: {"players": {"hlsjs": ["hls"]}})
+    r = client.post(f"/api/v1/playback-test/channels/{CHANNEL}",
+                    json={"hls_query": "timeline_mode=continuous&dvr_window=60", "dash_query": "addressing=time"})
+    assert r.status_code == 200, r.text
+    cmd = seen["command"]
+    assert cmd[cmd.index("--hls-query") + 1] == "timeline_mode=continuous&dvr_window=60"
+    assert cmd[cmd.index("--dash-query") + 1] == "addressing=time"
+    # no query: the flags are left out
+    r = client.post(f"/api/v1/playback-test/channels/{CHANNEL}", json={})
+    assert "--hls-query" not in seen["command"] and "--dash-query" not in seen["command"]
+
+
 def test_unknown_player_and_channel_rejected(outputs, monkeypatch):
     monkeypatch.setattr(player_lab, "info", lambda: {"players": {"hlsjs": ["hls"]}})
     assert client.post(f"/api/v1/playback-test/channels/{CHANNEL}", json={"players": ["nope"]}).status_code == 400

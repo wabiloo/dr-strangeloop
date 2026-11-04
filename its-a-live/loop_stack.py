@@ -3,6 +3,7 @@ import aws_cdk as cdk
 from aws_cdk import (
     Stack,
     Duration,
+    Fn,
     aws_s3 as s3,
     aws_ecr_assets as ecr_assets,
     aws_iam as iam,
@@ -11,13 +12,14 @@ from aws_cdk import (
     aws_cloudfront_origins as origins,
 )
 from constructs import Construct
-from loop_shared_stack import CLUSTER_NAME
+from loop_shared_stack import BACKEND as SHARED_BACKEND, CLUSTER_NAME
+import _cdn_policies as cdn
 from _host_paths import to_host_path
 from _epoch_cfg import config_epoch_utc
 from _infra_cfg import infra_table
-from _markers_cfg import period_on_segmentation_serve_args
-from _packaging_cfg import dash_addressing_serve_args
-from _timeshift_cfg import timeshift_param_names, timeshift_serve_args
+from _markers_cfg import announce_serve_args, split_on_serve_args
+from _packaging_cfg import cdn_query_names, dash_serve_args, ll_serve_args, dvr_window_seconds as config_dvr_window_seconds
+from _query_cfg import query_serve_args
 
 LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 
@@ -61,7 +63,9 @@ class LoopStack(Stack):
     that gap with a shared-secret origin header if needed later.
     """
 
-    def __init__(self, scope: Construct, construct_id: str, *, config: dict, **kwargs) -> None:
+    def __init__(
+        self, scope: Construct, construct_id: str, *, config: dict, public_host: str | None = None, **kwargs
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         name = config.get("deploy", {}).get("name", "default")
@@ -73,8 +77,7 @@ class LoopStack(Stack):
 
         loop_package_folder = infra_table(config, "s3").get("content_folder", "its-a-live/content").strip("/")
 
-        packaging_cfg = config.get("packaging", {})
-        dvr_window_seconds = str(packaging_cfg.get("dvr_window_seconds", 30))
+        dvr_window_seconds = config_dvr_window_seconds(config)
         # loop-dee-loop/SCOPE.md §12: default on -- rewrites each segment's
         # own timestamps per request (header patch only, never a re-mux) so
         # the channel has no #EXT-X-DISCONTINUITY / DASH Period restart at
@@ -178,7 +181,7 @@ class LoopStack(Stack):
         # other channel.
 
         # ── Express service (long-running, auto-scaling `serve.py`) ──────────
-        # --epoch-utc comes from [timeline] epoch_utc (default
+        # --epoch-utc comes from [timeline] epoch (default
         # 2026-01-01T00:00:00Z -- recent enough to keep loop numbers small;
         # the Unix epoch gave ~1.8e9-sized ones) and is then left alone --
         # this is looping content simulating live, not a real broadcast start
@@ -197,7 +200,7 @@ class LoopStack(Stack):
             task_role_arn=task_role.role_arn,
             cpu=serve_cpu,
             memory=serve_memory,
-            health_check_path="/stream.mpd",
+            health_check_path="/index.mpd",
             # Pinned to one task up front (the Express default is a 1..N
             # range): `channel.py start` would otherwise have to apply it
             # right after `create`, and that update alone rolls out a second
@@ -216,9 +219,11 @@ class LoopStack(Stack):
                     "--epoch-utc", config_epoch_utc(config),
                     "--channel-name", config.get("deploy", {}).get("name", "default"),
                     *(["--continuous-timeline"] if continuous else []),
-                    *period_on_segmentation_serve_args(config),
-                    *dash_addressing_serve_args(config),
-                    *timeshift_serve_args(config),
+                    *split_on_serve_args(config),
+                    *announce_serve_args(config),
+                    *dash_serve_args(config),
+                    *ll_serve_args(config, public_url=f"https://{public_host}" if public_host else None),
+                    *query_serve_args(config),
                 ],
                 environment=[
                     ecs.CfnExpressGatewayService.KeyValuePairProperty(
@@ -228,46 +233,39 @@ class LoopStack(Stack):
             ),
         )
 
-        playback_host = service.attr_endpoint
+        # The service's Endpoint attribute is "https://<host>" (it used to be a
+        # bare host). CloudFront origins and our https:// URLs need the bare
+        # host, so strip any scheme -- in CloudFormation, since it's a token:
+        # "<ep>//<ep>" split on "//" has the host at index 1 whether or not
+        # <ep> starts with "https:".
+        service_host = Fn.select(
+            1, Fn.split("//", Fn.join("", [service.attr_endpoint, "//", service.attr_endpoint]))
+        )
+        playback_host = service_host
         if use_cdn:
             # ── CloudFront: public entrypoint, caches /seg/* aggressively ────────
             # Manifests are dynamic (sliding window) -- never cached. Segments are
             # immutable within a loop package version -- cache them (SCOPE.md §8).
-            # Startover/catchup (loop-dee-loop/SCOPE.md §13) selects the range via
-            # query parameters on the manifest URLs, so manifests MUST be cached
-            # per value of exactly those parameters -- CloudFront's default is to
-            # drop the query string entirely, which would serve one viewer's range
-            # to everyone. Nothing else in the query string is keyed or forwarded.
-            timeshift_params = timeshift_param_names(config)
-            manifest_query_strings = (
-                cloudfront.CacheQueryStringBehavior.allow_list(*timeshift_params)
-                if timeshift_params
-                else cloudfront.CacheQueryStringBehavior.none()
-            )
-            manifest_cache_policy = cloudfront.CachePolicy(
-                self,
-                "ManifestCachePolicy",
-                query_string_behavior=manifest_query_strings,
-                cache_policy_name=f"loop-dee-loop-{name}-manifests",
-                default_ttl=Duration.seconds(0),
-                min_ttl=Duration.seconds(0),
-                max_ttl=Duration.seconds(1),
-                enable_accept_encoding_gzip=True,
-                enable_accept_encoding_brotli=True,
-            )
-            segment_cache_policy = cloudfront.CachePolicy(
-                self,
-                "SegmentCachePolicy",
-                cache_policy_name=f"loop-dee-loop-{name}-segments",
-                default_ttl=Duration.minutes(5),
-                min_ttl=Duration.seconds(0),
-                max_ttl=Duration.hours(1),
-                enable_accept_encoding_gzip=True,
-                enable_accept_encoding_brotli=True,
-            )
+            # Startover/catchup and the per-request overrides (loop-dee-loop/
+            # SCOPE.md §13) select what a manifest contains via query parameters
+            # on its URL, so manifests MUST be cached per value of exactly those
+            # parameters -- CloudFront's default is to drop the query string
+            # entirely, which would serve one viewer's range to everyone.
+            # The policies are shared (an account may only have 20): they live in
+            # ItsALiveSharedStack-ecs-express (loop_shared_stack.py), and this
+            # channel creates its own manifests policy only when its `[query]`
+            # parameter names differ from the default.
+            segment_cache_policy = cdn.import_policy(self, "SegmentCachePolicy", SHARED_BACKEND, "segments")
+            if cdn.uses_default_query(config):
+                manifest_cache_policy = cdn.import_policy(self, "ManifestCachePolicy", SHARED_BACKEND, "manifests")
+            else:
+                manifest_cache_policy = cdn.manifest_policy(
+                    self, "ManifestCachePolicy", f"loop-dee-loop-{name}-manifests", cdn_query_names(config),
+                    default_ttl=Duration.seconds(0), max_ttl=Duration.seconds(1),
+                )
 
             origin = origins.HttpOrigin(
-                service.attr_endpoint,
+                service_host,
                 protocol_policy=cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
             )
 
@@ -299,8 +297,8 @@ class LoopStack(Stack):
         cdk.CfnOutput(self, "S3BucketName", value=bucket_name)
         cdk.CfnOutput(self, "LoopPackageS3Uri", value=loop_package_s3_uri)
         cdk.CfnOutput(self, "ExpressServiceArn", value=service.attr_service_arn)
-        cdk.CfnOutput(self, "ExpressServiceEndpoint", value=f"https://{service.attr_endpoint}")
+        cdk.CfnOutput(self, "ExpressServiceEndpoint", value=f"https://{service_host}")
         if use_cdn:
             cdk.CfnOutput(self, "CloudFrontDomainName", value=distribution.distribution_domain_name)
         cdk.CfnOutput(self, "HlsPlaybackUrl", value=f"https://{playback_host}/index.m3u8")
-        cdk.CfnOutput(self, "DashPlaybackUrl", value=f"https://{playback_host}/stream.mpd")
+        cdk.CfnOutput(self, "DashPlaybackUrl", value=f"https://{playback_host}/index.mpd")

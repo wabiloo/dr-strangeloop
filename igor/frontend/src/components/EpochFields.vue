@@ -10,6 +10,7 @@ import {
   isValidEpochUtc,
 } from '../utils/epoch'
 import FieldHelp from './FieldHelp.vue'
+import QpBadge from './QpBadge.vue'
 
 // The [timeline] epoch_utc field, shared by the New channel form and the
 // Configuration edit form on the channel detail page. Edits `form` in place.
@@ -30,7 +31,7 @@ const valid = computed(() => isValidEpochUtc(props.form.epoch_utc ?? ''))
 <template>
   <div class="flex flex-column gap-1">
     <div class="flex align-items-center gap-2">
-      <label :for="`${idPrefix}-epoch`">{{ L.epoch_utc }}</label>
+      <label :for="`${idPrefix}-epoch`">{{ L.epoch_utc }}</label><QpBadge field="epoch_utc" :form="form" />
       <FieldHelp label="Channel epoch">
         Loop 0 starts at the epoch, and it is the DASH availabilityStartTime. Loop numbers, media sequence
         numbers and Period ids count from it, so a recent epoch keeps them small (the Unix epoch gives loop

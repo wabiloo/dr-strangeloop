@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 import subprocess
 import string
 from pathlib import Path
@@ -30,6 +31,114 @@ DEFAULT_DATERANGE_ID_FORMAT = "{segcode}-{eventid}-{loop}"
 DEFAULT_EPOCH_UTC = "2026-01-01T00:00:00Z"
 _EPOCH_UTC_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 _DATERANGE_ID_FIELDS = {"loop", "eventid", "segid", "seghex", "segcode", "segname", "epoch", "pd"}
+# The fixed-name query parameters of a channel's manifests. Mirrors
+# its-a-live/_query_cfg.py (separate venv, so not imported; a test keeps the
+# two in lockstep). `[query] start_param`/`end_param` must not collide with them.
+QUERY_FIXED_PARAMS = (
+    "full_loops", "timeline_mode", "offset", "epoch", "dvr_window",
+    "timeline_style", "addressing", "cue_tags", "descriptor_grouping",
+    "increment_event_ids", "signal_format", "id_template", "split_on", "announce_ahead", "announce_on",
+    "max_height", "max_bitrate",
+    "low_latency", "ll_target_latency", "ll_utc_timing",
+)
+_QUERY_PREFIX_RE = re.compile(r"^[A-Za-z0-9_.~-]*$")
+
+
+# [packaging.dash] low latency (its-a-live/_packaging_cfg.py is the authority; its-a-live has its own venv and is not
+# imported here, so the rules are mirrored and a test keeps the two in step).
+LOW_LATENCY_VALUES = ("off", "on", "optin")
+UTC_TIMING_VALUES = ("direct", "http", "none")
+LOW_LATENCY_BACKENDS = ("ecs-express", "local-docker")
+MAX_TARGET_LATENCY = 120
+
+
+def validate_low_latency(
+    *,
+    backend: str,
+    dash_low_latency: str,
+    hls_low_latency: str,
+    hls_format: str,
+    segment_duration: float,
+    chunk_duration: float,
+    target_latency: float | None,
+    utc_timing: str,
+    utc_timing_url: str,
+    query_overrides: bool,
+) -> None:
+    """Raise ValueError for a low-latency combination its-a-live would refuse (see _packaging_cfg.py)."""
+    for name, mode in (("dash_low_latency", dash_low_latency), ("hls_low_latency", hls_low_latency)):
+        if mode not in LOW_LATENCY_VALUES:
+            raise ValueError(f"{name} must be 'off', 'on' or 'optin'")
+    if utc_timing not in UTC_TIMING_VALUES:
+        raise ValueError("utc_timing must be 'direct', 'http' or 'none'")
+    if target_latency is not None and not 0 < target_latency <= MAX_TARGET_LATENCY:
+        raise ValueError(f"target_latency must be > 0 and at most {MAX_TARGET_LATENCY} seconds")
+    if utc_timing_url:
+        if utc_timing != "http":
+            raise ValueError("utc_timing_url only applies to utc_timing 'http'")
+        if not utc_timing_url.startswith(("http://", "https://")):
+            raise ValueError("utc_timing_url must be an absolute http(s) URL (DASH does not allow a relative one)")
+    if dash_low_latency == "off" and hls_low_latency == "off":
+        return
+    if backend not in LOW_LATENCY_BACKENDS:
+        raise ValueError(
+            f"low latency is not supported on the {backend} backend (only {', '.join(LOW_LATENCY_BACKENDS)}): "
+            "its responses are held open while chunks are released"
+        )
+    if not 0 < chunk_duration < segment_duration:
+        raise ValueError(
+            f"chunk_duration must be > 0 and shorter than segment_duration ({segment_duration:g}), got {chunk_duration:g}"
+        )
+    if "optin" in (dash_low_latency, hls_low_latency) and not query_overrides:
+        raise ValueError("low_latency 'optin' needs query overrides enabled (?low_latency=true)")
+    if hls_low_latency != "off" and hls_format != "cmaf":
+        raise ValueError("hls_low_latency needs hls_format 'cmaf' (MPEG-TS segments cannot carry parts)")
+
+
+MAX_ANNOUNCE_AHEAD = 3600
+SPLICE_INSERT = "splice_insert"
+
+
+def validate_announce_ahead(value: float) -> float:
+    """`[markers] announce_ahead`: seconds, 0 = off (mirrors its-a-live/_markers_cfg.py)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= MAX_ANNOUNCE_AHEAD:
+        raise ValueError(f"announce_ahead must be a number of seconds between 0 and {MAX_ANNOUNCE_AHEAD} (0 = off)")
+    return value
+
+
+def normalise_announce_on(items: list) -> list[str]:
+    """`[markers] announce_on` entries: segmentation_type_ids as "0x22" plus optionally "splice_insert"; deduplicated."""
+    out: list[str] = []
+    for item in items:
+        if str(item).strip().lower() == SPLICE_INSERT:
+            entry = SPLICE_INSERT
+        else:
+            try:
+                value = int(str(item), 0)
+            except ValueError:
+                raise ValueError(
+                    f"invalid announce_on entry {item!r} (expected a segmentation_type_id such as 0x22, or {SPLICE_INSERT})"
+                ) from None
+            if not 0 <= value <= 0xFF:
+                raise ValueError(f"announce_on entry {item!r} out of range 0..255")
+            entry = f"0x{value:02X}"
+        if entry not in out:
+            out.append(entry)
+    return out
+
+
+def validate_query_prefix(value: str) -> str:
+    """`[query] prefix`: prepended to every query parameter name, so it must be URL-safe."""
+    if not isinstance(value, str) or not _QUERY_PREFIX_RE.match(value):
+        raise ValueError("query prefix must contain only letters, digits, '_', '-', '.' or '~'")
+    return value
+
+
+def validate_query_names(start_param: str, end_param: str, prefix: str = "") -> None:
+    """Every on-the-wire name (prefix applied) must be distinct."""
+    names = [f"{prefix}{n}" for n in (start_param, end_param, *QUERY_FIXED_PARAMS)]
+    if len(set(names)) != len(names):
+        raise ValueError(f"query parameter names must be distinct, got {names}")
 
 
 def validate_daterange_id_format(value: str) -> str:
@@ -65,7 +174,14 @@ def validate_epoch_utc(value: str) -> str:
     return value
 
 
+# The layout of the channel TOML this module writes: its-a-live refuses a config
+# of another version and migrates old ones (its-a-live/_legacy_cfg.py CONFIG_VERSION;
+# a test keeps the two equal).
+CONFIG_VERSION = 2
+
 _TOML_TEMPLATE = """\
+config_version = {config_version}
+
 [deploy]
 name = "{name}"
 backend = "{backend}"
@@ -85,35 +201,51 @@ allow_missing_segments = {allow_missing_segments}
 
 _MARKERS_EXTRA = """
 [markers]
-daterange_mode      = "{daterange_mode}"
-cue_tags            = "{cue_tags}"
-increment_event_ids = {increment_event_ids}
-daterange_id_format = "{daterange_id_format}"
-dash_signal_format  = "{dash_signal_format}"
-dash_descriptor_mode = "{dash_descriptor_mode}"{period_extra}
+increment_event_ids = {increment_event_ids}{split_on_extra}{announce_extra}
+
+[markers.hls]
+descriptor_grouping = "{daterange_mode}"
+cue_tags = "{cue_tags}"
+id_template = "{daterange_id_format}"
+
+[markers.dash]
+descriptor_grouping = "{dash_descriptor_mode}"
+signal_format = "{dash_signal_format}"
 """
 
-_TIMESHIFT_EXTRA = """
+_QUERY_EXTRA = """
+[query]
+timeshift = {timeshift}
+overrides = {overrides}
+prefix = "{prefix}"
+start_param = "{start_param}"
+end_param = "{end_param}"
+
 [timeshift]
-enabled          = {enabled}
-start_param      = "{start_param}"
-end_param        = "{end_param}"
 max_span_seconds = {max_span_seconds}
 """
 
-_ECS_EXPRESS_EXTRA = """
+_PACKAGING_EXTRA = """
 [packaging]
-segment_duration   = {segment_duration}
-dvr_window_seconds = {dvr_window_seconds}
-hls_format = "{hls_format}"
-hls_ts_mux_audio = {hls_ts_mux_audio}
-dash_addressing = "{dash_addressing}"
-dash_timeline = "{dash_timeline}"
+segment_duration = {segment_duration}
+dvr_window = {dvr_window_seconds}{chunk_extra}
+
+[packaging.hls]
+container = "{hls_format}"
+mux_audio = {hls_ts_mux_audio}{hls_ll_extra}
+
+[packaging.dash]
+timeline_style = "{dash_timeline}"
+addressing = "{dash_addressing}"{dash_ll_extra}
 
 [timeline]
-epoch_utc = "{epoch_utc}"
+epoch = "{epoch_utc}"
 continuous = {continuous}
+"""
 
+BACKENDS = ("aws-media", "ecs-express", "aws-lambda", "local-docker")
+
+_ECS_EXPRESS_EXTRA = """
 [infrastructure.express]
 port   = {port}
 cpu    = {cpu}
@@ -121,19 +253,16 @@ memory = {memory}
 cdn    = {cdn}
 """
 
+_AWS_LAMBDA_EXTRA = """
+[infrastructure.lambda]
+memory               = {memory}
+timeout              = {timeout}
+reserved_concurrency = {reserved_concurrency}
+cache_mb             = {cache_mb}
+architecture         = "{architecture}"
+"""
+
 _LOCAL_DOCKER_EXTRA = """
-[packaging]
-segment_duration   = {segment_duration}
-dvr_window_seconds = {dvr_window_seconds}
-hls_format = "{hls_format}"
-hls_ts_mux_audio = {hls_ts_mux_audio}
-dash_addressing = "{dash_addressing}"
-dash_timeline = "{dash_timeline}"
-
-[timeline]
-epoch_utc = "{epoch_utc}"
-continuous = {continuous}
-
 [infrastructure.docker]
 port = {port}
 bundle_content = {bundle_content}
@@ -164,10 +293,19 @@ def generate_toml(
     hls_ts_mux_audio: bool = True,
     dash_addressing: str = "number",
     dash_timeline: str = "full",
+    dash_low_latency: str = "off",
+    hls_low_latency: str = "off",
+    chunk_duration: float = 0.5,
+    target_latency: float | None = None,
+    utc_timing: str = "direct",
+    utc_timing_url: str = "",
     continuous: bool = False,
     period_on_segmentation: list[str] | None = None,
-    period_on_segmentation_apply: str = "both",
+    announce_ahead: float = 0,
+    announce_on: list[str] | None = None,
     timeshift_enabled: bool = True,
+    query_overrides: bool = True,
+    query_prefix: str = "",
     timeshift_start_param: str = "start",
     timeshift_end_param: str = "end",
     timeshift_max_span_seconds: int = 21600,
@@ -176,6 +314,11 @@ def generate_toml(
     cpu: int = 256,
     memory: int = 512,
     cdn: bool = True,
+    lambda_memory: int = 1024,
+    lambda_timeout: int = 30,
+    lambda_reserved_concurrency: int = 10,
+    lambda_cache_mb: int = 512,
+    lambda_architecture: str = "arm64",
     daterange_mode: str = "shared",
     cue_tags: str = "none",
     increment_event_ids: bool = False,
@@ -183,9 +326,9 @@ def generate_toml(
     dash_signal_format: str = "binary",
     dash_descriptor_mode: str = "shared",
 ) -> str:
-    if backend not in ("aws-media", "ecs-express", "local-docker"):
+    if backend not in BACKENDS:
         raise ValueError(
-            f"backend must be 'aws-media', 'ecs-express', or 'local-docker', got {backend!r}"
+            f"backend must be 'aws-media', 'ecs-express', 'aws-lambda' or 'local-docker', got {backend!r}"
         )
     if source_kind not in ("playlist", "archive", "manifest"):
         raise ValueError("source_kind must be 'playlist', 'archive' or 'manifest'")
@@ -205,27 +348,73 @@ def generate_toml(
         raise ValueError("dash_signal_format must be 'binary' or 'xml'")
     if dash_descriptor_mode not in ("shared", "narrowed"):
         raise ValueError("dash_descriptor_mode must be 'shared' or 'narrowed'")
-    if period_on_segmentation_apply not in ("both", "dash", "hls"):
-        raise ValueError("period_on_segmentation_apply must be 'both', 'dash' or 'hls'")
+    validate_query_prefix(query_prefix)
+    validate_query_names(timeshift_start_param, timeshift_end_param, query_prefix)
+    validate_low_latency(
+        backend=backend, dash_low_latency=dash_low_latency, hls_low_latency=hls_low_latency, hls_format=hls_format,
+        segment_duration=segment_duration, chunk_duration=chunk_duration, target_latency=target_latency,
+        utc_timing=utc_timing, utc_timing_url=utc_timing_url, query_overrides=query_overrides,
+    )
+    # Only written when low latency is on: the keys are bake-time/serve-time settings of a feature most channels
+    # do not use, and their absence keeps every other channel's TOML exactly as it was. chunk_duration is shared
+    # by both formats ([packaging]); target latency and the clock source are DASH-only.
+    chunk_extra = f"\nchunk_duration = {chunk_duration:g}" if "off" != dash_low_latency or "off" != hls_low_latency else ""
+    hls_ll_extra = f'\nlow_latency = "{hls_low_latency}"' if hls_low_latency != "off" else ""
+    dash_ll_extra = ""
+    if dash_low_latency != "off":
+        dash_ll_extra = f'\nlow_latency = "{dash_low_latency}"'
+        if target_latency is not None:
+            dash_ll_extra += f"\ntarget_latency = {target_latency:g}"
+        dash_ll_extra += f'\nutc_timing = "{utc_timing}"'
+        if utc_timing_url:
+            dash_ll_extra += f"\nutc_timing_url = {json.dumps(utc_timing_url)}"
     period_ids = [int(str(i), 0) for i in (period_on_segmentation or [])]
     if any(not 0 <= i <= 0xFF for i in period_ids):
         raise ValueError("period_on_segmentation entries must be segmentation_type_ids (0..255)")
     # loop-dee-loop/SCOPE.md §14 -- only written when something is selected.
-    period_extra = (
-        "\nperiod_on_segmentation = [" + ", ".join(f"0x{i:02X}" for i in period_ids) + "]"
-        f'\nperiod_on_segmentation_apply = "{period_on_segmentation_apply}"'
+    split_on_extra = (
+        "\nsplit_on = [" + ", ".join(f"0x{i:02X}" for i in period_ids) + "]"
         if period_ids else ""
     )
+    # Only written when set: announce_ahead > 0, and announce_on when it narrows the markers.
+    validate_announce_ahead(announce_ahead)
+    announce_extra = f"\nannounce_ahead = {announce_ahead:g}" if announce_ahead else ""
+    announce_entries = normalise_announce_on(announce_on or [])
+    if announce_entries:
+        announce_extra += "\nannounce_on = [" + ", ".join(
+            json.dumps(e) if e == SPLICE_INSERT else e for e in announce_entries
+        ) + "]"
 
-    def _timeshift_section() -> str:
-        return _TIMESHIFT_EXTRA.format(
-            enabled=str(timeshift_enabled).lower(),
+    def _query_section() -> str:
+        return _QUERY_EXTRA.format(
+            timeshift=str(timeshift_enabled).lower(), overrides=str(query_overrides).lower(),
+            prefix=query_prefix,
             start_param=timeshift_start_param, end_param=timeshift_end_param,
             max_span_seconds=int(timeshift_max_span_seconds),
         )
 
+    def _markers_section() -> str:
+        return _MARKERS_EXTRA.format(
+            daterange_mode=daterange_mode, cue_tags=cue_tags,
+            increment_event_ids=str(increment_event_ids).lower(),
+            daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
+            dash_signal_format=dash_signal_format,
+            dash_descriptor_mode=dash_descriptor_mode,
+            split_on_extra=split_on_extra, announce_extra=announce_extra,
+        )
+
+    def _packaging_section() -> str:
+        return _PACKAGING_EXTRA.format(
+            segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
+            epoch_utc=epoch_utc,
+            hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
+            dash_addressing=dash_addressing, dash_timeline=dash_timeline, dash_ll_extra=dash_ll_extra,
+            hls_ll_extra=hls_ll_extra, chunk_extra=chunk_extra,
+            continuous=str(continuous).lower(),
+        )
+
     content = _TOML_TEMPLATE.format(
-        name=name, backend=backend, region=region, bucket_name=bucket_name,
+        config_version=CONFIG_VERSION, name=name, backend=backend, region=region, bucket_name=bucket_name,
         content_folder=content_folder, source_path=source_path,
         source_kind=source_kind,
         allow_missing_segments=str(allow_missing_segments).lower(),
@@ -233,48 +422,32 @@ def generate_toml(
     if backend == "ecs-express":
         if port == "auto":
             raise ValueError("port: 'auto' is only supported for the local-docker backend")
-        content += _MARKERS_EXTRA.format(
-            daterange_mode=daterange_mode, cue_tags=cue_tags,
-            increment_event_ids=str(increment_event_ids).lower(),
-            daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
-            dash_signal_format=dash_signal_format,
-            dash_descriptor_mode=dash_descriptor_mode,
-            period_extra=period_extra,
+        content += _markers_section() + _packaging_section()
+        content += _ECS_EXPRESS_EXTRA.format(port=int(port), cpu=cpu, memory=memory, cdn=str(cdn).lower())
+        content += _query_section()
+    elif backend == "aws-lambda":
+        # No port: the Function URL / CloudFront own the endpoint.
+        if lambda_architecture not in ("arm64", "x86_64"):
+            raise ValueError("lambda_architecture must be 'arm64' or 'x86_64'")
+        if lambda_reserved_concurrency == 0 or lambda_reserved_concurrency < -1:
+            raise ValueError("lambda_reserved_concurrency must be >= 1, or -1 for no reservation")
+        content += _markers_section() + _packaging_section()
+        content += _AWS_LAMBDA_EXTRA.format(
+            memory=int(lambda_memory), timeout=int(lambda_timeout),
+            reserved_concurrency=int(lambda_reserved_concurrency), cache_mb=int(lambda_cache_mb),
+            architecture=lambda_architecture,
         )
-        content += _ECS_EXPRESS_EXTRA.format(
-            segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
-            epoch_utc=epoch_utc,
-            hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
-            dash_addressing=dash_addressing,
-            dash_timeline=dash_timeline,
-            continuous=str(continuous).lower(),
-            port=int(port), cpu=cpu, memory=memory,
-            cdn=str(cdn).lower(),
-        )
-        content += _timeshift_section()
+        content += _query_section()
     elif backend == "local-docker":
         # No [infrastructure.express] -- local-docker has no Fargate CPU/memory
         # concept, and [infrastructure.aws]/[infrastructure.s3] above are written but ignored by
         # channel.py for this backend (kept for TOML-shape consistency).
-        content += _MARKERS_EXTRA.format(
-            daterange_mode=daterange_mode, cue_tags=cue_tags,
-            increment_event_ids=str(increment_event_ids).lower(),
-            daterange_id_format=json.dumps(daterange_id_format, ensure_ascii=False)[1:-1],
-            dash_signal_format=dash_signal_format,
-            dash_descriptor_mode=dash_descriptor_mode,
-            period_extra=period_extra,
-        )
+        content += _markers_section() + _packaging_section()
         content += _LOCAL_DOCKER_EXTRA.format(
-            segment_duration=segment_duration, dvr_window_seconds=dvr_window_seconds,
-            epoch_utc=epoch_utc,
-            hls_format=hls_format, hls_ts_mux_audio=str(hls_ts_mux_audio).lower(),
-            dash_addressing=dash_addressing,
-            dash_timeline=dash_timeline,
-            continuous=str(continuous).lower(),
             port=_format_local_docker_port(port),
             bundle_content=str(bundle_content).lower(),
         )
-        content += _timeshift_section()
+        content += _query_section()
     return content
 
 

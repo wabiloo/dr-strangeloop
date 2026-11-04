@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 import tomllib
 from pathlib import Path
 from typing import Literal
@@ -17,7 +19,12 @@ from igor.integrations.its_a_live import (
     DEFAULT_DATERANGE_ID_FORMAT,
     DEFAULT_EPOCH_UTC,
     validate_daterange_id_format,
+    validate_low_latency,
     validate_epoch_utc,
+    validate_query_names,
+    validate_query_prefix,
+    validate_announce_ahead,
+    normalise_announce_on,
 )
 from igor.store import channels as channel_store
 
@@ -36,7 +43,7 @@ _QUERY_PARAM_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
 
 class ChannelCreatePayload(BaseModel):
     name: str
-    backend: str  # "aws-media" | "ecs-express" | "local-docker"
+    backend: str  # "aws-media" | "ecs-express" | "aws-lambda" | "local-docker"
     region: str
     bucket_name: str
     content_folder: str
@@ -62,8 +69,23 @@ class ChannelCreatePayload(BaseModel):
     # or $Time$. ecs-express/local-docker only.
     dash_addressing: Literal["number", "time"] = "number"
     # [packaging].dash_timeline -- SegmentTimeline "full" (@t and @d on every
-    # <S>) or "compact" (implicit @t + @r). ecs-express/local-docker only.
+    # <S>, a SegmentTemplate per representation) or "compact" (implicit @t + @r,
+    # one shared SegmentTemplate). ecs-express/local-docker only.
     dash_timeline: Literal["full", "compact"] = "full"
+    # Low latency (docs/low-latency.md; ecs-express/local-docker only). dash_low_latency is [packaging.dash]
+    # low_latency and hls_low_latency is [packaging.hls] low_latency (LL-HLS, needs hls_format "cmaf"): each "off",
+    # "on" (every manifest of that format advertises it) or "optin" (?low_latency=true); both map to the query
+    # parameter low_latency, per format. chunk_duration is [packaging] chunk_duration, a bake-time setting shared by
+    # both (seconds, shorter than segment_duration). target_latency and utc_timing are DASH-only and also per-request
+    # query parameters (ll_target_latency, ll_utc_timing). utc_timing_url (only with "http", absolute http(s)) is
+    # configuration only: a query parameter must not choose viewers' clock source; with "http" and no URL,
+    # its-a-live sets it automatically at deploy time. Written to the TOML only when a format's low latency is on.
+    dash_low_latency: Literal["off", "on", "optin"] = "off"
+    hls_low_latency: Literal["off", "on", "optin"] = "off"
+    chunk_duration: float = 0.5
+    target_latency: float | None = None
+    utc_timing: Literal["direct", "http", "none"] = "direct"
+    utc_timing_url: str = ""
     # loop-dee-loop/SCOPE.md §12: default on -- serve.py rewrites each
     # segment's own timestamps per request (header patch, never a re-mux)
     # so the channel has no #EXT-X-DISCONTINUITY/DASH Period restart at the
@@ -73,13 +95,24 @@ class ChannelCreatePayload(BaseModel):
     # loop-dee-loop/SCOPE.md §14: SCTE-35 segmentation_type_ids (hex strings,
     # e.g. "0x22") whose markers force a new DASH Period / HLS discontinuity,
     # signal-only (timestamps stay continuous). A Start implies its End.
-    # `period_on_segmentation_apply` picks the formats: both | dash | hls.
+    # Written as [markers] split_on; applies to HLS and DASH alike.
     period_on_segmentation: list[str] = []
-    period_on_segmentation_apply: Literal["both", "dash", "hls"] = "both"
-    # loop-dee-loop/SCOPE.md §13: startover/catchup via query parameters on
-    # the normal manifest URLs. Names are configurable per channel and
-    # also drive CloudFront's manifest cache key (its-a-live/loop_stack.py).
+    # [markers] announce_ahead (seconds, 0 = off) and announce_on (segmentation_type_ids as hex strings, plus
+    # optionally "splice_insert"; empty = every marker): announce SCTE-35 markers ahead of the segment they fall in
+    # (HLS DATERANGE / DASH Event appear earlier; the marker's own time and CUE-OUT/IN do not move). Both are also
+    # per-request query parameters of the same names. Written to the TOML only when set.
+    announce_ahead: float = 0
+    announce_on: list[str] = []
+    # loop-dee-loop/SCOPE.md §13: startover/catchup and per-request overrides
+    # via query parameters on the normal manifest URLs ([query] + [timeshift]
+    # max_span_seconds). The start/end names are configurable per channel,
+    # `query_prefix` goes in front of EVERY parameter name, and all of them
+    # drive CloudFront's manifest cache key (its-a-live/loop_stack.py).
     timeshift_enabled: bool = True
+    # [query] overrides: false keeps only startover/catchup (start, end,
+    # full_loops, offset) and ignores the per-request rendering overrides.
+    query_overrides: bool = True
+    query_prefix: str = ""
     timeshift_start_param: str = "start"
     timeshift_end_param: str = "end"
     timeshift_max_span_seconds: int = 21600
@@ -94,6 +127,13 @@ class ChannelCreatePayload(BaseModel):
     cpu: int = 256
     memory: int = 512
     cdn: bool = True
+    # aws-lambda only: [infrastructure.lambda] memory / timeout /
+    # reserved_concurrency (-1 = none) / cache_mb / architecture.
+    lambda_memory: int = 1024
+    lambda_timeout: int = 30
+    lambda_reserved_concurrency: int = 10
+    lambda_cache_mb: int = 512
+    lambda_architecture: Literal["arm64", "x86_64"] = "arm64"
     # [markers] -- shape of the HLS/DASH SCTE-35 signaling loop-dee-loop's
     # bake.py renders from this channel (see its-a-live/AGENTS.md).
     daterange_mode: str = "shared"
@@ -118,6 +158,16 @@ class ChannelCreatePayload(BaseModel):
             if hexed not in out:
                 out.append(hexed)
         return out
+
+    @field_validator("announce_ahead")
+    @classmethod
+    def _validate_announce_ahead(cls, v: float) -> float:
+        return validate_announce_ahead(v)
+
+    @field_validator("announce_on")
+    @classmethod
+    def _validate_announce_on(cls, v: list[str]) -> list[str]:
+        return normalise_announce_on(v)
 
     @field_validator("name")
     @classmethod
@@ -190,6 +240,11 @@ class ChannelCreatePayload(BaseModel):
             raise ValueError("dash_descriptor_mode must be 'shared' or 'narrowed'")
         return v
 
+    @field_validator("query_prefix")
+    @classmethod
+    def _validate_query_prefix(cls, v: str) -> str:
+        return validate_query_prefix(v)
+
     @field_validator(
         "timeshift_start_param", "timeshift_end_param",
     )
@@ -210,18 +265,31 @@ class ChannelCreatePayload(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _validate_timeshift_names_distinct(self) -> "ChannelCreatePayload":
-        # "full-loops", "timeline" and "offset" are fixed, non-configurable query params.
-        names = [
-            self.timeshift_start_param, self.timeshift_end_param,
-            "full-loops", "timeline", "offset",
-        ]
-        if len(set(names)) != len(names):
-            raise ValueError(f"timeshift parameter names must be distinct, got {names}")
+    def _validate_timeshift_names_distinct(self) -> ChannelCreatePayload:
+        # Every other query parameter has a fixed name; with the prefix applied
+        # to all of them, every on-the-wire name must still be distinct.
+        validate_query_names(self.timeshift_start_param, self.timeshift_end_param, self.query_prefix)
+        return self
+
+    @field_validator("lambda_reserved_concurrency")
+    @classmethod
+    def _validate_lambda_reserved_concurrency(cls, v: int) -> int:
+        if v == 0 or v < -1:
+            raise ValueError("lambda_reserved_concurrency must be >= 1, or -1 for no reservation")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_low_latency(self) -> ChannelCreatePayload:
+        validate_low_latency(
+            backend=self.backend, dash_low_latency=self.dash_low_latency, hls_low_latency=self.hls_low_latency,
+            hls_format=self.hls_format, segment_duration=self.segment_duration, chunk_duration=self.chunk_duration,
+            target_latency=self.target_latency, utc_timing=self.utc_timing, utc_timing_url=self.utc_timing_url,
+            query_overrides=self.query_overrides,
+        )
         return self
 
     @model_validator(mode="after")
-    def _validate_port_backend(self) -> "ChannelCreatePayload":
+    def _validate_port_backend(self) -> ChannelCreatePayload:
         if self.port == "auto" and self.backend != "local-docker":
             raise ValueError("port: 'auto' is only supported for the local-docker backend")
         if self.bundle_content and self.backend != "local-docker":
@@ -271,7 +339,7 @@ def list_channels(live: bool = True) -> list[dict]:
             except (OSError, tomllib.TOMLDecodeError):
                 continue
             deploy = cfg.get("deploy", {})
-            if deploy.get("backend") not in ("aws-media", "ecs-express", "local-docker"):
+            if deploy.get("backend") not in its_a_live.BACKENDS:
                 continue
             channels.append({
                 "config_path": path,
@@ -401,9 +469,24 @@ def channel_outputs(name: str) -> dict:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+_OUTPUTS_TTL = 60.0
+_outputs_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _cached_outputs(name: str) -> dict:
+    """Stack outputs (endpoint/domain) only change on deploy, but the UI polls
+    /health and /timeline every few seconds -- don't spawn channel.py each time."""
+    hit = _outputs_cache.get(name)
+    if hit and time.monotonic() - hit[0] < _OUTPUTS_TTL:
+        return hit[1]
+    outputs = its_a_live.get_outputs(channel_store.config_path_for(name))
+    _outputs_cache[name] = (time.monotonic(), outputs)
+    return outputs
+
+
 def _serve_url(name: str, path: str) -> str:
     """URL of a loop-dee-loop `serve.py` path for a running channel
-    (ecs-express and local-docker only, both of which actually run
+    (ecs-express, aws-lambda and local-docker only, all of which actually run
     serve.py -- aws-media has no equivalent).
 
     - ecs-express: the direct ECS Express service endpoint (not the
@@ -431,7 +514,7 @@ def _serve_url(name: str, path: str) -> str:
             )
         return f"http://localhost:{port}{path}"
     if backend == "ecs-express":
-        outputs = its_a_live.get_outputs(channel_store.config_path_for(name))
+        outputs = _cached_outputs(name)
         endpoint = outputs.get("ExpressServiceEndpoint")
         if not endpoint:
             raise HTTPException(
@@ -439,10 +522,24 @@ def _serve_url(name: str, path: str) -> str:
                 detail="No ExpressServiceEndpoint output -- not deployed yet.",
             )
         return endpoint.rstrip("/") + path
+    if backend == "aws-lambda":
+        # The Function URL is IAM-locked (CloudFront only); /health and
+        # /timeline.json have their own uncached, all-query-strings behaviors.
+        outputs = _cached_outputs(name)
+        domain = outputs.get("CloudFrontDomainName")
+        if not domain:
+            raise HTTPException(status_code=404, detail="No CloudFrontDomainName output -- not deployed yet.")
+        return f"https://{domain}{path}"
     raise HTTPException(
         status_code=404,
-        detail=f"backend {backend!r} has no {path} endpoint (only ecs-express and local-docker run serve.py).",
+        detail=f"backend {backend!r} has no {path} endpoint (only ecs-express, aws-lambda and local-docker run serve.py).",
     )
+
+
+async def _serve_url_async(name: str, path: str) -> str:
+    """`_serve_url` shells out to channel.py (up to a minute when AWS is slow);
+    keep that off the event loop so it can't stall every other request."""
+    return await asyncio.to_thread(_serve_url, name, path)
 
 
 async def _proxy_serve_json(url: str, params: dict[str, str] | None = None) -> dict:
@@ -467,7 +564,7 @@ async def _proxy_serve_json(url: str, params: dict[str, str] | None = None) -> d
 @router.get("/{name}/health")
 async def channel_health(name: str) -> dict:
     """Proxies loop-dee-loop's `serve.py` `/health` endpoint."""
-    return await _proxy_serve_json(_serve_url(name, "/health"))
+    return await _proxy_serve_json(await _serve_url_async(name, "/health"))
 
 
 @router.get("/{name}/timeline")
@@ -477,12 +574,12 @@ async def channel_timeline(name: str, request: Request) -> dict:
     (`start`/`end`/`offset`/... timeshift selectors) are forwarded as-is so
     the same endpoint describes a startover/catchup range."""
     return await _proxy_serve_json(
-        _serve_url(name, "/timeline.json"), params=dict(request.query_params)
+        await _serve_url_async(name, "/timeline.json"), params=dict(request.query_params)
     )
 
 
 async def _proxy_serve_text(name: str, path: str) -> Response:
-    url = _serve_url(name, path)
+    url = await _serve_url_async(name, path)
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(url)
@@ -512,7 +609,7 @@ def _spawn(job_type: str, name: str, extra_args: list[str] | None = None) -> dic
 
 @router.post("/{name}/create")
 def create_channel(name: str) -> dict:
-    """First-time deploy: ensure shared stack (ecs-express only), cdk
+    """First-time deploy: ensure shared stack (ecs-express, aws-lambda), cdk
     deploy the channel stack, spark, start -- see channel.py's `create`
     command (added alongside this console)."""
     return _spawn("create", name)

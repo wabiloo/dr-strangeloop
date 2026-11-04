@@ -15,6 +15,8 @@ import sys
 import time
 
 from _infra_cfg import infra_table
+from _markers_cfg import markers_bake_args
+from _packaging_cfg import packaging_bake_args
 from _paths_cfg import get_paths
 from _reachability import check_manifest_reachable
 
@@ -38,20 +40,9 @@ def spark(cfg, session, channel_name, extra_args=None):
     source_path = cfg.get("input", {}).get("source_path", "")
     bucket_name = infra_table(cfg, "s3").get("bucket_name", "")
     folder = infra_table(cfg, "s3").get("content_folder", "its-a-live/content").strip("/")
-    segment_duration = str(cfg.get("packaging", {}).get("segment_duration", 4.0))
-    packaging = cfg.get("packaging", {})
     local_output_dir = cfg.get("bake", {}).get(
         "local_output_dir", os.path.join(get_paths().local_package_dir, channel_name)
     )
-    markers_cfg = cfg.get("markers", {})
-    daterange_mode = markers_cfg.get("daterange_mode", "shared")
-    cue_tags = markers_cfg.get("cue_tags", "none")
-    increment_event_ids = markers_cfg.get("increment_event_ids", False)
-    daterange_id_format = markers_cfg.get(
-        "daterange_id_format", "{segcode}-{eventid}-{loop}"
-    )
-    dash_signal_format = markers_cfg.get("dash_signal_format", "binary")
-    dash_descriptor_mode = markers_cfg.get("dash_descriptor_mode", "shared")
 
     if not source_path or not bucket_name:
         sys.exit("input.source_path and s3.bucket_name must be set in the config")
@@ -63,16 +54,7 @@ def spark(cfg, session, channel_name, extra_args=None):
     python_cmd = _resolve_python_cmd()
     bake_script = os.path.join(_LOOP_DEE_LOOP_DIR, "bake.py")
     bake_args = python_cmd + [bake_script, source_path, "--output", local_output_dir,
-                               "--segment-duration", segment_duration,
-                               "--hls-format", packaging.get("hls_format", "cmaf"),
-                               "--hls-ts-mux-audio" if packaging.get("hls_ts_mux_audio", True) else "--no-hls-ts-mux-audio",
-                              "--daterange-mode", daterange_mode,
-                              "--cue-tags", cue_tags,
-                              "--daterange-id-format", daterange_id_format,
-                              "--dash-signal-format", dash_signal_format,
-                              "--dash-descriptor-mode", dash_descriptor_mode]
-    if increment_event_ids:
-        bake_args.append("--increment-event-ids")
+                              *packaging_bake_args(cfg), *markers_bake_args(cfg)]
     # grave-robber/SCOPE.md §10: only meaningful when [input].source_path
     # points at a segment-list manifest (.json) rather than a franken-ts
     # .ts/rendition dir -- bake.py itself ignores this flag for the normal
@@ -163,7 +145,7 @@ def start(cfg, session, outputs, extra_args=None):
     """Scale the Express service to 1 task (if it was stopped).
 
     Epoch defaults to whatever is already baked into the service (from
-    `[timeline] epoch_utc`, default 2026-01-01T00:00:00Z -- see
+    `[timeline] epoch`, default 2026-01-01T00:00:00Z -- see
     loop_stack.py) and is left untouched, making this a pure scaling
     operation: no primaryContainer change, no new task revision, no canary
     deployment. Pass `--epoch-utc now` or `--epoch-utc <ISO8601>` to

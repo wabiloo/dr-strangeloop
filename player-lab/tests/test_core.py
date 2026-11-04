@@ -64,7 +64,7 @@ def test_profile_rejects_unknown_key(tmp_path):
 
 
 def test_plan_cases_respects_player_formats():
-    t = Target("x", "http://h/index.m3u8", "http://h/stream.mpd", None)
+    t = Target("x", "http://h/index.m3u8", "http://h/index.mpd", None)
     cases = plan_cases(RunConfig(target=t))
     assert ("dashjs", "hls") not in cases and ("hlsjs", "dash") not in cases
     assert ("shaka", "hls") in cases and ("videojs", "dash") in cases
@@ -75,7 +75,7 @@ def test_plan_cases_respects_player_formats():
 
 
 def test_target_timeline_url_derived_from_manifest():
-    t = from_manifest_urls("http://h:1/index.m3u8", "http://h:1/stream.mpd", None)
+    t = from_manifest_urls("http://h:1/index.m3u8", "http://h:1/index.mpd", None)
     assert t.timeline_url == "http://h:1/timeline.json"
 
 
@@ -119,7 +119,7 @@ def test_keyed_players_need_a_key(tmp_path, monkeypatch):
     assert list(PLAYERS) == ["hlsjs", "dashjs", "bitmovin", "shaka", "videojs"]
     assert "bitmovin" not in default_players()
     assert keys.available() == {"bitmovin": False}
-    target = from_manifest_urls("http://x/index.m3u8", "http://x/stream.mpd", None)
+    target = from_manifest_urls("http://x/index.m3u8", "http://x/index.mpd", None)
     with __import__("pytest").raises(ValueError, match="no licence key"):
         plan_cases(RunConfig(target=target, players=["bitmovin"]))
 
@@ -130,3 +130,98 @@ def test_keyed_players_need_a_key(tmp_path, monkeypatch):
     monkeypatch.setenv("BITMOVIN_LICENSE_KEY", "from-env")
     assert keys.load_keys()["bitmovin"] == "from-env"
     assert [c[0] for c in plan_cases(RunConfig(target=target))][:3] == ["hlsjs", "bitmovin", "shaka"]
+
+
+def test_with_queries_appends_to_manifests_and_timeline():
+    from player_lab.targets import Target, with_queries
+
+    t = Target("c", "http://h/hls/master.m3u8", "http://h/dash/manifest.mpd?x=1", "http://h/timeline.json")
+    out = with_queries(t, "timeline_mode=continuous", "addressing=time")
+    assert out.hls_url == "http://h/hls/master.m3u8?timeline_mode=continuous"
+    assert out.dash_url == "http://h/dash/manifest.mpd?x=1&addressing=time"
+    assert out.timeline_url == "http://h/timeline.json?timeline_mode=continuous"
+    # DASH only: the timeline follows the DASH query
+    d = with_queries(Target("c", None, "http://h/m.mpd", "http://h/timeline.json"), None, "addressing=time")
+    assert d.timeline_url == "http://h/timeline.json?addressing=time"
+    # nothing to add: unchanged
+    assert with_queries(t, None, None) == t
+
+
+# ── live latency ───────────────────────────────────────────────────────────
+
+from player_lab.profile import summarize_live  # noqa: E402
+from player_lab.report import format_table  # noqa: E402
+
+
+def live_case(latencies, *, target=2.0, started=1.0, own_offset=0.1, **kw):
+    """A case whose observer sampled `latencies` (wall-clock) once a second from t=2."""
+    trace = [[2 + i, lat, round(lat + own_offset, 3), target, 1.0] for i, lat in enumerate(latencies)]
+    return good_case(startedAfterS=started, latencyTrace=trace,
+                     playbackRate={"min": 1.0, "max": 1.04, "offNominalS": 12.0, "changes": 5}, **kw)
+
+
+def test_summarize_skips_the_settle_period_and_reports_the_distribution():
+    th = Thresholds(latency_settle_s=10)
+    # t=2..10 converging from 5 s down to 2.6 s (ignored: before started+10 = 11), then 30 samples of ~2 s.
+    lats = [5.0 - 0.3 * i for i in range(9)] + [2.0 + 0.01 * (i % 5) for i in range(30)]
+    s = summarize_live(live_case(lats), th)
+    assert s["source"] == "wallclock" and s["samples"] > 20
+    assert 2.0 <= s["medianS"] <= 2.04 and s["maxS"] <= 2.04  # the early catch-up does not leak in
+    assert s["targetS"] == 2.0 and s["targetErrorS"] <= 0.04
+    assert s["jitterS"] < 0.05
+    assert s["playerMedianS"] == pytest.approx(s["medianS"] + 0.1, abs=0.001)
+    assert s["playbackRate"]["max"] == 1.04
+    assert s["convergedAfterS"] is not None and s["convergedAfterS"] <= 12  # first within 0.5 s of target
+
+
+def test_summarize_none_without_samples_and_falls_back_to_the_players_own_number():
+    th = Thresholds(latency_settle_s=0)
+    assert summarize_live(good_case(), th) is None
+    assert summarize_live(good_case(startedAfterS=None, latencyTrace=[[1, 2.0, 2.0, 2.0, 1.0]]), th) is None
+    only_own = good_case(latencyTrace=[[3 + i, None, 3.0, None, 1.0] for i in range(10)])
+    s = summarize_live(only_own, th)
+    assert s["source"] == "player" and s["medianS"] == 3.0 and s["targetS"] is None and s["targetErrorS"] is None
+
+
+def test_latency_is_not_judged_by_default():
+    assert judge(live_case([9.0] * 40), 2, Thresholds()) == []
+
+
+def test_judge_latency_limits():
+    th = Thresholds(latency_settle_s=5, max_live_latency_s=3.0, max_latency_target_error_s=0.5, max_latency_jitter_s=0.5)
+    assert judge(live_case([2.1] * 30), 2, th) == []
+    too_high = judge(live_case([4.0] * 30), 2, th)
+    assert any("live latency 4.0s > 3.0s" in w for w in too_high)
+    assert any("from the player's target" in w for w in too_high)
+    wobbly = judge(live_case([2.0, 3.0] * 15), 2, th)
+    assert any("jitter" in w for w in wobbly)
+
+
+def test_judge_latency_needs_samples_when_a_limit_is_set():
+    th = Thresholds(latency_settle_s=30, max_live_latency_s=3.0)
+    too_short = judge(live_case([2.0] * 20), 2, th)  # all inside the settle period
+    assert any("no live-latency samples" in w for w in too_short)
+    assert any("no live-latency samples" in w for w in judge(good_case(), 2, th))  # player reports none
+
+
+def test_profile_and_cli_override_latency_thresholds(tmp_path):
+    f = tmp_path / "p.toml"
+    f.write_text("latency_settle_s = 10\nmax_live_latency_s = 4\n[player.shaka]\nmax_live_latency_s = 6\n")
+    p = load_profile(f)
+    assert p.for_player("dashjs", "dash").max_live_latency_s == 4
+    assert p.for_player("shaka", "dash").max_live_latency_s == 6
+    assert p.with_default(max_live_latency_s=2.5).for_player("dashjs", "dash").max_live_latency_s == 2.5
+    assert p.with_default(max_live_latency_s=2.5).for_player("shaka", "dash").max_live_latency_s == 6  # per-player wins
+
+
+def test_report_table_shows_latency_columns_only_when_there_are_some():
+    th = Thresholds(latency_settle_s=5)
+    base = {"boundaries": {"newPeriods": None, "newDiscontinuities": None, "source": "x", "timelinePolls": 0},
+            "pass": True, "durationS": 1, "outDir": "o"}
+    with_live = dict(live_case([2.0] * 20), player="dashjs", format="dash", version="5", failures=[], pass_=True)
+    with_live["pass"] = True
+    with_live["live"] = summarize_live(with_live, th)
+    plain = dict(good_case(), player="hlsjs", format="hls", version="1", failures=[], crossed=None)
+    plain["pass"] = True
+    assert "latency" in format_table({**base, "cases": [with_live, plain]})
+    assert "latency" not in format_table({**base, "cases": [plain]})

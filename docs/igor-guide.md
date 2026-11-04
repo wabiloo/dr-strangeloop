@@ -52,10 +52,13 @@ source_kind` is `playlist`, `archive` or `manifest`.
 and running state as each channel's summary arrives.
 
 **New.** A form whose groups are the TOML tables of the channel config
-(`[deploy]`, `[input]`, `[infrastructure.*]`, `[timeline]`, `[packaging]`,
-`[timeshift]`, `[markers]`). The same groups appear in the read-only
+(`[deploy]`, `[input]`, `[infrastructure.*]`, `[timeline]`, `[packaging]` and
+its `.hls`/`.dash` sub-tables, `[query]`, `[timeshift]`, `[markers]` and its
+`.hls`/`.dash` sub-tables). The same groups appear in the read-only
 configuration panel and the edit form. Field-by-field reference:
-[its-a-live AGENTS](../its-a-live/AGENTS.md).
+[its-a-live AGENTS](../its-a-live/AGENTS.md). *Packaging · DASH* includes the
+low-latency settings (only for backends that support them; settings a request can
+override carry an `&` badge): see [Low latency (DASH and HLS)](./low-latency.md).
 
 **Detail page.**
 
@@ -66,12 +69,12 @@ configuration panel and the edit form. Field-by-field reference:
 - *Timeline panel*: the channel's current window as drawn from
   `/timeline.json`, with an **API docs** button that opens the channel's own
   API documentation.
-- *Startover & catchup*: build and preview past-range URLs (`?start=&end=`)
+- *Preview page* (a channel's **Preview** button, or the eye icon in the list; opened automatically when a channel comes alive): the players, plus *Timeshift* and *URL overrides* (two panels, one set of URLs): build and preview past-range URLs (`?start=&end=`)
   in UTC or local time, with presets and a "pretend now is..." offset.
   Background: [loop-dee-loop README](../loop-dee-loop/README.md).
 - *Schedule*: on-air windows for AWS-backed channels.
 - *Configuration*: read-only view, **Edit**, and **Duplicate to ecs-express**.
-- *Health*: live loop position for `ecs-express` channels.
+- *Health*: live loop position for `ecs-express` and `aws-lambda` channels.
 
 ## Docs
 

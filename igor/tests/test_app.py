@@ -4,6 +4,7 @@ need its-a-live's separate venv + credentials, out of scope here)."""
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -18,6 +19,13 @@ def test_health():
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+def test_version():
+    resp = client.get("/api/v1/version")
+    assert resp.status_code == 200
+    expected = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["project"]["version"]
+    assert resp.json()["version"] == expected
 
 
 def test_playlist_schema_is_derived_from_franken_ts():

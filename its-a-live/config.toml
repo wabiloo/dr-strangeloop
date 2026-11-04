@@ -4,12 +4,20 @@
 # [deploy].backend together drive the CloudFormation stack name
 # (ItsALiveStack-<name>-<backend>) and every AWS resource name, so
 # multiple config files == multiple independent channel deployments.
+#
+# config_version is the layout of this file (absent = 1, i.e. written before 2.0).
+# A file with an older version is refused with the exact changes; rewrite it with
+#   uv run --project its-a-live python its-a-live/migrate_config.py <file>
+config_version = 2
 
 [deploy]
 name = "default"
 # Which backend serves this channel:
 #   "ecs-express"  -- loop-dee-loop baked locally, served on ECS Express
 #                      Mode + CloudFront (cheap, self-hosted, in AWS)
+#   "aws-lambda"   -- loop-dee-loop baked locally, served from a Lambda function
+#                      behind CloudFront, package read lazily from S3 (no
+#                      idle cost, no ECS/ALB; see LAMBDA_BACKEND.md)
 #   "aws-media"    -- MediaLive + MediaPackage v1 (fully managed AWS media
 #                      services)
 #   "local-docker" -- loop-dee-loop baked and served entirely on this
@@ -26,12 +34,12 @@ region = "eu-west-1"
 # created/deleted by this stack).
 bucket_name = "my-existing-bucket"
 # Channel content lives under <content_folder>/<name>/ in this bucket --
-# a baked loop package for ecs-express, or the raw uploaded .ts for
+# a baked loop package for ecs-express and aws-lambda, or the raw uploaded .ts for
 # aws-media.
 content_folder = "its-a-live/content"
 
 [input]
-# franken-ts output: for ecs-express and local-docker, either a single
+# franken-ts output: for ecs-express, aws-lambda and local-docker, either a single
 # .ts file (its sibling .markers.json is picked up automatically by
 # bake.py) or a directory containing a rendition ladder (see
 # loop-dee-loop/README.md "Multi-rendition"). For aws-media, a single
@@ -39,42 +47,94 @@ content_folder = "its-a-live/content"
 # AGENT_BRIEF.md's "timed cues" requirement).
 source_path = "../outputs/mychannel"
 
-# ── ecs-express/local-docker-only sections (ignored by aws-media) ───────
+# ── ecs-express/aws-lambda/local-docker-only sections (ignored by aws-media) ──
 
 [bake]
 # Where `channel.py spark` writes the local loop package -- pushed to S3
-# for ecs-express, served straight from disk (bind-mounted into the
+# for ecs-express and aws-lambda, served straight from disk (bind-mounted into the
 # container) for local-docker. Defaults to ./.local-loop-package/<name>
 # next to this file.
 # local_output_dir = "/tmp/my-channel-loop-package"
 
 [markers]
 # Shape of the HLS/DASH SCTE-35 signaling loop-dee-loop's bake.py renders
-# (see loop-dee-loop/README.md "SCTE-35 signaling shape"). Fixed per bake,
-# read back by serve.py -- not re-decided per request.
-daterange_mode      = "shared"  # "shared" | "narrowed" | "grouped"
-cue_tags            = "none"    # "none" | "alongside" | "only"
-increment_event_ids = false     # bump each event id by loop_number * step (step = a shared power of 10 above the channel's largest base id) instead of repeating it every loop -- see AGENTS.md
-daterange_id_format = "{segcode}-{eventid}-{loop}" # HLS DATERANGE ID template; ecs-express/local-docker only
-# period_on_segmentation = [0x22, 0x30]  # optional (a Start implies its End): force a new DASH Period / #EXT-X-DISCONTINUITY at markers with these SCTE-35 segmentation_type_ids (signal only -- timestamps stay continuous when continuous = true; loop-dee-loop/SCOPE.md §14)
-# period_on_segmentation_apply = "both"  # "both" (default) | "dash" (Periods only) | "hls" (discontinuities only)
+# (see loop-dee-loop/README.md "SCTE-35 signaling shape"). These are the
+# channel's defaults; every setting below that also exists as a query parameter
+# of the same name (see [query]) can be overridden per request.
+increment_event_ids = false  # bump each event id by loop_number * step (step = a shared power of 10 above the channel's largest base id) instead of repeating it every loop -- see AGENTS.md
+# split_on = [0x22, 0x30]    # optional (a Start implies its End): force a new DASH Period / HLS #EXT-X-DISCONTINUITY at markers with these SCTE-35 segmentation_type_ids (signal only -- timestamps stay continuous when continuous = true; loop-dee-loop/SCOPE.md §14)
+# announce_ahead = 10            # optional, seconds (0 = off, default; max 3600): announce each marker (HLS DATERANGE / DASH Event) at least this long before the segment it falls in (rounded to whole segments, across the loop wrap; the tag/Event stays until every segment it covers has left the window; in DASH a marker announced in an earlier Period is carried again by every later Period that still covers it). The marker's time never changes; CUE-OUT/-IN are not moved; not applied to a closed catchup range. Per request: ?announce_ahead=10
+# announce_on = [0x22, "splice_insert"]   # optional: only announce these (segmentation_type_ids and/or "splice_insert"); empty/absent = every marker. Per request: ?announce_on=0x22,splice_insert
+
+[markers.hls]
+descriptor_grouping = "shared"  # "shared" | "narrowed" | "grouped" -- one DATERANGE per descriptor with the full shared payload, narrowed to just that event, or one per group of coincident descriptors
+cue_tags            = "none"    # "none" | "alongside" | "only" -- also emit EXT-X-CUE-OUT/-CONT/-IN next to DATERANGE, or instead of it
+id_template         = "{segcode}-{eventid}-{loop}"  # DATERANGE ID template; ecs-express/local-docker only
+
+[markers.dash]
+descriptor_grouping = "shared"  # "shared" | "narrowed"
+signal_format       = "binary"  # "binary" | "xml" -- EventStream encoding of the SCTE-35 message
 
 [packaging]
-segment_duration   = 4.0   # nominal bake segment duration, seconds
-dvr_window_seconds = 30    # serve.py sliding-window size, seconds
+segment_duration = 4.0   # nominal bake segment duration, seconds
+dvr_window       = 30    # serve.py sliding-window size, seconds (also a query parameter)
+
+# chunk_duration = 0.5   # low latency (either format): seconds, shorter than segment_duration. Segments are baked as chunks of this length; low-latency DASH sends them chunk by chunk and LL-HLS serves each as a part. Bake time -- TOML only, no query parameter. Re-spark after changing it or turning low latency on/off.
+
+# [packaging.hls]        # decided at bake time -- no query parameter (except low_latency)
+# container = "cmaf"     # "cmaf" | "ts" (DASH is always CMAF)
+# mux_audio = true       # TS only: mux audio into each video rendition, or a separate audio playlist
+# low_latency = "off"    # Apple LL-HLS (parts, preload hint, blocking reload). "off" | "on" (every media playlist advertises it) | "optin" (delivered, but advertised only on ?low_latency=true; needs [query] overrides). Needs container = "cmaf". ecs-express/local-docker only. Also a query parameter.
+
+# [packaging.dash]       # also query parameters of the same name
+# timeline_style = "full"  # "full" (every <S> has @t and @d, a SegmentTemplate per representation) | "compact" (implicit @t, @r runs, one shared SegmentTemplate)
+# addressing     = "number"  # "number" ($Number$) | "time" ($Time$)
+#
+# Low-latency DASH (docs/low-latency.md); ecs-express and local-docker only.
+# low_latency    = "off"     # "off" | "on" (every MPD advertises it) | "optin" (delivered, but an MPD advertises it only on ?low_latency=true; needs [query] overrides). Also a query parameter.
+# target_latency = 2         # optional, seconds (at most 120): the latency the MPD asks players to hold; default 4 chunks, at least 1 s. Also a query parameter. DASH only.
+# utc_timing     = "direct"  # how the MPD lets players sync their clock. "direct" (default): the time written into the MPD, which is then served no-store (never CDN-cached; no URL needed). "http": a polled /time -- its URL is set automatically at deploy time (local-docker: http://localhost:<port>/time; ecs-express: the CloudFront domain or the service endpoint, via one extra deploy for a new channel). "none": the player's own clock. Also a query parameter.
+# utc_timing_url = "https://time.example/time"  # optional, absolute http(s), only with utc_timing = "http": use this instead of the automatic one (e.g. a tunnel, a custom domain). Configuration only -- never a query parameter.
 
 [timeline]                 # ecs-express/local-docker only
-epoch_utc = "2026-01-01T00:00:00Z"  # optional, this is the default -- loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
+epoch = "2026-01-01T00:00:00Z"  # optional, this is the default -- loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
 continuous = true # default -- no discontinuity/Period restart at the loop wrap (loop-dee-loop/SCOPE.md §12); false reverts to the signaled-discontinuity default
 
+# Query parameters on the manifest URLs: startover/catchup (start, end,
+# full_loops, offset) and per-request overrides (timeline_mode, epoch,
+# dvr_window, split_on, announce_ahead, announce_on, timeline_style, addressing, cue_tags,
+# descriptor_grouping, increment_event_ids, signal_format, id_template,
+# max_height, max_bitrate, low_latency, ll_target_latency, ll_utc_timing). ecs-express/local-docker only. (LL-HLS's
+# blocking-reload parameters _HLS_msn/_HLS_part/_HLS_skip are not overrides: the CDN keys on them automatically.)
+# [query]
+# timeshift = true    # startover/catchup: start, end, full_loops, offset. false: those are ignored (live only)
+# overrides = true    # per-request overrides of how a manifest is rendered (every other parameter).
+#                     # false: ignored, the channel's own settings always apply
+#                     # (both switches are TOML only -- they are not query parameters themselves)
+# prefix  = ""        # prepended to EVERY parameter name (e.g. "dsl_" -> dsl_start, dsl_cue_tags) so
+#                     # they cannot clash with a caller's own parameters, e.g. an SSAI service
+# start_param = "start"   # the two names you can change; also CloudFront's manifest cache key
+# end_param   = "end"
+# [timeshift]
+# max_span_seconds = 21600  # longest startover/catchup range (also caps dvr_window)
+
 [infrastructure.express]
-# ecs-express only -- local-docker gets [infrastructure.docker] instead (`port`, `bundle_content`).
+# ecs-express only -- aws-lambda gets [infrastructure.lambda] and local-docker [infrastructure.docker] instead (`port`, `bundle_content`).
 port   = 8080  # serve.py listen port, container-internal
 # ECS Express Mode CPU/memory codes (same numeric convention as Fargate:
 # 256 = 0.25 vCPU). See AWS ECS Express Mode docs for the full supported
 # list.
 cpu    = 256   # 0.25 vCPU
 memory = 512   # 0.5 GB
+
+# aws-lambda only, in place of [infrastructure.express] (no port: CloudFront and a
+# Function URL only CloudFront may call own the endpoint):
+# [infrastructure.lambda]
+# memory = 1024               # MB; CPU scales with it (1769 = one full vCPU, for hls container "ts" + continuous timeline)
+# timeout = 30                # s
+# reserved_concurrency = 10   # cap on concurrent invocations; -1 = none. `stop` sets it to 0, `start` restores it
+# cache_mb = 512              # /tmp cache of segment bytes fetched from S3
+# architecture = "arm64"      # or "x86_64"
 
 # local-docker only, in place of [infrastructure.express]:
 # [infrastructure.docker]

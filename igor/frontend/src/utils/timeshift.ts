@@ -1,36 +1,50 @@
 // Startover / catchup URL generation (loop-dee-loop/SCOPE.md §13).
 //
 // A channel serves time-shifted playback from its NORMAL manifest URLs via
-// query parameters whose names are configurable per channel ([timeshift] in
-// the channel TOML). This module is the single place that turns a
+// query parameters whose start/end names are configurable per channel
+// ([query] in the channel TOML), all behind an optional common prefix. This module is the single place that turns a
 // user-facing request (start, optional end, full-loop, timeline override)
 // into those URLs, and pre-validates it the same way serve.py will, so the
 // UI can explain a problem instead of showing a bare HTTP 400.
 //
 // Pure functions only (no Vue, no DOM) so they can be exercised directly.
 
+import { overridePairs, parseInstantMs, validateOverrides, type OverrideValues, type QpFormat } from './queryParams.ts'
+
 export interface TimeshiftParams {
-  enabled: boolean
+  /** [query] timeshift: startover/catchup (start, end, full_loops, offset) is on. */
+  timeshift: boolean
+  /** [query] overrides: the per-request rendering overrides are on. */
+  overrides: boolean
+  /** Prepended to EVERY query parameter name ([query] prefix); '' = none. */
+  prefix: string
   start_param: string
   end_param: string
   max_span_seconds: number
 }
 
 export const DEFAULT_TIMESHIFT_PARAMS: TimeshiftParams = {
-  enabled: true,
+  timeshift: true,
+  overrides: true,
+  prefix: '',
   start_param: 'start',
   end_param: 'end',
   max_span_seconds: 21600,
 }
 
+/** The on-the-wire name of a query parameter (channel prefix applied). */
+export function paramName(params: Pick<TimeshiftParams, 'prefix'>, base: string): string {
+  return `${params.prefix}${base}`
+}
+
 export type TimeFormat = 'iso' | 'epoch' | 'epoch_ms'
 /** Fixed (not configurable) name of the per-request timeline-mode override,
- * `timeline=default|continuous|periodic`; absent == `default`, i.e. the
+ * `timeline_mode=default|continuous|periodic`; absent == `default`, i.e. the
  * channel's own continuous-timeline setting. Mirrors loop-dee-loop's
  * timeshift.TIMELINE_PARAM. */
-export const TIMELINE_PARAM = 'timeline'
-/** Also fixed: `full-loops=true` widens the range to whole loops. */
-export const FULL_LOOPS_PARAM = 'full-loops'
+export const TIMELINE_PARAM = 'timeline_mode'
+/** Also fixed: `full_loops=true` widens the range to whole loops. */
+export const FULL_LOOPS_PARAM = 'full_loops'
 /** Also fixed: `offset=` pretends "now" is earlier (negative) or later
  * (positive): the live edge, and what "past"/"future" mean for start/end,
  * move with it. Signed seconds or an ISO 8601 duration. */
@@ -42,6 +56,8 @@ export interface TimeshiftRequest {
   end: Date | null
   fullLoop: boolean
   timeline: TimelineChoice
+  /** The other per-request overrides (queryParams.ts), raw text by parameter name. */
+  overrides?: OverrideValues
   /** Raw text typed for `offset` ('' = none): signed seconds or ISO 8601 duration. */
   offset: string
   format: TimeFormat
@@ -56,19 +72,28 @@ export interface ChannelTiming {
 
 export type TimeshiftKind = 'live' | 'catchup' | 'startover-bounded' | 'startover-open'
 
-/** Merge a parsed [timeshift] TOML table over the defaults. A missing table
- * means "defaults, enabled" -- same as its-a-live's own defaulting. */
-export function timeshiftParamsFromConfig(table: Record<string, unknown> | undefined): TimeshiftParams {
-  const t = table ?? {}
-  const str = (key: keyof TimeshiftParams) =>
-    typeof t[key] === 'string' && t[key] !== '' ? (t[key] as string) : String(DEFAULT_TIMESHIFT_PARAMS[key])
+/** Merge a channel's parsed TOML over the defaults: `[query]` (timeshift, overrides,
+ * prefix, start_param, end_param) and `[timeshift]` (max_span_seconds). A
+ * config with neither means "defaults, enabled" -- same as its-a-live's own
+ * defaulting. */
+export function timeshiftParamsFromConfig(config: Record<string, unknown> | undefined): TimeshiftParams {
+  const tableOf = (name: string): Record<string, unknown> => {
+    const t = config?.[name]
+    return t && typeof t === 'object' ? (t as Record<string, unknown>) : {}
+  }
+  const q = tableOf('query')
+  const ts = tableOf('timeshift')
+  const str = (key: 'prefix' | 'start_param' | 'end_param') =>
+    typeof q[key] === 'string' && (key === 'prefix' || q[key] !== '') ? (q[key] as string) : DEFAULT_TIMESHIFT_PARAMS[key]
   return {
-    enabled: typeof t.enabled === 'boolean' ? t.enabled : DEFAULT_TIMESHIFT_PARAMS.enabled,
+    timeshift: typeof q.timeshift === 'boolean' ? q.timeshift : DEFAULT_TIMESHIFT_PARAMS.timeshift,
+    overrides: typeof q.overrides === 'boolean' ? q.overrides : DEFAULT_TIMESHIFT_PARAMS.overrides,
+    prefix: str('prefix'),
     start_param: str('start_param'),
     end_param: str('end_param'),
     max_span_seconds:
-      typeof t.max_span_seconds === 'number' && t.max_span_seconds >= 1
-        ? t.max_span_seconds
+      typeof ts.max_span_seconds === 'number' && ts.max_span_seconds >= 1
+        ? ts.max_span_seconds
         : DEFAULT_TIMESHIFT_PARAMS.max_span_seconds,
   }
 }
@@ -92,27 +117,44 @@ function encodeValue(v: string): string {
   return encodeURIComponent(v).replace(/%3A/g, ':')
 }
 
-/** The query string (no leading '?') for a request; '' for plain live. */
-export function buildTimeshiftQuery(params: TimeshiftParams, req: TimeshiftRequest): string {
+/** The query string (no leading '?') for a request; '' for plain live.
+ *
+ * Each kind is emitted only while the channel's own switch for it is on:
+ * `params.timeshift` for start/end/full_loops/offset, `params.overrides` for
+ * timeline_mode and every other override. `fmt` selects the manifest format the URL
+ * is for: an override only one format reads (cue_tags for HLS, addressing for DASH)
+ * is left off the other's URL. */
+export function buildTimeshiftQuery(params: TimeshiftParams, req: TimeshiftRequest, fmt: QpFormat = 'hls'): string {
   const parts: string[] = []
-  if (req.start) {
-    parts.push(`${encodeURIComponent(params.start_param)}=${encodeValue(formatInstant(req.start, req.format))}`)
-    if (req.end) {
-      parts.push(`${encodeURIComponent(params.end_param)}=${encodeValue(formatInstant(req.end, req.format))}`)
-    }
-    if (req.fullLoop) parts.push(`${FULL_LOOPS_PARAM}=true`)
+  const add = (base: string, value: string) =>
+    parts.push(`${encodeURIComponent(paramName(params, base))}=${encodeValue(value)}`)
+  if (params.timeshift && req.start) {
+    add(params.start_param, formatInstant(req.start, req.format))
+    if (req.end) add(params.end_param, formatInstant(req.end, req.format))
+    if (req.fullLoop) add(FULL_LOOPS_PARAM, 'true')
   }
-  if (req.timeline !== 'default') parts.push(`${TIMELINE_PARAM}=${req.timeline}`)
+  if (params.overrides && req.timeline !== 'default') add(TIMELINE_PARAM, req.timeline)
   const offsetSeconds = parseOffsetSeconds(req.offset)
   // Normalised to plain signed seconds: no '+' to get mangled in a URL.
-  if (typeof offsetSeconds === 'number' && offsetSeconds !== 0) parts.push(`${OFFSET_PARAM}=${offsetSeconds}`)
+  if (params.timeshift && typeof offsetSeconds === 'number' && offsetSeconds !== 0) add(OFFSET_PARAM, String(offsetSeconds))
+  if (params.overrides) {
+    // timeline_mode has its own control above; the registry covers the rest
+    for (const [name, value] of overridePairs(req.overrides, fmt)) {
+      if (name !== TIMELINE_PARAM) add(name, value)
+    }
+  }
   return parts.join('&')
 }
 
 /** `baseUrl` (a channel's normal HLS or DASH URL) plus the request. Any
  * existing query on baseUrl is preserved. */
-export function buildTimeshiftUrl(baseUrl: string, params: TimeshiftParams, req: TimeshiftRequest): string {
-  const query = buildTimeshiftQuery(params, req)
+export function buildTimeshiftUrl(
+  baseUrl: string,
+  params: TimeshiftParams,
+  req: TimeshiftRequest,
+  fmt: QpFormat = 'hls',
+): string {
+  const query = buildTimeshiftQuery(params, req, fmt)
   if (!query) return baseUrl
   return baseUrl + (baseUrl.includes('?') ? '&' : '?') + query
 }
@@ -206,6 +248,18 @@ export function effectiveRange(
   return { startMs, endMs, capped }
 }
 
+/** The channel timing with the epoch override applied: `epoch=` moves loop 0 (and
+ * so what "before the channel epoch" means) for this request. Unchanged without one. */
+export function effectiveTiming(
+  req: TimeshiftRequest,
+  params: Pick<TimeshiftParams, 'overrides'>,
+  timing?: ChannelTiming,
+): ChannelTiming | undefined {
+  const raw = params.overrides ? req.overrides?.epoch?.trim() : undefined
+  const epochMs = raw ? parseInstantMs(raw) : null
+  return timing && epochMs !== null ? { ...timing, epochMs } : timing
+}
+
 /** Problems serve.py would reject (HTTP 400), found up front. Empty = OK. */
 export function validateRequest(
   req: TimeshiftRequest,
@@ -218,10 +272,14 @@ export function validateRequest(
     problems.push('Offset must be signed seconds (-3600) or an ISO 8601 duration (-PT1H), within ±10 years.')
   }
   nowMs = pretendNowMs(req, nowMs)
+  if (params.overrides) {
+    problems.push(...validateOverrides(req.overrides, { maxSpanSeconds: params.max_span_seconds, nowMs }))
+  }
+  timing = effectiveTiming(req, params, timing)
   if (timing && Number.isFinite(timing.epochMs) && nowMs < (timing.epochMs as number)) {
     problems.push('That offset puts “now” before the channel epoch (nothing existed yet).')
   }
-  if (req.end && !req.start) problems.push(`An end time needs a start time (“${params.end_param}” requires “${params.start_param}”).`)
+  if (req.end && !req.start) problems.push(`An end time needs a start time (“${paramName(params, params.end_param)}” requires “${paramName(params, params.start_param)}”).`)
   if (!req.start) return problems
   if (Number.isNaN(req.start.getTime())) problems.push('Start is not a valid date.')
   if (req.end && Number.isNaN(req.end.getTime())) problems.push('End is not a valid date.')

@@ -13,12 +13,14 @@ import JobPanel from '../components/JobPanel.vue'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import BundleContentField from '../components/BundleContentField.vue'
 import FieldHelp from '../components/FieldHelp.vue'
+import QpBadge from '../components/QpBadge.vue'
 import EpochFields from '../components/EpochFields.vue'
 import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
+import AnnounceFields from '../components/AnnounceFields.vue'
+import LowLatencyFields from '../components/LowLatencyFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
 import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
-import { CONFIG_FIELD_LABEL as L, CONFIG_SECTION_TITLE as T, deriveSourceKind, periodTypesFromConfig } from '../utils/channelConfigLayout'
-import { timeshiftParamsFromConfig } from '../utils/timeshift'
+import { CONFIG_FIELD_LABEL as L, CONFIG_SECTION_TITLE as T, deriveSourceKind, formFieldsFromConfig, lowLatencyProblems } from '../utils/channelConfigLayout'
 import type { ArchiveListItem, ChannelCreatePayload, Job, ManifestListItem, PlaylistListItem } from '../api/types'
 
 const router = useRouter()
@@ -147,10 +149,19 @@ const form = reactive<ChannelCreatePayload>({
   hls_ts_mux_audio: true,
   dash_addressing: 'number',
   dash_timeline: 'full',
+  dash_low_latency: 'off',
+  hls_low_latency: 'off',
+  chunk_duration: 0.5,
+  target_latency: null,
+  utc_timing: 'direct',
+  utc_timing_url: '',
   continuous: false,
   period_on_segmentation: [],
-  period_on_segmentation_apply: 'both',
+  announce_ahead: 0,
+  announce_on: [],
   timeshift_enabled: true,
+  query_overrides: true,
+  query_prefix: '',
   timeshift_start_param: 'start',
   timeshift_end_param: 'end',
   timeshift_max_span_seconds: 21600,
@@ -159,6 +170,11 @@ const form = reactive<ChannelCreatePayload>({
   cpu: 256,
   memory: 512,
   cdn: true,
+  lambda_memory: 1024,
+  lambda_timeout: 30,
+  lambda_reserved_concurrency: 10,
+  lambda_cache_mb: 512,
+  lambda_architecture: 'arm64',
   daterange_mode: 'shared',
   cue_tags: 'none',
   increment_event_ids: false,
@@ -225,11 +241,7 @@ async function prefillFromChannel(from: string) {
     const cfg = await getChannel(from)
     const sec = (key: string) => (cfg[key] as Record<string, unknown>) ?? {}
     const input = sec('input')
-    const packaging = sec('packaging')
-    const timeline = sec('timeline')
-    const markers = sec('markers')
     const kind = deriveSourceKind(input)
-    const ts = timeshiftParamsFromConfig(sec('timeshift'))
     sourceKind.value = kind
     autoPort.value = false
     Object.assign(form, {
@@ -237,28 +249,9 @@ async function prefillFromChannel(from: string) {
       backend: 'ecs-express',
       source_path: String(input.source_path ?? ''),
       source_kind: kind,
-      segment_duration: Number(packaging.segment_duration ?? form.segment_duration),
-      dvr_window_seconds: Number(packaging.dvr_window_seconds ?? form.dvr_window_seconds),
-      hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? form.hls_format,
-      hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? form.hls_ts_mux_audio),
-      dash_addressing: (packaging.dash_addressing as ChannelCreatePayload['dash_addressing']) ?? form.dash_addressing,
-      dash_timeline: (packaging.dash_timeline as ChannelCreatePayload['dash_timeline']) ?? form.dash_timeline,
-      epoch_utc: String(timeline.epoch_utc ?? DEFAULT_EPOCH_UTC),
-      continuous: Boolean(timeline.continuous ?? true),
-      period_on_segmentation: periodTypesFromConfig(markers.period_on_segmentation),
-      period_on_segmentation_apply:
-        (markers.period_on_segmentation_apply as ChannelCreatePayload['period_on_segmentation_apply']) ?? 'both',
-      timeshift_enabled: ts.enabled,
-      timeshift_start_param: ts.start_param,
-      timeshift_end_param: ts.end_param,
-      timeshift_max_span_seconds: ts.max_span_seconds,
+      // packaging, timeline, markers and query settings: one mapping from the TOML layout to the form
+      ...formFieldsFromConfig(cfg),
       port: 8080,
-      daterange_mode: (markers.daterange_mode as ChannelCreatePayload['daterange_mode']) ?? form.daterange_mode,
-      cue_tags: (markers.cue_tags as ChannelCreatePayload['cue_tags']) ?? form.cue_tags,
-      increment_event_ids: Boolean(markers.increment_event_ids ?? form.increment_event_ids),
-      daterange_id_format: String(markers.daterange_id_format ?? form.daterange_id_format),
-      dash_signal_format: (markers.dash_signal_format as ChannelCreatePayload['dash_signal_format']) ?? form.dash_signal_format,
-      dash_descriptor_mode: (markers.dash_descriptor_mode as ChannelCreatePayload['dash_descriptor_mode']) ?? form.dash_descriptor_mode,
     })
     // The sourceKind watcher resets allow_missing_segments; apply the
     // channel's own value once it has run.
@@ -278,12 +271,18 @@ onMounted(() => {
 
 const backendOptions = [
   { label: 'ecs-express (loop-dee-loop, self-hosted, cheap)', value: 'ecs-express' },
+  { label: 'aws-lambda (loop-dee-loop on Lambda + CloudFront, no idle cost)', value: 'aws-lambda' },
   { label: 'aws-media (MediaLive + MediaPackage, fully managed)', value: 'aws-media' },
   { label: 'local-docker (loop-dee-loop on this machine, no AWS)', value: 'local-docker' },
 ]
 
 const isEcsExpress = computed(() => form.backend === 'ecs-express')
 const isLocalDocker = computed(() => form.backend === 'local-docker')
+const isAwsLambda = computed(() => form.backend === 'aws-lambda')
+const lambdaArchitectureOptions = [
+  { label: 'arm64 (Graviton, cheaper)', value: 'arm64' },
+  { label: 'x86_64', value: 'x86_64' },
+]
 // "auto" port is local-docker-only (see backend/its_a_live.generate_toml
 // validation) -- fall back to an explicit port if the backend is switched
 // away from local-docker while it's toggled on.
@@ -300,15 +299,16 @@ watch(
 // ecs-express or the local-docker-only [infrastructure.docker] section
 // (generate_toml() picks the section, this form just shows one `port` field
 // either way). Only ecs-express additionally needs Fargate cpu/memory (also
-// in [infrastructure.express]).
-const usesChannelSection = computed(() => isEcsExpress.value || isLocalDocker.value)
+// in [infrastructure.express]). aws-lambda has no port: its own
+// [infrastructure.lambda] table (memory, timeout, reserved concurrency, ...).
+const usesChannelSection = computed(() => isEcsExpress.value || isAwsLambda.value || isLocalDocker.value)
 const dashAddressingOptions = [
   { label: '$Number$ (segment number + startNumber)', value: 'number' },
   { label: '$Time$ (segment start time)', value: 'time' },
 ]
 const dashTimelineOptions = [
-  { label: 'Full (@t and @d on every S)', value: 'full' },
-  { label: 'Compact (implicit @t, @r for repeats)', value: 'compact' },
+  { label: 'Full (@t and @d on every S, a SegmentTemplate per representation)', value: 'full' },
+  { label: 'Compact (implicit @t, @r for repeats, one shared SegmentTemplate)', value: 'compact' },
 ]
 const hlsFormatOptions = [
   { label: 'CMAF (fragmented MP4)', value: 'cmaf' },
@@ -336,6 +336,11 @@ const dashDescriptorModeOptions = [
 
 async function submit() {
   if (nameError.value) return
+  const llProblems = lowLatencyProblems(form)
+  if (llProblems.length) {
+    error.value = llProblems.join(' ')
+    return
+  }
   saving.value = true
   error.value = ''
   try {
@@ -486,8 +491,42 @@ async function submit() {
     </template>
 
     <template v-if="usesChannelSection">
-      <h4 class="mb-0 mt-2">{{ isLocalDocker ? T['infrastructure.docker'] : T['infrastructure.express'] }}</h4>
-      <div class="flex flex-column gap-1">
+      <h4 class="mb-0 mt-2">{{ isLocalDocker ? T['infrastructure.docker'] : isAwsLambda ? T['infrastructure.lambda'] : T['infrastructure.express'] }}</h4>
+      <div v-if="isAwsLambda" class="grid">
+        <div class="col-6 flex flex-column gap-1">
+          <label for="lambda-memory">{{ L.lambda_memory }}</label>
+          <InputNumber id="lambda-memory" v-model="form.lambda_memory" :use-grouping="false" />
+        </div>
+        <div class="col-6 flex flex-column gap-1">
+          <label for="lambda-timeout">{{ L.lambda_timeout }}</label>
+          <InputNumber id="lambda-timeout" v-model="form.lambda_timeout" :use-grouping="false" />
+        </div>
+        <div class="col-6 flex flex-column gap-1">
+          <label for="lambda-reserved">
+            {{ L.lambda_reserved_concurrency }}
+            <FieldHelp label="Reserved concurrency">
+              Caps concurrent invocations of this channel's function (cost and blast-radius guard);
+              <code>Stop</code> sets it to 0. Use -1 for no cap if your account's Lambda concurrency
+              quota is too small to reserve any (new accounts can be limited to 10 in total).
+            </FieldHelp>
+          </label>
+          <InputNumber id="lambda-reserved" v-model="form.lambda_reserved_concurrency" :use-grouping="false" />
+        </div>
+        <div class="col-6 flex flex-column gap-1">
+          <label for="lambda-cache">{{ L.lambda_cache_mb }}</label>
+          <InputNumber id="lambda-cache" v-model="form.lambda_cache_mb" :use-grouping="false" />
+        </div>
+        <div class="col-12 flex flex-column gap-1">
+          <label for="lambda-arch">{{ L.lambda_architecture }}</label>
+          <Select id="lambda-arch" v-model="form.lambda_architecture" :options="lambdaArchitectureOptions" option-label="label" option-value="value" />
+          <FieldHelp label="Lambda memory and cost">
+            The function reads the loop package from S3 on demand and costs nothing while nobody
+            watches. 1024 MB suits CMAF; use 1769 MB (one full vCPU) for MPEG-TS HLS with a
+            continuous timeline, which patches every packet.
+          </FieldHelp>
+        </div>
+      </div>
+      <div v-if="!isAwsLambda" class="flex flex-column gap-1">
         <label for="port">{{ L.port }}{{ isLocalDocker ? ' (also the host port -- http://localhost:<port>)' : '' }}</label>
         <div v-if="isLocalDocker" class="flex align-items-center gap-2">
           <Checkbox v-model="autoPort" binary input-id="auto-port" />
@@ -539,7 +578,7 @@ async function submit() {
         </div>
         <div class="col-12 flex align-items-center gap-2">
           <Checkbox v-model="form.continuous" binary input-id="continuous-timeline" />
-          <label for="continuous-timeline">{{ L.continuous }}</label>
+          <label for="continuous-timeline">{{ L.continuous }}</label><QpBadge field="continuous" :form="form" />
           <FieldHelp label="Continuous timeline">
             Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
             the channel has no discontinuity/Period restart at the loop wrap. Off by default: the loop wrap
@@ -557,9 +596,14 @@ async function submit() {
           <InputNumber id="segdur" v-model="form.segment_duration" :min-fraction-digits="1" />
         </div>
         <div :class="[sourceKind === 'playlist' ? 'col-6' : 'col-12', 'flex flex-column gap-1']">
-          <label for="dvr">{{ L.dvr_window_seconds }}</label>
+          <div class="flex align-items-center"><label for="dvr">{{ L.dvr_window_seconds }}</label><QpBadge field="dvr_window_seconds" :form="form" /></div>
           <InputNumber id="dvr" v-model="form.dvr_window_seconds" />
         </div>
+        <LowLatencyFields :form="form" id-prefix="new" part="packaging" />
+      </div>
+
+      <h4 class="mb-0 mt-2">{{ T['packaging.hls'] }}</h4>
+      <div class="grid">
         <div class="col-12 flex flex-column gap-1">
           <label for="hls-format">{{ L.hls_format }}</label>
           <Select id="hls-format" v-model="form.hls_format" :options="hlsFormatOptions" option-label="label" option-value="value" />
@@ -568,39 +612,34 @@ async function submit() {
           <Checkbox v-model="form.hls_ts_mux_audio" binary input-id="hls-ts-mux-audio" />
           <label for="hls-ts-mux-audio">{{ L.hls_ts_mux_audio }}</label>
         </div>
+        <LowLatencyFields :form="form" id-prefix="new" part="hls" />
+      </div>
+
+      <h4 class="mb-0 mt-2">{{ T['packaging.dash'] }}</h4>
+      <div class="grid">
         <div class="col-12 flex flex-column gap-1">
-          <label for="dash-addressing">{{ L.dash_addressing }}</label>
+          <div class="flex align-items-center"><label for="dash-addressing">{{ L.dash_addressing }}</label><QpBadge field="dash_addressing" :form="form" /></div>
           <Select id="dash-addressing" v-model="form.dash_addressing" :options="dashAddressingOptions" option-label="label" option-value="value" />
         </div>
         <div class="col-12 flex flex-column gap-1">
-          <label for="dash-timeline">{{ L.dash_timeline }}</label>
+          <div class="flex align-items-center"><label for="dash-timeline">{{ L.dash_timeline }}</label><QpBadge field="dash_timeline" :form="form" /></div>
           <Select id="dash-timeline" v-model="form.dash_timeline" :options="dashTimelineOptions" option-label="label" option-value="value" />
         </div>
+        <LowLatencyFields :form="form" id-prefix="new" part="dash" />
       </div>
 
-      <h4 class="mb-0 mt-2">{{ T.timeshift }}</h4>
-      <TimeshiftFields :form="form" id-prefix="new" />
+      <h4 class="mb-0 mt-2">{{ T.query }}</h4>
+      <TimeshiftFields :form="form" id-prefix="new" part="query" />
+
+      <template v-if="form.timeshift_enabled || form.query_overrides">
+        <h4 class="mb-0 mt-2">{{ T.timeshift }}</h4>
+        <TimeshiftFields :form="form" id-prefix="new" part="timeshift" />
+      </template>
 
       <h4 class="mb-0 mt-2">{{ T.markers }}</h4>
-      <div class="flex flex-column gap-1">
-        <label for="daterange-mode">{{ L.daterange_mode }}</label>
-        <Select id="daterange-mode" v-model="form.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" />
-      </div>
-      <div class="flex flex-column gap-1">
-        <label for="cue-tags">{{ L.cue_tags }}</label>
-        <Select id="cue-tags" v-model="form.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" />
-      </div>
-      <div class="flex flex-column gap-1">
-        <label for="dash-signal-format">{{ L.dash_signal_format }}</label>
-        <Select id="dash-signal-format" v-model="form.dash_signal_format" :options="dashSignalFormatOptions" option-label="label" option-value="value" />
-      </div>
-      <div class="flex flex-column gap-1">
-        <label for="dash-descriptor-mode">{{ L.dash_descriptor_mode }}</label>
-        <Select id="dash-descriptor-mode" v-model="form.dash_descriptor_mode" :options="dashDescriptorModeOptions" option-label="label" option-value="value" />
-      </div>
       <div class="flex align-items-center gap-2">
         <Checkbox v-model="form.increment_event_ids" binary input-id="increment-event-ids" />
-        <label for="increment-event-ids">{{ L.increment_event_ids }}</label>
+        <label for="increment-event-ids">{{ L.increment_event_ids }}</label><QpBadge field="increment_event_ids" :form="form" />
         <FieldHelp label="Increment SCTE-35 event ids">
           Off (default) repeats the same event id every loop -- easiest to test against. On bumps
           each id by loop_number &times; a shared step (a power of 10 above the channel's largest
@@ -609,14 +648,35 @@ async function submit() {
           at the 32-bit SCTE-35 ceiling.
         </FieldHelp>
       </div>
+      <PeriodSegmentationFields :form="form" id-prefix="new" />
+      <AnnounceFields :form="form" id-prefix="new" />
+
+      <h4 class="mb-0 mt-2">{{ T['markers.hls'] }}</h4>
+      <div class="flex flex-column gap-1">
+        <div class="flex align-items-center"><label for="daterange-mode">{{ L.daterange_mode }}</label><QpBadge field="daterange_mode" :form="form" /></div>
+        <Select id="daterange-mode" v-model="form.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" />
+      </div>
+      <div class="flex flex-column gap-1">
+        <div class="flex align-items-center"><label for="cue-tags">{{ L.cue_tags }}</label><QpBadge field="cue_tags" :form="form" /></div>
+        <Select id="cue-tags" v-model="form.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" />
+      </div>
       <div class="flex flex-column gap-1">
         <div class="flex align-items-center gap-1">
-          <label for="daterange-id-format">{{ L.daterange_id_format }}</label>
+          <label for="daterange-id-format">{{ L.daterange_id_format }}</label><QpBadge field="daterange_id_format" :form="form" />
           <DaterangeIdFormatHelp />
         </div>
         <InputText id="daterange-id-format" v-model="form.daterange_id_format" />
       </div>
-      <PeriodSegmentationFields :form="form" id-prefix="new" />
+
+      <h4 class="mb-0 mt-2">{{ T['markers.dash'] }}</h4>
+      <div class="flex flex-column gap-1">
+        <div class="flex align-items-center"><label for="dash-descriptor-mode">{{ L.dash_descriptor_mode }}</label><QpBadge field="dash_descriptor_mode" :form="form" /></div>
+        <Select id="dash-descriptor-mode" v-model="form.dash_descriptor_mode" :options="dashDescriptorModeOptions" option-label="label" option-value="value" />
+      </div>
+      <div class="flex flex-column gap-1">
+        <div class="flex align-items-center"><label for="dash-signal-format">{{ L.dash_signal_format }}</label><QpBadge field="dash_signal_format" :form="form" /></div>
+        <Select id="dash-signal-format" v-model="form.dash_signal_format" :options="dashSignalFormatOptions" option-label="label" option-value="value" />
+      </div>
     </template>
 
     <div>

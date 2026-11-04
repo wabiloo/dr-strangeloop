@@ -1,3 +1,5 @@
+config_version = 2
+
 [deploy]
 name = "mt-demo-short-loop-l-nl"
 backend = "ecs-express"
@@ -15,24 +17,29 @@ source_kind = "playlist"
 allow_missing_segments = false
 
 [markers]
-daterange_mode      = "shared"
-cue_tags            = "none"
 increment_event_ids = true
-daterange_id_format = "{segcode}-{eventid}-{loop}"
-dash_signal_format  = "binary"
-dash_descriptor_mode = "shared"
-period_on_segmentation = [0x22]
-period_on_segmentation_apply = "both"
+split_on = [0x22]
+
+[markers.hls]
+descriptor_grouping      = "shared"
+cue_tags            = "none"
+id_template = "{segcode}-{eventid}-{loop}"
+
+[markers.dash]
+signal_format  = "binary"
+descriptor_grouping = "shared"
 
 [packaging]
 segment_duration   = 4.0
-dvr_window_seconds = 30.0
-hls_format = "cmaf"
-hls_ts_mux_audio = true
+dvr_window = 30.0
+
+[packaging.hls]
+container = "cmaf"
+mux_audio = true
 
 [timeline]
-epoch_utc = "2026-01-01T00:00:00Z"
 continuous = true
+epoch = "2026-01-01T00:00:00Z"
 
 [infrastructure.express]
 port   = 8080
@@ -40,8 +47,11 @@ cpu    = 256
 memory = 512
 cdn    = false
 
-[timeshift]
-enabled          = false
+[query]
 start_param      = "start"
 end_param        = "end"
+timeshift          = false
+overrides          = false
+
+[timeshift]
 max_span_seconds = 21600

@@ -13,27 +13,28 @@ import { useRouter } from 'vue-router'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import BackendBadge from '../components/BackendBadge.vue'
-import ItsAliveBanner from '../components/ItsAliveBanner.vue'
 import JobPanel from '../components/JobPanel.vue'
-import PlaybackPanel from '../components/PlaybackPanel.vue'
-import PlaybackTestPanel from '../components/PlaybackTestPanel.vue'
 import EpochFields from '../components/EpochFields.vue'
 import PeriodSegmentationFields from '../components/PeriodSegmentationFields.vue'
+import AnnounceFields from '../components/AnnounceFields.vue'
+import LowLatencyFields from '../components/LowLatencyFields.vue'
 import TimeshiftFields from '../components/TimeshiftFields.vue'
 import { DEFAULT_EPOCH_UTC } from '../utils/epoch'
-import WindowPanel from '../components/WindowPanel.vue'
-import TimeshiftPanel, { type TimeshiftPreview } from '../components/TimeshiftPanel.vue'
 import { timeshiftParamsFromConfig } from '../utils/timeshift'
 import DaterangeIdFormatHelp from '../components/DaterangeIdFormatHelp.vue'
 import BundleContentField from '../components/BundleContentField.vue'
 import FieldHelp from '../components/FieldHelp.vue'
+import QpBadge from '../components/QpBadge.vue'
 import {
   CONFIG_FIELD_LABEL as L,
   CONFIG_SECTION_TITLE as T,
   buildConfigSections,
   deriveSourceKind,
-  periodTypesFromConfig,
-  usesChannelSection,
+  CONFIG_VERSION,
+  configVersionOf,
+  formFieldsFromConfig,
+  lambdaFieldsFromConfig,
+  lowLatencyProblems,
 } from '../utils/channelConfigLayout'
 import { alignConfirmPopup } from '../utils/confirmPopup'
 import {
@@ -103,8 +104,6 @@ const activeActionEta = ref('')
 // genuine not-running -> running transition (worth celebrating) apart from
 // e.g. Update content on an already-running channel.
 const phaseBeforeAction = ref<Phase | null>(null)
-const itsAliveBanner = ref<InstanceType<typeof ItsAliveBanner> | null>(null)
-const playbackPanel = ref<InstanceType<typeof PlaybackPanel> | null>(null)
 
 const editing = ref(false)
 const editSaving = ref(false)
@@ -125,10 +124,19 @@ const editForm = reactive<ChannelCreatePayload>({
   hls_ts_mux_audio: true,
   dash_addressing: 'number',
   dash_timeline: 'full',
+  dash_low_latency: 'off',
+  hls_low_latency: 'off',
+  chunk_duration: 0.5,
+  target_latency: null,
+  utc_timing: 'direct',
+  utc_timing_url: '',
   continuous: false,
   period_on_segmentation: [],
-  period_on_segmentation_apply: 'both',
+  announce_ahead: 0,
+  announce_on: [],
   timeshift_enabled: true,
+  query_overrides: true,
+  query_prefix: '',
   timeshift_start_param: 'start',
   timeshift_end_param: 'end',
   timeshift_max_span_seconds: 21600,
@@ -137,6 +145,11 @@ const editForm = reactive<ChannelCreatePayload>({
   cpu: 256,
   memory: 512,
   cdn: true,
+  lambda_memory: 1024,
+  lambda_timeout: 30,
+  lambda_reserved_concurrency: 10,
+  lambda_cache_mb: 512,
+  lambda_architecture: 'arm64',
   daterange_mode: 'shared',
   cue_tags: 'none',
   increment_event_ids: false,
@@ -146,15 +159,20 @@ const editForm = reactive<ChannelCreatePayload>({
 })
 const editIsEcsExpress = computed(() => editForm.backend === 'ecs-express')
 const editIsLocalDocker = computed(() => editForm.backend === 'local-docker')
-const editUsesChannelSection = computed(() => editIsEcsExpress.value || editIsLocalDocker.value)
+const editIsAwsLambda = computed(() => editForm.backend === 'aws-lambda')
+const editUsesChannelSection = computed(() => editIsEcsExpress.value || editIsAwsLambda.value || editIsLocalDocker.value)
+const lambdaArchitectureOptions = [
+  { label: 'arm64 (Graviton, cheaper)', value: 'arm64' },
+  { label: 'x86_64', value: 'x86_64' },
+]
 const editIsArchiveSource = computed(() => editForm.source_kind === 'archive' || editForm.source_kind === 'manifest')
 const dashAddressingOptions = [
   { label: '$Number$ (segment number + startNumber)', value: 'number' },
   { label: '$Time$ (segment start time)', value: 'time' },
 ]
 const dashTimelineOptions = [
-  { label: 'Full (@t and @d on every S)', value: 'full' },
-  { label: 'Compact (implicit @t, @r for repeats)', value: 'compact' },
+  { label: 'Full (@t and @d on every S, a SegmentTemplate per representation)', value: 'full' },
+  { label: 'Compact (implicit @t, @r for repeats, one shared SegmentTemplate)', value: 'compact' },
 ]
 const hlsFormatOptions = [
   { label: 'CMAF (fragmented MP4)', value: 'cmaf' },
@@ -205,6 +223,14 @@ const toast = useToast()
 const confirm = useConfirm()
 let healthTimer: ReturnType<typeof setInterval> | null = null
 
+// A channel TOML written before the 2.0 key renames (no `config_version`, or an
+// older one) is read with defaults here, and refused by its-a-live: say so.
+const configVersion = computed(() => configVersionOf(config.value))
+const configNeedsMigration = computed(() => !!config.value && configVersion.value < CONFIG_VERSION)
+const migrateCommand = computed(
+  () => `uv run --project its-a-live python its-a-live/migrate_config.py data/channels/${props.name}.toml`,
+)
+
 function section(key: string): Record<string, unknown> {
   return (config.value?.[key] as Record<string, unknown>) ?? {}
 }
@@ -221,12 +247,8 @@ function startEdit() {
   const aws = sub('aws')
   const s3 = sub('s3')
   const input = section('input')
-  const packaging = section('packaging')
-  const timeline = section('timeline')
   const express = sub('express')
   const docker = sub('docker')
-  const markers = section('markers')
-  const editTimeshift = timeshiftParamsFromConfig(section('timeshift'))
   const backend = (deploy.backend as ChannelCreatePayload['backend']) ?? 'ecs-express'
   // `port` lives in [infrastructure.express] for ecs-express, [infrastructure.docker] for local-docker
   // (see its_a_live.generate_toml()) -- one form field either way.
@@ -240,32 +262,15 @@ function startEdit() {
     source_path: String(input.source_path ?? ''),
     source_kind: deriveSourceKind(input),
     allow_missing_segments: Boolean(input.allow_missing_segments ?? false),
-    segment_duration: Number(packaging.segment_duration ?? 4.0),
-    dvr_window_seconds: Number(packaging.dvr_window_seconds ?? 30),
-    epoch_utc: String(timeline.epoch_utc ?? DEFAULT_EPOCH_UTC),
-    hls_format: (packaging.hls_format as ChannelCreatePayload['hls_format']) ?? 'cmaf',
-    hls_ts_mux_audio: Boolean(packaging.hls_ts_mux_audio ?? true),
-    dash_addressing: (packaging.dash_addressing as ChannelCreatePayload['dash_addressing']) ?? 'number',
-    dash_timeline: (packaging.dash_timeline as ChannelCreatePayload['dash_timeline']) ?? 'full',
-    continuous: Boolean(timeline.continuous ?? true),
-    period_on_segmentation: periodTypesFromConfig(markers.period_on_segmentation),
-    period_on_segmentation_apply:
-      (markers.period_on_segmentation_apply as ChannelCreatePayload['period_on_segmentation_apply']) ?? 'both',
-    timeshift_enabled: editTimeshift.enabled,
-    timeshift_start_param: editTimeshift.start_param,
-    timeshift_end_param: editTimeshift.end_param,
-    timeshift_max_span_seconds: editTimeshift.max_span_seconds,
+    // packaging, timeline, markers and query settings: one mapping from the TOML layout to the form
+    ...formFieldsFromConfig(config.value ?? {}),
     port: portSection.port === 'auto' ? 'auto' : Number(portSection.port ?? 8080),
     bundle_content: backend === 'local-docker' ? Boolean(docker.bundle_content ?? false) : false,
     cpu: Number(express.cpu ?? 256),
     memory: Number(express.memory ?? 512),
     cdn: Boolean(express.cdn ?? true),
-    daterange_mode: (markers.daterange_mode as ChannelCreatePayload['daterange_mode']) ?? 'shared',
-    cue_tags: (markers.cue_tags as ChannelCreatePayload['cue_tags']) ?? 'none',
-    increment_event_ids: Boolean(markers.increment_event_ids ?? false),
-    daterange_id_format: String(markers.daterange_id_format ?? '{segcode}-{eventid}-{loop}'),
-    dash_signal_format: (markers.dash_signal_format as ChannelCreatePayload['dash_signal_format']) ?? 'binary',
-    dash_descriptor_mode: (markers.dash_descriptor_mode as ChannelCreatePayload['dash_descriptor_mode']) ?? 'shared',
+    // [infrastructure.lambda] -> lambda_* (one mapping, in channelConfigLayout.ts)
+    ...lambdaFieldsFromConfig(config.value ?? {}),
   })
   editAutoPort.value = editForm.port === 'auto'
   editLastExplicitPort.value = typeof editForm.port === 'number' ? editForm.port : editLastExplicitPort.value
@@ -279,6 +284,11 @@ function cancelEdit() {
 }
 
 async function saveEdit() {
+  const llProblems = lowLatencyProblems(editForm)
+  if (llProblems.length) {
+    editError.value = llProblems.join(' ')
+    return
+  }
   editSaving.value = true
   editError.value = ''
   try {
@@ -313,16 +323,6 @@ const phase = computed<Phase>(() => {
   return liveStatusPhase(status.value)
 })
 
-// Whenever the channel (re-)reaches "It's Alive!", force both players to
-// tear down and restart from the live edge. PlaybackPanel already does this
-// itself when the playback URLs change or when it gets freshly mounted (via
-// `v-if="showPlayback"` toggling off/on), but a redeploy/restart can leave
-// the URLs identical while a player instance stays attached across the
-// gap -- left alone, it would just keep showing the tail end of the DVR
-// window from the previous run instead of jumping to the new stream.
-watch(phase, (next, prev) => {
-  if (next === 'alive' && prev !== 'alive') playbackPanel.value?.reloadPlayers()
-})
 
 // The State tag at the top of the page: same computation, same labels,
 // same colors as ChannelList.vue's State column (listItemPhase), so a
@@ -398,9 +398,10 @@ const bundleNote = computed(() =>
     : '',
 )
 
-function byBackend(localDocker: string, ecsExpress: string, awsMedia: string): string {
+function byBackend(localDocker: string, ecsExpress: string, awsMedia: string, awsLambda?: string): string {
   if (backend.value === 'local-docker') return localDocker
   if (backend.value === 'ecs-express') return ecsExpress
+  if (backend.value === 'aws-lambda') return awsLambda ?? ecsExpress
   return awsMedia
 }
 
@@ -412,11 +413,13 @@ const firstDeployAction = computed<ActionDef>(() => ({
     'Bakes the content locally and starts the container. Equivalent to running Spark then Start below.',
     'One-time, first deploy of this channel: bakes the content locally, stages it to S3, deploys the ECS/CloudFront stack, then starts it.',
     'One-time, first deploy of this channel: uploads the content to S3, deploys the MediaLive/MediaPackage stack, then starts it.',
+    'One-time, first deploy of this channel: bakes the content locally, stages it to S3, deploys the Lambda/CloudFront stack, then allows invocations. Nothing runs (or costs anything) until someone plays the channel.',
   ),
   eta: byBackend(
     '~10-60s for the bake, plus a one-time Docker image build the first time (a few minutes).',
     '~4-11 min -- Docker image build + push (only when the image is new; a cold build takes a few minutes), ECS task startup, and, if CloudFront is on, a brand-new distribution that adds about 3 min. This is normal, not a hang.',
     '~5-10 min -- MediaLive channel provisioning and startup. This is normal, not a hang.',
+    '~4-8 min -- Docker image build + push (only when the image is new) and a brand-new CloudFront distribution (about 3 min). This is normal, not a hang.',
   ),
   fn: () => createChannel(props.name),
   disabled: () => (backend.value === 'local-docker' ? isUpButMaybeUnreachable(phase.value) : phase.value !== 'not-deployed'),
@@ -446,8 +449,9 @@ const contentAction = computed<ActionDef>(() => {
         `Bakes the franken-ts output locally and recreates the container from it, in one step -- the routine way to ship new content to a running channel.${bundleNote.value}`,
         'Bakes the franken-ts output locally, stages it to S3, then re-syncs the running channel -- the routine way to ship new content, in one step.',
         'Uploads the franken-ts output to S3, then cycles the channel to pick it up -- the routine way to ship new content, in one step.',
+        'Bakes the franken-ts output locally, stages it to S3, recycles the warm Lambda environments and invalidates the CloudFront cache -- the routine way to ship new content, in one step.',
       ),
-      eta: byBackend(bundled.value ? '~30s-several min (image rebuild scales with loop size).' : '~15-90s.', '~40-90s.', 'A full stop/start cycle (a few minutes) on top of the bake/upload.'),
+      eta: byBackend(bundled.value ? '~30s-several min (image rebuild scales with loop size).' : '~15-90s.', '~40-90s.', 'A full stop/start cycle (a few minutes) on top of the bake/upload.', '~20-60s.'),
       fn: () => updateChannelContent(props.name),
       disabled: () => false,
       disabledReason: () => '',
@@ -501,11 +505,13 @@ const streamActions = computed<ActionDef[]>(() => [
       `Goes live: starts the local-docker container. Requires content to already be Sparked at least once.${bundleNote.value}`,
       'Goes live: scales the ECS Express service to 1 task. Requires content to already be Sparked at least once.',
       'Goes live: starts the MediaLive channel. Requires content to already be Sparked at least once.',
+      'Lifts the block set by Stop (restores the reserved concurrency). An idle Lambda costs nothing, so a freshly deployed channel is already playable. Requires content to already be Sparked at least once.',
     ),
     eta: byBackend(
       bundled.value ? '~30s-several min (image rebuild scales with loop size), then container startup.' : '~10-30s (container startup + health check).',
       '~30-60s (task startup + health check).',
       'A couple of minutes (MediaLive channel start).',
+      '~2s.',
     ),
     fn: () => startChannel(props.name),
     // aws-media/ecs-express: `start` reads CloudFormation stack outputs, so
@@ -531,8 +537,9 @@ const streamActions = computed<ActionDef[]>(() => [
       'Stops and removes the local container.',
       'Stops paying for compute: scales the ECS Express service to 0 tasks (the shared ALB stays up for other channels).',
       'Stops the MediaLive channel.',
+      'Blocks playback: sets the function\'s reserved concurrency to 0 so every request is throttled. (An idle Lambda costs nothing either way -- this is an access control, not a cost saving.)',
     ),
-    eta: byBackend('~5-10s.', '~10-30s.', 'Up to a couple of minutes.'),
+    eta: byBackend('~5-10s.', '~10-30s.', 'Up to a couple of minutes.', '~2s.'),
     fn: () => stopChannel(props.name),
     disabled: () => !isUpButMaybeUnreachable(phase.value),
     disabledReason: () =>
@@ -588,11 +595,13 @@ const infrastructureActions = computed<ActionDef[]>(() => {
         'Recreates the local container from whatever was last Sparked (same as the content-update action above).',
         'Applies your edited channel config to the already-deployed stack (runs cdk deploy; the service restarts briefly). Run this after changing any setting in the Configuration panel -- a running channel keeps using the old settings until you do. For new content, use Update content instead. If the stack is in a failed state it is deleted and recreated first.',
         'Applies your edited channel config to the already-deployed stack (runs cdk deploy). Run this after changing any setting in the Configuration panel -- a running channel keeps using the old settings until you do. For new content, use Update content instead. If the stack is in a failed state it is deleted and recreated first.',
+        'Applies your edited channel config to the already-deployed stack (runs cdk deploy; new settings take effect as warm Lambda environments are replaced). Run this after changing any setting in the Configuration panel. For new content, use Update content instead. If the stack is in a failed state it is deleted and recreated first.',
       ),
       eta: byBackend(
         '~10-30s.',
         '~5-10 min (ECS Express rolls the new task out with a canary, and the old task keeps serving for ~3+ min); longer only if a failed stack has to be deleted and recreated -- not a hang.',
         '~1-2 min for a config change; ~5-10 min only if a failed stack has to be deleted and recreated.',
+        '~1-3 min for a config change; a CloudFront change can take a few minutes more -- not a hang.',
       ),
       fn: () => redeployChannel(props.name),
       disabled: () => phase.value === 'unknown' && !statusError.value,
@@ -608,11 +617,13 @@ const infrastructureActions = computed<ActionDef[]>(() => {
         '', // never rendered -- local-docker has no infrastructureActions at all
         'Deletes the CloudFormation stack for good (ECS service, CloudFront distribution, load balancer, ...) -- stops billing. Uploaded content in S3 is not deleted. Use Galvanise above to bring it back.',
         'Deletes the CloudFormation stack for good (MediaLive channel, MediaPackage channel/endpoints) -- stops billing. Uploaded content in S3 is not deleted. Use Galvanise above to bring it back.',
+        'Deletes the CloudFormation stack for good (Lambda function, CloudFront distribution). Uploaded content in S3 is not deleted. Use Galvanise above to bring it back.',
       ),
       eta: byBackend(
         '',
         '~1-2 min, though CloudFront can take 15+ min to finish deleting its distribution in the background after this returns.',
         '~1-5 min for MediaLive/MediaPackage resource deletion.',
+        '~1-2 min, though CloudFront can take 15+ min to finish deleting its distribution in the background after this returns.',
       ),
       fn: () => terminateChannel(props.name),
       disabled: () => phase.value !== 'stopped' && phase.value !== 'failed',
@@ -643,44 +654,14 @@ const playbackDashUrl = computed(() =>
 // live phase too (not just URL presence) means Stop actually tears the
 // players down (PlaybackPanel's onBeforeUnmount destroys both) instead of
 // leaving them mounted and auto-playing/erroring against a dead stream.
-// Startover/catchup (loop-dee-loop/SCOPE.md §13): a generated time-shifted
-// URL can be previewed in the players in place of the live one. Only
-// ecs-express/local-docker run serve.py, so only they have this.
-const timeshiftParams = computed(() => timeshiftParamsFromConfig(section('timeshift')))
-const timeshiftAvailable = computed(
-  () => usesChannelSection(String(section('deploy').backend ?? '')) && timeshiftParams.value.enabled,
-)
-const timeshiftPreview = ref<TimeshiftPreview | null>(null)
-// Leaving a preview behind when the channel stops/changes would leave the
-// players pointed at a dead URL.
-watch([playbackHlsUrl, playbackDashUrl], () => (timeshiftPreview.value = null))
-const effectiveHlsUrl = computed(() => timeshiftPreview.value?.hlsUrl ?? playbackHlsUrl.value)
-const effectiveDashUrl = computed(() => timeshiftPreview.value?.dashUrl ?? playbackDashUrl.value)
+// Used by the read-only configuration table (override badges) below.
+const timeshiftParams = computed(() => timeshiftParamsFromConfig(config.value ?? undefined))
 
+// The preview page (players, startover/catchup, URL overrides, playback test) is only
+// meaningful while the channel is actually playing.
 const showPlayback = computed(
   () => (playbackHlsUrl.value || playbackDashUrl.value) && phase.value !== 'stopped' && phase.value !== 'not-deployed',
 )
-
-// loop-dee-loop's /timeline.json describes the live window, or -- while a
-// startover/catchup preview is active -- the previewed range (same query).
-const windowAvailable = computed(
-  () => !!showPlayback.value && usesChannelSection(String(section('deploy').backend ?? '')),
-)
-// A continuous timeline has no loop-wrap boundary: only forced signal-break Periods (period_on_segmentation) are any.
-const boundariesExpected = computed(() => {
-  const continuous = Boolean(section('timeline').continuous ?? true)
-  const forced = periodTypesFromConfig(section('markers').period_on_segmentation)
-  return !continuous || forced.length > 0
-})
-const windowQuery = computed(() => {
-  const url = timeshiftPreview.value?.hlsUrl ?? timeshiftPreview.value?.dashUrl
-  if (!url) return ''
-  try {
-    return new URL(url, window.location.href).search.replace(/^\?/, '')
-  } catch {
-    return ''
-  }
-})
 
 async function loadConfig() {
   try {
@@ -715,7 +696,7 @@ async function loadListPhase() {
 }
 
 async function loadHealth() {
-  if (status.value?.backend !== 'ecs-express' && status.value?.backend !== 'local-docker') return
+  if (!['ecs-express', 'aws-lambda', 'local-docker'].includes(status.value?.backend ?? '')) return
   try {
     health.value = await getChannelHealth(props.name)
     healthError.value = ''
@@ -832,8 +813,9 @@ async function onJobFinished(job: Job) {
   })
   const wasRunning = phaseBeforeAction.value === 'alive'
   await loadStatus()
+  // Newly alive: go and look at it (the preview page plays the "It's alive" banner).
   if (job.status === 'succeeded' && !wasRunning && phase.value === 'alive') {
-    itsAliveBanner.value?.trigger()
+    router.push({ name: 'channel-preview', params: { name: props.name }, query: { alive: '1' } })
   }
 }
 
@@ -916,7 +898,17 @@ watch(() => props.name, reload)
         class="pi pi-exclamation-triangle text-yellow-600 text-sm"
         :title="`List and live status briefly disagree (list: ${PHASE_LABEL[listPhase]}, live: ${PHASE_LABEL[phase]}) -- usually settles within a poll or two.`"
       />
-      <BackendBadge v-if="status" class="ml-auto" :backend="status.backend" pill />
+      <Button
+        v-if="showPlayback"
+        label="Preview"
+        icon="pi pi-eye"
+        size="small"
+        class="ml-auto"
+        data-testid="to-channel-preview"
+        title="Players, startover / catchup, URL overrides and the playback test"
+        @click="router.push({ name: 'channel-preview', params: { name } })"
+      />
+      <BackendBadge v-if="status" :class="showPlayback ? '' : 'ml-auto'" :backend="status.backend" pill />
     </div>
 
     <Message v-if="statusError && !statusErrorIsMissingStack" severity="warn">
@@ -927,45 +919,19 @@ watch(() => props.name, reload)
       </details>
     </Message>
 
+    <Message v-if="configNeedsMigration" severity="warn" :closable="false">
+      This channel's config file is an older layout (config_version {{ configVersion }}, current is
+      {{ CONFIG_VERSION }}): its-a-live will refuse it, and the settings shown here are defaults, not what the
+      file says. Migrate it (keeps comments, safe to repeat):
+      <pre class="job-log mt-2 mb-0">{{ migrateCommand }}</pre>
+    </Message>
+
     <Message v-if="phase === 'unreachable'" severity="error" :closable="false">
       Infrastructure reports running, but HlsPlaybackUrl/DashPlaybackUrl did not return a manifest
       on the last check. Common causes: a MediaPackage/CloudFront endpoint still propagating right
       after deploy, an empty target group, or content not actually Sparked/Started yet. Re-check
       with Refresh, or re-visit this page in a minute if you just deployed.
     </Message>
-
-    <PlaybackPanel
-      v-if="showPlayback"
-      ref="playbackPanel"
-      :hls-url="effectiveHlsUrl"
-      :dash-url="effectiveDashUrl"
-      :start-from-beginning="timeshiftPreview?.startEpochSeconds != null"
-      :dash-clock-offset-seconds="timeshiftPreview?.startEpochSeconds ?? 0"
-      :health="health"
-      :health-error="status?.backend === 'ecs-express' || status?.backend === 'local-docker' ? healthError : ''"
-    />
-
-    <TimeshiftPanel
-      v-if="showPlayback && timeshiftAvailable"
-      :hls-url="playbackHlsUrl"
-      :dash-url="playbackDashUrl"
-      :params="timeshiftParams"
-      :health="health"
-      :previewing="timeshiftPreview !== null"
-      @preview="timeshiftPreview = $event"
-    />
-
-    <WindowPanel v-if="windowAvailable" :name="name" :query="windowQuery" />
-
-    <PlaybackTestPanel
-      v-if="showPlayback"
-      :name="name"
-      :has-timeline="windowAvailable"
-      :boundaries-expected="boundariesExpected"
-      :loop-duration-s="health?.total_loop_duration_seconds"
-      :hls-url="playbackHlsUrl"
-      :dash-url="playbackDashUrl"
-    />
 
     <div class="channel-detail-layout">
       <div class="flex flex-column gap-4 p-3 border-round surface-card channel-actions" style="border: 1px solid var(--surface-border)">
@@ -1001,6 +967,7 @@ watch(() => props.name, reload)
             {{
               byBackend(
                 'Spark and Start can both run now -- Start builds/launches the container directly, no separate deploy step for this backend.',
+                'Spark can run now to stage content ahead of the first deploy. Start/Stop need the channel deployed first -- run Galvanise above.',
                 'Spark can run now to stage content ahead of the first deploy. Start/Stop need the channel deployed first -- run Galvanise above.',
                 'Spark can run now to stage content ahead of the first deploy. Start/Stop need the channel deployed first -- run Galvanise above.',
               )
@@ -1172,6 +1139,7 @@ watch(() => props.name, reload)
               <tbody>
                 <tr v-for="row in sec.rows" :key="row.key">
                   <td class="pr-3 text-color-secondary vertical-align-top config-key" :title="row.label">{{ row.key }}</td>
+                  <td class="config-badge vertical-align-top"><QpBadge :field="row.key" :prefix="timeshiftParams.prefix" :active="timeshiftParams.overrides" /></td>
                   <td class="font-mono config-value">{{ row.value }}</td>
                 </tr>
               </tbody>
@@ -1231,9 +1199,9 @@ watch(() => props.name, reload)
 
           <template v-if="editUsesChannelSection">
             <section class="config-group">
-              <h4 class="config-group-title">{{ editIsLocalDocker ? T['infrastructure.docker'] : T['infrastructure.express'] }}</h4>
+              <h4 class="config-group-title">{{ editIsLocalDocker ? T['infrastructure.docker'] : editIsAwsLambda ? T['infrastructure.lambda'] : T['infrastructure.express'] }}</h4>
               <div class="config-fields">
-                <div class="flex flex-column gap-1" :class="{ 'config-field-wide': editIsLocalDocker }">
+                <div v-if="!editIsAwsLambda" class="flex flex-column gap-1" :class="{ 'config-field-wide': editIsLocalDocker }">
                   <label class="text-xs text-color-secondary">{{ L.port }}</label>
                   <div v-if="editIsLocalDocker" class="flex align-items-center gap-2">
                     <Checkbox v-model="editAutoPort" binary input-id="edit-auto-port" />
@@ -1247,6 +1215,28 @@ watch(() => props.name, reload)
                 <div v-if="editIsLocalDocker" class="config-field-wide">
                   <BundleContentField v-model="editForm.bundle_content" input-id="edit-bundle-content" />
                 </div>
+                <template v-if="editIsAwsLambda">
+                  <div class="flex flex-column gap-1">
+                    <label class="text-xs text-color-secondary">{{ L.lambda_memory }}</label>
+                    <InputNumber v-model="editForm.lambda_memory" :use-grouping="false" fluid />
+                  </div>
+                  <div class="flex flex-column gap-1">
+                    <label class="text-xs text-color-secondary">{{ L.lambda_timeout }}</label>
+                    <InputNumber v-model="editForm.lambda_timeout" :use-grouping="false" fluid />
+                  </div>
+                  <div class="flex flex-column gap-1">
+                    <label class="text-xs text-color-secondary">{{ L.lambda_reserved_concurrency }}</label>
+                    <InputNumber v-model="editForm.lambda_reserved_concurrency" :use-grouping="false" fluid />
+                  </div>
+                  <div class="flex flex-column gap-1">
+                    <label class="text-xs text-color-secondary">{{ L.lambda_cache_mb }}</label>
+                    <InputNumber v-model="editForm.lambda_cache_mb" :use-grouping="false" fluid />
+                  </div>
+                  <div class="flex flex-column gap-1">
+                    <label class="text-xs text-color-secondary">{{ L.lambda_architecture }}</label>
+                    <Select v-model="editForm.lambda_architecture" :options="lambdaArchitectureOptions" option-label="label" option-value="value" fluid />
+                  </div>
+                </template>
                 <template v-if="editIsEcsExpress">
                   <div class="flex flex-column gap-1">
                     <label class="text-xs text-color-secondary">{{ L.cpu }}</label>
@@ -1278,7 +1268,7 @@ watch(() => props.name, reload)
                 <div class="flex align-items-center gap-2 config-field-wide">
                   <Checkbox v-model="editForm.continuous" binary input-id="edit-continuous-timeline" />
                   <label for="edit-continuous-timeline" class="text-xs text-color-secondary">
-                    {{ L.continuous }}
+                    {{ L.continuous }}<QpBadge field="continuous" :form="editForm" />
                   </label>
                   <FieldHelp label="Continuous timeline">
                     Rewrites each segment's own timestamps per request (header patch, never a re-transcode) so
@@ -1300,9 +1290,16 @@ watch(() => props.name, reload)
                   <InputNumber v-else v-model="editForm.segment_duration" :min-fraction-digits="1" fluid />
                 </div>
                 <div class="flex flex-column gap-1">
-                  <label class="text-xs text-color-secondary">{{ L.dvr_window_seconds }}</label>
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.dvr_window_seconds }}</label><QpBadge field="dvr_window_seconds" :form="editForm" /></div>
                   <InputNumber v-model="editForm.dvr_window_seconds" fluid />
                 </div>
+              </div>
+              <div class="grid mt-1"><LowLatencyFields :form="editForm" id-prefix="edit" part="packaging" /></div>
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">{{ T['packaging.hls'] }}</h4>
+              <div class="config-fields">
                 <div class="flex flex-column gap-1 config-field-wide">
                   <label class="text-xs text-color-secondary">{{ L.hls_format }}</label>
                   <Select v-model="editForm.hls_format" :options="hlsFormatOptions" option-label="label" option-value="value" fluid />
@@ -1311,44 +1308,41 @@ watch(() => props.name, reload)
                   <Checkbox v-model="editForm.hls_ts_mux_audio" binary input-id="edit-hls-ts-mux-audio" />
                   <label for="edit-hls-ts-mux-audio" class="text-xs text-color-secondary">{{ L.hls_ts_mux_audio }}</label>
                 </div>
-                <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">{{ L.dash_addressing }}</label>
-                  <Select v-model="editForm.dash_addressing" :options="dashAddressingOptions" option-label="label" option-value="value" fluid />
-                </div>
-                <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">{{ L.dash_timeline }}</label>
-                  <Select v-model="editForm.dash_timeline" :options="dashTimelineOptions" option-label="label" option-value="value" fluid />
-                </div>
               </div>
+              <div class="grid mt-1"><LowLatencyFields :form="editForm" id-prefix="edit" part="hls" /></div>
             </section>
 
             <section class="config-group">
+              <h4 class="config-group-title">{{ T['packaging.dash'] }}</h4>
+              <div class="config-fields">
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.dash_addressing }}</label><QpBadge field="dash_addressing" :form="editForm" /></div>
+                  <Select v-model="editForm.dash_addressing" :options="dashAddressingOptions" option-label="label" option-value="value" fluid />
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.dash_timeline }}</label><QpBadge field="dash_timeline" :form="editForm" /></div>
+                  <Select v-model="editForm.dash_timeline" :options="dashTimelineOptions" option-label="label" option-value="value" fluid />
+                </div>
+              </div>
+              <div class="grid mt-1"><LowLatencyFields :form="editForm" id-prefix="edit" part="dash" /></div>
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">{{ T.query }}</h4>
+              <TimeshiftFields :form="editForm" id-prefix="edit" part="query" />
+            </section>
+
+            <section v-if="editForm.timeshift_enabled || editForm.query_overrides" class="config-group">
               <h4 class="config-group-title">{{ T.timeshift }}</h4>
-              <TimeshiftFields :form="editForm" id-prefix="edit" />
+              <TimeshiftFields :form="editForm" id-prefix="edit" part="timeshift" />
             </section>
 
             <section class="config-group">
               <h4 class="config-group-title">{{ T.markers }}</h4>
               <div class="config-fields">
-                <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">{{ L.daterange_mode }}</label>
-                  <Select v-model="editForm.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" fluid />
-                </div>
-                <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">{{ L.cue_tags }}</label>
-                  <Select v-model="editForm.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" fluid />
-                </div>
-                <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">{{ L.dash_signal_format }}</label>
-                  <Select v-model="editForm.dash_signal_format" :options="dashSignalFormatOptions" option-label="label" option-value="value" fluid />
-                </div>
-                <div class="flex flex-column gap-1 config-field-wide">
-                  <label class="text-xs text-color-secondary">{{ L.dash_descriptor_mode }}</label>
-                  <Select v-model="editForm.dash_descriptor_mode" :options="dashDescriptorModeOptions" option-label="label" option-value="value" fluid />
-                </div>
                 <div class="flex align-items-center gap-2 config-field-wide">
                   <Checkbox v-model="editForm.increment_event_ids" binary input-id="edit-increment-event-ids" />
-                  <label for="edit-increment-event-ids" class="text-xs text-color-secondary">{{ L.increment_event_ids }}</label>
+                  <label for="edit-increment-event-ids" class="text-xs text-color-secondary">{{ L.increment_event_ids }}<QpBadge field="increment_event_ids" :form="editForm" /></label>
                   <FieldHelp label="Increment SCTE-35 event ids">
                     Off (default) repeats the same event id every loop -- easiest to test against. On bumps
                     each id by loop_number &times; a shared step (a power of 10 above the channel's largest
@@ -1357,15 +1351,46 @@ watch(() => props.name, reload)
                     at the 32-bit SCTE-35 ceiling.
                   </FieldHelp>
                 </div>
+                <div class="config-field-wide">
+                  <PeriodSegmentationFields :form="editForm" id-prefix="edit" />
+                </div>
+                <div class="config-field-wide">
+                  <AnnounceFields :form="editForm" id-prefix="edit" />
+                </div>
+              </div>
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">{{ T['markers.hls'] }}</h4>
+              <div class="config-fields">
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.daterange_mode }}</label><QpBadge field="daterange_mode" :form="editForm" /></div>
+                  <Select v-model="editForm.daterange_mode" :options="daterangeModeOptions" option-label="label" option-value="value" fluid />
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.cue_tags }}</label><QpBadge field="cue_tags" :form="editForm" /></div>
+                  <Select v-model="editForm.cue_tags" :options="cueTagsOptions" option-label="label" option-value="value" fluid />
+                </div>
                 <div class="flex flex-column gap-1 config-field-wide">
                   <div class="flex align-items-center gap-1">
-                    <label class="text-xs text-color-secondary" for="edit-daterange-id-format">{{ L.daterange_id_format }}</label>
+                    <label class="text-xs text-color-secondary" for="edit-daterange-id-format">{{ L.daterange_id_format }}<QpBadge field="daterange_id_format" :form="editForm" /></label>
                     <DaterangeIdFormatHelp />
                   </div>
                   <InputText id="edit-daterange-id-format" v-model="editForm.daterange_id_format" />
                 </div>
-                <div class="config-field-wide">
-                  <PeriodSegmentationFields :form="editForm" id-prefix="edit" />
+              </div>
+            </section>
+
+            <section class="config-group">
+              <h4 class="config-group-title">{{ T['markers.dash'] }}</h4>
+              <div class="config-fields">
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.dash_descriptor_mode }}</label><QpBadge field="dash_descriptor_mode" :form="editForm" /></div>
+                  <Select v-model="editForm.dash_descriptor_mode" :options="dashDescriptorModeOptions" option-label="label" option-value="value" fluid />
+                </div>
+                <div class="flex flex-column gap-1 config-field-wide">
+                  <div class="flex align-items-center"><label class="text-xs text-color-secondary">{{ L.dash_signal_format }}</label><QpBadge field="dash_signal_format" :form="editForm" /></div>
+                  <Select v-model="editForm.dash_signal_format" :options="dashSignalFormatOptions" option-label="label" option-value="value" fluid />
                 </div>
               </div>
             </section>
@@ -1379,7 +1404,7 @@ watch(() => props.name, reload)
 
         <div class="text-color-secondary text-xs mt-2">
           Editing only rewrites configs/{{ name }}.toml -- it does not
-          {{ byBackend('touch the running container', 'touch AWS', 'touch AWS') }} by itself.
+          {{ byBackend('touch the running container', 'touch AWS', 'touch AWS', 'touch AWS') }} by itself.
           Use Update content to rebake HLS packaging after saving.
         </div>
       </div>
@@ -1387,7 +1412,6 @@ watch(() => props.name, reload)
 
     <JobPanel :job-id="activeJobId" :eta-hint="activeActionEta" @finished="onJobFinished" />
     <ConfirmPopup />
-    <ItsAliveBanner ref="itsAliveBanner" />
   </div>
 </template>
 
@@ -1412,6 +1436,11 @@ watch(() => props.name, reload)
 .config-key {
   width: 11rem;
   overflow-wrap: anywhere;
+}
+
+.config-badge {
+  width: 2rem;
+  white-space: nowrap;
 }
 
 .config-value {

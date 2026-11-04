@@ -55,6 +55,16 @@ RUN mkdir -p /out/lib /out/bin \
         | xargs -I{} cp -L {} /out/lib/
 
 # ---------------------------------------------------------------------------
+# Stage: frontend-build -- Vite (rolldown) needs Node >=20.17/22.13, but
+# Debian 12's apt nodejs is 18 (fine for the cdk CLI, too old for the build).
+FROM node:22-bookworm-slim AS frontend-build
+WORKDIR /build/igor/frontend
+COPY igor/frontend/package.json igor/frontend/package-lock.json ./
+RUN npm ci
+COPY igor/frontend/ ./
+RUN npm run build
+
+# ---------------------------------------------------------------------------
 # Stage: runtime
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim AS runtime
@@ -64,20 +74,19 @@ FROM debian:bookworm-slim AS runtime
 # runtime (source varies, target never does).
 ARG REPO_ROOT=/repo
 
-# UNVERIFIED PLACEHOLDER -- confirm before your first build. This wasn't
-# checked against a live download in the environment that wrote this
-# Dockerfile (no network egress to github.com there). Go to
-# https://github.com/tsduck/tsduck/releases, find the newest release still
-# publishing a "debian12"/"bookworm" amd64 .deb asset, and pass its exact
-# URL via --build-arg (or edit the default below). This base image is
-# debian:bookworm-slim (Debian 12) specifically because GPAC above is built
-# from source against it -- a "debian13" tsduck package is very likely
-# linked against a newer glibc than bookworm ships and will fail at runtime
-# ("version `GLIBC_2.NN' not found") rather than merely warn, so don't
-# substitute one as a quick fix if debian12 assets stop being published;
-# build tsduck from source instead (same pattern as the gpac-build stage
-# above) if that ever happens.
-ARG TSDUCK_DEB_URL=https://github.com/tsduck/tsduck/releases/download/v3.41-3977/tsduck_3.41-3977.debian12_amd64.deb
+# tsduck stopped publishing Debian 12 ("bookworm") packages after 3.39-3956;
+# 3.40+ only ship debian13/ubuntu24+ builds. This base image is
+# debian:bookworm-slim (Debian 12) because GPAC above is built from source
+# against it, and a "debian13" package is linked against a newer glibc than
+# bookworm ships (fails at runtime with "version `GLIBC_2.NN' not found"), so
+# pin the last release that has a debian12 asset. Override with --build-arg
+# if you move the base image. To go newer, build tsduck from source instead
+# (same pattern as the gpac-build stage above).
+# The package is picked for the build's own architecture (amd64 or arm64, both
+# published for this release), so Apple Silicon builds natively. Set
+# TSDUCK_DEB_URL to override the whole URL.
+ARG TSDUCK_VERSION=3.39-3956
+ARG TSDUCK_DEB_URL=
 
 # docker.io gives us the `docker` CLI to talk to the *host* daemon via the
 # mounted socket (docker-compose.yml) -- dockerd itself is never started,
@@ -87,7 +96,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 ffmpeg \
         docker.io \
         nodejs npm \
-    && curl -fsSL -o /tmp/tsduck.deb "${TSDUCK_DEB_URL}" \
+    && curl -fsSL -o /tmp/tsduck.deb "${TSDUCK_DEB_URL:-https://github.com/tsduck/tsduck/releases/download/v${TSDUCK_VERSION}/tsduck_${TSDUCK_VERSION}.debian12_$(dpkg --print-architecture).deb}" \
     && apt-get install -y --no-install-recommends /tmp/tsduck.deb \
     && rm -f /tmp/tsduck.deb \
     && rm -rf /var/lib/apt/lists/*
@@ -98,7 +107,7 @@ RUN ldconfig
 
 # aws CLI v2 (Debian only packages v1) -- required for its-a-live's
 # aws-media/ecs-express backends (S3 sync, `cdk bootstrap`'s own checks).
-RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip \
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
     && unzip -q /tmp/awscliv2.zip -d /tmp \
     && /tmp/aws/install \
     && rm -rf /tmp/awscliv2.zip /tmp/aws
@@ -136,7 +145,9 @@ RUN UV_PROJECT_ENVIRONMENT=/opt/venv-its-a-live uv sync --project "${REPO_ROOT}/
 
 # Frontend: built once here; the container serves the static bundle, it
 # never runs `vite dev` in this shape.
-RUN cd igor/frontend && npm ci && npm run build
+# Outside $REPO_ROOT for the same reason as the venvs: the bind mount shadows
+# it, so docker-entrypoint.sh symlinks it back to igor/frontend/dist.
+COPY --from=frontend-build /build/igor/frontend/dist /opt/igor-frontend-dist
 
 COPY igor/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

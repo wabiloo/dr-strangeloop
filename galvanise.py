@@ -3,7 +3,7 @@
 galvanise.py — Full pipeline runner for dr-strangeloop.
 
 Usage:
-  uv run python galvanise.py <config.yaml> [--backend aws-media|ecs-express]
+  uv run python galvanise.py <config.yaml> [--backend aws-media|ecs-express|aws-lambda]
 
 The config.yaml should be a franken-ts playlist (e.g. data/playlists/foo.yaml).
 Paths may be absolute or relative to the current working directory.
@@ -11,7 +11,7 @@ Paths may be absolute or relative to the current working directory.
 Pipeline (its-a-live backend selected by --backend, default aws-media):
   1. Run franken-ts to build the .ts file
   2. Generate <channels_dir>/<basename>.toml (default data/channels/)
-  3. (ecs-express only) Ensure the shared ECS cluster stack is deployed
+  3. (ecs-express, aws-lambda) Ensure the backend's shared stack is deployed
   4. Run CDK deploy (cdk deploy) for the channel stack
   5. Spark: stage the input for the chosen backend (upload .ts for
      aws-media; bake it locally via GPAC + push to S3 for ecs-express)
@@ -86,6 +86,8 @@ def _repo_root() -> str:
 # ---------------------------------------------------------------------------
 
 _AWS_MEDIA_TOML_TEMPLATE = """\
+config_version = 2
+
 [deploy]
 name = "{name}"
 backend = "aws-media"
@@ -102,6 +104,8 @@ source_path = "{ts_file}"
 """
 
 _ECS_EXPRESS_TOML_TEMPLATE = """\
+config_version = 2
+
 [deploy]
 name = "{name}"
 backend = "ecs-express"
@@ -118,7 +122,7 @@ source_path = "{ts_file}"
 
 [packaging]
 segment_duration   = 4.0
-dvr_window_seconds = 30
+dvr_window       = 30
 
 [infrastructure.express]
 port   = 8080
@@ -127,9 +131,37 @@ memory = 512   # 0.5 GB
 cdn    = true
 """
 
+_AWS_LAMBDA_TOML_TEMPLATE = """\
+config_version = 2
+
+[deploy]
+name = "{name}"
+backend = "aws-lambda"
+
+[infrastructure.aws]
+region = "eu-west-1"
+
+[infrastructure.s3]
+bucket_name = "bpkio-cs-demos"
+content_folder = "fabre/its-a-live"  # prefix inside the bucket
+
+[input]
+source_path = "{ts_file}"
+
+[packaging]
+segment_duration   = 4.0
+dvr_window       = 30
+
+[infrastructure.lambda]
+memory               = 1024  # MB (CPU scales with it)
+reserved_concurrency = 10    # cap on concurrent invocations; -1 = no cap
+cache_mb             = 512   # /tmp cache of segment bytes fetched from S3
+"""
+
 _TOML_TEMPLATES = {
     "aws-media": _AWS_MEDIA_TOML_TEMPLATE,
     "ecs-express": _ECS_EXPRESS_TOML_TEMPLATE,
+    "aws-lambda": _AWS_LAMBDA_TOML_TEMPLATE,
 }
 
 
@@ -149,12 +181,13 @@ def main() -> None:
     )
     parser.add_argument("config_yaml", metavar="config.yaml",
                         help="franken-ts YAML config file.")
-    parser.add_argument("--backend", choices=["aws-media", "ecs-express"],
+    parser.add_argument("--backend", choices=["aws-media", "ecs-express", "aws-lambda"],
                         default="aws-media",
                         help="its-a-live backend to deploy to: 'aws-media' "
                              "(MediaLive + MediaPackage, default) or "
                              "'ecs-express' (loop-dee-loop on ECS Express "
-                             "Mode + CloudFront).")
+                             "Mode + CloudFront) or 'aws-lambda' "
+                             "(loop-dee-loop on Lambda + CloudFront, no idle cost).")
     parser.add_argument("--clear-cache", action="store_true",
                         help="Delete the franken-ts clip cache (~/.cache/franken_ts) "
                              "before running Step 1.")
@@ -244,21 +277,24 @@ def main() -> None:
         print(f"{GREEN}TOML written to {toml_path}{RESET}")
 
     # ------------------------------------------------------------------
-    # Step 3 — (ecs-express only) ensure the shared ECS cluster stack
+    # Step 3 — (ecs-express, aws-lambda) ensure the backend's shared stack
     # ------------------------------------------------------------------
     step = 3
-    if backend == "ecs-express":
-        _header(step, "Ensure shared ECS cluster stack is deployed (ItsALiveSharedStack-ecs-express)")
+    if backend in ("ecs-express", "aws-lambda"):
+        shared_stack = f"ItsALiveSharedStack-{backend}"
+        shared_what = ("shared ECS cluster + CloudFront cache policies stack" if backend == "ecs-express"
+                       else "shared CloudFront cache policies stack")
+        _header(step, f"Ensure {shared_what} is deployed ({shared_stack})")
         shared_cmd = [
             "cdk", "deploy",
             "--require-approval", "never",
-            "--output", "cdk.out-_shared",
+            "--output", f"cdk.out-_shared-{backend}",
             "-c", f"config={toml_path}",
-            "ItsALiveSharedStack-ecs-express",
+            shared_stack,
         ]
         print(f"  cwd        : {push_dir}")
         print(f"  command    : {' '.join(shared_cmd)}")
-        if not _confirm("Deploy the shared cluster stack now? (safe/idempotent if already deployed)"):
+        if not _confirm("Deploy the shared stack now? (safe/idempotent if already deployed)"):
             print("Skipped.")
         else:
             _run(shared_cmd, cwd=push_dir)
@@ -309,8 +345,10 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Step — Start channel
     # ------------------------------------------------------------------
-    start_title = ("Start the MediaLive channel" if backend == "aws-media"
-                   else "Start the channel (scale ECS Express service to 1 task)")
+    start_title = {
+        "aws-media": "Start the MediaLive channel",
+        "aws-lambda": "Start the channel (allow invocations; an idle Lambda costs nothing)",
+    }.get(backend, "Start the channel (scale ECS Express service to 1 task)")
     _header(step, start_title)
     start_cmd = [
         "uv", "run", "--project", push_dir, "python", channel_py,

@@ -38,6 +38,7 @@ from fractions import Fraction
 from pathlib import Path
 
 import cmaf
+import lowlatency
 from gpac_pipeline import (
     AudioTrackParams,
     build_cues_xml,
@@ -48,8 +49,8 @@ from scte35_signaling import (
     DASH_DESCRIPTOR_MODE_DEFAULT,
     DASH_SIGNAL_FORMAT_DEFAULT,
     DATERANGE_ID_FORMAT_DEFAULT,
-    SCTE35_EVENT_ID_MAX,
-    compute_event_id_step,
+    event_id_increment_problem,
+    non_splice_insert_event_ids,
     validate_daterange_id_format,
     validate_dash_descriptor_mode,
     validate_dash_signal_format,
@@ -58,6 +59,8 @@ from scte35_signaling import (
 logger = logging.getLogger(__name__)
 
 TIMESCALE = 90_000
+# loop_descriptor.json "scte35_payloads": every marker holds the shared AND the narrowed message.
+SCTE35_PAYLOADS_BOTH = "shared+narrowed"
 
 
 class ValidationError(RuntimeError):
@@ -290,9 +293,7 @@ def validate_cue_tags_only(raw_markers: list[dict]) -> None:
     how to derive a duration/pairing for without a segmentation
     descriptor). Hard-fails otherwise, same style as
     `validate_markers_against_ts`."""
-    non_splice_insert = sorted(
-        m["event_id"] for m in raw_markers if m.get("splice_type") != "splice_insert"
-    )
+    non_splice_insert = non_splice_insert_event_ids(raw_markers)
     if non_splice_insert:
         raise ValidationError(
             f"cue_tags='only' requires every marker to be a bare "
@@ -317,23 +318,9 @@ def validate_increment_event_ids(raw_markers: list[dict]) -> None:
     exact same id as loop 0 -- i.e. the setting would quietly do nothing.
     Hard-fail instead of shipping a loop package where that's the case,
     same style as `validate_cue_tags_only`."""
-    event_ids = [m["event_id"] for m in raw_markers]
-    if not event_ids:
-        return
-    step = compute_event_id_step(event_ids)
-    max_base_id = max(int(eid, 16) for eid in event_ids)
-    if step > SCTE35_EVENT_ID_MAX - max_base_id:
-        raise ValidationError(
-            f"increment_event_ids=true derives step={step} (smallest power "
-            f"of 10 above the largest base event id, "
-            f"0x{max_base_id:08X}={max_base_id}), which leaves no room "
-            f"under the 32-bit SCTE-35 ceiling "
-            f"(0x{SCTE35_EVENT_ID_MAX:08X}={SCTE35_EVENT_ID_MAX}) for even "
-            f"one real increment -- every loop would silently emit the "
-            f"exact same id as loop 0. Base event ids are too close to the "
-            f"32-bit ceiling for this feature. Hard failure -- not "
-            f"silently ignored."
-        )
+    problem = event_id_increment_problem(raw_markers)
+    if problem:
+        raise ValidationError(f"{problem} Hard failure -- not silently ignored.")
 
 
 def validate_markers_against_ts(
@@ -1706,6 +1693,24 @@ def bake_segment_list(
     )
 
 
+def max_chunk_ticks(
+    rendition_dir: Path, track_id: int, boundary_ticks: list[int], total_ticks: int, *, all_sync: bool = False
+) -> int:
+    """The longest chunk, in package ticks, over every segment of one baked track.
+
+    LL-HLS `PART-TARGET` must be at least as long as every part and must never change, so serve.py needs the real
+    maximum -- GPAC does not cut chunks evenly (a 0.5 s target gave 0.60 s for the first chunk of a loop)."""
+    init = next(iter(sorted(rendition_dir.glob(f"*track{track_id}_init.mp4"))), None)
+    track_timescale = (cmaf.track_timescale(init.read_bytes()) if init else None) or TIMESCALE
+    segments = sorted(rendition_dir.glob(f"*track{track_id}_*.m4s"), key=_numeric_segment_index)
+    longest = 0
+    for index, path in enumerate(segments):
+        end = boundary_ticks[index + 1] if index + 1 < len(boundary_ticks) else total_ticks
+        table = lowlatency.chunk_table(path.read_bytes(), track_timescale, TIMESCALE, end - boundary_ticks[index], all_sync=all_sync)
+        longest = max([longest, *(c.duration_ticks for c in table)])
+    return longest
+
+
 def bake_one_rendition(
     name: str,
     ts_file: Path,
@@ -1716,6 +1721,7 @@ def bake_one_rendition(
     dry_run: bool,
     include_audio: bool,
     daterange_mode: str = "shared",
+    chunk_duration_seconds: float | None = None,
 ) -> dict | None:
     """Bake a single rendition's .ts into its own segment set under
     `<output_package_dir>/segments/<name>/`. Returns a rendition result
@@ -1735,7 +1741,11 @@ def bake_one_rendition(
     """
     logger.info("── Rendition '%s' (%s) ──", name, ts_file)
 
-    decoded = decode_embedded_scte35(ts_file, narrow_descriptors=(daterange_mode == "narrowed"))
+    # `splice_command_b64` stays the shared (whole-message) payload and
+    # `splice_command_b64_narrowed` the single-descriptor one, whatever
+    # `daterange_mode` is: serve.py picks per format -- and per request, via
+    # the `descriptor_grouping` query parameter -- so both must be baked.
+    decoded = decode_embedded_scte35(ts_file)
     validated_markers = validate_markers_against_ts(raw_markers, decoded)
 
     video_track_id, audio_track_id, audio_params = read_actual_track_params(ts_file)
@@ -1791,6 +1801,7 @@ def bake_one_rendition(
         cues_xml_path,
         rendition_dir,
         segment_duration_seconds=segment_duration_seconds,
+        chunk_duration_seconds=chunk_duration_seconds,
         dry_run=dry_run,
     )
 
@@ -1828,6 +1839,15 @@ def bake_one_rendition(
 
     variant_metadata = read_variant_metadata(rendition_dir / "manifest.mpd")
 
+    longest_chunk = None
+    if chunk_duration_seconds is not None:
+        longest_chunk = max_chunk_ticks(rendition_dir, video_track_id, segment_boundary_ticks, total_loop_duration_ticks)
+        if include_audio and audio_segment_boundary_ticks is not None:
+            longest_chunk = max(
+                longest_chunk,
+                max_chunk_ticks(rendition_dir, audio_track_id, audio_segment_boundary_ticks, total_loop_duration_ticks, all_sync=True),
+            )
+
     logger.info(
         "Rendition '%s': produced %d real segment(s); all %d marker "
         "tick(s) landed exactly on a segment boundary",
@@ -1844,6 +1864,8 @@ def bake_one_rendition(
         "video_variant": variant_metadata["video"],
         "audio_variant": variant_metadata["audio"] if include_audio else None,
         "markers": validated_markers,
+        # Only for a chunked bake (--chunk-duration), so every other package's descriptor is unchanged.
+        **({"max_chunk_ticks": longest_chunk} if longest_chunk is not None else {}),
     }
 
 
@@ -1863,6 +1885,7 @@ def bake(
     hls_ts_mux_audio: bool = True,
     dash_signal_format: str = DASH_SIGNAL_FORMAT_DEFAULT,
     dash_descriptor_mode: str = DASH_DESCRIPTOR_MODE_DEFAULT,
+    chunk_duration_seconds: float | None = None,
 ) -> None:
     """Bake phase entrypoint (SCOPE.md §4.1), generalized to a rendition
     ladder auto-discovered from disk (see discover_renditions()).
@@ -1885,6 +1908,11 @@ def bake(
 
     if hls_format not in ("cmaf", "ts"):
         raise ValidationError("hls_format must be 'cmaf' or 'ts'")
+    if chunk_duration_seconds is not None and not 0 < chunk_duration_seconds < segment_duration_seconds:
+        raise ValidationError(
+            f"chunk_duration_seconds ({chunk_duration_seconds}) must be > 0 and shorter than "
+            f"segment_duration_seconds ({segment_duration_seconds})"
+        )
 
     try:
         validate_daterange_id_format(daterange_id_format)
@@ -1926,6 +1954,7 @@ def bake(
             dry_run=dry_run,
             include_audio=(i == 0),
             daterange_mode=daterange_mode,
+            chunk_duration_seconds=chunk_duration_seconds,
         )
         if dry_run:
             continue
@@ -1972,6 +2001,11 @@ def bake(
         "segment_duration_seconds": segment_duration_seconds,
         "hls_format": hls_format,
         "hls_ts_mux_audio": hls_ts_mux_audio,
+        # Every marker carries BOTH the shared (`splice_command_b64`) and the narrowed
+        # (`splice_command_b64_narrowed`) SCTE-35 message, so serve.py can choose per
+        # format and per request (the `descriptor_grouping` query parameter). Packages
+        # baked earlier lack this marker; serve.py refuses to switch their payload.
+        "scte35_payloads": SCTE35_PAYLOADS_BOTH,
         "daterange_mode": daterange_mode,
         "cue_tags": cue_tags,
         "increment_event_ids": increment_event_ids,
@@ -1989,6 +2023,9 @@ def bake(
         "source_markers_json": str(markers_json),
         "source_timeline_json": str(timeline_json) if timeline_json else None,
     }
+    if chunk_duration_seconds is not None:
+        # Absent (not null) for ordinary packages, so their descriptors stay unchanged.
+        loop_descriptor["chunk_duration_seconds"] = chunk_duration_seconds
     descriptor_path = output_package_dir / "loop_descriptor.json"
     with descriptor_path.open("w", encoding="utf-8") as f:
         json.dump(loop_descriptor, f, indent=2)
@@ -2040,6 +2077,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", type=Path, required=True, help="Output loop package directory")
     parser.add_argument("--segment-duration", type=float, default=4.0)
+    parser.add_argument(
+        "--chunk-duration",
+        type=float,
+        default=None,
+        help="Low-latency: split every segment into CMAF chunks (`moof`+`mdat`) of "
+        "about this many seconds (e.g. 0.5), each with its own tfdt, so serve.py can "
+        "release them progressively. Default: one chunk per segment (not low-latency). "
+        "Must be shorter than --segment-duration.",
+    )
     parser.add_argument("--hls-format", choices=("cmaf", "ts"), default="cmaf")
     parser.add_argument("--hls-ts-mux-audio", action=argparse.BooleanOptionalAction, default=True,
                         help="For HLS TS, mux audio with video (default) or serve a separate TS audio playlist")
@@ -2159,6 +2205,7 @@ def main(argv: list[str] | None = None) -> int:
                 hls_ts_mux_audio=args.hls_ts_mux_audio,
                 dash_signal_format=args.dash_signal_format,
                 dash_descriptor_mode=args.dash_descriptor_mode,
+                chunk_duration_seconds=args.chunk_duration,
             )
     except ValidationError as exc:
         logger.error("VALIDATION FAILED: %s", exc)

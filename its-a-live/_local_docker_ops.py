@@ -38,11 +38,11 @@ import sys
 from _host_paths import to_host_path
 from _infra_cfg import infra_table
 from _paths_cfg import get_paths
-from _markers_cfg import period_on_segmentation_serve_args
-from _packaging_cfg import dash_addressing_serve_args
+from _markers_cfg import announce_serve_args, markers_bake_args, split_on_serve_args
+from _packaging_cfg import dash_serve_args, dvr_window_seconds, ll_serve_args, packaging_bake_args
 from _reachability import check_manifest_reachable
 from _epoch_cfg import config_epoch_utc
-from _timeshift_cfg import timeshift_serve_args
+from _query_cfg import query_serve_args
 
 _LOOP_DEE_LOOP_DIR = os.path.join(os.path.dirname(__file__), "..", "loop-dee-loop")
 _IMAGE_TAG = "loop-dee-loop:local"
@@ -169,10 +169,6 @@ def _resolve_port(cfg, name):
     return _find_free_port()
 
 
-def _dvr_window_seconds(cfg):
-    return str(cfg.get("packaging", {}).get("dvr_window_seconds", 30))
-
-
 def _continuous_timeline_args(cfg):
     """loop-dee-loop/SCOPE.md §12: default on -- `[timeline]
     continuous = false` opts back out to the honestly-signaled
@@ -193,32 +189,12 @@ def spark(cfg, session, channel_name, extra_args=None):
 
     source_path = os.path.abspath(source_path)
     local_output_dir = _local_output_dir(cfg, channel_name)
-    segment_duration = str(cfg.get("packaging", {}).get("segment_duration", 4.0))
-    packaging = cfg.get("packaging", {})
-    markers_cfg = cfg.get("markers", {})
-    daterange_mode = markers_cfg.get("daterange_mode", "shared")
-    cue_tags = markers_cfg.get("cue_tags", "none")
-    increment_event_ids = markers_cfg.get("increment_event_ids", False)
-    daterange_id_format = markers_cfg.get(
-        "daterange_id_format", "{segcode}-{eventid}-{loop}"
-    )
-    dash_signal_format = markers_cfg.get("dash_signal_format", "binary")
-    dash_descriptor_mode = markers_cfg.get("dash_descriptor_mode", "shared")
     os.makedirs(local_output_dir, exist_ok=True)
 
     python_cmd = _resolve_python_cmd()
     bake_script = os.path.join(_LOOP_DEE_LOOP_DIR, "bake.py")
     bake_args = python_cmd + [bake_script, source_path, "--output", local_output_dir,
-                               "--segment-duration", segment_duration,
-                               "--hls-format", packaging.get("hls_format", "cmaf"),
-                               "--hls-ts-mux-audio" if packaging.get("hls_ts_mux_audio", True) else "--no-hls-ts-mux-audio",
-                              "--daterange-mode", daterange_mode,
-                              "--cue-tags", cue_tags,
-                              "--daterange-id-format", daterange_id_format,
-                              "--dash-signal-format", dash_signal_format,
-                              "--dash-descriptor-mode", dash_descriptor_mode]
-    if increment_event_ids:
-        bake_args.append("--increment-event-ids")
+                              *packaging_bake_args(cfg), *markers_bake_args(cfg)]
     # grave-robber/SCOPE.md §10: only meaningful when [input].source_path
     # points at a segment-list manifest (.json) rather than a franken-ts
     # .ts/rendition dir -- bake.py itself ignores this flag for the normal
@@ -310,11 +286,15 @@ def _serve_args(cfg, channel_name, port, epoch):
         "--epoch-utc", epoch,
         "--channel-name", channel_name,
         "--port", str(port),
-        "--dvr-window-seconds", _dvr_window_seconds(cfg),
+        "--dvr-window-seconds", dvr_window_seconds(cfg),
         *_continuous_timeline_args(cfg),
-        *period_on_segmentation_serve_args(cfg),
-        *dash_addressing_serve_args(cfg),
-        *timeshift_serve_args(cfg),
+        *split_on_serve_args(cfg),
+        *announce_serve_args(cfg),
+        # `utc_timing = "http"` without an explicit utc_timing_url: the container is reached on localhost:<port>
+        # (viewers elsewhere, e.g. through a tunnel, set utc_timing_url).
+        *dash_serve_args(cfg),
+        *ll_serve_args(cfg, public_url=f"http://localhost:{port}"),
+        *query_serve_args(cfg),
     ]
 
 
@@ -433,7 +413,7 @@ def _resolve_epoch_arg(raw):
 
 def _print_urls(port):
     print(f"\nHLS:  http://localhost:{port}/index.m3u8")
-    print(f"DASH: http://localhost:{port}/stream.mpd")
+    print(f"DASH: http://localhost:{port}/index.mpd")
 
 
 def start(cfg, session, outputs, extra_args=None):
@@ -447,7 +427,7 @@ def start(cfg, session, outputs, extra_args=None):
     behavior). Otherwise it's recreated -- if that recreate is happening
     ONLY because the image changed underneath it (not because of an
     explicit --epoch-utc), the container's own currently-running epoch is
-    preserved rather than reset to the configured `[timeline] epoch_utc`, so a rebuild-triggered
+    preserved rather than reset to the configured `[timeline] epoch`, so a rebuild-triggered
     restart never visibly jumps the stream's playback position. Pass
     `--epoch-utc now|<ISO8601>` to reset it explicitly."""
     _require_docker()
@@ -508,7 +488,7 @@ def stop(cfg, session, outputs):
 def refresh(cfg, session, outputs):
     """Recreate the container so it picks up whatever was last `spark`ed
     into the bind-mounted loop package directory. The container is
-    recreated with the configured `[timeline] epoch_utc` (default
+    recreated with the configured `[timeline] epoch` (default
     2026-01-01T00:00:00Z) -- this is also how a changed epoch is applied
     (`redeploy` runs this). Pass `channel.py start --epoch-utc ...`
     directly for a one-off epoch."""
@@ -544,7 +524,7 @@ def image(cfg, session, channel_name, extra_args=None):
       channel.py image [--epoch-utc now|<ISO8601>] [--save [PATH]]
 
     --epoch-utc sets the default epoch baked into the image (default: the
-    configured `[timeline] epoch_utc`). --save writes `docker save` output to PATH
+    configured `[timeline] epoch`). --save writes `docker save` output to PATH
     (default: <outputs_dir>/images/<name>.tar)."""
     _require_docker()
     local_output_dir = _local_output_dir(cfg, channel_name)
@@ -590,7 +570,7 @@ def image(cfg, session, channel_name, extra_args=None):
     print("\nRun it anywhere Docker is available -- no S3, AWS credentials or volume needed:")
     print(f"  docker run -p 8080:8080 {tag}")
     print("  HLS:  http://localhost:8080/index.m3u8")
-    print("  DASH: http://localhost:8080/stream.mpd")
+    print("  DASH: http://localhost:8080/index.mpd")
 
 
 def status(cfg, session, outputs):
@@ -605,7 +585,7 @@ def status(cfg, session, outputs):
     raw_port = infra_table(cfg, "docker").get("port", "auto")
     port = int(raw_port) if raw_port != "auto" else _running_port(name)
     hls_url = f"http://localhost:{port}/index.m3u8" if docker_status == "running" and port else None
-    dash_url = f"http://localhost:{port}/stream.mpd" if docker_status == "running" and port else None
+    dash_url = f"http://localhost:{port}/index.mpd" if docker_status == "running" and port else None
     result = {
         "backend": "local-docker",
         "container_name": name,

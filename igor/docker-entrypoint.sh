@@ -37,4 +37,8 @@ link_venv() {
 link_venv "${REPO_ROOT}/.venv" /opt/venv-root
 link_venv "${REPO_ROOT}/its-a-live/.venv" /opt/venv-its-a-live
 
+# Same shadowing applies to the built Igor UI (igor/frontend/dist, gitignored,
+# so absent from a fresh checkout). A real dist/ built on the host is left alone.
+link_venv "${REPO_ROOT}/igor/frontend/dist" /opt/igor-frontend-dist
+
 exec "$@"

@@ -319,6 +319,7 @@ def test_bake_segment_list_with_middle_null_entry_produces_complete_ledger(tmp_p
     bake_segment_list(manifest_path, output_dir, allow_missing_segments=True)
 
     descriptor = json.loads((output_dir / "loop_descriptor.json").read_text())
+    assert "scte35_payloads" not in descriptor  # archive markers carry no SCTE-35 message to switch
     assert descriptor["total_loop_duration_ticks"] == 350
     assert descriptor["asset_boundary_indices"] == [2]
     assert descriptor["asset_boundary_gap_ticks"] == {"2": 45_000}

@@ -34,6 +34,10 @@ CATALOG: tuple[DocSection, ...] = (
         DocEntry("agents", "Agent entrypoint", "Pipeline architecture, config locations and per-tool pointers.", "AGENTS.md"),
         DocEntry("docker-local", "Run Igor via Docker", "No toolchain install: everything in a container.", "DOCKER_LOCAL.md"),
     )),
+    DocSection("low-latency", "Low latency", (
+        DocEntry("low-latency", "Low latency (DASH and HLS)", "How it works, how to turn it on, per-request overrides, clock sync, backends, limits.", "docs/low-latency.md"),
+        DocEntry("player-lab-agents", "player-lab", "Play a channel in several players and measure latency, stalls and errors.", "player-lab/AGENTS.md"),
+    )),
     DocSection("franken-ts", "Content authoring: franken-ts", (
         DocEntry("franken-ts-readme", "franken-ts", "Build a .ts with SCTE-35 from a YAML playlist.", "franken-ts/README.md"),
         DocEntry("franken-ts-agents", "franken-ts reference", "YAML schema, marker types and CLI.", "franken-ts/AGENTS.md"),
@@ -41,9 +45,10 @@ CATALOG: tuple[DocSection, ...] = (
         DocEntry("scte35-numbering", "SCTE-35 segment numbering", "Cross-standard reference for segment numbering.", "scte35-segment-numbering-spec-comparison.md"),
     )),
     DocSection("its-a-live", "Deploy and run: its-a-live", (
-        DocEntry("its-a-live-readme", "its-a-live", "Channel lifecycle across the three backends.", "its-a-live/README.md"),
+        DocEntry("its-a-live-readme", "its-a-live", "Channel lifecycle across the four backends.", "its-a-live/README.md"),
         DocEntry("its-a-live-agents", "its-a-live reference", "Channel TOML schema and every channel.py command.", "its-a-live/AGENTS.md"),
         DocEntry("its-a-live-brief", "Architecture brief", "Original design brief for the AWS stacks.", "its-a-live/AGENT_BRIEF.md"),
+        DocEntry("its-a-live-lambda", "aws-lambda backend", "Design and trade-offs of the Lambda + CloudFront backend.", "its-a-live/LAMBDA_BACKEND.md"),
         DocEntry("its-a-live-k8s", "Kubernetes backend", "Scope for a generic-Kubernetes backend.", "its-a-live/K8S_BACKEND.md"),
         DocEntry("its-a-live-mpv2", "MediaPackage v2", "Future work, not wired up.", "its-a-live/MEDIAPACKAGE_V2.md"),
     )),

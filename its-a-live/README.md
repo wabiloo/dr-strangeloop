@@ -1,13 +1,18 @@
 # its-a-live
 
 Provisions a live-looping HLS/DASH channel from `franken-ts` output, on
-one of three backends selected per-channel via config — one command-line
+one of four backends selected per-channel via config — one command-line
 tool, one config schema, identical commands regardless of which backend
 you pick:
 
 - **`ecs-express`** — `loop-dee-loop` (self-hosted remux/serve, no
   transcoding) on **ECS Express Mode** + CloudFront. Cheap, simple, no
   managed media services involved.
+- **`aws-lambda`** — the same `loop-dee-loop` serve code in a **Lambda
+  function** behind CloudFront, reading the loop package lazily from S3.
+  No idle cost, no ECS cluster or load balancer; the first viewer wakes it
+  up. Best for rarely-watched channels — see
+  [`LAMBDA_BACKEND.md`](./LAMBDA_BACKEND.md).
 - **`aws-media`** — **MediaLive + MediaPackage v1** (fully managed AWS
   media services, real live transcoding).
 - **`local-docker`** — `loop-dee-loop` in a `docker run` container on
@@ -40,6 +45,7 @@ franken-ts output (.ts + .markers.json)
         |
         +-- ecs-express: bake.py (GPAC, local, no AWS compute)
         |                 -> loop package -> S3
+        +-- aws-lambda:  (same bake, same S3 push)
         |
         +-- aws-media:   upload .ts as-is -> S3
         |
@@ -47,6 +53,9 @@ franken-ts output (.ts + .markers.json)
    channel.py start
         |
         +-- ecs-express: ECS::ExpressGatewayService (Fargate, shared ALB)
+        |                 -> CloudFront -> HLS/DASH
+        |
+        +-- aws-lambda:  Lambda (serve.py, package read from S3 on demand)
         |                 -> CloudFront -> HLS/DASH
         |
         +-- aws-media:   MediaLive (TS_FILE input, LOOP) -> MediaPackage v1
@@ -58,6 +67,11 @@ franken-ts output (.ts + .markers.json)
 - AWS CLI v2, Node.js (`npm install -g aws-cdk`), [uv](https://docs.astral.sh/uv/)
 - An existing S3 bucket (referenced only, never created/destroyed by
   either backend's stack).
+- **`aws-lambda` only**: Docker (for the CDK-managed serve-only image,
+  `loop-dee-loop/Dockerfile.lambda`) and the same local bake tooling as
+  `ecs-express` for `channel.py spark`. Check the account's Lambda
+  concurrency quota: reserving concurrency needs more than 100 + the
+  channel's `reserved_concurrency`; on a new account set it to `-1`.
 - **`ecs-express` only**: Docker (for the CDK-managed `loop-dee-loop`
   image build); either a local Python env with `loop-dee-loop`'s deps +
   a GPAC/MP4Box build with `scte35dec` support on `PATH`, or just use
@@ -89,7 +103,7 @@ cdk deploy ItsALiveSharedStack-scheduler -c scheduler=true     # once per accoun
 ## Scheduling
 
 `channel.py schedule add/remove/list` manages scheduled on-air windows
-for a channel (aws-media/ecs-express only -- local-docker has no AWS
+for a channel (aws-media/ecs-express/aws-lambda only -- local-docker has no AWS
 presence to schedule against). A window is `[--start ISO8601]
 [--end ISO8601]`, both optional: no `--start` means the window begins
 right now (and `schedule add` also runs `start` for you); no `--end`
@@ -127,7 +141,7 @@ schema). The key field is `[deploy].backend`:
 # configs/my-channel.toml
 [deploy]
 name = "my-channel"
-backend = "ecs-express"        # or "aws-media"
+backend = "ecs-express"        # or "aws-lambda" | "aws-media" | "local-docker"
 
 [infrastructure.aws]
 region = "eu-west-1"
@@ -141,24 +155,33 @@ source_path = "../outputs/mychannel"   # franken-ts output
 
 # ecs-express-only:
 [packaging]
-segment_duration   = 4.0
-dvr_window_seconds = 30
+segment_duration = 4.0
+dvr_window = 30              # seconds (also a query parameter of the same name)
 
-[timeline]                  # ecs-express/local-docker only
-epoch_utc          = "2026-01-01T00:00:00Z"  # optional, this is the default; loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
+[timeline]                  # ecs-express/aws-lambda/local-docker only
+epoch = "2026-01-01T00:00:00Z"  # optional, this is the default; loop 0's start / DASH availabilityStartTime (UTC, exactly this form)
 continuous = true  # default -- see loop-dee-loop/SCOPE.md §12; false reverts to signaled discontinuities/Period restarts at the loop wrap
 
-[timeshift]                  # optional; startover/catchup (loop-dee-loop/SCOPE.md §13), on by default
-enabled = true
+[query]                      # optional; startover/catchup and per-request overrides (loop-dee-loop/SCOPE.md §13), on by default
+timeshift = true             # startover/catchup (start, end, full_loops, offset); false = live only
+overrides = true             # per-request overrides (every other parameter); false = ignored. Both are TOML only
+prefix = ""                  # put in front of EVERY query parameter name, e.g. "dsl_" -> dsl_start, dsl_cue_tags
 start_param = "start"        # e.g. https://<cdn>/index.m3u8?start=2026-09-30T08:00:00Z&end=2026-09-30T08:10:00Z
 end_param = "end"
-# `full-loops` (bool), `timeline` (default|continuous|periodic) and `offset` (e.g. -PT1H) are fixed query params, not configurable
-max_span_seconds = 21600
-# These names are also the only query params CloudFront keys manifest caching on --
+# The other parameters have fixed names: full_loops (bool), timeline_mode (default|continuous|periodic), offset
+# (e.g. -PT1H), epoch, dvr_window, split_on, announce_ahead, announce_on, timeline_style, addressing, cue_tags, descriptor_grouping,
+# increment_event_ids, signal_format, id_template, max_height, max_bitrate, low_latency, ll_target_latency,
+# ll_utc_timing (DASH low latency, loop-dee-loop/README.md "Low-latency DASH").
+# All these names (prefixed) are also what CloudFront keys manifest caching on --
 # redeploy (`channel.py redeploy`) after changing them.
 
+[timeshift]
+max_span_seconds = 21600     # longest startover/catchup range
+
 [markers]
-# period_on_segmentation = [0x22, 0x30]  # optional: force a Period/discontinuity at these SCTE-35 segmentation_type_ids, even with continuous (loop-dee-loop/SCOPE.md §14)
+# split_on = [0x22, 0x30]    # optional: force a Period/discontinuity at these SCTE-35 segmentation_type_ids, even with continuous (loop-dee-loop/SCOPE.md §14)
+# announce_ahead = 10            # optional, seconds (0 = off): announce markers (HLS DATERANGE / DASH Event) at least this long before the segment they fall in, rounded to whole segments, also across the loop wrap; the tag/Event stays until every segment it covers has left the window; in DASH a marker announced in an earlier Period than the one it falls in is carried again by every later Period that still covers it. Marker times and CUE-OUT/-IN are not moved; not applied to a closed catchup range. Per request: ?announce_ahead=10&announce_on=0x22
+# announce_on = [0x22, "splice_insert"]   # optional: only announce these segmentation_type_ids and/or "splice_insert"; empty = every marker
 
 [infrastructure.express]
 port   = 8080
@@ -167,12 +190,16 @@ memory = 512
 cdn    = true   # false: no CloudFront (faster deploy, no edge caching, URLs use the service endpoint)
 ```
 
+A config written before the key renames (HLS/DASH sub-tables, `[query]`, ...)
+is rejected with the exact renames; `migrate_config.py` rewrites it (see
+`AGENTS.md`, "Renamed config keys and migrating old files").
+
 See `AGENTS.md`'s config reference for the full schema, including the
-`[markers]` section controlling the shape of the HLS/DASH SCTE-35
-signaling `loop-dee-loop` renders, and `local-docker`'s `[infrastructure.docker]`
+`[markers]` section (with its `[markers.hls]` / `[markers.dash]` sub-tables)
+controlling the shape of the HLS/DASH SCTE-35 signaling `loop-dee-loop` renders, and `local-docker`'s `[infrastructure.docker]`
 section (in place of `[infrastructure.express]`, holding `port` and `bundle_content`).
 
-For `ecs-express` and `local-docker`, `[markers].daterange_id_format`
+For `ecs-express`, `aws-lambda` and `local-docker`, `[markers.hls] id_template`
 controls HLS DATERANGE IDs. Its default is
 `"{segcode}-{eventid}-{loop}"`; supported fields are `{loop}`, `{eventid}`,
 `{segid}`, `{seghex}`, `{segcode}`, `{segname}` (e.g.
@@ -220,6 +247,10 @@ uv run python channel.py refresh    # pick it up on the running channel
   deployment strategy means the *previous* task can still serve most/all
   traffic for a fixed ~3 minute bake period — no fast/reliable API signal
   for "100% of viewers now see the new content."
+- `aws-lambda`: `refresh` bumps the function's `LOOP_PACKAGE_REVISION`, which
+  recycles every warm execution environment (they cache the S3 listing), and
+  invalidates the CloudFront cache so edges drop the old segments. Seconds,
+  no canary.
 - `aws-media`: MediaLive's `TS_FILE` input has no hot-reload, so `refresh`
   is a full stop→start cycle (a real, brief interruption).
 
@@ -232,25 +263,25 @@ groups: **Infrastructure** (does the stack/container exist at all) and
 
 ### Infrastructure
 
-| Command | `ecs-express` | `aws-media` | `local-docker` |
-|---|---|---|---|
-| `create` | First-time bootstrap: ensure the shared cluster stack, `spark`, `cdk deploy`, `start` | First-time bootstrap: `spark`, `cdk deploy`, `start` | First-time bootstrap: `spark`, `start` (no cdk) |
-| `redeploy` | Delete a broken stack if needed (and ensure the shared cluster stack is deployed), then `cdk deploy` | Delete a broken stack if needed, then `cdk deploy` | No stack to redeploy — pure alias for `refresh` |
-| `terminate` | `cdk destroy` the stack for good — stops billing, does not bring anything back | `cdk destroy` the stack for good — stops billing, does not bring anything back | Errors — no stack; `stop` alone is complete teardown (igor's UI hides this action for local-docker rather than showing an error) |
-| `outputs` | CloudFormation stack outputs | CloudFormation stack outputs | Errors — no stack; use `status` instead (igor's UI hides this action for local-docker rather than showing an error) |
-| `list` | List channels + stack status found under a directory of TOML configs | (same) | (same, using Docker container status in place of stack status) |
+| Command | `ecs-express` | `aws-lambda` | `aws-media` | `local-docker` |
+|---|---|---|---|---|
+| `create` | First-time bootstrap: ensure the shared cluster + cache-policy stack, `spark`, `cdk deploy`, `start` | First-time bootstrap: ensure the shared cache-policy stack, `spark`, `cdk deploy`, `start` | First-time bootstrap: `spark`, `cdk deploy`, `start` | First-time bootstrap: `spark`, `start` (no cdk) |
+| `redeploy` | Delete a broken stack if needed (and ensure the shared cluster + cache-policy stack is deployed), then `cdk deploy` | Delete a broken stack if needed (and ensure the shared cache-policy stack is deployed), then `cdk deploy` | Delete a broken stack if needed, then `cdk deploy` | No stack to redeploy — pure alias for `refresh` |
+| `terminate` | `cdk destroy` the stack for good — stops billing, does not bring anything back | `cdk destroy` the stack for good — does not bring anything back (CloudFront can take 15+ min to finish deleting in the background) | `cdk destroy` the stack for good — stops billing, does not bring anything back | Errors — no stack; `stop` alone is complete teardown (igor's UI hides this action for local-docker rather than showing an error) |
+| `outputs` | CloudFormation stack outputs | CloudFormation stack outputs | CloudFormation stack outputs | Errors — no stack; use `status` instead (igor's UI hides this action for local-docker rather than showing an error) |
+| `list` | List channels + stack status found under a directory of TOML configs | (same) | (same) | (same, using Docker container status in place of stack status) |
 
 ### Stream
 
-| Command | `ecs-express` | `aws-media` | `local-docker` |
-|---|---|---|---|
-| `spark` | Bake locally (GPAC via `bake.py`), push loop package to S3 | Upload the raw `.ts` to S3 as-is | Bake locally (GPAC via `bake.py`), no upload — package stays on disk |
-| `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Start the MediaLive channel, wait for `RUNNING` | `docker run` a container bind-mounting the baked package (building the image on first use) — or, with `bundle_content = true`, build the per-channel image with the package inside and run it with no mount; epoch is `[timeline] epoch_utc` (default 2026-01-01T00:00:00Z), `--epoch-utc` works the same as `ecs-express` |
-| `stop` | Scale ECS to 0 tasks (shared ALB keeps running for other channels) | Stop the MediaLive channel, wait for `IDLE` | `docker rm -f` the container |
-| `refresh` | Force a new ECS task launch to re-sync S3 content | Full stop→start cycle (no hot-reload exists) | Recreate the container (seconds, no canary) |
-| `update` | `spark` then `refresh` in one step — the routine "ship new content to a running channel" combo | (same) | (same) |
-| `image` | Errors — content lives in S3, nothing to export | Errors | Build the self-contained image (`its-a-live-<name>:baked`: code + baked loop package), regardless of `bundle_content`; `--save [PATH]` exports a tarball for `docker load` on another machine |
-| `status` | ECS service scaling/status | MediaLive channel state | Docker container status (plus `bundle_content`, the image, and the size of any exported tarball) |
+| Command | `ecs-express` | `aws-lambda` | `aws-media` | `local-docker` |
+|---|---|---|---|---|
+| `spark` | Bake locally (GPAC via `bake.py`), push loop package to S3 | Bake locally (GPAC via `bake.py`), push loop package to S3 — identical to `ecs-express` | Upload the raw `.ts` to S3 as-is | Bake locally (GPAC via `bake.py`), no upload — package stays on disk |
+| `start` | Scale ECS to 1 task. Epoch left untouched by default (fast, no redeploy) — pass `--epoch-utc now\|<ISO8601>` to explicitly (re)set it (forces a real redeploy, see Notes) | Restore the function's reserved concurrency (removed by `stop`). Nothing needs starting for the channel to be playable: an idle function costs nothing and the first viewer wakes it. `--epoch-utc now\|<ISO8601>` rewrites the serve command and invalidates the CDN | Start the MediaLive channel, wait for `RUNNING` | `docker run` a container bind-mounting the baked package (building the image on first use) — or, with `bundle_content = true`, build the per-channel image with the package inside and run it with no mount; epoch is `[timeline] epoch` (default 2026-01-01T00:00:00Z), `--epoch-utc` works the same as `ecs-express` |
+| `stop` | Scale ECS to 0 tasks (shared ALB keeps running for other channels) | Set reserved concurrency to 0 — every request is throttled. An access control, not a cost saving (idle costs nothing) | Stop the MediaLive channel, wait for `IDLE` | `docker rm -f` the container |
+| `refresh` | Force a new ECS task launch to re-sync S3 content | Recycle warm execution environments + invalidate the CloudFront cache | Full stop→start cycle (no hot-reload exists) | Recreate the container (seconds, no canary) |
+| `update` | `spark` then `refresh` in one step — the routine "ship new content to a running channel" combo | `spark` then `refresh` in one step | (same) | (same) |
+| `image` | Errors — content lives in S3, nothing to export | Errors — content lives in S3, nothing to export | Errors | Build the self-contained image (`its-a-live-<name>:baked`: code + baked loop package), regardless of `bundle_content`; `--save [PATH]` exports a tarball for `docker load` on another machine |
+| `status` | ECS service scaling/status | Function state (`ACTIVE`/`STOPPED`/`PENDING`/`FAILED`) and reserved concurrency | MediaLive channel state | Docker container status (plus `bundle_content`, the image, and the size of any exported tarball) |
 
 ### local-docker: bundled content
 
@@ -297,9 +328,44 @@ and `outputs` don't apply (igor hides all three for local-docker channels
 rather than showing an inapplicable control), and playback URLs are
 always `http://localhost:<channel.port>/...`.
 
+## Low latency (DASH and HLS)
+
+Overview, measured results and limits: [`docs/low-latency.md`](../docs/low-latency.md).
+
+ecs-express and local-docker channels can serve low-latency DASH (CMAF chunked delivery) and Apple LL-HLS (parts,
+preload hint, blocking reload); details in `loop-dee-loop/README.md` "Low-latency DASH" and "Low-latency HLS". Both
+are made from the same baked chunks. Set them per channel (keys in `config.toml`):
+
+```toml
+[packaging]
+segment_duration = 2          # shorter segments sit better with chunks
+chunk_duration = 0.5          # shared by both formats
+
+[packaging.dash]
+low_latency = "on"            # "off" | "on" | "optin" (advertised only on ?low_latency=true)
+# utc_timing = "direct"       # default: the time in the MPD (served no-store); "http" | "none"
+
+[packaging.hls]
+low_latency = "on"            # needs container = "cmaf" (the default)
+```
+
+- It decides how the loop is **baked** (chunks), so run `spark` again after turning it on or off.
+- `utc_timing = "http"` (DASH) needs the channel's own `/time` URL. It is filled in automatically: for local-docker
+  `http://localhost:<port>/time`; for ecs-express the CloudFront domain (or the service endpoint without a CDN),
+  which only exists once the stack does, so `create` (and `redeploy` of a channel not deployed yet) deploys a second
+  time to set it. Set `utc_timing_url` for a tunnel or a custom domain. The URL is never a query parameter.
+- LL-HLS blocking reload (`_HLS_msn`, `_HLS_part`) must reach the origin and be part of CloudFront's cache key. A
+  default channel's manifest policy already keys on the whole query string; a channel on a narrower allow-list gets
+  its own policy that adds those names. LL-HLS blocking responses are held up to three target durations, within
+  CloudFront's origin read timeout.
+- Not supported on aws-lambda (responses are held open) or aws-media: a config error.
+- `low_latency` (per format), `target_latency` and `utc_timing` are also per-request query parameters
+  (`[query] overrides`).
+- Measure it with `player-lab run --max-latency S` (see `player-lab/AGENTS.md`).
+
 ## Notes / gotchas
 
-- **Epoch (`ecs-express` / `local-docker`)** is `[timeline] epoch_utc`,
+- **Epoch (`ecs-express` / `local-docker`)** is `[timeline] epoch`,
   default `2026-01-01T00:00:00Z` (set it in igor's channel form, which offers
   1970, 2026 and "now" presets, or in the TOML). It is loop 0's start and the
   DASH `availabilityStartTime`, so a recent one keeps loop numbers, media
@@ -318,10 +384,19 @@ always `http://localhost:<channel.port>/...`.
   "Express Mode" charge. `stop` genuinely stops the Fargate compute line;
   the shared ALB keeps running regardless, amortized across every channel
   using it.
+- **Cost (`aws-lambda`)**: nothing while nobody watches. Otherwise Lambda
+  duration + requests (roughly $2e-6 per active second per CloudFront regional
+  cache, an estimate — see [`LAMBDA_BACKEND.md`](./LAMBDA_BACKEND.md) §9) +
+  CloudFront egress + a little CloudWatch. No ALB, no public IPv4. Cost grows
+  with the number of regional caches that see traffic, not with viewers.
 - **Cost (`aws-media`)**: MediaLive bills continuously while `RUNNING`
   (~$0.50-0.65/hr for a single-pipeline HD channel) *regardless of
   audience size* — `stop` is the main cost lever here, much more so than
   on `ecs-express`.
+- **Manifests on `aws-lambda`** are cached for 1 s by CloudFront (so concurrent
+  viewers collapse into one invocation); `/timeline.json` and `/health` are never
+  cached and forward every query parameter; segments and init segments are
+  cached like `ecs-express`'s.
 - **Manifests are never cached** by CloudFront on `ecs-express` (`TTL=0`);
   segments under `*/seg/*` get a 5-minute default TTL. `aws-media`'s
   MediaPackage v1 endpoints have no CDN in front at all (public, direct).
@@ -347,7 +422,7 @@ always `http://localhost:<channel.port>/...`.
   groups created)**, and `aws ecs describe-service-revisions` shows a
   `statusReason` like `ValidationError: Health check path '...' must
   begin with a '/' character ...`: `health_check_path` must be a **bare
-  path** (e.g. `/stream.mpd`), not a `PROTOCOL:PORT/PATH`-style string
+  path** (e.g. `/index.mpd`), not a `PROTOCOL:PORT/PATH`-style string
   — despite AWS's docs quoting the *default* as `"HTTP:80/ping"`, which
   reads like that combined format. This doesn't fail cleanly; it retries
   invalid ALB/listener/target-group provisioning indefinitely with no

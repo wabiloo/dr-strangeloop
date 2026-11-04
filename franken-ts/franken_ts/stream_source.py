@@ -162,6 +162,48 @@ def resolve_stream_asset(
     return ResolvedStreamAsset(url=url, local_path=target, cached=False)
 
 
+def probe_stream_manifest(url: str, headers: Optional[dict[str, str]] = None):
+    """Metadata-only VideoInfo for an HLS/DASH manifest -- no download.
+
+    Duration comes from the manifest itself (yt-dlp reads it for both HLS and
+    DASH); resolution/fps/codec are those of the highest-bitrate video
+    rendition, i.e. the one `_download` would fetch. Stream counts are
+    reported as 1/1 because the ladder is collapsed to a single video +
+    audio pair at download time. Raises StreamAssetError for live manifests
+    or manifests that don't expose a duration.
+    """
+    from .validate import VideoInfo  # validate imports this module
+
+    info = _probe(url, headers)
+    if info.get("is_live") or info.get("live_status") in _LIVE_STATUSES:
+        raise StreamAssetError(
+            f"{url}: this manifest is live (open-ended), not VOD -- only "
+            "closed/finite HLS or DASH manifests can be used as asset sources."
+        )
+    formats = info.get("formats") or []
+    video = [f for f in formats if f.get("vcodec") not in (None, "none")]
+    best = max(video, key=lambda f: f.get("tbr") or 0) if video else {}
+    # yt-dlp sets a top-level duration for HLS but often not for DASH; there
+    # the manifest's segment durations (summed) are the same information.
+    duration = info.get("duration") or sum(
+        frag.get("duration") or 0 for frag in best.get("fragments") or []
+    )
+    if not duration:
+        raise StreamAssetError(f"{url}: manifest does not expose a duration")
+    codec = (best.get("vcodec") or "").split(".")[0]
+    return VideoInfo(
+        path=Path(url),
+        duration=float(duration),
+        video_streams=1,
+        audio_streams=1,
+        fps=best.get("fps"),
+        is_vfr=False,
+        width=int(best.get("width") or 0),
+        height=int(best.get("height") or 0),
+        codec=codec,
+    )
+
+
 def resolve_stream_assets(
     assets: list[AssetConfig],
     cache_dir: Path,

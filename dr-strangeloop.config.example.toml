@@ -7,13 +7,13 @@
 # For a per-user setup, copy it to ~/.dr-strangeloop/config.toml (picked up
 # automatically; nothing else is searched). Keys left out default to folders
 # inside the config's folder, so an empty ~/.dr-strangeloop/config.toml gives
-#   ~/.dr-strangeloop/data/{playlists,channels,assets,archives,manifests}
+#   ~/.dr-strangeloop/data/{playlists,channels,assets,archives,manifests,profiles}
 #   ~/.dr-strangeloop/outputs/   (+ archives/, manifests/ imports)
 #   ~/.dr-strangeloop/packages/  (baked loop packages)
 # With no config file at all, the repo layout below is used.
 
 [paths]
-data_dir          = "data"       # parent of the five folders below
+data_dir          = "data"       # parent of the folders below
 outputs_dir       = "outputs"    # franken-ts builds + archives/ + manifests/ imports
 local_package_dir = "its-a-live/.local-loop-package"   # baked loop packages
 
@@ -23,6 +23,7 @@ local_package_dir = "its-a-live/.local-loop-package"   # baked loop packages
 # assets_dir      = "data/assets"       # files uploaded through Igor
 # archives_dir    = "data/archives"     # HAR / Proxyman captures
 # manifests_dir   = "data/manifests"    # saved VOD manifest URLs
+# profiles_dir    = "data/profiles"     # user-saved output profiles (ladders/encoding)
 
 # Licence keys of commercial players for player-lab (the environment variable
 # wins). Secret: keep this file private.

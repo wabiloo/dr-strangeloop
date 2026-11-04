@@ -18,6 +18,31 @@ from .utils import parse_time
 TimeValue = Union[str, int, float]
 
 
+H264_PROFILES = ("baseline", "main", "high")
+H264_LEVELS = (
+    "1.0", "1.1", "1.2", "1.3", "2.0", "2.1", "2.2", "3.0", "3.1", "3.2",
+    "4.0", "4.1", "4.2", "5.0", "5.1", "5.2", "6.0", "6.1", "6.2",
+)
+
+
+def _normalize_level(value):
+    """YAML turns `level: 4.0` into a float and `level: 4` into an int; ffmpeg
+    wants "4.0". Anything else is left for the allow-list check to reject."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return f"{value}.0"
+    if isinstance(value, float):
+        return f"{value:.1f}"
+    return value
+
+
+def _check_level(value: Optional[str]) -> Optional[str]:
+    if value is not None and value not in H264_LEVELS:
+        raise ValueError(f"level must be one of {', '.join(H264_LEVELS)} (got {value!r})")
+    return value
+
+
 class RenditionConfig(BaseModel):
     """One entry in a multi-rendition ABR ladder (see OutputConfig.renditions).
 
@@ -32,6 +57,12 @@ class RenditionConfig(BaseModel):
     name: str
     resolution: str
     bitrate_kbps: int
+    # Per-rendition H.264 overrides; unset inherits output.profile / output.level.
+    profile: Optional[Literal["baseline", "main", "high"]] = None
+    level: Optional[str] = None
+
+    _normalize_level = field_validator("level", mode="before")(_normalize_level)
+    _check_level = field_validator("level")(_check_level)
 
     @property
     def width(self) -> int:
@@ -50,8 +81,14 @@ class OutputConfig(BaseModel):
     framerate: int = 25
     bitrate_kbps: int = 10000
     gop: Optional[int] = None
+    # H.264 profile/level of the assembled video (renditions may override).
+    profile: Literal["baseline", "main", "high"] = "high"
+    level: str = "4.0"
     service_provider: str = "broadpeak"
     service_name: str = "broadpeak.io"
+
+    _normalize_level = field_validator("level", mode="before")(_normalize_level)
+    _check_level = field_validator("level")(_check_level)
 
     @model_validator(mode="after")
     def default_gop(self) -> "OutputConfig":
@@ -98,7 +135,7 @@ class OutputConfig(BaseModel):
     def for_rendition(self, rendition: "RenditionConfig") -> "OutputConfig":
         """Return an effective single-output OutputConfig for one rendition
         of a multi-rendition ladder: same framerate/gop/service metadata,
-        resolution/bitrate_kbps/file overridden from the rendition, dir/
+        resolution/bitrate_kbps/profile/level/file overridden from the rendition, dir/
         renditions cleared. This lets extract.py/validate.py/cache.py --
         all of which only ever look at a single OutputConfig -- work
         completely unchanged, whether we're in single- or multi-rendition
@@ -111,6 +148,8 @@ class OutputConfig(BaseModel):
                 "file": self.dir / f"{rendition.name}.ts",
                 "resolution": rendition.resolution,
                 "bitrate_kbps": rendition.bitrate_kbps,
+                "profile": rendition.profile or self.profile,
+                "level": rendition.level or self.level,
                 "dir": None,
                 "renditions": None,
             }
@@ -150,6 +189,8 @@ class SpliceConfig(BaseModel):
 
     event_id: int
     splice_type: Literal["splice_insert", "time_signal"] = "splice_insert"
+    # `splice_insert` only: the 16-bit SCTE-35 `unique_program_id`. Accepts an
+    # int or a hex/decimal string; normalized to "0x%04X".
     unique_program_id: str = "0x0001"
     avail_num: int = 18
     avails_expected: int = 255
@@ -166,6 +207,19 @@ class SpliceConfig(BaseModel):
     # start/stop signaling.
     auto_return: bool = True
     segmentation: Optional[SegmentationConfig] = None
+
+    @field_validator("unique_program_id", mode="before")
+    @classmethod
+    def normalize_unique_program_id(cls, value: object) -> str:
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise ValueError("unique_program_id must be an integer or a hex string like '0x0001'")
+        try:
+            number = value if isinstance(value, int) else int(value.strip(), 0)
+        except ValueError:
+            raise ValueError(f"unique_program_id {value!r} is not a valid integer") from None
+        if not 0 <= number <= 0xFFFF:
+            raise ValueError(f"unique_program_id {value!r} must fit in 16 bits (0-65535)")
+        return f"0x{number:04X}"
 
     @model_validator(mode="after")
     def segmentation_required_for_time_signal(self) -> "SpliceConfig":

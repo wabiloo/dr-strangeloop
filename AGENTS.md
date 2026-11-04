@@ -25,9 +25,10 @@ names or CLI flags from this file alone.
 | Inspect/verify a built `.ts` | `inspector-krogh/` (`frame-extractor` CLI: every frame + GOP/I-P-B timeline; `krogh` CLI: scans the file's *actual* SCTE-35 markers, independent of franken-ts, optionally compared against `markers.json`) | [`inspector-krogh/README.md`](./inspector-krogh/README.md) |
 | Validate playback of a running channel in several players (hls.js, dash.js, Shaka, Video.js): startup, stalls, errors, Period/discontinuity counts vs `/timeline.json` | `player-lab/` (`player-lab run --channel <name>`) | [`player-lab/AGENTS.md`](./player-lab/AGENTS.md), [`player-lab/DESIGN.md`](./player-lab/DESIGN.md) |
 | (alt. source) Derive a loop from a captured HAR/Proxyman session, or from a VOD HLS/DASH manifest URL (`ingest-url`, multi-rendition ladder), instead of authoring one | `grave-robber/` (feeds `loop-dee-loop`'s sparse segment-list `bake.py` mode, not `franken-ts`) | [`grave-robber/AGENTS.md`](./grave-robber/AGENTS.md) |
-| Startover / catchup (past-range playback via `?start=&end=` on the normal manifest URLs) | `loop-dee-loop/` (`serve.py --timeshift`; on by default via `[timeshift]` in the its-a-live TOML) | [`loop-dee-loop/README.md`](./loop-dee-loop/README.md) "Startover & catchup", `loop-dee-loop/SCOPE.md` §13 |
+| Startover / catchup (past-range playback via `?start=&end=` on the normal manifest URLs) | `loop-dee-loop/` (`serve.py --timeshift`; on by default via `[query]` in the its-a-live TOML) | [`loop-dee-loop/README.md`](./loop-dee-loop/README.md) "Startover & catchup", `loop-dee-loop/SCOPE.md` §13 |
 | Web UI over all of the above (playlists, archive imports, VOD manifest imports, channels); its **Docs** menu browses all the documentation and API docs | `igor/` | [`igor/AGENTS.md`](./igor/AGENTS.md) |
 | Overview, Igor tour, CLI & API cheatsheet | `docs/` | [`docs/overview.md`](./docs/overview.md), [`docs/igor-guide.md`](./docs/igor-guide.md), [`docs/cli-reference.md`](./docs/cli-reference.md) |
+| Low-latency DASH (chunked delivery; `[packaging.dash] low_latency`, `?low_latency=` overrides; `ecs-express`/`local-docker`) | `loop-dee-loop/` (`bake.py --chunk-duration`, `serve.py --ll-dash`), `its-a-live/` (config + deploy), `player-lab/` (latency metrics) | [`docs/low-latency.md`](./docs/low-latency.md) -- start here; it links to each tool's reference |
 
 ## Architecture
 
@@ -50,6 +51,12 @@ data/playlists/*.yaml
         │                               (GPAC remux, no transcode)
         │                               → ECS Express Mode + CloudFront
         │
+        ├── backend = "aws-lambda"    → cdk deploy → loop-dee-loop/bake.py
+        │                               (same bake, pushed to S3)
+        │                               → Lambda (serve.py, package read
+        │                                 lazily from S3) + CloudFront;
+        │                                 no idle cost, no ECS/ALB
+        │
         └── backend = "local-docker"  → no cdk, no AWS at all →
                                         loop-dee-loop/bake.py → `docker run`
                                         on your own machine (content
@@ -58,13 +65,13 @@ data/playlists/*.yaml
                                         `[infrastructure.docker] bundle_content = true`)
 ```
 
-Three backends exist for phase 3, chosen per-channel via
+Four backends exist for phase 3, chosen per-channel via
 `[deploy].backend` in the its-a-live TOML config — **not** different
 tools an agent needs to pick between at the code level; `its-a-live`
 exposes one CLI (`channel.py`) regardless of backend. Only `aws-media`/
-`ecs-express` involve `cdk`/CloudFormation; `local-docker` has no stack at
+`ecs-express`/`aws-lambda` involve `cdk`/CloudFormation; `local-docker` has no stack at
 all. `loop-dee-loop` is only directly relevant if the backend is
-`ecs-express` or `local-docker`, and even then its `bake.py`/`serve.py` are
+`ecs-express`, `aws-lambda` or `local-docker`, and even then its `bake.py`/`serve.py` are
 normally invoked *by* `its-a-live` (`channel.py spark`/`start` / the
 deployed ECS task), not by hand — see `loop-dee-loop/AGENTS.md` for when
 running it directly is actually appropriate (local dev/testing).
@@ -88,10 +95,21 @@ commands at the end of its run.
 
 The its-a-live channel TOML tables (`[deploy]`, `[input]`, `[infrastructure.aws]`,
 `[infrastructure.s3]`, `[infrastructure.express]`/`[infrastructure.docker]`,
-`[timeline]`, `[timeshift]`, `[packaging]`, `[markers]`) and Igor's config groups (create form, read-only panel, edit form)
-use the **same names, one group per table, same keys in each**. Never add,
+`[timeline]`, `[query]`, `[timeshift]`, `[packaging]`, `[markers]`, with their `.hls`/`.dash` sub-tables) and Igor's config groups (create form, read-only panel, edit form)
+use the **same table names, one group per table**, with the same keys in each
+(the API/form field names of a few keys still differ from the TOML -- an interim
+gap documented, with its mapping, in [`igor/AGENTS.md`](./igor/AGENTS.md)). Never add,
 rename or move a table/key in one place only -- see
-[`igor/AGENTS.md`](./igor/AGENTS.md) "Channel config sections".
+"Channel config sections" there. Renamed keys are migrated in old files with
+`its-a-live/migrate_config.py` ([`its-a-live/AGENTS.md`](./its-a-live/AGENTS.md)).
+
+## Versioning
+
+All packages share one version number (every `pyproject.toml`, `igor/frontend/package.json`
++ `package-lock.json`, and both `uv.lock` files; shown by `/api/v1/version`). After
+completing a change or fix, **always propose bumping it** (patch for fixes, minor for
+features) and ask before doing so. If the user agrees, bump them all together and
+regenerate the lockfiles (`uv lock` at the root and in `its-a-live/`).
 
 ## Environments
 

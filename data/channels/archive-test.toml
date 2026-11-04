@@ -1,3 +1,5 @@
+config_version = 2
+
 [deploy]
 name = "archive-test"
 backend = "local-docker"
@@ -14,16 +16,20 @@ source_path = "/Users/fabrelambeau/Broadpeak/Code/dr-strangeloop/outputs/archive
 allow_missing_segments = false
 
 [markers]
-daterange_mode      = "shared"
-cue_tags            = "none"
 increment_event_ids = false
-daterange_id_format = "{segcode}-{eventid}-{loop}"
+
+[markers.hls]
+descriptor_grouping      = "shared"
+cue_tags            = "none"
+id_template = "{segcode}-{eventid}-{loop}"
 
 [packaging]
 segment_duration   = 4.0
-dvr_window_seconds = 30.0
-hls_format = "ts"
-hls_ts_mux_audio = false
+dvr_window = 30.0
+
+[packaging.hls]
+container = "ts"
+mux_audio = false
 
 [infrastructure.docker]
 port = "auto"

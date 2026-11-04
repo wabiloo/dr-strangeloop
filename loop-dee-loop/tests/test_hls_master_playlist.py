@@ -41,6 +41,7 @@ def _rendition(name, codecs, width, height, frame_rate, bandwidth, audio_variant
 def _fake_package(video_renditions, audio_rendition=None, hls_format="cmaf", hls_ts_mux_audio=True):
     package = SimpleNamespace(
         video_renditions=video_renditions,
+        all_video_renditions=video_renditions,
         audio_rendition=audio_rendition,
         has_audio=audio_rendition is not None,
         hls_format=hls_format,

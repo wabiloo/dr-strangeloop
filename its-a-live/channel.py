@@ -47,7 +47,7 @@ config file selects "aws-media" (MediaLive + MediaPackage v1) or
             Not available for local-docker (no stack) -- `stop` alone is
             sufficient teardown there. Content staged in S3 is NOT
             deleted (the stack doesn't own the bucket) -- see README.md.
-  create    First-time, non-interactive setup: (ecs-express only) ensure
+  create    First-time, non-interactive setup: (ecs-express, aws-lambda) ensure
             the shared ECS cluster stack is deployed, `spark` (content
             MUST be staged before the channel stack exists), `cdk deploy`
             the channel stack, then `start`. Equivalent to
@@ -91,13 +91,17 @@ import sys
 import time
 import tomllib
 import boto3
+import botocore.config
+import botocore.exceptions
 
 from _infra_cfg import infra_table, reject_legacy_tables
+from _legacy_cfg import check_config_version
+from _packaging_cfg import check_low_latency, needs_public_url
 from _paths_cfg import resolve_source_path
 
 _DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "config.toml")
 
-_BACKENDS = ("aws-media", "ecs-express", "local-docker")
+_BACKENDS = ("aws-media", "ecs-express", "aws-lambda", "local-docker")
 
 # Backends with no CloudFormation/CDK stack at all -- channel.py must never
 # call _cf_outputs() or `cdk deploy`/`cdk destroy` for these.
@@ -129,6 +133,11 @@ def _config(config_path):
     if backend not in _BACKENDS:
         sys.exit(f"[deploy].backend must be one of {_BACKENDS!r} in {config_path}, got {backend!r}")
     reject_legacy_tables(cfg, config_path)
+    check_config_version(cfg, config_path)
+    try:
+        check_low_latency(cfg, backend)
+    except ValueError as exc:
+        sys.exit(f"{config_path}: {exc}")
     source = cfg.get("input", {})
     if source.get("source_path"):
         source["source_path"] = resolve_source_path(source["source_path"], config_path)
@@ -156,8 +165,17 @@ def _cdk_output(name):
 
 
 def _shared_stack_name(cfg):
-    """Only meaningful for ecs-express (the shared ECS cluster stack)."""
-    return "ItsALiveSharedStack-ecs-express"
+    """The shared prerequisite stack of a backend (ecs-express: cluster +
+    cache policies; aws-lambda: cache policies), or None if it has none."""
+    return _SHARED_STACKS.get(_backend(cfg), (None, ()))[0]
+
+
+# backend -> (shared stack name, outputs it must have). A stack deployed by an
+# older version lacks the cache-policy outputs and is redeployed to add them.
+_SHARED_STACKS = {
+    "ecs-express": ("ItsALiveSharedStack-ecs-express", ("ClusterName", "SegmentsCachePolicyId", "ManifestsCachePolicyId")),
+    "aws-lambda": ("ItsALiveSharedStack-aws-lambda", ("SegmentsCachePolicyId", "StatusCachePolicyId", "ManifestsCachePolicyId")),
+}
 
 
 def _session(cfg):
@@ -165,11 +183,70 @@ def _session(cfg):
     return boto3.session.Session(region_name=region)
 
 
+# Bound every boto call's wall time (default: 60s connect+read, 5 retries --
+# minutes when credentials/network are bad) so one unreachable AWS endpoint
+# can't hang `list`/`status`/`outputs` and, through igor, the whole UI.
+_BOTO_CONFIG = botocore.config.Config(
+    connect_timeout=5, read_timeout=15, retries={"max_attempts": 2, "mode": "standard"},
+)
+
+
 def _cf_outputs(cfg, stack_name=None):
     stack_name = stack_name or _stack_name(cfg)
-    cf = _session(cfg).client("cloudformation")
+    cf = _session(cfg).client("cloudformation", config=_BOTO_CONFIG)
     resp = cf.describe_stacks(StackName=stack_name)
     return {o["OutputKey"]: o["OutputValue"] for o in resp["Stacks"][0].get("Outputs", [])}
+
+
+def _public_host(outputs):
+    """The channel's public host from its stack outputs: the CloudFront domain, else the Express service's own
+    endpoint (an `https://<host>` URL; scheme stripped). None when the stack has neither (yet)."""
+    host = outputs.get("CloudFrontDomainName")
+    if host:
+        return host
+    return outputs.get("ExpressServiceEndpoint", "").split("//", 1)[-1] or None
+
+
+def _public_host_context(cfg):
+    """`cdk deploy` context carrying the channel's own public host, for the serve flags that need it
+    (`_packaging_cfg.needs_public_url`: low latency with `utc_timing = "http"` and no explicit URL).
+
+    The host only exists once the stack does -- the service's command line cannot reference the distribution
+    or its own endpoint (a CloudFormation cycle) -- so it is read from the existing stack's outputs: [] for a
+    channel not deployed yet (create then deploys a second time), and whenever nothing needs it."""
+    if _backend(cfg) != "ecs-express" or not needs_public_url(cfg):
+        return []
+    try:
+        host = _public_host(_cf_outputs(cfg))
+    except botocore.exceptions.ClientError:  # no such stack yet
+        return []
+    return ["-c", f"public_host={host}"] if host else []
+
+
+def _cdk_deploy(cfg, config_path, stack_name):
+    """`cdk deploy` the channel stack; returns the exit code. With `utc_timing = "http"` and no configured URL on
+    ecs-express, a first deploy cannot know the public address, so once the stack exists it is deployed again
+    with it (one rolling task replacement, only ever for a new channel: later deploys already know it)."""
+    import subprocess
+
+    base = ["cdk", "deploy", "--require-approval", "never", *_cdk_output(_channel_name(cfg)),
+            "-c", f"config={config_path}"]
+    context = _public_host_context(cfg)
+    cmd = [*base, *context, stack_name]
+    print(f"Running: {' '.join(cmd)}")
+    code = subprocess.run(cmd, check=False).returncode
+    if code != 0 or context or not needs_public_url(cfg) or _backend(cfg) != "ecs-express":
+        return code
+    context = _public_host_context(cfg)
+    if not context:
+        print("WARNING: could not read the channel's public address from the stack outputs; the low-latency "
+              "UTCTiming URL (utc_timing = \"http\") is not set. Set [packaging.dash] utc_timing_url, or use "
+              "utc_timing = \"direct\".")
+        return 0
+    print("Redeploying once to set the low-latency UTCTiming URL from the channel's public address ...")
+    cmd = [*base, *context, stack_name]
+    print(f"Running: {' '.join(cmd)}")
+    return subprocess.run(cmd, check=False).returncode
 
 
 def _ops(cfg):
@@ -177,6 +254,9 @@ def _ops(cfg):
     if _backend(cfg) == "ecs-express":
         import _ecs_express_ops
         return _ecs_express_ops
+    if _backend(cfg) == "aws-lambda":
+        import _aws_lambda_ops
+        return _aws_lambda_ops
     if _backend(cfg) == "local-docker":
         import _local_docker_ops
         return _local_docker_ops
@@ -204,7 +284,7 @@ def cmd_start(cfg, extra_args):
 def cmd_image(cfg, extra_args):
     if _backend(cfg) != "local-docker":
         sys.exit("`image` is only available for the local-docker backend -- "
-                  "ecs-express keeps its content in S3 and aws-media has no image.")
+                  "ecs-express and aws-lambda keep their content in S3 and aws-media has no image.")
     _ops(cfg).image(cfg, _session(cfg), _channel_name(cfg), extra_args)
 
 
@@ -250,7 +330,7 @@ def cmd_status(cfg, extra_args, as_json=False):
     # itself already unambiguously answers.
     stack_status = None
     if backend not in _NO_STACK_BACKENDS:
-        cf = _session(cfg).client("cloudformation")
+        cf = _session(cfg).client("cloudformation", config=_BOTO_CONFIG)
         stack_status = _stack_status(cf, _stack_name(cfg))
         if stack_status is None or not _stack_status_is_settled(stack_status):
             result = {
@@ -332,7 +412,7 @@ def _list_entry(path):
             "reachable": result.get("reachable"),
         }
     stack_name = _stack_name(cfg)
-    cf = _session(cfg).client("cloudformation")
+    cf = _session(cfg).client("cloudformation", config=_BOTO_CONFIG)
     status_value = _stack_status(cf, stack_name)
     entry = {
         "config_path": path,
@@ -414,23 +494,29 @@ def cmd_list(config_path, extra_args, as_json=False):
 
 
 def _ensure_shared_stack_if_needed(cfg, config_path):
-    """Deploy the shared ECS cluster stack (ecs-express only) unless it already
-    exists and is healthy. It is channel-independent and rarely changes, and a
-    no-op `cdk deploy` still pays a full synth + asset publish. To roll out a
-    change to loop_shared_stack.py, run `cdk deploy ItsALiveSharedStack-ecs-express`
-    by hand."""
+    """Deploy the backend's shared prerequisite stack (ecs-express: cluster +
+    cache policies; aws-lambda: cache policies) unless it already exists, is
+    healthy and has the outputs this version needs. It is channel-independent
+    and rarely changes, and a no-op `cdk deploy` still pays a full synth +
+    asset publish. A stack deployed before the cache policies moved into it
+    lacks their outputs, so it is redeployed once. To roll out any other
+    change to it, run `cdk deploy ItsALiveSharedStack-<backend>` by hand."""
     import subprocess
 
-    if _backend(cfg) != "ecs-express":
-        return
     shared_stack_name = _shared_stack_name(cfg)
+    if shared_stack_name is None:
+        return
+    required = _SHARED_STACKS[_backend(cfg)][1]
     status = _stack_status(_session(cfg).client("cloudformation"), shared_stack_name)
     if status in ("CREATE_COMPLETE", "UPDATE_COMPLETE"):
-        print(f"{shared_stack_name} already deployed ({status}) -- skipping.")
-        return
+        missing = [k for k in required if k not in _cf_outputs(cfg, shared_stack_name)]
+        if not missing:
+            print(f"{shared_stack_name} already deployed ({status}) -- skipping.")
+            return
+        print(f"{shared_stack_name} is missing {', '.join(missing)} (deployed by an older version) -- updating it.")
     print(f"Ensuring {shared_stack_name} is deployed ...")
     result = subprocess.run(
-        ["cdk", "deploy", "--require-approval", "never", *_cdk_output("_shared"),
+        ["cdk", "deploy", "--require-approval", "never", *_cdk_output(f"_shared-{_backend(cfg)}"),
          "-c", f"config={config_path}", shared_stack_name],
         check=False,
     )
@@ -440,7 +526,7 @@ def _ensure_shared_stack_if_needed(cfg, config_path):
 
 def cmd_create(cfg, config_path, extra_args):
     """Non-interactive first-time channel setup: ensure the shared stack
-    (ecs-express only), `spark` (stage content), `cdk deploy` the channel
+    (ecs-express and aws-lambda), `spark` (stage content), `cdk deploy` the channel
     stack, then `start`. This is `galvanise.py`'s pipeline (steps 3-6)
     with every interactive confirmation removed -- intended for
     programmatic callers (a management API/UI) that already know they
@@ -459,7 +545,6 @@ def cmd_create(cfg, config_path, extra_args):
     if extra_args:
         sys.exit("`create` does not take extra arguments")
 
-    import subprocess
 
     if _backend(cfg) in _NO_STACK_BACKENDS:
         print("Sparking (staging content) ...")
@@ -475,13 +560,9 @@ def cmd_create(cfg, config_path, extra_args):
 
     stack_name = _stack_name(cfg)
     print(f"Deploying {stack_name} ...")
-    result = subprocess.run(
-        ["cdk", "deploy", "--require-approval", "never", *_cdk_output(_channel_name(cfg)),
-         "-c", f"config={config_path}", stack_name],
-        check=False,
-    )
-    if result.returncode != 0:
-        sys.exit(result.returncode)
+    code = _cdk_deploy(cfg, config_path, stack_name)
+    if code != 0:
+        sys.exit(code)
 
     print("Starting the channel ...")
     cmd_start(cfg, [])
@@ -491,7 +572,6 @@ def cmd_redeploy(cfg, config_path, extra_args):
     if extra_args:
         sys.exit("`redeploy` does not take extra arguments")
 
-    import subprocess
 
     if _backend(cfg) in _NO_STACK_BACKENDS:
         # No CloudFormation stack to fix up -- just recreate the local
@@ -502,7 +582,7 @@ def cmd_redeploy(cfg, config_path, extra_args):
         return
 
     stack_name = _stack_name(cfg)
-    cf = _session(cfg).client("cloudformation")
+    cf = _session(cfg).client("cloudformation", config=_BOTO_CONFIG)
 
     _ensure_shared_stack_if_needed(cfg, config_path)
 
@@ -548,16 +628,12 @@ def cmd_redeploy(cfg, config_path, extra_args):
     # Explicit stack name: for ecs-express the app also contains
     # ItsALiveSharedStack-ecs-express, so a bare `cdk deploy` with no stack
     # argument would be ambiguous and CDK would refuse it.
-    cdk_cmd = ["cdk", "deploy", "--require-approval", "never", *_cdk_output(_channel_name(cfg)),
-               "-c", f"config={config_path}", stack_name]
-    print(f"Running: {' '.join(cdk_cmd)}")
-    result = subprocess.run(cdk_cmd, check=False)
-    sys.exit(result.returncode)
+    sys.exit(_cdk_deploy(cfg, config_path, stack_name))
 
 
 def cmd_schedule(cfg, config_path, extra_args, as_json=False):
     if _backend(cfg) == "local-docker":
-        sys.exit("Scheduling requires an AWS backend (aws-media or ecs-express) -- "
+        sys.exit("Scheduling requires an AWS backend (aws-media, ecs-express or aws-lambda) -- "
                   "local-docker channels have no AWS presence to schedule against.")
     if not extra_args:
         sys.exit("Usage: channel.py schedule <add|remove|list> [args...]")

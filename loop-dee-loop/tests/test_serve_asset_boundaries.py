@@ -140,6 +140,7 @@ def _sparse_fake_package(boundaries, gap_ticks_by_index, segment_boundary_ticks,
     boundary_set = compute_asset_boundary_set(boundaries)
     package = SimpleNamespace(
         video_renditions=[rendition],
+        all_video_renditions=[rendition],
         audio_rendition=None,
         has_audio=False,
         hls_format="cmaf",

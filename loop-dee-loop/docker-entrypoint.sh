@@ -80,7 +80,12 @@ case "$SUBCOMMAND" in
     serve.py)
         shift
         if [[ -n "${LOOP_PACKAGE_S3_URI:-}" || "${LOOP_PACKAGE_BAKED:-}" == "1" ]]; then
-            if [[ -n "${LOOP_PACKAGE_S3_URI:-}" ]]; then
+            if [[ "${LOOP_PACKAGE_STORE:-}" == "s3" ]]; then
+                # aws-lambda backend: no sync. wsgi.py lists the S3 prefix and
+                # fetches segment bytes lazily (s3_package.py).
+                [[ -n "${LOOP_PACKAGE_S3_URI:-}" ]] || { log "ERROR: LOOP_PACKAGE_STORE=s3 needs LOOP_PACKAGE_S3_URI"; exit 2; }
+                log "lazy S3 package ${LOOP_PACKAGE_S3_URI} (no sync)"
+            elif [[ -n "${LOOP_PACKAGE_S3_URI:-}" ]]; then
                 sync_down "$LOOP_PACKAGE_S3_URI" "$LOOP_PACKAGE_LOCAL_DIR"
             else
                 if [[ ! -d "$LOOP_PACKAGE_LOCAL_DIR" || -z "$(ls -A "$LOOP_PACKAGE_LOCAL_DIR" 2>/dev/null)" ]]; then
@@ -106,7 +111,6 @@ case "$SUBCOMMAND" in
             WINDOW_SEGMENTS=""
             CONTINUOUS_TIMELINE="false"
             PERIOD_ON_SEGMENTATION=""
-            PERIOD_ON_SEGMENTATION_APPLY=""
             CHANNEL_NAME=""
             DASH_ADDRESSING=""
             DASH_TIMELINE=""
@@ -114,6 +118,16 @@ case "$SUBCOMMAND" in
             TIMESHIFT_START_PARAM=""
             TIMESHIFT_END_PARAM=""
             TIMESHIFT_MAX_SPAN_SECONDS=""
+            QUERY_PREFIX=""
+            QUERY_OVERRIDES="false"
+            LL_DASH="false"
+            LL_TARGET_LATENCY=""
+            LL_UTC_TIMING_URL=""
+            LL_UTC_TIMING=""
+            LL_OPTIN="false"
+            LL_HLS="false"
+            ANNOUNCE_AHEAD=""
+            ANNOUNCE_ON=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --host) HOST="$2"; shift 2 ;;
@@ -126,11 +140,20 @@ case "$SUBCOMMAND" in
                     --window-segments) WINDOW_SEGMENTS="$2"; shift 2 ;;
                     --continuous-timeline) CONTINUOUS_TIMELINE="true"; shift ;;
                     --period-on-segmentation) PERIOD_ON_SEGMENTATION="$2"; shift 2 ;;
-                    --period-on-segmentation-apply) PERIOD_ON_SEGMENTATION_APPLY="$2"; shift 2 ;;
                     --timeshift) TIMESHIFT="true"; shift ;;
+                    --query-overrides) QUERY_OVERRIDES="true"; shift ;;
                     --timeshift-start-param) TIMESHIFT_START_PARAM="$2"; shift 2 ;;
                     --timeshift-end-param) TIMESHIFT_END_PARAM="$2"; shift 2 ;;
                     --timeshift-max-span-seconds) TIMESHIFT_MAX_SPAN_SECONDS="$2"; shift 2 ;;
+                    --query-prefix) QUERY_PREFIX="$2"; shift 2 ;;
+                    --ll-dash) LL_DASH="true"; shift ;;
+                    --ll-target-latency) LL_TARGET_LATENCY="$2"; shift 2 ;;
+                    --ll-utc-timing-url) LL_UTC_TIMING_URL="$2"; shift 2 ;;
+                    --ll-utc-timing) LL_UTC_TIMING="$2"; shift 2 ;;
+                    --ll-optin) LL_OPTIN="true"; shift ;;
+                    --ll-hls) LL_HLS="true"; shift ;;
+                    --announce-ahead) ANNOUNCE_AHEAD="$2"; shift 2 ;;
+                    --announce-on) ANNOUNCE_ON="$2"; shift 2 ;;
                     *)
                         log "ERROR: unrecognized serve.py flag in production mode: $1"
                         exit 2
@@ -144,9 +167,32 @@ case "$SUBCOMMAND" in
 
             export LOOP_PACKAGE_DIR="$LOOP_PACKAGE_LOCAL_DIR"
             export EPOCH_UTC DVR_WINDOW_SECONDS WINDOW_SEGMENTS CONTINUOUS_TIMELINE
-            export PERIOD_ON_SEGMENTATION PERIOD_ON_SEGMENTATION_APPLY CHANNEL_NAME DASH_ADDRESSING DASH_TIMELINE
+            export PERIOD_ON_SEGMENTATION CHANNEL_NAME DASH_ADDRESSING DASH_TIMELINE
             export TIMESHIFT TIMESHIFT_START_PARAM TIMESHIFT_END_PARAM
-            export TIMESHIFT_MAX_SPAN_SECONDS
+            export TIMESHIFT_MAX_SPAN_SECONDS QUERY_PREFIX QUERY_OVERRIDES
+            export LL_DASH LL_TARGET_LATENCY LL_UTC_TIMING_URL LL_UTC_TIMING LL_OPTIN LL_HLS
+            export ANNOUNCE_AHEAD ANNOUNCE_ON
+            if [[ "${LOOP_PACKAGE_STORE:-}" == "s3" ]]; then
+                # One execution environment handles one request at a time
+                # (Lambda), so one worker; threads cover the Web Adapter's
+                # health probe and response streaming.
+                export LOOP_PACKAGE_DIR LOOP_PACKAGE_STORE LOOP_PACKAGE_S3_URI
+                exec gunicorn --bind "${HOST}:${PORT}" --workers 1 --threads "${GUNICORN_THREADS:-4}" \
+                    --worker-class gthread --timeout 0 \
+                    --access-logfile - \
+                    --access-logformat '%(h)s "%(r)s" %(s)s %(b)s "%(a)s"' \
+                    wsgi:app
+            fi
+            if [[ "$LL_DASH" == "true" || "$LL_OPTIN" == "true" || "$LL_HLS" == "true" ]]; then
+                # Low-latency responses are held open (chunks released on the
+                # wall clock), which would starve sync workers: threaded ones.
+                log "low-latency DASH: gthread workers"
+                exec gunicorn --bind "${HOST}:${PORT}" --workers "${GUNICORN_WORKERS:-2}" \
+                    --threads "${GUNICORN_THREADS:-32}" --worker-class gthread --timeout 0 \
+                    --access-logfile - \
+                    --access-logformat '%(h)s "%(r)s" %(s)s %(b)s "%(a)s"' \
+                    wsgi:app
+            fi
             WORKERS="${GUNICORN_WORKERS:-4}"
             log "starting gunicorn (${WORKERS} workers) on ${HOST}:${PORT}"
             exec gunicorn --bind "${HOST}:${PORT}" --workers "$WORKERS" \

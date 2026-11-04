@@ -1,20 +1,20 @@
 # Agent reference — loop-dee-loop
 
 Phase 3a of the pipeline (see repo-root [`AGENTS.md`](../AGENTS.md)):
-self-hosted `ecs-express` backend for `its-a-live`. Bakes a `franken-ts`
+self-hosted engine behind the `ecs-express`, `aws-lambda` and `local-docker` backends of `its-a-live`. Bakes a `franken-ts`
 `.ts` (+ `.markers.json`) into an immutable loop package once, then serves
 it forever as live-sliding HLS/DASH with zero drift. See
 [`README.md`](./README.md) for usage/module-layout and
 [`SCOPE.md`](./SCOPE.md) for full design rationale (read `SCOPE.md`
-before changing anything in `bake.py`/`serve.py`/`loop_math.py` — the
+before changing anything in `bake.py`/`serve.py` (the `serving/` package)/`loop_math.py` — the
 drift-freedom and GPAC-quirk constraints there are load-bearing, not
 stylistic).
 
 ## Do you need to touch this tool directly?
 
-**Usually no.** If you're deploying a channel with `ecs-express` backend,
+**Usually no.** If you're deploying a channel with the `ecs-express` or `aws-lambda` backend,
 `its-a-live/channel.py spark` calls `bake.py` for you and the deployed ECS
-task calls `serve.py` for you — see `its-a-live/AGENTS.md`. Run this
+task (or Lambda function, reading the package from S3 through `s3_package.py`) calls `serve.py` for you — see `its-a-live/AGENTS.md`. Run this
 tool's scripts directly only for:
 
 - local dev/testing of a franken-ts output before deploying anything,
@@ -60,20 +60,31 @@ match, fix the upstream franken-ts input instead.
 | `gpac_pipeline.py` | DASHCues XML construction + GPAC CLI invocation. |
 | `scte35_signaling.py` | Authors `EXT-X-DATERANGE`/DASH `<EventStream>` directly from `.markers.json` — never trust GPAC's own aggregation (unreliable for multi-marker content, see `SCOPE.md` §6). |
 | `loop_math.py` | Integer epoch/loop_number/position_in_loop arithmetic — the drift-freedom guarantee (`SCOPE.md` §4.2/§5). No floats in persisted timing state, ever. |
-| `serve.py` | Stateless HTTP serving of manifests + segments per request. |
+| `serve.py` | The entrypoint (`python serve.py`, and what `wsgi.py` imports). A thin facade: it re-exports every name the old single-file module defined, so imports keep working, and runs the CLI. The code lives in `serving/`. |
+| `serving/package.py` | The baked package as loaded: `VideoRendition`, `LoopPackage` (renditions, audio, markers, boundaries, the lazily cached chunk/part tables). Read-only. |
+| `serving/channel.py` | `Channel`: init, clock, validation. Composed of the mixins below; stateless per request. |
+| `serving/variants.py` | `Channel.with_*` / `for_mode`: per-request variants (a shallow copy with one setting changed, never a mutation). |
+| `serving/plan.py` | The shared timeline plan (window range, segment starts, marker anchors, Period grouping, segment URIs) used by the HLS and DASH builders **and** `build_window_json`, so the views cannot disagree. |
+| `serving/hls.py` · `dash.py` · `window_json.py` | The three builders: HLS (classic and LL-HLS), the MPD (periodic and continuous, low-latency attributes, clock sync), `/timeline.json`. |
+| `serving/dash_render.py` · `markers.py` · `timeline.py` · `constants.py` | Pure helpers: MPD fragment rendering, SCTE-35 marker helpers, window/discontinuity maths, the version stamp and shared choices. |
+| `serving/query.py` | `resolve_request_channel`: the query parameters of a request -> the `Channel` variant they select. |
+| `serving/app.py` · `context.py` · `ll_http.py` | `create_app`; `ServeContext` (the shared state and request helpers: resolving a request's channel, serving segment bytes, decoding segment URLs); the low-latency HTTP helpers (paced segments, LL-HLS parts, held requests, blocking reload). |
+| `serving/routes/` | One `register(app, ctx)` per concern: `meta` (health, `/timeline.json`, `/time`, OpenAPI, docs), `manifests`, `segments`, `lowlatency` (LL-HLS parts). Handlers bind the context state to local names and are otherwise ordinary Flask routes. |
+| `serving/cli.py` · `startup.py` | `main` (the argparse command line) and the startup helpers shared with `wsgi.py` (descriptor, epoch, DVR window). |
 | `continuity.py` | Opt-in `--continuous-timeline` mode (`SCOPE.md` §12): per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite so the channel has no discontinuity/Period-restart at the loop wrap — header patch only, never a re-mux. |
-| `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig`, and integer-tick `resolve_window` (segment snapping, `full-loops` widening, max-span cap). Pure ints, no Flask. |
+| `lowlatency.py` | Low-latency DASH and LL-HLS (README "Low-latency DASH" / "Low-latency HLS"): splits a baked segment into its `moof`+`mdat` chunks (the DASH chunks and the LL-HLS parts, with which start on a sync sample), computes each chunk's wall-clock release tick from the real `tfdt`s (integer ticks), the pacing generator, and which occurrence of a looping segment is still in progress. `serve.py` streams in-progress segments through it when `--ll-dash`/`--ll-optin`; `bake.py --chunk-duration` produces the chunks. |
+| `timeshift.py` | Startover/catchup (`SCOPE.md` §13): query-param parsing (epoch s/ms or ISO8601), `TimeshiftConfig` (the parameter names + prefix), the per-request override parsers (`parse_choice`, `parse_duration_seconds`, `parse_split_on`, `parse_announce_ahead`, `parse_announce_on`, ...) and integer-tick `resolve_window` (segment snapping, `full_loops` widening, max-span cap). Pure ints, no Flask. |
 | `Dockerfile` / `Dockerfile.baked` / `docker-entrypoint.sh` | `Dockerfile`: code-only image shared by every channel (content comes from S3 or a bind mount). `Dockerfile.baked`: layers one channel's loop package on top for a self-contained, shareable image (`LOOP_PACKAGE_BAKED=1`, local-docker `bundle_content` only — see `its-a-live/AGENTS.md`). The entrypoint picks S3 / baked / passthrough mode from env vars. |
 | `load_test.py` | Concurrent-viewer load generator (see `PERFS.md`). |
 
 ## Window JSON (`/timeline.json`)
 
-`serve.py` exposes `/timeline.json`, documented in
+`serve.py` (`serving/routes/meta.py`) exposes `/timeline.json`, documented in
 [`openapi.yaml`](./openapi.yaml) (served at `/openapi.yaml`, rendered at
 `/docs`). `Channel.build_window_json` shares its timeline maths with the
 HLS/DASH builders through `Channel` helpers (window range, segment times,
 discontinuities, Period grouping/ids, marker anchors -- see "shared timeline
-plan" in `serve.py`): change those in one place, not in a builder. Only the
+plan" in `serving/plan.py`): change those in one place, not in a builder. Only the
 marker/asset *span* is a JSON-vs-manifest difference. `tests/test_serve_window_json.py` (schema drift + HLS DATERANGE /
 DASH Period+Event consistency, both directions, with and without
 `increment_event_ids`, periodic and continuous) and
@@ -84,15 +95,39 @@ change) guard it. Igor's Timeline panel draws it. Design/glossary: `SCOPE.md` §
 ## Forced Periods on SCTE-35 types
 
 `serve.py --period-on-segmentation 0x22,0x30,...` (its-a-live `[markers]
-period_on_segmentation`) opens a new Period / `#EXT-X-DISCONTINUITY` at
-markers with those `segmentation_type_id`s, signal-only (timestamps stay
-continuous under `--continuous-timeline`). Design: `SCOPE.md` §14; tests:
+split_on`; query parameter `split_on`) opens a new Period / `#EXT-X-DISCONTINUITY`
+at markers with those `segmentation_type_id`s in HLS and DASH alike,
+signal-only (timestamps stay continuous under `--continuous-timeline`). Design: `SCOPE.md` §14; tests:
 `tests/test_serve_signal_periods.py`.
+
+## Announcing markers ahead
+
+`serve.py --announce-ahead 10 [--announce-on 0x22,splice_insert]` (its-a-live `[markers]
+announce_ahead` / `announce_on`; query parameters of the same names) signals markers
+before the segment they fall in. One rule decides it, shared by HLS, DASH and the rest:
+`_marker_covers_segment(..., announce_ticks)` in `serving/markers.py` (coverage = announce
+time up to the marker's own end), used by `TimelinePlanMixin.marker_anchors` (HLS and
+continuous DASH; entries are `Anchored(marker, loop)`: the loop the *marker* belongs to, which
+is the next one across the wrap) and, per Period, by the periodic DASH builder. Things an agent
+must not get wrong:
+
+- Only placement moves: `START-DATE`, `Event@presentationTime`, ids and `{loop}` all use the
+  marker's own loop, never the segment's. `#EXT-X-CUE-OUT/-IN` are not moved.
+- Coverage must keep running to the marker's own end (interval end, or for a point marker the
+  segment holding it): that is what keeps a tag/Event in the manifest after the segment it was
+  announced on has scrolled out. Do not shorten it to "from announce to start".
+- DASH continuous: an announced marker is placed in the Period of its first covered segment AND
+  in every later Period with a covered segment (events are only valid in the Period carrying
+  them). Markers with no lead keep the once-per-response rule, so lead 0 is byte-identical.
+- A closed catchup range (`window.ended`) never announces ahead (`announce=False`).
+- Low latency needs nothing special: the live edge is the segment in progress either way.
+- Tests: `tests/test_serve_announce_ahead.py` (pure + fake package, HLS/DASH, wrap, queries),
+  `tests/test_announce_ahead_ll.py` (LL-HLS parts/blocking reload, LL DASH).
 
 ## DASH `$Time$` addressing
 
-`serve.py --dash-addressing time` (its-a-live `[packaging] dash_addressing =
-"time"`; default `number`) makes every DASH `SegmentTemplate` use `$Time$`
+`serve.py --dash-addressing time` (its-a-live `[packaging.dash] addressing =
+"time"`; query parameter `addressing`; default `number`) makes every DASH `SegmentTemplate` use `$Time$`
 (each `<S t>`) instead of `$Number$` + `startNumber`. HLS is unaffected.
 URL forms (nested under `/seg/` and `/cseg/` so CDN cache rules still match):
 `/<track>/seg/t/<real span>/<t>.m4s` (default mode; `t` is span-relative, the
@@ -103,20 +138,31 @@ boundaries); an unknown `t` is a 404. Tests: `tests/test_serve_dash_time.py`.
 
 ## DASH SegmentTimeline style
 
-`serve.py --dash-timeline compact` (its-a-live `[packaging] dash_timeline =
-"compact"`; default `full`) omits `@t` where a segment starts where the
+`serve.py --dash-timeline compact` (its-a-live `[packaging.dash] timeline_style =
+"compact"`; query parameter `timeline_style`; default `full`) omits `@t` where a segment starts where the
 previous one ended and folds runs of equal `@d` into `@r`. The first `<S>` of a
 Period always keeps `@t` (a front-trimmed window must not change anyone's t),
-`@t` returns after a gap, and a loop/asset comment ends a run. Independent of
+`@t` returns after a gap, and a loop/asset comment ends a run. Compact also writes one `SegmentTemplate` on the video
+`AdaptationSet` (`$RepresentationID$` in `media`/`initialization`) when every
+rendition shares the same timeline, offset and URL shape; renditions that differ keep their own templates.
+Video `Representation@id` is the rendition name in both styles. Independent of
 `--dash-addressing`; HLS unaffected. Tests: `tests/test_serve_dash_timeline.py`.
 
-## Startover & catchup
+## Startover, catchup and per-request overrides (query parameters)
 
-`serve.py --timeshift` (its-a-live: `[timeshift]`, on by default) makes the
-normal `index.m3u8` / `stream.mpd` accept `start`, `end`, `full-loops`, `offset` (pretend "now" is earlier/later; `SCOPE.md` §13.7) and
-`continuous_timeline` query params (names configurable) — catchup = VOD of a
-past range, startover = live-style from a past point. Full reference and
-examples: [`README.md`](./README.md) "Startover & catchup"; design:
+`serve.py --timeshift` (its-a-live: `[query]`, on by default) makes the
+normal `index.m3u8` / `index.mpd` accept `start`, `end`, `full_loops`, `offset` (pretend "now" is earlier/later; `SCOPE.md` §13.7) and
+`timeline_mode` query params (only `start`/`end` configurable) — catchup = VOD of a
+past range, startover = live-style from a past point — plus per-request overrides of
+the rendering (`epoch`, `dvr_window`, `split_on`, `announce_ahead`, `announce_on`, `timeline_style`, `addressing`,
+`signal_format`, `descriptor_grouping`, `cue_tags`, `increment_event_ids`,
+`id_template`, `max_height`, `max_bitrate`, and for low-latency DASH `low_latency`, `ll_target_latency`,
+`ll_utc_timing`; `SCOPE.md` §13.8), all behind an optional
+`--query-prefix`. Adding one means: a name in `timeshift.FIXED_PARAMS`, its parsing
+and a `Channel.with_*` variant (`serving/variants.py`) in `resolve_request_channel` (`serving/query.py`), an entry in
+`openapi.yaml`, and the same name in its-a-live's `_query_cfg.FIXED_PARAMS` and Igor's
+`QUERY_FIXED_PARAMS` (tests keep the three lists in lockstep). Full reference and
+examples: [`README.md`](./README.md) "Query parameters"; design:
 `SCOPE.md` §13. Things an agent must not get wrong:
 
 - **Segment URL forms are part of the contract**: `/seg/<local>` (loop-local),
@@ -127,7 +173,9 @@ examples: [`README.md`](./README.md) "Startover & catchup"; design:
   (its-a-live's `loop_stack.py` does), or viewers share each other's ranges.
 - History is re-derived from the epoch + baked package, never recorded; a new
   `--epoch-utc` or a re-bake changes what past times contain.
-- `tests/test_timeshift.py` covers parsing, range math and served manifests.
+- `tests/test_timeshift.py` covers parsing, range math and served manifests;
+  `tests/test_query_overrides.py` every per-request override, the prefix and the
+  OpenAPI parameter list.
 
 ## Requirements
 

@@ -170,7 +170,7 @@ if [[ "$DISPLAY_HOST" == "0.0.0.0" || "$DISPLAY_HOST" == "::" ]]; then
 fi
 echo ""
 echo "    HLS:  http://${DISPLAY_HOST}:${PORT}/index.m3u8"
-echo "    DASH: http://${DISPLAY_HOST}:${PORT}/stream.mpd"
+echo "    DASH: http://${DISPLAY_HOST}:${PORT}/index.mpd"
 echo ""
 
 exec "${PYTHON_CMD[@]}" "${SCRIPT_DIR}/serve.py" "$OUTPUT" --epoch-utc "$EPOCH_UTC" --host "$HOST" --port "$PORT" \

@@ -1,5 +1,5 @@
-// Unified lifecycle phase across all three deploy backends (aws-media,
-// ecs-express, local-docker), so the UI shows the same badge colors for
+// Unified lifecycle phase across all four deploy backends (aws-media,
+// ecs-express, aws-lambda, local-docker), so the UI shows the same badge colors for
 // the same real-world state regardless of which backend a channel uses.
 //
 // Each backend surfaces its own raw status vocabulary (CloudFormation
@@ -171,6 +171,25 @@ function ecsExpressPhase(liveStatus: string | null | undefined, minTasks: number
   return 'unknown'
 }
 
+// aws-lambda's live status() op: ACTIVE (serving), STOPPED (reserved
+// concurrency 0 -- every request throttled), PENDING (function being
+// created/updated), FAILED. An idle-but-ACTIVE function costs nothing and
+// wakes on the first request, so it is simply 'alive'.
+function awsLambdaPhase(status: string | null | undefined, reachable?: boolean | null): Phase {
+  switch (status) {
+    case 'ACTIVE':
+      return withReachability('alive', reachable)
+    case 'STOPPED':
+      return 'stopped'
+    case 'PENDING':
+      return 'transitioning'
+    case 'FAILED':
+      return 'failed'
+    default:
+      return 'unknown'
+  }
+}
+
 /** Phase for a row from the channel list endpoint. `stack_status` alone
  * only says whether the CloudFormation stack is deployed -- for
  * ecs-express/aws-media it stays COMPLETE (-> cfnStackPhase 'alive')
@@ -195,6 +214,9 @@ export function listItemPhase(
   if (channel.backend === 'aws-media' && channel.live_status) {
     return awsMediaLivePhase(channel.live_status, channel.reachable)
   }
+  if (channel.backend === 'aws-lambda' && channel.live_status) {
+    return awsLambdaPhase(channel.live_status, channel.reachable)
+  }
   return stackPhase
 }
 
@@ -211,6 +233,7 @@ export function liveStatusPhase(status: ChannelStatus): Phase {
   }
   if (status.backend === 'aws-media') return awsMediaLivePhase(status.status, status.reachable)
   if (status.backend === 'local-docker') return localDockerPhase(status.status, status.reachable)
+  if (status.backend === 'aws-lambda') return awsLambdaPhase(status.status, status.reachable)
   // ecs-express: `status.status` here IS the raw statusCode (see
   // ecsExpressPhase) -- desired task count is otherwise the reliable
   // running/stopped signal, but DRAINING overrides it.

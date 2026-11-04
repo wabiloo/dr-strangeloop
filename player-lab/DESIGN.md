@@ -11,7 +11,7 @@ the channel says it is doing. Manual use (scheduling later), plus a "Playback te
 panel in Igor. Not part of the unit-test suite or merge-request CI.
 
 Works on any channel with a playable URL. Expectation checks (below) need
-`/timeline.json`, so they apply to `ecs-express` and `local-docker`; for
+`/timeline.json`, so they apply to `ecs-express`, `aws-lambda` and `local-docker`; for
 `aws-media` only the generic stall/error checks apply.
 
 ## Architecture

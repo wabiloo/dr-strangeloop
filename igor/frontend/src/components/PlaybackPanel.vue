@@ -15,10 +15,13 @@ const props = defineProps<{
    * beginning of the range instead of joining near the live edge, and
    * don't chase the live edge afterwards. */
   startFromBeginning?: boolean
-  /** Wall-clock instant (epoch seconds) that DASH presentation time 0
-   * corresponds to. 0 for the normal live MPD (availabilityStartTime is
-   * the unix epoch); a time-shifted MPD is anchored at its range start. */
+  /** Fallback wall-clock instant (epoch seconds) that DASH presentation time 0 corresponds to, used until dash.js
+   * has loaded the MPD and we can read its own availabilityStartTime (the channel epoch, or a time-shifted MPD's
+   * range start). */
   dashClockOffsetSeconds?: number
+  /** Whether the manifest being played advertises low latency (per format). Then the player follows the target the
+   * manifest itself carries (LL-HLS PART-HOLD-BACK, the MPD's ServiceDescription) instead of the fixed delay below. */
+  lowLatency?: { hls?: boolean; dash?: boolean }
 }>()
 
 const toast = useToast()
@@ -32,6 +35,12 @@ const DASH_CDN = 'https://cdn.dashjs.org/latest/dash.all.min.js'
 // defaults don't actually agree (15s vs 10s here) and drift apart further
 // if segment duration or the manifest ever change independently.
 const TARGET_LIVE_DELAY_SECONDS = 10
+// A low-latency manifest states its own target, so the players' defaults are right for it: hls.js reads
+// PART-HOLD-BACK, dash.js the MPD's ServiceDescription latency and turns its low-latency catch-up on by itself. The
+// fixed delay above would override both and park the player 10 s behind. Not used for startover/catchup, which never
+// chases the live edge.
+const hlsFollowsManifest = () => !!props.lowLatency?.hls && !props.startFromBeginning
+const dashFollowsManifest = () => !!props.lowLatency?.dash && !props.startFromBeginning
 
 const hlsVideo = ref<HTMLVideoElement | null>(null)
 const dashVideo = ref<HTMLVideoElement | null>(null)
@@ -51,6 +60,8 @@ const hlsVolume = ref(1)
 const hlsFullscreen = ref(false)
 const hlsPlayheadTime = ref('')
 const dashPlayheadTime = ref('')
+// availabilityStartTime of the MPD dash.js last loaded (epoch seconds): presentation time 0 is this wall-clock instant.
+let dashAvailabilityStartSeconds: number | null = null
 const hlsDvrWindowSeconds = computed(() => Math.max(0, hlsSeekMax.value - hlsSeekMin.value))
 const dashDvrWindowSeconds = computed(() => Math.max(0, dashSeekMax.value - dashSeekMin.value))
 
@@ -493,7 +504,9 @@ function syncDashVideoState() {
   dashMuted.value = video.muted
   dashVolume.value = video.volume
   if (Number.isFinite(video.currentTime) && video.currentTime > 0) {
-    const wallSeconds = video.currentTime + (props.dashClockOffsetSeconds ?? 0)
+    // The MPD's own availabilityStartTime when dash.js has told us (it is the channel's epoch, not 1970, and a
+    // time-shifted MPD's range start); the parent's offset until the manifest has loaded.
+    const wallSeconds = video.currentTime + (dashAvailabilityStartSeconds ?? props.dashClockOffsetSeconds ?? 0)
     dashPlayheadTime.value = new Date(wallSeconds * 1000).toISOString().replace('T', ' ')
   }
   updateDashDvrRange()
@@ -853,7 +866,9 @@ async function playHls() {
       // immediately instead of waiting for a slow multi-minute gradual
       // catch-up at a capped, mild speed-up.
       hlsInstance = new Hls(
-        props.startFromBeginning
+        hlsFollowsManifest()
+          ? { lowLatencyMode: true }
+          : props.startFromBeginning
           ? {
               // Startover: begin at the start of the playlist and never
               // seek/speed up towards the live edge.
@@ -937,12 +952,16 @@ async function playDash() {
     const video = dashVideo.value
     if (!video) return
     dashInstance = dashjs.MediaPlayer().create()
-    // Playhead position (wall-clock): our MPD's availabilityStartTime is
-    // 1970-01-01 (unix epoch) by construction (see loop-dee-loop/serve.py),
-    // so video.currentTime for a dash.js-driven <video> IS already real
-    // Unix epoch seconds directly -- no fragment-metadata mapping needed
-    // here, unlike hls.js (see playHls()), whose currentTime lives on its
-    // own internal, non-epoch timeline.
+    dashAvailabilityStartSeconds = null
+    dashInstance.on(dashjs.MediaPlayer.events.MANIFEST_LOADED, (e: { data?: { availabilityStartTime?: Date | string } }) => {
+      const ast = e?.data?.availabilityStartTime
+      const ms = ast instanceof Date ? ast.getTime() : typeof ast === 'string' ? Date.parse(ast) : NaN
+      if (Number.isFinite(ms)) dashAvailabilityStartSeconds = ms / 1000
+    })
+    // Playhead position (wall-clock): video.currentTime of a dash.js-driven <video> is seconds since the MPD's
+    // availabilityStartTime, which is the channel's epoch (configurable; a time-shifted MPD uses its range start),
+    // not 1970. We read it from the loaded manifest (MANIFEST_LOADED below) -- no fragment-metadata mapping needed,
+    // unlike hls.js (see playHls()), whose currentTime lives on its own internal, non-epoch timeline.
     video.addEventListener('timeupdate', onDashTimeUpdate)
     video.addEventListener('play', syncDashVideoState)
     video.addEventListener('playing', syncDashVideoState)
@@ -978,18 +997,20 @@ async function playDash() {
     // recovering from a big one-off stall (a rebuffer, a slow segment
     // fetch) at a capped ~1.05x can take minutes. Past maxDrift seconds
     // behind target, dash.js seeks forward immediately instead.
-    dashInstance.updateSettings({
-      streaming: {
-        delay: { liveDelay: TARGET_LIVE_DELAY_SECONDS },
-        liveCatchup: props.startFromBeginning
-          ? { enabled: false }
-          : {
-              enabled: true,
-              maxDrift: TARGET_LIVE_DELAY_SECONDS * 2,
-              playbackRate: { min: -0.5, max: 0.5 },
-            },
-      },
-    })
+    if (!dashFollowsManifest()) {
+      dashInstance.updateSettings({
+        streaming: {
+          delay: { liveDelay: TARGET_LIVE_DELAY_SECONDS },
+          liveCatchup: props.startFromBeginning
+            ? { enabled: false }
+            : {
+                enabled: true,
+                maxDrift: TARGET_LIVE_DELAY_SECONDS * 2,
+                playbackRate: { min: -0.5, max: 0.5 },
+              },
+        },
+      })
+    }
     // Startover/catchup MPDs are anchored at their own range start, so
     // offset 0 == the first segment; the default is to join near live.
     if (props.startFromBeginning) dashInstance.initialize(video, url, true, 0)
@@ -1284,7 +1305,10 @@ async function copyUrl(url?: string | null) {
     <div class="players-grid">
       <div v-if="hlsUrl" class="player-card">
         <div class="player-card-header">
-          <span class="font-semibold text-sm">HLS</span>
+          <span class="player-title">
+            <span class="font-semibold text-sm">HLS</span>
+            <span v-if="hlsFollowsManifest()" class="ll-pill" title="This playlist advertises Apple LL-HLS: the player follows its latency target (parts, blocking reload)."><i class="pi pi-bolt" />Low latency</span>
+          </span>
           <Button v-if="hlsPlaying" icon="pi pi-stop-circle" text size="small" severity="secondary" label="Stop" @click="destroyHls" />
         </div>
         <div v-if="hlsError" class="player-stack-error">
@@ -1404,7 +1428,10 @@ async function copyUrl(url?: string | null) {
 
       <div v-if="dashUrl" class="player-card">
         <div class="player-card-header">
-          <span class="font-semibold text-sm">DASH</span>
+          <span class="player-title">
+            <span class="font-semibold text-sm">DASH</span>
+            <span v-if="dashFollowsManifest()" class="ll-pill" title="This MPD advertises low latency: the player follows its latency target (chunked delivery)."><i class="pi pi-bolt" />Low latency</span>
+          </span>
           <Button v-if="dashPlaying" icon="pi pi-stop-circle" text size="small" severity="secondary" label="Stop" @click="destroyDash" />
         </div>
         <div v-if="dashError" class="player-stack-error">
@@ -1625,6 +1652,31 @@ async function copyUrl(url?: string | null) {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   padding: 0.75rem;
+}
+
+.player-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ll-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.55);
+}
+
+.ll-pill .pi {
+  font-size: 0.65rem;
 }
 
 .player-card-header {

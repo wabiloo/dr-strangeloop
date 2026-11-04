@@ -19,6 +19,7 @@ import type {
   Job,
   MarkersNumberingPreview,
   MarkersPreview,
+  OutputProfile,
   PlaybackInfo,
   PlaybackReport,
   PlaybackRuns,
@@ -40,6 +41,10 @@ async function handle(res: Response): Promise<Response> {
     throw new Error(detail || `HTTP ${res.status}`)
   }
   return res
+}
+
+export async function fetchAppVersion(): Promise<string> {
+  return (await getJson<{ version: string }>('/api/v1/version')).version
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -231,6 +236,31 @@ export async function saveArchiveSelection(name: string, selection: ArchiveSelec
 
 export function getArchiveImportStatus(name: string): Promise<ArchiveImportStatus> {
   return getJson(`${ARCHIVES_BASE}/${encodeURIComponent(name)}/import/status`)
+}
+
+// ---------------------------------------------------------------------------
+// Output profiles (encoding settings / ABR ladders)
+// ---------------------------------------------------------------------------
+
+const PROFILES_BASE = '/api/v1/profiles'
+
+export function listProfiles(): Promise<OutputProfile[]> {
+  return getJson(`${PROFILES_BASE}/`)
+}
+
+export async function saveProfile(name: string, profile: Omit<OutputProfile, 'name' | 'builtin'>): Promise<OutputProfile> {
+  const res = await handle(
+    await fetch(`${PROFILES_BASE}/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profile),
+    }),
+  )
+  return res.json()
+}
+
+export async function deleteProfile(name: string): Promise<void> {
+  await handle(await fetch(`${PROFILES_BASE}/${encodeURIComponent(name)}`, { method: 'DELETE' }))
 }
 
 // ---------------------------------------------------------------------------
@@ -503,7 +533,7 @@ export function playbackScreenshotUrl(name: string, runId: string, file: string)
 /** The in-browser driver page (served same-origin by Igor) for one run. */
 export function playbackBrowserRunUrl(
   name: string,
-  opts: { channel?: string; cases: string[]; hls?: string | null; dash?: string | null; withTimeline: boolean; boundaries: number; durationS: number; maxS?: number; skipped?: string[] },
+  opts: { channel?: string; cases: string[]; hls?: string | null; dash?: string | null; withTimeline: boolean; timelineQuery?: string; boundaries: number; durationS: number; maxS?: number; skipped?: string[] },
 ): string {
   const q = new URLSearchParams({
     channel: opts.channel ?? name,
@@ -516,6 +546,6 @@ export function playbackBrowserRunUrl(
   if (opts.skipped?.length) q.set('skipped', opts.skipped.join(','))
   if (opts.hls) q.set('hls', opts.hls)
   if (opts.dash) q.set('dash', opts.dash)
-  if (opts.withTimeline) q.set('timeline', `${CHANNELS_BASE}/${encodeURIComponent(name)}/timeline`)
+  if (opts.withTimeline) q.set('timeline', `${CHANNELS_BASE}/${encodeURIComponent(name)}/timeline${opts.timelineQuery ? `?${opts.timelineQuery}` : ''}`)
   return `${PLAYBACK_BASE}/harness/browser.html?${q}`
 }

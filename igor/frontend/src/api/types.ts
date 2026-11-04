@@ -185,6 +185,8 @@ export interface MarkerEntry {
   }
   /** `splice_insert` only, default true -- see franken_ts.config.SpliceConfig.auto_return. */
   auto_return?: boolean
+  /** `splice_insert` only, 16-bit; int or hex string (franken-ts normalizes to "0x%04X"). */
+  unique_program_id?: number | string
 }
 
 /** One resolved entry from POST /playlists/{name}/resolve-markers -- real
@@ -259,7 +261,7 @@ export interface ProbeResult {
 export interface ChannelListItem {
   config_path: string
   name: string
-  backend: 'aws-media' | 'ecs-express' | 'local-docker'
+  backend: 'aws-media' | 'ecs-express' | 'aws-lambda' | 'local-docker'
   stack_name: string | null
   // local-docker only (null for aws-media/ecs-express) -- there's no
   // CloudFormation stack for that backend, so this is the nearest
@@ -293,7 +295,7 @@ export interface ChannelListItem {
 }
 
 export interface ChannelStatus {
-  backend: 'aws-media' | 'ecs-express' | 'local-docker'
+  backend: 'aws-media' | 'ecs-express' | 'aws-lambda' | 'local-docker'
   status: string
   // CloudFormation StackStatus for aws-media/ecs-express (absent for
   // local-docker, which has no stack). Set even while `status` itself is
@@ -306,6 +308,10 @@ export interface ChannelStatus {
   stack_status?: string | null
   hls_url?: string | null
   dash_url?: string | null
+  // aws-lambda only: status is ACTIVE | STOPPED | PENDING | FAILED;
+  // reserved_concurrency 0 means stopped.
+  function_name?: string
+  reserved_concurrency?: number | null
   // ecs-express only:
   service_name?: string
   min_tasks?: number
@@ -471,12 +477,19 @@ export interface ChannelHealth {
   /** Newer serve.py only (loop-dee-loop/SCOPE.md §13). */
   epoch_utc?: string
   continuous?: boolean
-  timeshift?: {
-    enabled: boolean
+  /** The channel's [query] configuration (newer serve.py only). */
+  query?: {
+    timeshift: boolean
+    overrides: boolean
+    /** Effective on-the-wire names (the channel's [query] prefix already applied). */
     start_param?: string
     end_param?: string
     timeline_param?: string
+    offset_param?: string
     full_loops_param?: string
+    prefix?: string
+    /** Every query parameter name the channel's manifests accept. */
+    params?: string[]
     max_span_seconds?: number
     continuous_supported?: boolean
   }
@@ -484,7 +497,7 @@ export interface ChannelHealth {
 
 export interface ChannelCreatePayload {
   name: string
-  backend: 'aws-media' | 'ecs-express' | 'local-docker'
+  backend: 'aws-media' | 'ecs-express' | 'aws-lambda' | 'local-docker'
   region: string
   bucket_name: string
   content_folder: string
@@ -496,28 +509,49 @@ export interface ChannelCreatePayload {
   allow_missing_segments?: boolean
   segment_duration?: number
   dvr_window_seconds?: number
-  /** [timeline].epoch_utc -- loop 0's start / DASH availabilityStartTime,
+  /** [timeline].epoch -- loop 0's start / DASH availabilityStartTime,
    * UTC `YYYY-MM-DDTHH:MM:SSZ` (ecs-express/local-docker). */
   epoch_utc?: string
   hls_format?: 'cmaf' | 'ts'
   hls_ts_mux_audio?: boolean
-  /** [packaging].dash_addressing -- DASH SegmentTemplate `$Number$` (default) or `$Time$`. */
+  /** [packaging.dash].addressing -- DASH SegmentTemplate `$Number$` (default) or `$Time$`. */
   dash_addressing?: 'number' | 'time'
-  /** [packaging].dash_timeline -- SegmentTimeline `full` (@t and @d on every S) or `compact` (implicit @t + @r). */
+  /** [packaging.dash].timeline_style -- SegmentTimeline `full` (@t and @d on every S, a SegmentTemplate per representation) or `compact` (implicit @t + @r, one shared SegmentTemplate when the video renditions match). */
   dash_timeline?: 'full' | 'compact'
+  // Low latency (docs/low-latency.md; ecs-express and local-docker only). dash_low_latency is [packaging.dash]
+  // low_latency and hls_low_latency is [packaging.hls] low_latency (LL-HLS, needs hls_format 'cmaf'); chunk_duration is
+  // [packaging] chunk_duration, shared by both. Written to the TOML only when a format's low latency is not 'off'.
+  // target_latency / utc_timing / utc_timing_url are DASH-only; utc_timing_url is configuration only.
+  dash_low_latency?: 'off' | 'on' | 'optin'
+  hls_low_latency?: 'off' | 'on' | 'optin'
+  chunk_duration?: number
+  target_latency?: number | null
+  utc_timing?: 'direct' | 'http' | 'none'
+  utc_timing_url?: string
   /** loop-dee-loop/SCOPE.md §12: default true -- no #EXT-X-DISCONTINUITY /
    * DASH Period restart at the loop wrap (serve.py rewrites each segment's
    * own timestamps per request instead). ecs-express/local-docker only. */
   continuous?: boolean
-  /** loop-dee-loop/SCOPE.md §14: segmentation_type_ids (hex, e.g. "0x22";
-   * a Start implies its End) whose markers force a new DASH Period / HLS
-   * discontinuity, signal-only. `apply` picks the formats. */
+  /** loop-dee-loop/SCOPE.md §14: [markers].split_on -- segmentation_type_ids
+   * (hex, e.g. "0x22"; a Start implies its End) whose markers force a new
+   * DASH Period / HLS discontinuity, signal-only. Applies to both formats. */
   period_on_segmentation?: string[]
-  period_on_segmentation_apply?: 'both' | 'dash' | 'hls'
-  /** loop-dee-loop/SCOPE.md §13: startover/catchup via query parameters on
-   * the normal manifest URLs. The names are per-channel and also become the
-   * CDN's manifest cache-key allow-list. ecs-express/local-docker only. */
+  /** [markers].announce_ahead -- seconds (0 = off): announce SCTE-35 markers at least this long before the segment
+   * they fall in (HLS DATERANGE / DASH Event appear earlier; CUE-OUT/IN and the marker's own time do not move).
+   * Also the per-request query parameter `announce_ahead`. */
+  announce_ahead?: number
+  /** [markers].announce_on -- segmentation_type_ids (hex strings, e.g. "0x22") and/or "splice_insert" the announcing
+   * applies to; empty = every marker. Also the query parameter `announce_on`. */
+  announce_on?: string[]
+  /** loop-dee-loop/SCOPE.md §13: [query] -- startover/catchup and per-request
+   * overrides via query parameters on the normal manifest URLs. The names are
+   * per-channel and also become the CDN's manifest cache key. ecs-express/
+   * local-docker only. `query_prefix` is put in front of EVERY parameter name. */
   timeshift_enabled?: boolean
+  /** [query] overrides -- false: only startover/catchup parameters are read,
+   * the per-request rendering overrides are ignored. */
+  query_overrides?: boolean
+  query_prefix?: string
   timeshift_start_param?: string
   timeshift_end_param?: string
   timeshift_max_span_seconds?: number
@@ -530,6 +564,13 @@ export interface ChannelCreatePayload {
   cpu?: number
   memory?: number
   cdn?: boolean
+  /** aws-lambda only: [infrastructure.lambda] memory / timeout / reserved_concurrency
+   * (-1 = no reservation) / cache_mb / architecture. */
+  lambda_memory?: number
+  lambda_timeout?: number
+  lambda_reserved_concurrency?: number
+  lambda_cache_mb?: number
+  lambda_architecture?: 'arm64' | 'x86_64'
   daterange_mode?: 'grouped' | 'shared' | 'narrowed'
   cue_tags?: 'none' | 'alongside' | 'only'
   increment_event_ids?: boolean
@@ -611,6 +652,9 @@ export interface PlaybackTestPayload {
   duration_s?: number
   max_seconds?: number
   ffmpeg_s?: number | null
+  /** Query strings appended to the channel's HLS / DASH manifest URLs (overrides, timeshift). */
+  hls_query?: string | null
+  dash_query?: string | null
 }
 
 export interface PlaybackRunSummary {
@@ -659,7 +703,33 @@ export interface PlaybackReport {
   durationS: number
   pass: boolean
   target: { name: string; hls: string | null; dash: string | null; timeline: string | null }
-  boundaries: { requested: number; source: string; newPeriods: number | null; newDiscontinuities: number | null }
+  boundaries: { requested: number; source: string; continuous?: boolean; newPeriods: number | null; newDiscontinuities: number | null }
   cases: PlaybackCase[]
   ffmpeg?: { url: string; pass?: boolean; skipped?: string; problems?: string[]; exitCode?: number }[]
+}
+
+export interface OutputProfileRendition {
+  name: string
+  resolution: string
+  bitrate_kbps: number
+  /** H.264 overrides; unset inherits the profile-level value. */
+  profile?: string
+  level?: string
+}
+
+/** Reusable Output settings (see igor/src/igor/integrations/profiles.py). */
+export interface OutputProfile {
+  name: string
+  builtin: boolean
+  mode: 'single' | 'ladder'
+  resolution?: string
+  bitrate_kbps?: number
+  renditions?: OutputProfileRendition[]
+  framerate: number
+  gop?: number | null
+  /** H.264 profile (baseline/main/high) and level (e.g. "4.0"). */
+  profile?: string
+  level?: string
+  service_provider?: string
+  service_name?: string
 }

@@ -69,8 +69,8 @@ HLS defaults to CMAF (`.m4s` segments and init files). Select MPEG-TS
 with `bake.py` or `run.sh --hls-format ts`. TS includes video and audio
 in each rendition by default; `--no-hls-ts-mux-audio` produces a shared,
 separate audio TS playlist instead. DASH always uses the CMAF fragments.
-The same choices are available in its-a-live's `[packaging]` section as
-`hls_format = "cmaf" | "ts"` and `hls_ts_mux_audio = true | false`.
+The same choices are available in its-a-live's `[packaging.hls]` section as
+`container = "cmaf" | "ts"` and `mux_audio = true | false`.
 
 ### Multi-rendition (ABR ladder)
 
@@ -161,9 +161,10 @@ init.
 
 `bake.py` accepts three flags controlling the shape of the HLS/DASH
 SCTE-35 signaling `serve.py` later renders (recorded into
-`loop_descriptor.json`, not re-decided per request); `its-a-live`
-surfaces the same three as `config.toml`'s `[markers]` section (see
-`its-a-live/AGENTS.md`):
+`loop_descriptor.json`; they are the defaults, and every one of them can be
+overridden per request with a query parameter, see "Query parameters" below);
+`its-a-live` surfaces them as `config.toml`'s `[markers]` section with its
+`[markers.hls]` / `[markers.dash]` sub-tables (see `its-a-live/AGENTS.md`):
 
 ```bash
 python3 bake.py path/to/output.ts --output /var/loop-packages/2026-01-01 \
@@ -222,9 +223,9 @@ python3 bake.py path/to/output.ts --output /var/loop-packages/2026-01-01 \
 |---|---|
 | `/index.m3u8` | HLS **multivariant** playlist — give players this URL, not a media playlist directly. |
 | `/video[_N].m3u8` | HLS media playlist for one video rendition (video only). `_N` is the 1-based rendition index, present only when there is more than one rendition. |
-| `/video_audio[_N].m3u8` | Same, when audio is muxed into the segments (`hls_format=ts` with `hls_ts_mux_audio`). |
+| `/video_audio[_N].m3u8` | Same, when audio is muxed into the segments (`container = "ts"` with `mux_audio`). |
 | `/audio.m3u8` | HLS media playlist (audio, the one track shared across renditions) — only present if the source has an audio track and it isn't muxed into the video segments. |
-| `/stream.mpd` | DASH MPD (one video `AdaptationSet` with one `Representation` per rendition, + one audio `AdaptationSet`). |
+| `/index.mpd` | DASH MPD (one video `AdaptationSet` with one `Representation` per rendition, + one audio `AdaptationSet`). |
 | `/<rendition>/init.mp4` | CMAF init segment for one rendition. |
 | `/<rendition>/seg/<n>.m4s` | CMAF media segments for one rendition. |
 | `/audio/init.mp4` | CMAF init segment (audio track). |
@@ -273,52 +274,207 @@ SCOPE.md §12 for the full design and known limitations).
 ### Forced Periods on chosen SCTE-35 segmentations (SCOPE.md §14)
 
 `--period-on-segmentation 0x22,0x30` (a Start implies its End; its-a-live: `[markers]
-period_on_segmentation = [0x22, 0x30]`) forces a new DASH Period /
-`#EXT-X-DISCONTINUITY` at every marker with one of those
-`segmentation_type_id`s, in either timeline mode. It is signal only: with
-`--continuous-timeline` the timestamps stay continuous across the new Period.
-`--period-on-segmentation-apply dash|hls|both` (its-a-live:
-`period_on_segmentation_apply`) restricts it to DASH Periods, HLS
-discontinuities, or both (default).
+split_on = [0x22, 0x30]`; per request: `?split_on=0x22,0x30`, or `split_on=none`)
+forces a new DASH Period / `#EXT-X-DISCONTINUITY` at every marker with one of
+those `segmentation_type_id`s, in either timeline mode and in HLS and DASH
+alike. It is signal only: with `--continuous-timeline` the timestamps stay
+continuous across the new Period.
 
-### Startover & catchup (SCOPE.md §13)
+### Announcing markers ahead of their segment (SCOPE.md §16)
 
-The normal manifest URLs also serve a **past range**, selected by query
-parameters (opt in with `serve.py --timeshift`, or `[timeshift]` in an
-its-a-live channel config; its-a-live enables it by default):
+By default a marker's `EXT-X-DATERANGE` / DASH `<Event>` appears with the segment it falls
+in, which is the live edge only when that segment starts. `--announce-ahead 10`
+(its-a-live: `[markers] announce_ahead = 10`; per request: `?announce_ahead=10`, `0`
+off) puts it in the manifest as soon as the live edge is within 10 s of the marker, rounded
+to whole segments and across the loop wrap (a marker 2 s into the next loop is announced in
+the last segments of the current one). `--announce-on 0x22,0x30,splice_insert`
+(`announce_on = [0x22, "splice_insert"]`, `?announce_on=`) limits it to those markers (a Start
+implies its End; empty or `all` = every marker).
+
+Only *where* the marker is signalled changes: `START-DATE` and `Event@presentationTime` stay the
+marker's own, and `#EXT-X-CUE-OUT` / `-IN` stay exact. The tag or Event then stays in the
+manifest until every segment the marker covers has left the window -- not just the segment it
+was announced on. In DASH, where a forced Period (`split_on`) or the loop wrap
+separates the announce from the marker, the early Event sits in the earlier Period with a
+`presentationTime` past that Period's end, and the Period the marker belongs to carries it
+again (same id) while a segment it covers is still in the window. Low latency changes nothing
+here (the live edge is the segment in progress). A closed catchup range (`start`+`end`)
+never announces ahead.
+
+### Low-latency DASH (CMAF chunked delivery)
+
+The overview, how to turn it on per channel, measured results and limits are in [`docs/low-latency.md`](../docs/low-latency.md); this section is the flag and delivery reference for DASH, the next one for HLS. Both are made from the same baked chunks.
+
+Bake the loop with `bake.py --chunk-duration 0.5` (shorter than `--segment-duration`): every segment then holds
+several `moof`+`mdat` chunks, each with its own `tfdt`. Serve it with `serve.py --ll-dash` (or `--ll-optin`):
+
+- the segment **in progress** on the wall clock is streamed with chunked transfer encoding, each chunk released at its
+  own wall-clock end (derived from the baked `tfdt`s in integer ticks, so it cannot drift; `lowlatency.py`). Completed
+  segments are served at once, as before; a request for the upcoming segment (also across the loop wrap) is held until
+  its first chunk is due;
+- the MPD advertises it: `availabilityTimeOffset` (segment - chunk) with `availabilityTimeComplete="false"` on each
+  `SegmentTemplate`, `ServiceDescription/Latency` (target `--ll-target-latency`, default 4 chunks, at least 1 s;
+  min = half, max = double), a shorter `suggestedPresentationDelay` / `minBufferTime`, and a clock source (below).
+
+| Flag | Meaning |
+|---|---|
+| `--ll-dash` | Deliver low latency **and** advertise it in every MPD. Refused (`ValueError`) on a package baked without chunks. |
+| `--ll-optin` | Deliver low latency (DASH **and** HLS), but advertise it only when asked (`?low_latency=true`, needs `--query-overrides`). Implied by `--ll-dash` / `--ll-hls`, which advertise by default. |
+| `--ll-target-latency S` | Latency the MPD asks players to hold. |
+| `--ll-utc-timing direct\|http\|none` | Clock source in the MPD. `direct` (default): the current time written into the MPD, which is then served `Cache-Control: no-store` (a cached copy would be a wrong clock; needs no URL, but the MPD is never CDN-cached). `http`: a polled `/time` (`no-store`), the MPD stays cacheable. `none`: the player's own clock (dash.js falls back to the response `Date` header). |
+| `--ll-utc-timing-url URL` | Absolute URL of `/time` for `http` (the spec wants an absolute `http(s)` URL; relative values are not valid). Without it the URL is derived from the request **only when it is addressed to localhost**; for any other `Host` no `UTCTiming` is written (a `Host` header is client-controlled and a shared cache could keep a forged one). Never overridable per request. |
+
+Per request (behind `--query-overrides`): `low_latency=true|false` applies to the MPD and to HLS media playlists alike (a
+multivariant playlist passes it on); `ll_target_latency=<seconds>` (at most 120) and `ll_utc_timing=http|direct|none` are MPD-only
+(HLS and `/timeline.json` accept and ignore them). `low_latency=true`
+is a `400` on a channel that does not deliver low latency. Not overridable: the chunk size (baked), the `UTCTiming` URL
+(a link must not choose viewers' clock source). Segment bytes never change, only when they are sent.
+
+Needs a threaded or async server: responses are held open, so `docker-entrypoint.sh` uses gunicorn `gthread` workers
+(`GUNICORN_THREADS`, default 32) when `--ll-dash`/`--ll-hls`/`--ll-optin` is set, and the Flask dev server runs threaded. The
+`aws-lambda` backend (one request per environment, billed while held) is not a fit. Measure with
+`player-lab run --max-latency S` (wall-clock latency per player; `player-lab/AGENTS.md`).
+
+### Low-latency HLS (Apple LL-HLS)
+
+`serve.py --ll-hls` makes the HLS **media playlists** low-latency, in the form Apple has specified since 2020 and folded
+into the HLS spec (RFC 8216bis); not HTTP/2 push, not the older community "LHLS". A package baked with `--chunk-duration`
+and `--hls-format cmaf` is enough: a *part* is one baked chunk, so there is nothing else to bake (and a package that is
+already chunked for DASH needs no re-bake; its parts are read lazily from the segment files and cached). MPEG-TS cannot
+carry parts, so `--ll-hls` is refused for `--hls-format ts` (and `?low_latency=true` on such a channel is a `400`).
+
+A live low-latency media playlist carries:
+
+- `EXT-X-VERSION:9`, `EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=<3 x part target>` and
+  `EXT-X-PART-INF:PART-TARGET=<seconds>`. The part target must cover every part and never change, so `bake.py` records the
+  true longest chunk (`max_chunk_ticks`; GPAC cut a 0.5 s target into a 0.60 s first chunk) and serving rounds it up to a
+  millisecond;
+- `EXT-X-PART` lines for the newest three segments (`INDEPENDENT=YES` on a part whose first sample is a sync sample, read
+  from the `moof`), then that segment's `EXTINF` + URI; the segment **in progress** lists only the parts released so far and
+  has no `EXTINF`/URI yet;
+- `EXT-X-PRELOAD-HINT:TYPE=PART` for the next part, and an `EXT-X-RENDITION-REPORT` (`LAST-MSN` / `LAST-PART`) for every other
+  playlist (the other renditions and the audio playlist), carrying the request's query like every child URI does.
+
+Part URLs are separate objects, `.../seg/<n>.<k>.m4s` (`/cseg/<global>.<k>.m4s` under a continuous timeline; `audio/` for the
+audio track): the parts of a segment, joined, are the segment, and a finished part is immutable, so a CDN caches it like a
+segment. A request for a part that is **not complete yet is held** until its wall-clock end, which is what answers a preload
+hint; it is released within a few milliseconds, at most three target durations later.
+
+**Blocking playlist reload**: `?_HLS_msn=<n>[&_HLS_part=<k>]` holds the response until the playlist contains that segment
+(part). `400` for a negative or non-integer value, an `_HLS_part` without `_HLS_msn` or past the segment's last part, or an
+`_HLS_msn` more than two segments ahead of the live edge. `_HLS_skip` (delta updates) is accepted and ignored:
+`CAN-SKIP-UNTIL` is not advertised. These are protocol parameters, not overrides: never prefixed, not in the override list,
+and a CDN must key and forward them (its-a-live does, see `_packaging_cfg.cdn_query_names`).
+
+A startover/catchup range or an `offset` is never low-latency (an ended or growing past range has no live edge to hold at).
+Everything else about HLS is unchanged, and with `--ll-hls` off the playlists are byte-identical.
+
+Known edge: in a *periodic* timeline (not the default) `seg/<local>` is the same URL every loop. Near the loop wrap the
+server cannot tell a *finished* old segment or part from the *upcoming* occurrence of the same index, and in a loop shorter
+than about two segments it may hold a request for the finished one for up to a segment. A continuous timeline names the
+loop in the URL and has no such ambiguity. Apple's tooling also expects HTTP/2 from an LL-HLS origin; Flask's dev server speaks
+HTTP/1.1 (a CDN such as CloudFront provides HTTP/2 to the viewer).
+
+### Query parameters: startover, catchup and per-request overrides (SCOPE.md §13)
+
+The normal manifest URLs take query parameters (opt in with `serve.py --timeshift`,
+or `[query] timeshift` / `overrides` in an its-a-live channel config -- its-a-live enables
+both by default). Two kinds: a **past range** (startover/catchup) and **overrides**
+of how the manifest is rendered for this request. Overrides only change the
+manifests -- segment bytes never change -- and absent parameters keep the
+channel's own setting.
 
 ```bash
 # Catchup: a finished VOD of a past range (ENDLIST / static MPD)
 curl 'http://localhost:8080/index.m3u8?start=2026-09-30T08:00:00Z&end=2026-09-30T08:10:00Z'
-curl 'http://localhost:8080/stream.mpd?start=1790755200&end=1790755800'       # epoch seconds (ms also accepted)
+curl 'http://localhost:8080/index.mpd?start=1790755200&end=1790755800'       # epoch seconds (ms also accepted)
 
 # Startover: plays from the start point, grows to the live edge (end optional)
 curl 'http://localhost:8080/index.m3u8?start=2026-09-30T11:55:00Z'
 
 # Whole loops only, and/or pick the timeline mode for this request
-curl 'http://localhost:8080/index.m3u8?start=...&end=...&full-loops=true&timeline=periodic'
+curl 'http://localhost:8080/index.m3u8?start=...&end=...&full_loops=true&timeline_mode=periodic'
 
-# The timeline override also works on plain live (no start needed)
-curl 'http://localhost:8080/index.m3u8?timeline=continuous'
+# Overrides work on plain live too (no start needed)
+curl 'http://localhost:8080/index.m3u8?timeline_mode=continuous'
+curl 'http://localhost:8080/index.m3u8?cue_tags=alongside&descriptor_grouping=narrowed&dvr_window=PT2M'
+curl 'http://localhost:8080/index.mpd?addressing=time&timeline_style=compact&signal_format=xml'
+curl 'http://localhost:8080/index.m3u8?max_height=720'
 
 # Play the live stream as it was an hour ago (or will be in an hour with a positive offset)
 curl 'http://localhost:8080/index.m3u8?offset=-PT1H'
 ```
 
+**Range and clock**
+
 | Param | Meaning |
 |---|---|
 | `start` (name configurable) | Range start: epoch seconds, epoch ms (≥ 1e11) or ISO 8601 (no zone = UTC). Snapped down to a segment boundary. Must be ≥ the channel epoch and not in the future. Without it the URL is plain live. |
 | `end` (name configurable) | Optional range end (needs `start`). Past → catchup (VOD); future → startover that ends there; absent → startover capped at `start + max_span`. Snapped up to a segment boundary. |
-| `full-loops` (fixed name) | Boolean. Widen the range to whole loops: `start` → nearest loop start at or before it, `end` → nearest loop end at or after it. |
-| `offset` (fixed name) | Pretend "now" is earlier (negative) or later (positive): signed seconds (`-3600`) or an ISO 8601 duration (`-PT1H`, `P1DT2H`; days and below). The live edge and DVR window sit at `now + offset` and the manifest is what the server would have produced then — the epoch and all timestamps are unchanged. Works on plain live, and start/end are judged against the pretend-now. Dynamic DASH manifests carry a `UTCTiming` element with that time so players use it as their clock. `400` if it would put "now" before the channel epoch or is beyond ±10 years. |
-| `timeline` (fixed name) | `default`, `continuous` or `periodic`; absent = `default` = the server's `--continuous-timeline` setting. Overrides it for this request, on live URLs too. `continuous` → `400` if the package can't be served continuously. |
+| `full_loops` | Boolean. Widen the range to whole loops: `start` → nearest loop start at or before it, `end` → nearest loop end at or after it. |
+| `offset` | Pretend "now" is earlier (negative) or later (positive): signed seconds (`-3600`) or an ISO 8601 duration (`-PT1H`, `P1DT2H`; days and below). The live edge and DVR window sit at `now + offset` and the manifest is what the server would have produced then — the epoch and all timestamps are unchanged. Works on plain live, and start/end are judged against the pretend-now. Dynamic DASH manifests carry a `UTCTiming` element with that time so players use it as their clock. `400` if it would put "now" before the channel epoch or is beyond ±10 years. |
+| `epoch` | Replace the channel epoch (loop 0's start) for this request: epoch seconds/ms or ISO 8601. Unlike `offset` the whole timeline moves: loop numbers, `PROGRAM-DATE-TIME`, Period starts, DASH `availabilityStartTime` and the global segment numbers all follow it. `400` if it is in the future; `start`/`end` are judged against it. Use a fixed value: changing it between requests of one player session makes the timeline jump. |
+
+**Timeline and window**
+
+| Param | Meaning |
+|---|---|
+| `timeline_mode` | `default`, `continuous` or `periodic`; absent = `default` = the server's `--continuous-timeline` setting. Overrides it for this request, on live URLs too. `continuous` → `400` if the package can't be served continuously. |
+| `dvr_window` | Size of the sliding window: seconds (`30`) or an ISO 8601 duration (`PT30S`), rounded up to whole segments; at most the channel's max span (`400` beyond). |
+| `split_on` | Comma-separated SCTE-35 `segmentation_type_id`s (`0x22,0x30`; a Start implies its End) at whose markers a new DASH Period / HLS `#EXT-X-DISCONTINUITY` is forced (signal only). Replaces the channel setting; empty or `none` disables. |
+| `announce_ahead` | Announce markers this many seconds (or an ISO 8601 duration) before the segment they fall in; `0` = off. Replaces the channel setting. See "Announcing markers ahead". |
+| `announce_on` | Which markers `announce_ahead` applies to: segmentation_type_ids (`0x22,0x30`; a Start implies its End) and/or `splice_insert`; empty or `all` = every marker. Replaces the channel setting. |
+
+**DASH manifest style** (ignored by HLS)
+
+| Param | Meaning |
+|---|---|
+| `timeline_style` | `full` (every `<S>` has `@t` and `@d`; a `SegmentTemplate` per representation) or `compact` (implicit `@t`, `@r` runs; identical video renditions share one `SegmentTemplate` via `$RepresentationID$`). |
+| `addressing` | `number` (`$Number$` + `startNumber`) or `time` (`$Time$`). |
+| `signal_format` | `binary` (`<scte35:Binary>`) or `xml` (the decoded `SpliceInfoSection`): the EventStream encoding of the SCTE-35 message. |
+
+**SCTE-35 signaling**
+
+| Param | Meaning |
+|---|---|
+| `descriptor_grouping` | HLS: `shared` (the whole message in each DATERANGE), `narrowed` (each marker's own single-descriptor message) or `grouped` (one DATERANGE per group of coincident descriptors). DASH: `shared` or `narrowed` (`grouped` is a `400`). bake.py stores both the shared and the narrowed message, so this is a per-request choice -- for packages baked since 2.0; an older package answers a payload-changing value with a `400` asking for a re-bake. |
+| `cue_tags` | HLS only. `none`, `alongside` (also `#EXT-X-CUE-OUT`/`-CONT`/`-IN`) or `only` (cue tags instead of DATERANGE; `400` unless every marker is a bare `splice_insert`). |
+| `increment_event_ids` | Boolean. Give every loop its own SCTE-35 event ids (`400` if the largest id leaves no headroom under the 32-bit ceiling). |
+| `id_template` | HLS only. The DATERANGE ID template (`{segcode}-{eventid}-{loop}`, ...); `400` on an unknown placeholder. |
+
+**Ladder**
+
+| Param | Meaning |
+|---|---|
+| `max_height` / `max_bitrate` | Keep only renditions up to this height (pixels) / bandwidth (bits per second) in the master playlist, the MPD and `/timeline.json`. `400` (listing the ladder) if none is left. Media playlist names (`video_2.m3u8`, ...) keep their original numbers. |
+
+**Low latency (DASH MPD only; see "Low-latency DASH")**
+
+| Param | Meaning |
+|---|---|
+| `low_latency` | Boolean. Whether this MPD advertises low latency. `true` is a `400` where the channel does not deliver it. |
+| `ll_target_latency` | Seconds (or ISO 8601), at most 120: the latency the MPD asks players to hold. |
+| `ll_utc_timing` | `http`, `direct` (served `no-store`) or `none`: how players sync their clock. The URL itself is not overridable. |
 
 Only the `start` and `end` names are configurable
 (`--timeshift-start-param`, `--timeshift-end-param`;
-`--timeshift-max-span-seconds`, default 21600); `full-loops`, `timeline` and
-`offset` are fixed, and neither configured name may equal them. Bad input is a
-plain-text `400`. Child playlists of an HLS master inherit the params
-automatically.
+`--timeshift-max-span-seconds`, default 21600), and no configured name may equal
+a fixed one. **`--query-prefix`** (its-a-live: `[query] prefix`) is put in front
+of *every* name, the configurable ones included (`dsl_` → `dsl_start`,
+`dsl_cue_tags`, ...), so another system that uses the channel as its source and
+has parameters of its own cannot clash; unprefixed names are then ignored.
+`/health` reports the effective names (`query.params`). Two **independent, TOML-only switches** decide which parameters a channel reads
+(they are not query parameters themselves): **`--timeshift`** (its-a-live: `[query]
+timeshift`) for `start`, `end`, `full_loops` and `offset`, and **`--query-overrides`**
+(`[query] overrides`) for every other parameter. A switch that is off means its
+parameters are ignored (not rejected, not forwarded to child playlists, not in the
+CDN cache key) and the channel's own settings always apply -- e.g. `overrides` off
+for a channel that must not let a viewer or an upstream system change how it is
+rendered, `timeshift` off for a live-only channel with no rewinding. `/health`
+reports both under `query`. Bad input is a
+plain-text `400` naming the (prefixed) parameter. Child playlists of an HLS
+master inherit every known parameter automatically (unknown ones are dropped).
+The full list is in `openapi.yaml` (`/docs`).
 
 Time-shifted HLS playlists carry `#EXT-X-PLAYLIST-TYPE` (`EVENT` while
 growing, `VOD` once ended) and `#EXT-X-START:TIME-OFFSET=0`, so a generic
@@ -332,7 +488,7 @@ Segment URLs: `/<r>/seg/<local>` is always the loop-local index;
 range, shifted relative to the range origin so 33-bit PTS never wraps. Every
 one is path-keyed, so they cache forever at a CDN. **Manifests must be cached
 per the param values** (its-a-live's CloudFront stack does this from
-`[timeshift]`).
+`[query]`).
 
 **History is derived, not recorded:** it is only right while the epoch and
 the baked package are unchanged.
@@ -367,7 +523,7 @@ not something to work around; see `SCOPE.md` §2 and §4.1 step 1.
 | `gpac_pipeline.py` | DASHCues XML construction + GPAC CLI invocation wrapper. |
 | `scte35_signaling.py` | Author `EXT-X-DATERANGE` / DASH `<EventStream>` directly from `.markers.json` (never trust GPAC's own aggregation — see `SCOPE.md` §6). |
 | `loop_math.py` | The epoch/loop_number/position_in_loop **integer** arithmetic that makes drift structurally impossible (`SCOPE.md` §4.2, §5). |
-| `serve.py` | Serve-phase entrypoint: stateless HTTP serving of manifests + segments. |
+| `serve.py` | Serve-phase entrypoint (a thin facade). The code is the `serving/` package: `package.py` (the baked package), `channel.py` + `variants.py` + `plan.py` (the channel and its timeline), `hls.py` / `dash.py` / `window_json.py` (the builders), `routes/` (the Flask routes), `cli.py`. Map in `AGENTS.md`. |
 | `continuity.py` | `--continuous-timeline` mode's per-request CMAF `tfdt` / MPEG-TS PTS/DTS/PCR rewrite (`SCOPE.md` §12) -- a pure header patch, never a re-mux. |
 | `load_test.py` | Concurrent-viewer load generator used for the measurements in `PERFS.md`. |
 
@@ -460,6 +616,17 @@ output (never trusts the requested grid) and hard-fails if any marker tick
 didn't land exactly on a segment boundary (GPAC's `cues=...:cts` mode can
 silently snap an imprecise cue to the nearest keyframe — SCOPE.md §6 —
 which is fine for nominal grid points but never acceptable for a marker).
+
+## Deploying to Lambda
+
+The `aws-lambda` backend runs the same `serve.py` in a Lambda function
+(`Dockerfile.lambda`: serve-only, no GPAC/ffmpeg, behind the AWS Lambda Web
+Adapter). Nothing is synced: `LOOP_PACKAGE_STORE=s3` makes `wsgi.py` build a
+skeleton of the package from an S3 listing (`s3_package.py`: small files for
+real, a sparse placeholder per `.m4s`/`.ts`) and fetch segment bytes on demand
+into a bounded `/tmp` cache. `package_io.py` is the seam; with no reader
+installed everything reads the local filesystem exactly as before. Design and
+trade-offs: [`../its-a-live/LAMBDA_BACKEND.md`](../its-a-live/LAMBDA_BACKEND.md).
 
 ## Deploying to Fargate / ECS Express Mode
 

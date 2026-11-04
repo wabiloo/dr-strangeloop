@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import AssetConfig, OutputConfig
+from .stream_source import is_stream_url, probe_stream_manifest
 from .utils import is_image, is_url, run_cmd, source_str
 
 logger = logging.getLogger(__name__)
@@ -145,7 +146,12 @@ def validate_inputs(
             continue
 
         try:
-            info = probe_file(asset.file)
+            if is_stream_url(asset.file):
+                # HLS/DASH ladder: read the manifest's duration instead of
+                # ffprobing (which would see every rendition) or downloading.
+                info = probe_stream_manifest(source_str(asset.file), asset.headers)
+            else:
+                info = probe_file(asset.file)
         except Exception as exc:
             report.errors.append(f"Cannot probe {asset.file}: {exc}")
             continue

@@ -50,8 +50,9 @@ const lab = (window.__lab = {
 try {
   adapter = (await import(`./adapters/${playerId}.js`)).default;
   if (!adapter.formats.includes(format)) throw new Error(`${playerId} does not support ${format}`);
-  observer = createObserver(() => document.querySelector('video'), clock);
-  await adapter.load({ video, url, format, emit });
+  observer = createObserver(() => document.querySelector('video'), clock, () => (adapter && adapter.live ? adapter.live() : null));
+  // `ll` = the manifest advertises low latency (the page knows it from the channel config)
+  await adapter.load({ video, url, format, emit, lowLatency: params.get('ll') === '1' });
   lab.ready = true;
 } catch (e) {
   emit('error', { message: String((e && e.message) || e), fatal: true, where: 'load' });
@@ -59,5 +60,7 @@ try {
 }
 setInterval(() => {
   const s = lab.snapshot();
-  statusEl.textContent = `t=${s.elapsedS} playhead=${s.playhead} started=${s.startedAfterS} stalls=${s.stallCount} errors=${s.errors.length} periods=${s.periodTransitions}`;
+  const lat = s.latencyTrace && s.latencyTrace.length ? s.latencyTrace[s.latencyTrace.length - 1] : null;
+  const live = lat ? ` latency=${lat[1] !== null ? lat[1] : lat[2]}s rate=${lat[4]}` : '';
+  statusEl.textContent = `t=${s.elapsedS} playhead=${s.playhead} started=${s.startedAfterS} stalls=${s.stallCount} errors=${s.errors.length} periods=${s.periodTransitions}${live}`;
 }, 1000);

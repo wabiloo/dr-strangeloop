@@ -255,7 +255,7 @@ def test_continuous_dash_manifest_has_exactly_one_period_spanning_the_wrap(tmp_p
     app = create_app(tmp_path, epoch_ticks=0, window_segments=4, continuous=True)
     client = app.test_client()
 
-    resp = client.get("/stream.mpd")
+    resp = client.get("/index.mpd")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert body.count("<Period ") == 1
@@ -420,7 +420,7 @@ def test_continuous_sparse_dash_has_no_initialization_attribute(tmp_path):
     app = create_app(tmp_path, epoch_ticks=0, window_segments=4, continuous=True)
     client = app.test_client()
 
-    resp = client.get("/stream.mpd")
+    resp = client.get("/index.mpd")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert body.count("<Period ") == 1
@@ -469,7 +469,7 @@ def _manifests(tmp_path, *, continuous: bool):
     return {
         "master": client.get("/index.m3u8").get_data(as_text=True),
         "hls": client.get("/video.m3u8").get_data(as_text=True),
-        "dash": client.get("/stream.mpd").get_data(as_text=True),
+        "dash": client.get("/index.mpd").get_data(as_text=True),
     }
 
 
@@ -574,8 +574,8 @@ def test_marker_comments_use_compact_codes_and_event_ids(tmp_path, continuous):
         iso = hls[i].split(" ")[3].rstrip(":")
         assert f'START-DATE="{iso}"' in hls[i + 1]  # right before the marker tags
 
-    dash = client.get("/stream.mpd").get_data(as_text=True)
-    descriptions = re.findall(r"<!-- markers @ ([^>]*) -->\n\s+<EventStream", dash)
+    dash = client.get("/index.mpd").get_data(as_text=True)
+    descriptions = re.findall(r"<!-- markers @ ([^>]*) -->\n\s+<Event ", dash)
     assert descriptions
     assert all(re.match(r"\S+Z( \(loop \d+\))?: PPOs \(1\)$", d) for d in descriptions)
     if continuous:  # one Period spans several loops, so each group names its loop
@@ -604,13 +604,16 @@ def test_coincident_markers_share_one_timestamp_and_others_get_their_own(tmp_pat
     times = re.findall(r"# markers @ (\S+Z): ", hls)
     assert len(set(times)) == 2 * hls.count("# loop:")
 
-    dash = client.get("/stream.mpd").get_data(as_text=True)
-    # each Period lists its coincident pair on one line, the later PPOe on its own
+    dash = client.get("/index.mpd").get_data(as_text=True)
+    # each <Event> carries its own comment, right before it
     assert re.search(
-        r"<!-- markers @ (\S+Z): PPOs \(1\), DPOs \(2\) -->\n"
-        r"\s+<!-- markers @ (?!\1)\S+Z: PPOe \(1\) -->\n\s+<EventStream",
+        r"<!-- markers @ (\S+Z): PPOs \(1\) -->\n\s+<Event [^>]*>\n(?:(?!<Event ).)*?"
+        r"<!-- markers @ \1: DPOs \(2\) -->\n\s+<Event ",
         dash,
+        re.S,
     )
+    assert re.search(r"<!-- markers @ \S+Z: PPOe \(1\) -->\n\s+<Event ", dash)
+    assert not re.search(r"markers @[^>]*-->\n\s+<EventStream", dash)
 
 
 def test_marker_comments_show_original_event_id_when_incrementing(tmp_path):
@@ -624,7 +627,7 @@ def test_marker_comments_show_original_event_id_when_incrementing(tmp_path):
 
     for body in (
         client.get("/video.m3u8").get_data(as_text=True),
-        client.get("/stream.mpd").get_data(as_text=True),
+        client.get("/index.mpd").get_data(as_text=True),
     ):
         m = re.search(r"PPOs \((\d+), orig 100\)", body)
         assert m and m.group(1) != "100"  # remapped past loop 0, original alongside

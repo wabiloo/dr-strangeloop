@@ -16,7 +16,7 @@ from .reference import ffmpeg_check
 from .report import format_table
 from . import keys
 from .runner import PLAYERS, RunConfig, default_players, run
-from .targets import from_channel, from_manifest_urls
+from .targets import from_channel, from_manifest_urls, with_queries
 
 
 def cmd_setup(_args) -> int:
@@ -64,8 +64,14 @@ def cmd_run(args) -> int:
         target = from_channel(args.channel)
     else:
         target = from_manifest_urls(args.hls, args.dash, args.timeline)
+    if args.hls_query or args.dash_query:
+        target = with_queries(target, args.hls_query, args.dash_query)
     if args.no_timeline:
         target.timeline_url = None
+    profile = load_profile(Path(args.profile) if args.profile else None)
+    changes = {k: v for k, v in (("max_live_latency_s", args.max_latency), ("latency_settle_s", args.latency_settle)) if v is not None}
+    if changes:
+        profile = profile.with_default(**changes)
     cfg = RunConfig(
         target=target,
         players=args.players.split(","),
@@ -75,7 +81,7 @@ def cmd_run(args) -> int:
         max_s=args.max_seconds,
         settle_s=args.settle,
         headless=not args.headed,
-        profile=load_profile(Path(args.profile) if args.profile else None),
+        profile=profile,
         trace=args.trace,
         out_dir=Path(args.out_dir) if args.out_dir else None,
     )
@@ -118,6 +124,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--dash", help="DASH MPD URL")
     r.add_argument("--timeline", help="override the /timeline.json URL (default: next to the manifest)")
     r.add_argument("--no-timeline", action="store_true", help="skip /timeline.json; run for --duration")
+    r.add_argument("--hls-query", help="query string to append to the HLS manifest URL (and /timeline.json), e.g. 'timeline_mode=continuous&dvr_window=60'")
+    r.add_argument("--dash-query", help="query string to append to the DASH manifest URL (and /timeline.json when there is no --hls-query)")
     r.add_argument("--players", default=",".join(default_players()), help=f"comma list of {sorted(PLAYERS)}")
     r.add_argument("--format", help="hls, dash or hls,dash (default: every format the channel has)")
     r.add_argument("--boundaries", type=int, default=2, help="stop after N boundaries were crossed (default %(default)s); 0 = play for --duration")
@@ -125,6 +133,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--max-seconds", type=float, default=600)
     r.add_argument("--settle", type=float, default=40, help="max seconds to wait for players to reach the boundaries")
     r.add_argument("--profile", help="TOML thresholds file")
+    r.add_argument("--max-latency", type=float, metavar="SECONDS", help="fail a case whose median live latency (after settling) exceeds this; "
+                   "latency is always reported when the player gives it (needs this machine's clock to be accurate)")
+    r.add_argument("--latency-settle", type=float, metavar="SECONDS", help="ignore latency samples this long after startup (default 30)")
     r.add_argument("--headed", action="store_true", help="show the browser window")
     r.add_argument("--ffmpeg", type=float, metavar="SECONDS", help="also demux each manifest with ffmpeg for SECONDS (informational: does not affect the exit code)")
     r.add_argument("--out-dir", help="write the report (and screenshots) here instead of a timestamped folder")

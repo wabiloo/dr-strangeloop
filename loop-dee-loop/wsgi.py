@@ -12,10 +12,11 @@ same flags serve.py's CLI accepts, since gunicorn imports this module
 import os
 from pathlib import Path
 
+from timeshift import parse_announce_on
+
 from serve import (
     TimeshiftConfig,
     create_app,
-    parse_period_apply,
     parse_segmentation_type_ids,
     read_package_descriptor,
     resolve_epoch_ticks,
@@ -23,6 +24,21 @@ from serve import (
 )
 
 package_dir = Path(os.environ["LOOP_PACKAGE_DIR"])
+
+# aws-lambda backend (its-a-live/LAMBDA_BACKEND.md): the package stays in S3;
+# build a local skeleton and fetch segment bytes on demand. Everything below
+# is then identical to the ECS path.
+if os.environ.get("LOOP_PACKAGE_STORE", "").lower() == "s3":
+    from s3_package import S3Package
+
+    _s3 = S3Package(
+        os.environ["LOOP_PACKAGE_S3_URI"],
+        package_dir,
+        cache_bytes=int(os.environ.get("SEGMENT_CACHE_MB") or 512) * 1024 * 1024,
+    )
+    _s3.materialize()
+    _s3.install()
+
 descriptor = read_package_descriptor(package_dir)
 
 epoch_ticks = resolve_epoch_ticks(os.environ["EPOCH_UTC"], int(descriptor["timescale"]))
@@ -37,13 +53,17 @@ window_segments = resolve_window_segments(
 continuous = os.environ.get("CONTINUOUS_TIMELINE", "").lower() in ("1", "true", "yes")
 
 timeshift = TimeshiftConfig(
-    enabled=os.environ.get("TIMESHIFT", "").lower() in ("1", "true", "yes"),
+    timeshift=os.environ.get("TIMESHIFT", "").lower() in ("1", "true", "yes"),
+    overrides=os.environ.get("QUERY_OVERRIDES", "").lower() in ("1", "true", "yes"),
     start_param=os.environ.get("TIMESHIFT_START_PARAM") or "start",
     end_param=os.environ.get("TIMESHIFT_END_PARAM") or "end",
     max_span_seconds=int(os.environ.get("TIMESHIFT_MAX_SPAN_SECONDS") or 21600),
+    prefix=os.environ.get("QUERY_PREFIX", ""),
 )
 
 period_on_segmentation = parse_segmentation_type_ids(os.environ.get("PERIOD_ON_SEGMENTATION"))
+
+announce_on, announce_splice_insert = parse_announce_on(os.environ.get("ANNOUNCE_ON", ""), "ANNOUNCE_ON")
 
 app = create_app(
     package_dir,
@@ -52,8 +72,16 @@ app = create_app(
     continuous=continuous,
     timeshift=timeshift,
     period_on_segmentation=period_on_segmentation,
-    period_apply=parse_period_apply(os.environ.get("PERIOD_ON_SEGMENTATION_APPLY")),
     channel_name=os.environ.get("CHANNEL_NAME", ""),
     dash_addressing=os.environ.get("DASH_ADDRESSING") or "number",
     dash_timeline=os.environ.get("DASH_TIMELINE") or "full",
+    ll_dash=os.environ.get("LL_DASH", "").lower() in ("1", "true", "yes"),
+    ll_target_latency=float(os.environ["LL_TARGET_LATENCY"]) if os.environ.get("LL_TARGET_LATENCY") else None,
+    ll_utc_timing_url=os.environ.get("LL_UTC_TIMING_URL", ""),
+    ll_utc_timing=os.environ.get("LL_UTC_TIMING") or "direct",
+    ll_optin=os.environ.get("LL_OPTIN", "").lower() in ("1", "true", "yes"),
+    ll_hls=os.environ.get("LL_HLS", "").lower() in ("1", "true", "yes"),
+    announce_ahead=float(os.environ.get("ANNOUNCE_AHEAD") or 0),
+    announce_on=announce_on,
+    announce_splice_insert=announce_splice_insert,
 )

@@ -262,7 +262,7 @@ def test_timeline_route_matches_schema(tmp_path):
 
 
 def test_timeline_route_timeshift_range_and_errors(tmp_path):
-    client = _client(tmp_path, timeshift=TimeshiftConfig(enabled=True))
+    client = _client(tmp_path, timeshift=TimeshiftConfig(timeshift=True, overrides=True))
 
     resp = client.get("/timeline.json?start=0&end=2")
     assert resp.status_code == 200
@@ -330,7 +330,7 @@ def test_openapi_document_is_served_and_valid(tmp_path):
     assert resp.status_code == 200
     spec = yaml.safe_load(resp.get_data(as_text=True))
     assert spec["openapi"].startswith("3.1")
-    for path in ("/timeline.json", "/health", "/index.m3u8", "/stream.mpd", "/openapi.yaml", "/docs"):
+    for path in ("/timeline.json", "/health", "/index.m3u8", "/index.mpd", "/openapi.yaml", "/docs"):
         assert path in spec["paths"]
     jsonschema.Draft202012Validator.check_schema(
         {"$ref": "#/components/schemas/WindowDocument", "components": spec["components"]}
