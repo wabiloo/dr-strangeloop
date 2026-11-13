@@ -53,11 +53,17 @@ def list_playlists() -> list[dict]:
         duration_seconds = None
         duration_estimated = False
         if assets:
-            duration_estimated = any(asset.get("duration") is None for asset in assets)
+            def _asset_duration(asset: dict):
+                # A generator asset's length is its generator.duration.
+                if asset.get("duration") is None and isinstance(asset.get("generator"), dict):
+                    return asset["generator"].get("duration")
+                return asset.get("duration")
+
+            duration_estimated = any(_asset_duration(a) is None for a in assets)
             try:
                 duration_seconds = sum(
-                    parse_time(asset["duration"]) if asset.get("duration") is not None else 15
-                    for asset in assets
+                    parse_time(_asset_duration(a)) if _asset_duration(a) is not None else 15
+                    for a in assets
                 )
             except (TypeError, ValueError):
                 pass
