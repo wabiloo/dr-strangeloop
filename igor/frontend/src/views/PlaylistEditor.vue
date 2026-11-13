@@ -98,7 +98,7 @@ type GeneratorPreset = 'testsrc' | 'testsrc2' | 'smptebars' | 'smptehdbars' | 'r
 const GENERATOR_PRESETS: GeneratorPreset[] = ['testsrc', 'testsrc2', 'smptebars', 'smptehdbars', 'rgbtestsrc', 'color']
 const ASSET_SOURCE_OPTIONS = [
   { label: 'File', value: 'file' },
-  { label: 'Generated (ffmpeg)', value: 'generator' },
+  { label: 'Generated', value: 'generator' },
 ]
 
 function defaultGenerator(): GeneratorForm {
@@ -108,7 +108,7 @@ function defaultGenerator(): GeneratorForm {
 interface AssetForm {
   id: string
   file: string
-  /** Non-null = a generated (ffmpeg lavfi) asset; `file` is then unused. */
+  /** Non-null = a generated asset; `file` is then unused. */
   gen: GeneratorForm | null
   role: AssetRole | null
   start: string
@@ -2746,6 +2746,10 @@ function applyHexPopover() {
                   <AssetFileField v-model="form.assets[selectedAssetIndex].file" placeholder="content.mp4" />
                 </div>
                 <template v-else>
+                  <div class="col-12 text-color-secondary text-sm">
+                    Presets and options explained, with a picture of each:
+                    <a href="#/docs/generator-assets" target="_blank" rel="noopener">Generated assets documentation</a>
+                  </div>
                   <div class="col-3 flex flex-column gap-1">
                     <label>Generator duration</label>
                     <InputText v-model="form.assets[selectedAssetIndex].gen!.duration" placeholder="30s" />
