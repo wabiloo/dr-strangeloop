@@ -3,7 +3,12 @@
 galvanise.py — Full pipeline runner for dr-strangeloop.
 
 Usage:
-  uv run python galvanise.py <config.yaml> [--backend aws-media|ecs-express|aws-lambda]
+  uv run python galvanise.py <config.yaml> [--backend aws-media|ecs-express|aws-lambda|local-docker]
+  uv run python galvanise.py <config.yaml> --backend local-docker --toml-only [--force]
+
+--toml-only just writes the channel TOML (no franken-ts, no prompts) and prints
+the channel.py commands to run by hand. It refuses to overwrite an existing
+file unless --force is given.
 
 The config.yaml should be a franken-ts playlist (e.g. data/playlists/foo.yaml).
 Paths may be absolute or relative to the current working directory.
@@ -13,9 +18,11 @@ Pipeline (its-a-live backend selected by --backend, default aws-media):
   2. Generate <channels_dir>/<basename>.toml (default data/channels/)
   3. (ecs-express, aws-lambda) Ensure the backend's shared stack is deployed
   4. Run CDK deploy (cdk deploy) for the channel stack
+     (not for local-docker: no AWS, no stack)
   5. Spark: stage the input for the chosen backend (upload .ts for
-     aws-media; bake it locally via GPAC + push to S3 for ecs-express)
-  6. Start the channel
+     aws-media; bake it locally via GPAC + push to S3 for ecs-express;
+     bake locally for local-docker)
+  6. Start the channel (local-docker: `docker run` on this machine)
 
 Each step prompts for confirmation before running.
 All channel management commands (spark/start/stop/refresh) can be run
@@ -158,10 +165,30 @@ reserved_concurrency = 10    # cap on concurrent invocations; -1 = no cap
 cache_mb             = 512   # /tmp cache of segment bytes fetched from S3
 """
 
+_LOCAL_DOCKER_TOML_TEMPLATE = """\
+config_version = 2
+
+[deploy]
+name = "{name}"
+backend = "local-docker"
+
+[input]
+source_path = "{ts_file}"
+
+[packaging]
+segment_duration = 4.0
+dvr_window       = 30
+
+[infrastructure.docker]
+port = "auto"            # free host port, 8080-8179
+bundle_content = false   # true: self-contained, shareable image
+"""
+
 _TOML_TEMPLATES = {
     "aws-media": _AWS_MEDIA_TOML_TEMPLATE,
     "ecs-express": _ECS_EXPRESS_TOML_TEMPLATE,
     "aws-lambda": _AWS_LAMBDA_TOML_TEMPLATE,
+    "local-docker": _LOCAL_DOCKER_TOML_TEMPLATE,
 }
 
 
@@ -173,6 +200,10 @@ def _generate_toml(backend: str, name: str, ts_file_abs: str) -> str:
 # Main
 # ---------------------------------------------------------------------------
 
+def stack_name_for(basename: str, backend: str) -> str:
+    return f"ItsALiveStack-{basename}-{backend}"
+
+
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(
@@ -181,18 +212,27 @@ def main() -> None:
     )
     parser.add_argument("config_yaml", metavar="config.yaml",
                         help="franken-ts YAML config file.")
-    parser.add_argument("--backend", choices=["aws-media", "ecs-express", "aws-lambda"],
+    parser.add_argument("--backend", choices=["aws-media", "ecs-express", "aws-lambda", "local-docker"],
                         default="aws-media",
                         help="its-a-live backend to deploy to: 'aws-media' "
                              "(MediaLive + MediaPackage, default) or "
                              "'ecs-express' (loop-dee-loop on ECS Express "
                              "Mode + CloudFront) or 'aws-lambda' "
-                             "(loop-dee-loop on Lambda + CloudFront, no idle cost).")
+                             "(loop-dee-loop on Lambda + CloudFront, no idle cost) or "
+                             "'local-docker' (loop-dee-loop in a container on "
+                             "this machine; no AWS).")
     parser.add_argument("--clear-cache", action="store_true",
                         help="Delete the franken-ts clip cache (~/.cache/franken_ts) "
                              "before running Step 1.")
+    parser.add_argument("--toml-only", action="store_true",
+                        help="Only write the channel TOML (no franken-ts, no "
+                             "prompts), print the channel.py commands, and exit.")
+    parser.add_argument("--force", action="store_true",
+                        help="With --toml-only: overwrite the TOML if it exists.")
     args = parser.parse_args()
     backend = args.backend
+    if args.force and not args.toml_only:
+        parser.error("--force only applies with --toml-only")
 
     config_yaml = os.path.abspath(args.config_yaml)
     if not os.path.isfile(config_yaml):
@@ -225,6 +265,25 @@ def main() -> None:
     # channel.py and cdk both receive the absolute TOML path so they work
     # regardless of the working directory.
     channel_py = os.path.join(push_dir, "channel.py")
+
+    if args.toml_only:
+        if os.path.exists(toml_path) and not args.force:
+            sys.exit(f"{toml_path} already exists; pass --force to overwrite it.")
+        os.makedirs(configs_dir, exist_ok=True)
+        with open(toml_path, "w") as f:
+            f.write(_generate_toml(backend=backend, name=basename, ts_file_abs=ts_file_abs))
+        rel_toml = os.path.relpath(toml_path, repo_root)
+        rel_channel = os.path.relpath(channel_py, repo_root)
+        rel_push = os.path.relpath(push_dir, repo_root)
+        base = f"uv run --project {rel_push} python {rel_channel} -c {rel_toml}"
+        print(f"{GREEN}TOML written to {toml_path}{RESET}")
+        print(f"\n{BOLD}Next, from the repo root:{RESET}")
+        print(f"  uv run franken-ts {config_yaml}   # if {ts_file_raw} is not built yet")
+        if backend in ("ecs-express", "aws-lambda", "aws-media"):
+            print(f"  cd {rel_push} && cdk deploy -c config={os.path.relpath(toml_path, push_dir)} {stack_name_for(basename, backend)}")
+        print(f"  {base} spark")
+        print(f"  {base} start")
+        return
 
     # Print a summary before starting.
     print(f"\n{BOLD}Pipeline summary{RESET}")
@@ -304,29 +363,32 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Step — CDK deploy (channel stack)
     # ------------------------------------------------------------------
-    _header(step, "Deploy AWS stack (cdk deploy)")
     stack_name = f"ItsALiveStack-{basename}-{backend}"
-    cdk_cmd = [
-        "cdk", "deploy",
-        "--require-approval", "never",
-        "--output", f"cdk.out-{basename}",
-        "-c", f"config={toml_path}",
-        stack_name,
-    ]
-    print(f"  cwd        : {push_dir}")
-    print(f"  command    : {' '.join(cdk_cmd)}")
-    if not _confirm("Run cdk deploy now?"):
-        print("Skipped.")
-    else:
-        _run(cdk_cmd, cwd=push_dir)
-        print(f"{GREEN}CDK deploy complete.{RESET}")
-    step += 1
+    if backend != "local-docker":
+        _header(step, "Deploy AWS stack (cdk deploy)")
+        cdk_cmd = [
+            "cdk", "deploy",
+            "--require-approval", "never",
+            "--output", f"cdk.out-{basename}",
+            "-c", f"config={toml_path}",
+            stack_name,
+        ]
+        print(f"  cwd        : {push_dir}")
+        print(f"  command    : {' '.join(cdk_cmd)}")
+        if not _confirm("Run cdk deploy now?"):
+            print("Skipped.")
+        else:
+            _run(cdk_cmd, cwd=push_dir)
+            print(f"{GREEN}CDK deploy complete.{RESET}")
+        step += 1
 
     # ------------------------------------------------------------------
     # Step — Spark (stage the input for the chosen backend)
     # ------------------------------------------------------------------
-    spark_title = ("Spark: upload .ts to S3" if backend == "aws-media"
-                   else "Spark: bake locally (GPAC) and push loop package to S3")
+    spark_title = {
+        "aws-media": "Spark: upload .ts to S3",
+        "local-docker": "Spark: bake locally (GPAC); no upload",
+    }.get(backend, "Spark: bake locally (GPAC) and push loop package to S3")
     _header(step, spark_title)
     spark_cmd = [
         "uv", "run", "--project", push_dir, "python", channel_py,
@@ -348,6 +410,7 @@ def main() -> None:
     start_title = {
         "aws-media": "Start the MediaLive channel",
         "aws-lambda": "Start the channel (allow invocations; an idle Lambda costs nothing)",
+        "local-docker": "Start the channel (docker run on this machine)",
     }.get(backend, "Start the channel (scale ECS Express service to 1 task)")
     _header(step, start_title)
     start_cmd = [
@@ -387,11 +450,17 @@ def main() -> None:
             print(f"  Start   : {channel_display} start")
 
     print(f"\n{BOLD}To update content on a running channel:{RESET}")
-    print(f"  {channel_display} spark      # re-bake/re-upload new content to S3")
+    print(f"  {channel_display} spark      # re-bake/re-upload new content (S3, or the local package)")
     print(f"  {channel_display} refresh    # pick it up on the running channel")
 
     print(f"\n{BOLD}To stop the channel:{RESET}")
     print(f"  {channel_display} stop")
+
+    if backend == "local-docker":
+        print(f"\n{BOLD}To share the channel as a self-contained image:{RESET}")
+        print(f"  {channel_display} image --save")
+        print()
+        return
 
     print(f"\n{BOLD}To destroy the stack (stops billing):{RESET}")
     print(f"  {channel_display} stop           # stop the channel first if running")
