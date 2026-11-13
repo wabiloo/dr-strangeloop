@@ -155,7 +155,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 ENV REPO_ROOT=${REPO_ROOT}
 EXPOSE 8090
 ENTRYPOINT ["docker-entrypoint.sh"]
-# Hardcoded /repo, not $REPO_ROOT -- exec-form CMD isn't shell-expanded, and
-# since REPO_ROOT is a fixed constant now (not per-colleague), that's fine;
-# if you ever do change the ARG default above, update this literal to match.
-CMD ["uv", "run", "--project", "/repo", "uvicorn", "igor.app.main:app", "--host", "0.0.0.0", "--port", "8090"]
+# Calls the venv-root uvicorn directly: `uv run` would re-sync the bind-mounted
+# host /repo/.venv at every start. For that behaviour (dependencies following
+# the host uv.lock without an image rebuild), opt in with docker-compose.dev.yml.
+CMD ["/opt/venv-root/bin/uvicorn", "igor.app.main:app", "--host", "0.0.0.0", "--port", "8090"]

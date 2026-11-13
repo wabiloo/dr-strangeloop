@@ -1,0 +1,23 @@
+# Optional dev override: run igor through `uv run` instead of the image's
+# pre-built venv, so uv re-syncs /repo/.venv against the host's uv.lock at
+# every container start -- dependency changes are picked up without rebuilding
+# the image (slower start, may need network). The default (no override) calls
+# /opt/venv-root/bin/uvicorn directly and never syncs.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Add --build the first time, or whenever the Dockerfile itself changes.
+
+services:
+  igor:
+    command:
+      - uv
+      - run
+      - --project
+      - /repo
+      - uvicorn
+      - igor.app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8090"

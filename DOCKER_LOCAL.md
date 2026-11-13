@@ -33,6 +33,18 @@ inside this one container. `local-docker` channels and `cdk deploy`'s image
 build/push run as sibling containers on your own Docker install (see
 below), not nested inside this one.
 
+### Dev mode: follow the host's `uv.lock`
+
+By default the container runs the image's pre-built environment
+(`/opt/venv-root/bin/uvicorn`) and never syncs it, so a dependency change
+needs `docker compose up --build`. To have `uv run` re-sync against your
+checkout's `uv.lock` at every start instead (slower, may need network), add
+the dev override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
+
 ## Why this needed more than "wrap it in a Dockerfile"
 
 The sharp edge is that several operations igor dispatches aren't pure
