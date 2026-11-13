@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Literal, Optional, Union
@@ -536,8 +537,55 @@ class MarkerConfig(SpliceConfig):
         return "ad"
 
 
+GENERATOR_VIDEO_PRESETS = (
+    "testsrc", "testsrc2", "smptebars", "smptehdbars", "rgbtestsrc", "color",
+)
+
+
+class GeneratorConfig(BaseModel):
+    """An asset rendered from ffmpeg lavfi sources instead of read from a file.
+
+    Rendered once to a cached mp4 (see generated_source.py), at the playlist's
+    output resolution/framerate/GOP, then treated like any local asset.
+    `video`/`audio` are raw lavfi graphs and override `preset`/the default.
+    Size, framerate, GOP and H.264 profile come from `output`, not from here.
+    """
+
+    duration: TimeValue
+    preset: Literal[GENERATOR_VIDEO_PRESETS] = "testsrc2"  # type: ignore[valid-type]
+    # Raw lavfi video source (e.g. "mandelbrot"); `size`/`rate` are appended
+    # automatically unless already given. Overrides `preset`.
+    video: Optional[str] = None
+    # Raw lavfi audio source, or "silence". Default: a 440 Hz sine.
+    audio: Optional[str] = None
+    # Fill colour for the `color` preset (any ffmpeg colour spec).
+    color: str = "gray"
+    # Burn a running timestamp (hh:mm:ss.mmm of the generated clip) into the
+    # video -- handy for checking loop and ad-break joins.
+    timecode: bool = False
+    # Free text burned into the top-left corner.
+    label: Optional[str] = None
+
+    def duration_seconds(self) -> float:
+        d = parse_time(self.duration)
+        if d <= 0:
+            raise ValueError("generator.duration must be positive")
+        return d
+
+    @field_validator("duration")
+    @classmethod
+    def _positive_duration(cls, v: TimeValue) -> TimeValue:
+        if parse_time(v) <= 0:
+            raise ValueError("generator.duration must be positive")
+        return v
+
+
 class AssetConfig(BaseModel):
-    file: Path
+    # Exactly one of `file` / `generator`. For generator assets `file` is a
+    # placeholder until generated_source.resolve_generated_assets points it
+    # at the cached render.
+    file: Optional[Path] = None
+    generator: Optional[GeneratorConfig] = None
     id: Optional[str] = None
     # Content role is independent of any signaling scheme. Only af2m currently
     # uses Jingle when numbering Provider Advertisement descriptors.
@@ -562,8 +610,22 @@ class AssetConfig(BaseModel):
 
     @field_validator("file", mode="before")
     @classmethod
-    def resolve_path(cls, v: object) -> Path:
-        return Path(str(v))
+    def resolve_path(cls, v: object) -> Optional[Path]:
+        return Path(str(v)) if v is not None else None
+
+    @model_validator(mode="after")
+    def _file_xor_generator(self) -> "AssetConfig":
+        if (self.file is None) == (self.generator is None):
+            raise ValueError("asset: specify exactly one of 'file' or 'generator'")
+        if self.generator is not None:
+            if self.start is not None:
+                raise ValueError("asset: 'start' is not supported with 'generator' "
+                                 "(set generator.duration instead)")
+            if self.headers is not None:
+                raise ValueError("asset: 'headers' is only meaningful with 'file'")
+            digest = hashlib.sha256(self.generator.model_dump_json().encode()).hexdigest()[:8]
+            self.file = Path(f"generator-{digest}.mp4")
+        return self
 
     @field_validator("slate_image", mode="before")
     @classmethod
