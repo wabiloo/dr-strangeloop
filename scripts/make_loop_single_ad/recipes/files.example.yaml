@@ -1,9 +1,9 @@
-# Recipe for scripts/make_ad_loop.py: a loop made from real video files.
+# Recipe for scripts/make_loop_single_ad/make_loop_single_ad.py: a loop made from real video files.
 # The content file is cut in two around the break (start/duration), and the
 # ad plays in between.
 #
-#   uv run python scripts/make_ad_loop.py my-loop \
-#       --recipe scripts/recipes/files.example.yaml
+#   uv run python scripts/make_loop_single_ad/make_loop_single_ad.py my-loop \
+#       --recipe scripts/make_loop_single_ad/recipes/files.example.yaml
 #   uv run franken-ts data/playlists/my-loop.yaml --verify
 ad_breaks:
   content: /media/show.mp4          # file or https URL

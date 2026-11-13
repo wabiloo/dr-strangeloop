@@ -1,8 +1,8 @@
-# Recipe for scripts/make_ad_loop.py: a loop built entirely from ffmpeg
+# Recipe for scripts/make_loop_single_ad/make_loop_single_ad.py: a loop built entirely from ffmpeg
 # generators, no source media needed.
 #
-#   uv run python scripts/make_ad_loop.py gen-loop \
-#       --recipe scripts/recipes/generated.example.yaml
+#   uv run python scripts/make_loop_single_ad/make_loop_single_ad.py gen-loop \
+#       --recipe scripts/make_loop_single_ad/recipes/generated.example.yaml
 #   uv run franken-ts data/playlists/gen-loop.yaml --verify
 #
 # Command-line flags override the same key here. See docs/generator-assets.md

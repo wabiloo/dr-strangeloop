@@ -10,22 +10,22 @@ When the loop wraps, the two content halves join, so there are exactly
 start of the next, and `break_duration_s` seconds of break.
 
 Usage:
-    uv run python scripts/make_ad_loop.py my-loop \
+    uv run python scripts/make_loop_single_ad/make_loop_single_ad.py my-loop \
         --content /path/content.mp4 --ad /path/ad.mp4 \
         --next-break-delay-s 60 --break-duration-s 30
     uv run franken-ts data/playlists/my-loop.yaml --verify
 
 Or with a recipe file (same keys as the CLI flags, `ad_breaks:` block):
-    uv run python scripts/make_ad_loop.py my-loop --recipe recipe.yaml
+    uv run python scripts/make_loop_single_ad/make_loop_single_ad.py my-loop --recipe recipe.yaml
 
 No source media? `--content` / `--ad` also take `generator:<preset>[:<colour>]`,
 rendered by ffmpeg (see docs/generator-assets.md):
-    uv run python scripts/make_ad_loop.py my-loop \
+    uv run python scripts/make_loop_single_ad/make_loop_single_ad.py my-loop \
         --content generator:testsrc2 --ad generator:color:red \
         --next-break-delay-s 60 --break-duration-s 30
 In a recipe, `content:` / `ad:` may instead be a full mapping
 (`{generator: {preset: smptebars, timecode: true, label: SHOW}}`).
-Annotated example recipes: scripts/recipes/*.example.yaml
+Annotated example recipes: scripts/make_loop_single_ad/recipes/*.example.yaml
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ from pathlib import Path
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 from dr_strangeloop_config import get_paths  # noqa: E402
 
