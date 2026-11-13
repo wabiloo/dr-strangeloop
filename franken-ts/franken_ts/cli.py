@@ -23,6 +23,7 @@ from .markers import write_markers_sidecar, write_timeline_sidecar
 from .pts import find_idr_pts
 from .report import generate_report
 from .scte35 import generate_xml
+from .generated_source import resolve_generated_assets
 from .stream_source import is_stream_url, resolve_stream_assets
 from .timeline import build_timeline, all_forced_keyframe_times, pts_for_boundary
 from .tsduck import inject_markers, verify_markers
@@ -226,6 +227,13 @@ def main(
         for r in resolved_streams:
             status = "cache hit" if r.cached else "downloaded"
             _ok(f"Stream asset ({status}): {r.url} → {r.local_path.name}")
+
+        # Render ffmpeg-generator assets (lavfi) to cached local mp4s.
+        for g in resolve_generated_assets(
+            cfg.assets, cfg.output, (effective_cache_dir or temp_dir) / "generated"
+        ):
+            status = "cache hit" if g.cached else "rendered"
+            _ok(f"Generated asset ({status}): {g.label} → {g.local_path.name}")
 
         if report_only:
             _run_report_only(cfg, temp_dir, dry_run=dry_run)

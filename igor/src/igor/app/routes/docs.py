@@ -37,3 +37,18 @@ def get_page(slug: str) -> dict:
     if page is None:
         raise HTTPException(status_code=404, detail=f"Unknown documentation page {slug!r}.")
     return page
+
+
+@router.get("/images/{path:path}")
+def get_image(path: str) -> FileResponse:
+    """Images referenced by catalogued pages, served from `docs/images/` only
+    (png/jpg/gif/svg/webp; path-traversal guarded)."""
+    root = docs.IMAGES_DIR.resolve()
+    target = (root / path).resolve()
+    if (
+        root not in target.parents
+        or target.suffix.lower() not in docs.IMAGE_SUFFIXES
+        or not target.is_file()
+    ):
+        raise HTTPException(status_code=404, detail="Unknown documentation image.")
+    return FileResponse(target)

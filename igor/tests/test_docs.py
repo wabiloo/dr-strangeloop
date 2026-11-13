@@ -93,3 +93,11 @@ def test_the_low_latency_page_is_catalogued_and_its_links_resolve():
         if path_part and rel not in catalogued and not rel.endswith((".yaml",)):
             bad.append(f"{target}: {rel} is not in the Docs menu (the viewer cannot open it)")
     assert not bad, "\n".join(bad)
+
+
+def test_docs_images_are_served_and_guarded():
+    ok = client.get("/api/v1/docs/images/generator-presets/testsrc2.png")
+    assert ok.status_code == 200 and ok.headers["content-type"] == "image/png"
+    assert client.get("/api/v1/docs/images/nope.png").status_code == 404
+    assert client.get("/api/v1/docs/images/..%2F..%2Foverview.md").status_code == 404
+    assert client.get("/api/v1/docs/images/..%2Foverview.md").status_code == 404

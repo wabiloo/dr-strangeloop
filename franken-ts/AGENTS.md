@@ -89,6 +89,31 @@ memory-bound, and most CDNs start rate-limiting/resetting well above
 single-digit concurrent requests per client. Raise it if the source CDN
 tolerates more and downloads are the bottleneck.
 
+Instead of `file`, an asset may have a **`generator`**: an ffmpeg lavfi
+source rendered once to a cached mp4 (no source video needed). Exactly one of
+`file` / `generator` per asset; `start` and `headers` are not allowed with
+`generator`.
+
+```yaml
+assets:
+  - id: content
+    generator:
+      duration: 30s            # required
+      preset: testsrc2         # testsrc | testsrc2 (default) | smptebars | smptehdbars | rgbtestsrc | color
+      # color: red             # fill colour, `color` preset only
+      # video: "mandelbrot"    # raw lavfi video graph; overrides preset (size/rate appended if absent)
+      # audio: silence         # raw lavfi audio graph, or `silence`; default 440 Hz sine
+      timecode: true           # burn a running hh:mm:ss.mmm into the video
+      label: "CONTENT"         # text burned into the top-left corner
+```
+
+Size, framerate, GOP and H.264 profile come from `output`, so generated clips
+always match the rest of the playlist (a multi-rendition playlist renders at the
+top-level `output.resolution`, then each rendition scales as usual). The render
+is cached under `<cache-dir>/generated/`, keyed by the generator spec + those
+output params (`--no-cache` renders into the temp dir). Implementation:
+`franken_ts/generated_source.py`, run right after stream-asset resolution.
+
 Optional per-asset: `fade_in`/`fade_out` (seconds), `slate_image`
 (per-asset override), `no_osd` (bool, suppresses the OSD entirely for
 this asset regardless of the playlist-level `osd` settings), `osd_label`

@@ -13,6 +13,7 @@ import Message from 'primevue/message'
 import Popover from 'primevue/popover'
 import RadioButton from 'primevue/radiobutton'
 import Select from 'primevue/select'
+import SelectButton from 'primevue/selectbutton'
 import Tab from 'primevue/tab'
 import TabList from 'primevue/tablist'
 import TabPanel from 'primevue/tabpanel'
@@ -83,9 +84,32 @@ interface SegmentationForm {
   sub_segments_expected?: number | null
 }
 
+/** Mirrors franken_ts.config.GeneratorConfig. */
+interface GeneratorForm {
+  duration: string
+  preset: GeneratorPreset
+  video: string
+  audio: string
+  color: string
+  timecode: boolean
+  label: string
+}
+type GeneratorPreset = 'testsrc' | 'testsrc2' | 'smptebars' | 'smptehdbars' | 'rgbtestsrc' | 'color'
+const GENERATOR_PRESETS: GeneratorPreset[] = ['testsrc', 'testsrc2', 'smptebars', 'smptehdbars', 'rgbtestsrc', 'color']
+const ASSET_SOURCE_OPTIONS = [
+  { label: 'File', value: 'file' },
+  { label: 'Generated', value: 'generator' },
+]
+
+function defaultGenerator(): GeneratorForm {
+  return { duration: '30s', preset: 'testsrc2', video: '', audio: '', color: 'gray', timecode: true, label: '' }
+}
+
 interface AssetForm {
   id: string
   file: string
+  /** Non-null = a generated asset; `file` is then unused. */
+  gen: GeneratorForm | null
   role: AssetRole | null
   start: string
   duration: string
@@ -234,6 +258,7 @@ function newAsset(): AssetForm {
   return {
     id: generateAssetId(),
     file: '',
+    gen: null,
     role: null,
     start: '',
     duration: '',
@@ -1007,9 +1032,16 @@ const splitError = ref('')
  * if neither is known -- the split can still proceed, it just can't bound
  * the first part against the total or give the second part an explicit
  * duration (left blank, meaning "rest of the file"). */
+/** Assets as the timeline sees them: a generated asset's length is its
+ * generator duration, so it needs no resolve to render at its true width. */
+const timelineAssets = computed(() =>
+  form.assets.map((a) => (a.gen ? { ...a, duration: a.gen.duration } : a)),
+)
+
 function knownTotalSeconds(asset: AssetForm): number | null {
   const resolved = resolvedAssetDurations.value?.[asset.id]
   if (resolved !== undefined) return resolved
+  if (asset.gen) return parseApproxSeconds(asset.gen.duration)
   return parseApproxSeconds(asset.duration)
 }
 
@@ -1082,6 +1114,15 @@ function confirmSplit(): boolean {
     start: `${(originalStartSeconds + firstPartSeconds).toFixed(3)}s`,
     duration: totalSeconds !== null ? `${(totalSeconds - firstPartSeconds).toFixed(3)}s` : '',
     fade_in: '',
+  }
+  if (asset.gen) {
+    // Generated assets can't be trimmed with `start`; split by shortening
+    // each half's generator duration instead.
+    first.gen = { ...asset.gen, duration: `${firstPartSeconds.toFixed(3)}s` }
+    first.duration = ''
+    second.gen = { ...asset.gen, duration: `${((totalSeconds ?? 0) - firstPartSeconds).toFixed(3)}s` }
+    second.start = ''
+    second.duration = ''
   }
 
   form.assets.splice(index, 1, first, second)
@@ -1487,7 +1528,7 @@ async function previewMarkerResolution() {
     // and only ever fills in a blank, never overrides a deliberate trim.
     let filledCount = 0
     for (const asset of form.assets) {
-      if (asset.duration.trim()) continue
+      if (asset.duration.trim() || asset.gen) continue
       const seconds = result.asset_durations[asset.id]
       if (seconds === undefined) continue
       asset.duration = `${(Math.floor(seconds * 1000) / 1000).toFixed(3)}s`
@@ -1588,13 +1629,25 @@ function toYamlPlaylist(): Record<string, unknown> {
   }
 
   const assets = form.assets
-    .filter((a) => a.file.trim())
+    .filter((a) => a.gen || a.file.trim())
     .map((a) => {
-      const asset: Record<string, unknown> = { file: a.file }
+      const asset: Record<string, unknown> = {}
+      if (a.gen) {
+        const g = a.gen
+        const gen: Record<string, unknown> = { duration: timeOrUndefined(g.duration), preset: g.preset }
+        if (g.video.trim()) gen.video = g.video.trim()
+        if (g.audio.trim()) gen.audio = g.audio.trim()
+        if (g.preset === 'color' && g.color.trim()) gen.color = g.color.trim()
+        if (g.timecode) gen.timecode = true
+        if (g.label.trim()) gen.label = g.label
+        asset.generator = gen
+      } else {
+        asset.file = a.file
+      }
       if (a.id.trim()) asset.id = a.id
       if (a.role !== null) asset.role = a.role
-      if (a.start.trim()) asset.start = timeOrUndefined(a.start)
-      if (a.duration.trim()) asset.duration = timeOrUndefined(a.duration)
+      if (a.start.trim() && !a.gen) asset.start = timeOrUndefined(a.start)
+      if (a.duration.trim() && !a.gen) asset.duration = timeOrUndefined(a.duration)
       if (a.fade_in.trim()) asset.fade_in = timeOrUndefined(a.fade_in)
       if (a.fade_out.trim()) asset.fade_out = timeOrUndefined(a.fade_out)
       if (a.slate_image.trim()) asset.slate_image = a.slate_image
@@ -1657,6 +1710,19 @@ function toYamlPlaylist(): Record<string, unknown> {
     })
   }
   return cfg
+}
+
+function generatorFromYaml(g: Record<string, unknown>): GeneratorForm {
+  const d = defaultGenerator()
+  return {
+    duration: g.duration !== undefined ? String(g.duration) : d.duration,
+    preset: (g.preset as GeneratorPreset) ?? d.preset,
+    video: String(g.video ?? ''),
+    audio: String(g.audio ?? ''),
+    color: String(g.color ?? d.color),
+    timecode: Boolean(g.timecode),
+    label: String(g.label ?? ''),
+  }
 }
 
 /** Best-effort inverse of toYamlPlaylist(), for loading an existing playlist
@@ -1729,6 +1795,7 @@ function fromYamlPlaylist(data: Record<string, unknown>) {
     // it gets written back on next save.
     id: a.id ? String(a.id) : generateAssetId(),
     file: String(a.file ?? ''),
+    gen: a.generator ? generatorFromYaml(a.generator as Record<string, unknown>) : null,
     role: (a.role as AssetRole | null) ?? (a.jingle_role === 'opening' || a.jingle_role === 'closing' ? 'jingle' : null) ?? legacyRoles.get(String(a.id)) ?? null,
     start: a.start !== undefined ? String(a.start) : '',
     duration: a.duration !== undefined ? String(a.duration) : '',
@@ -2435,7 +2502,7 @@ function applyHexPopover() {
           <div class="flex flex-column gap-3">
             <div class="timeline-sticky">
               <AssetTimeline
-                :assets="form.assets"
+                :assets="timelineAssets"
                 :selected-index="selectedAssetIndex"
                 :highlighted-asset-id="highlightedMovedAssetId"
                 :markers="timelineMarkers"
@@ -2663,10 +2730,55 @@ function applyHexPopover() {
                 </div>
               </div>
               <div class="grid">
-                <div class="col-8 flex flex-column gap-1">
+                <div class="col-12 flex flex-column gap-1">
+                  <label>Source</label>
+                  <SelectButton
+                    :model-value="form.assets[selectedAssetIndex].gen ? 'generator' : 'file'"
+                    :options="ASSET_SOURCE_OPTIONS"
+                    option-label="label"
+                    option-value="value"
+                    :allow-empty="false"
+                    @update:model-value="form.assets[selectedAssetIndex].gen = $event === 'generator' ? (form.assets[selectedAssetIndex].gen ?? defaultGenerator()) : null"
+                  />
+                </div>
+                <div v-if="!form.assets[selectedAssetIndex].gen" class="col-8 flex flex-column gap-1">
                   <label>File path (local path or https:// URL)</label>
                   <AssetFileField v-model="form.assets[selectedAssetIndex].file" placeholder="content.mp4" />
                 </div>
+                <template v-else>
+                  <div class="col-12 text-color-secondary text-sm">
+                    Presets and options explained, with a picture of each:
+                    <a href="#/docs/generator-assets" target="_blank" rel="noopener">Generated assets documentation</a>
+                  </div>
+                  <div class="col-3 flex flex-column gap-1">
+                    <label>Generator duration</label>
+                    <InputText v-model="form.assets[selectedAssetIndex].gen!.duration" placeholder="30s" />
+                  </div>
+                  <div class="col-3 flex flex-column gap-1">
+                    <label>Video preset</label>
+                    <Select v-model="form.assets[selectedAssetIndex].gen!.preset" :options="GENERATOR_PRESETS" />
+                  </div>
+                  <div v-if="form.assets[selectedAssetIndex].gen!.preset === 'color'" class="col-2 flex flex-column gap-1">
+                    <label>Colour</label>
+                    <InputText v-model="form.assets[selectedAssetIndex].gen!.color" placeholder="red / #336699" />
+                  </div>
+                  <div class="col-4 flex flex-column gap-1">
+                    <label>Label (burned in, optional)</label>
+                    <InputText v-model="form.assets[selectedAssetIndex].gen!.label" />
+                  </div>
+                  <div class="col-4 flex flex-column gap-1">
+                    <label>Raw lavfi video (overrides preset)</label>
+                    <InputText v-model="form.assets[selectedAssetIndex].gen!.video" placeholder="mandelbrot" />
+                  </div>
+                  <div class="col-4 flex flex-column gap-1">
+                    <label>Audio (lavfi, or "silence")</label>
+                    <InputText v-model="form.assets[selectedAssetIndex].gen!.audio" placeholder="default: 440 Hz sine" />
+                  </div>
+                  <div class="col-4 flex align-items-center gap-2">
+                    <Checkbox v-model="form.assets[selectedAssetIndex].gen!.timecode" binary input-id="gen-timecode" />
+                    <label for="gen-timecode">Burn in timecode</label>
+                  </div>
+                </template>
                 <div class="col-4 flex flex-column gap-1">
                   <label>Asset ID (for tagging markers)</label>
                   <InputText
@@ -2678,11 +2790,11 @@ function applyHexPopover() {
                   <label for="asset-role">Role</label>
                   <Select input-id="asset-role" v-model="form.assets[selectedAssetIndex].role" :options="ASSET_ROLE_OPTIONS" option-label="label" option-value="value" />
                 </div>
-                <div class="col-3 flex flex-column gap-1">
+                <div v-if="!form.assets[selectedAssetIndex].gen" class="col-3 flex flex-column gap-1">
                   <label>Start</label>
                   <InputText v-model="form.assets[selectedAssetIndex].start" placeholder="00:00:00 / 10 min" />
                 </div>
-                <div class="col-3 flex flex-column gap-1">
+                <div v-if="!form.assets[selectedAssetIndex].gen" class="col-3 flex flex-column gap-1">
                   <label>Duration</label>
                   <InputText v-model="form.assets[selectedAssetIndex].duration" placeholder="10 min" />
                 </div>

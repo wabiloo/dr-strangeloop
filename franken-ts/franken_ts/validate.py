@@ -139,6 +139,23 @@ def validate_inputs(
     infos: dict[Path, VideoInfo] = {}
 
     for asset in assets:
+        # Generator asset not yet rendered (e.g. Igor's timeline preview, which
+        # never runs ffmpeg): its properties are known from the spec + output,
+        # so synthesise the info instead of probing a file that doesn't exist.
+        if asset.generator is not None and not asset.file.exists():
+            infos[asset.file] = VideoInfo(
+                path=asset.file,
+                duration=asset.generator.duration_seconds(),
+                video_streams=1,
+                audio_streams=1,
+                fps=float(output.framerate),
+                is_vfr=False,
+                width=output.width,
+                height=output.height,
+                codec="h264",
+            )
+            continue
+
         # Remote (http/https) assets have no local filesystem entry to check
         # -- ffprobe below is the real reachability/validity check for them.
         if not is_url(asset.file) and not asset.file.exists():

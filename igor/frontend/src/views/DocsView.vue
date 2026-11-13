@@ -401,6 +401,21 @@ const tocItems = computed(() => rendered.value?.toc ?? [])
   scroll-margin-top: 1rem;
 }
 
+.doc-content :deep(img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+/* In tables, a percentage max-width resolves against the (auto-sized) cell, so
+   images shrank differently per table; give them one fixed width instead. */
+.doc-content :deep(td img),
+.doc-content :deep(th img) {
+  width: 220px;
+  max-width: none;
+  display: block;
+}
+
 .doc-content :deep(a) {
   color: var(--p-primary-color, #b91c1c);
 }
