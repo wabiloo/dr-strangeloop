@@ -1,0 +1,41 @@
+# Recipe for scripts/make_loop_single_ad/make_loop_single_ad.py: a loop built entirely from ffmpeg
+# generators, no source media needed.
+#
+#   uv run python scripts/make_loop_single_ad/make_loop_single_ad.py gen-loop \
+#       --recipe scripts/make_loop_single_ad/recipes/generated.example.yaml
+#   uv run franken-ts data/playlists/gen-loop.yaml --verify
+#
+# Command-line flags override the same key here. See docs/generator-assets.md
+# for the presets.
+ad_breaks:
+  # `generator:<preset>` (testsrc, testsrc2, smptebars, smptehdbars,
+  # rgbtestsrc, color), or `generator:color:<colour>` for a colour fill.
+  # For options the string can't carry (timecode, label, raw lavfi video/audio),
+  # use a mapping instead:
+  #   content:
+  #     generator: {preset: smptebars, timecode: true, label: "SHOW"}
+  content: generator:testsrc2
+  ad: generator:color:red
+
+  next_break_delay_s: 60     # content seconds between breaks
+  break_duration_s: 30       # break length
+
+  splice_type: splice_insert # or time_signal (then see `segmentation` below)
+  event_id: 1
+  # auto_return: true        # splice_insert only
+
+resolution: 1280x720
+framerate: 25
+gop: 50
+bitrate_kbps: 5000
+# output_file: outputs/gen-loop.ts   # default: outputs/<name>.ts
+
+# time_signal only; these are the defaults (provider advertisement start):
+# segmentation:
+#   type_id: "0x34"
+#   upid_type: "0x09"
+#   upid_hex: "53 49 47 4e 41 4c 3a 43 52"
+#   web_delivery_allowed: true
+#   no_regional_blackout: false
+#   archive_allowed: false
+#   device_restrictions: 1
