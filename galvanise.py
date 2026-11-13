@@ -249,9 +249,20 @@ def main() -> None:
     with open(config_yaml) as f:
         cfg = yaml.safe_load(f)
 
-    ts_file_raw = cfg.get("output", {}).get("file", "")
-    if not ts_file_raw:
-        sys.exit("Could not find output.file in the YAML config.")
+    output_cfg = cfg.get("output") or {}
+    ladder = bool(output_cfg.get("renditions"))
+    if ladder:
+        # ABR ladder: franken-ts writes <dir>/<name>.ts per rendition; the directory is the source.
+        ts_file_raw = output_cfg.get("dir", "")
+        if not ts_file_raw:
+            sys.exit("Multi-rendition config needs output.dir in the YAML config.")
+        if backend == "aws-media":
+            sys.exit("aws-media needs a single .ts file (output.file); "
+                     "multi-rendition ladders need ecs-express, aws-lambda or local-docker.")
+    else:
+        ts_file_raw = output_cfg.get("file", "")
+        if not ts_file_raw:
+            sys.exit("Could not find output.file in the YAML config.")
 
     # franken-ts runs with cwd=repo_root (playlists live under data/playlists/
     # and output paths are repo-root-relative, e.g. "outputs/foo.ts").
