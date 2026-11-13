@@ -25,6 +25,7 @@ rendered by ffmpeg (see docs/generator-assets.md):
         --next-break-delay-s 60 --break-duration-s 30
 In a recipe, `content:` / `ad:` may instead be a full mapping
 (`{generator: {preset: smptebars, timecode: true, label: SHOW}}`).
+Annotated example recipes: scripts/recipes/*.example.yaml
 """
 from __future__ import annotations
 
