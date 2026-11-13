@@ -112,6 +112,13 @@ completing a change or fix, **always propose bumping it** (patch for fixes, mino
 features) and ask before doing so. If the user agrees, bump them all together and
 regenerate the lockfiles (`uv lock` at the root and in `its-a-live/`).
 
+## Validating changes
+
+After touching `igor/frontend/`, run `npx vue-tsc -b` (and `npm run build`)
+from `igor/frontend/` before committing: `vite`'s dev server doesn't
+type-check, but the Docker image build does. Details in
+[`igor/AGENTS.md`](./igor/AGENTS.md) "Validating frontend changes".
+
 ## Environments
 
 - Repo-root `.venv` (`uv sync --all-packages`): `franken-ts`,

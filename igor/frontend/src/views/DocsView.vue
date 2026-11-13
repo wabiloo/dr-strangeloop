@@ -130,7 +130,6 @@ const results = ref<DocSearchResult[]>([])
 const searching = ref(false)
 const searchError = ref('')
 const showResults = ref(false)
-const searchInput = ref<InstanceType<typeof InputText> | null>(null)
 
 let searchId = 0
 let searchTimer: ReturnType<typeof setTimeout> | undefined
@@ -203,7 +202,6 @@ function reopenResults() {
       <div class="docs-search">
         <i class="pi pi-search docs-search-icon" aria-hidden="true" />
         <InputText
-          ref="searchInput"
           v-model="query"
           type="search"
           class="docs-search-input"

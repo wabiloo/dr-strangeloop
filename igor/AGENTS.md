@@ -234,6 +234,26 @@ Rules, for any change that touches channel config:
 See `src/igor/app/routes/*.py` for the authoritative request/response
 shapes, mirrored in `frontend/src/api/types.ts`.
 
+## Validating frontend changes (do this before committing or merging)
+
+`npm run dev` / `igor/dev.sh` run plain `vite`, which does **not** type-check:
+an unused variable, a wrong prop type or a bad import can work in the browser
+and still break the build. The type-check runs only in `npm run build`
+(`vue-tsc -b && vite build`), which is also what `igor/Dockerfile` runs in its
+frontend stage -- so the first symptom is a failed `docker compose up --build`.
+`tsconfig.app.json` sets `noUnusedLocals`/`noUnusedParameters`, so leftovers
+(e.g. a `ref` declared but never read) are hard errors.
+
+After any change under `igor/frontend/`, run, from `igor/frontend/`:
+
+```bash
+npx vue-tsc -b      # fast type-check, no output files; must print nothing
+npm run build       # full build, exactly what the Docker image does
+node --test --experimental-strip-types src/utils/*.test.ts   # unit tests (node:test, not vitest)
+```
+
+Fix what they report; don't loosen the tsconfig flags to silence it.
+
 ## Known gaps (not yet built)
 
 - No log tailing (CloudWatch Logs) yet -- job logs only cover the
