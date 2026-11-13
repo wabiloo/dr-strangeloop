@@ -4,6 +4,7 @@ only catalogued paths are ever served."""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -125,3 +126,135 @@ _REDOC_HTML = """<!doctype html>
 
 def channel_api_html() -> str:
     return _REDOC_HTML
+
+
+# ---------------------------------------------------------------------------
+# Search
+# ---------------------------------------------------------------------------
+# A scan over the catalogued pages (a few dozen small files), split into
+# sections at ATX headings. Each section's `anchor` is the heading id the
+# frontend renderer assigns (utils/markdown.ts: GitHub-style slug, repeated
+# slugs suffixed -1, -2...), so a result can open the page at that section.
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_LINK_RE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_SNIPPET_BEFORE = 70
+_SNIPPET_LENGTH = 190
+MAX_RESULTS = 40
+MAX_PER_PAGE = 6
+
+
+def _heading_text(raw: str) -> str:
+    """Visible text of a heading (what the renderer slugifies)."""
+    text = _LINK_RE.sub(r"\1", raw)
+    return text.replace("`", "").replace("*", "").strip()
+
+
+def _slugify(text: str) -> str:
+    kept = "".join(c for c in text.strip().lower() if c.isalnum() or c in "_-" or c.isspace())
+    return re.sub(r"\s", "-", kept)
+
+
+@dataclass
+class _Section:
+    heading: str
+    anchor: str
+    lines: list[str]
+
+
+def _sections(markdown: str) -> list[_Section]:
+    out = [_Section("", "", [])]
+    seen: dict[str, int] = {}
+    in_fence = False
+    for line in markdown.splitlines():
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+        m = None if in_fence else _HEADING_RE.match(line)
+        if m:
+            text = _heading_text(m.group(2))
+            base = _slugify(text) or "section"
+            n = seen.get(base, 0)
+            seen[base] = n + 1
+            out.append(_Section(text, base if n == 0 else f"{base}-{n}", []))
+        else:
+            out[-1].lines.append(line)
+    return out
+
+
+def _plain(line: str) -> str:
+    """Markdown noise out of a line, for display in a snippet."""
+    line = _LINK_RE.sub(r"\1", line)
+    line = line.replace("`", "").replace("**", "")
+    line = re.sub(r"^\s*(?:[-*+]|\d+\.|>)\s+", "", line)
+    line = re.sub(r"\s*\|\s*", "  ", line.strip().strip("|"))
+    return re.sub(r"\s+", " ", line).strip()
+
+
+def _snippet(body: list[str], terms: list[str]) -> list[dict]:
+    """~190 characters of the first body line holding a term (starting a little
+    before it), as [{"t": text, "hit": bool}] segments for highlighting."""
+    lines = [_plain(ln) for ln in body]
+    lines = [ln for ln in lines if ln and not set(ln) <= set("-: ")]
+    chosen = next((ln for ln in lines if any(t in ln.lower() for t in terms)), lines[0] if lines else "")
+    low = chosen.lower()
+    first = min((i for i in (low.find(t) for t in terms) if i >= 0), default=0)
+    start = max(0, first - _SNIPPET_BEFORE)
+    if start:
+        space = chosen.find(" ", start)
+        start = space + 1 if 0 <= space < first else start
+    piece = chosen[start : start + _SNIPPET_LENGTH]
+    prefix = "…" if start else ""
+    suffix = "…" if start + _SNIPPET_LENGTH < len(chosen) else ""
+    pattern = re.compile("(" + "|".join(re.escape(t) for t in sorted(terms, key=len, reverse=True)) + ")", re.I)
+    segments = []
+    for i, part in enumerate(pattern.split(prefix and prefix + piece or piece)):
+        if part:
+            segments.append({"t": part, "hit": bool(i % 2)})
+    if suffix:
+        segments.append({"t": suffix, "hit": False})
+    return segments
+
+
+def search(query: str) -> list[dict]:
+    """Sections containing every whitespace-separated term (case-insensitive),
+    best first: a match in the section heading or page title outranks one in
+    the body, then more occurrences."""
+    terms = [t for t in query.lower().split() if t]
+    if not terms:
+        return []
+    results: list[dict] = []
+    for section in CATALOG:
+        for entry in section.entries:
+            path = REPO_ROOT / entry.path
+            if not path.is_file():
+                continue
+            for sec in _sections(path.read_text(encoding="utf-8")):
+                body = "\n".join(sec.lines).lower()
+                heading = sec.heading.lower()
+                haystack = f"{heading}\n{body}"
+                if not all(t in haystack for t in terms):
+                    continue
+                # Repeats count up to 5 per term, so a long section can't beat
+                # a page that is actually about the term.
+                score = sum(min(haystack.count(t), 5) for t in terms)
+                score += 20 * sum(t in heading for t in terms)
+                score += 25 * sum(t in entry.title.lower() for t in terms)
+                results.append({
+                    "slug": entry.slug,
+                    "page_title": entry.title,
+                    "path": entry.path,
+                    "section_title": sec.heading,
+                    "anchor": sec.anchor,
+                    "snippet": _snippet(sec.lines, terms),
+                    "score": score,
+                })
+    results.sort(key=lambda r: -r["score"])
+    per_page: dict[str, int] = {}
+    capped = []
+    for r in results:
+        if per_page.get(r["slug"], 0) >= MAX_PER_PAGE:
+            continue
+        per_page[r["slug"]] = per_page.get(r["slug"], 0) + 1
+        capped.append(r)
+    return capped[:MAX_RESULTS]

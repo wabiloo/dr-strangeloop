@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import ProgressSpinner from 'primevue/progressspinner'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { getDocPage, listDocs } from '../api/client'
-import type { DocPage, DocSection } from '../api/types'
+import { getDocPage, listDocs, searchDocs } from '../api/client'
+import type { DocPage, DocSearchResult, DocSection } from '../api/types'
 import { renderMarkdown, type RenderedDoc } from '../utils/markdown'
 
 const props = defineProps<{ slug?: string }>()
@@ -119,6 +120,77 @@ function onContentClick(ev: MouseEvent) {
 }
 
 const tocItems = computed(() => rendered.value?.toc ?? [])
+
+// ── Search ──────────────────────────────────────────────────────────────────
+// The query outlives navigation (this component stays mounted across pages), so
+// after opening a result you can come back to the same list: results show
+// while `showResults` is set, and clicking a result clears it but keeps the text.
+const query = ref('')
+const results = ref<DocSearchResult[]>([])
+const searching = ref(false)
+const searchError = ref('')
+const showResults = ref(false)
+const searchInput = ref<InstanceType<typeof InputText> | null>(null)
+
+let searchId = 0
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+
+async function runSearch() {
+  const q = query.value.trim()
+  const mine = ++searchId
+  if (!q) {
+    results.value = []
+    searching.value = false
+    searchError.value = ''
+    showResults.value = false
+    return
+  }
+  searching.value = true
+  searchError.value = ''
+  showResults.value = true
+  try {
+    const found = await searchDocs(q)
+    if (mine !== searchId) return
+    results.value = found
+  } catch (e) {
+    if (mine !== searchId) return
+    results.value = []
+    searchError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    if (mine === searchId) searching.value = false
+  }
+}
+
+watch(query, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(runSearch, 200)
+})
+
+function clearSearch() {
+  query.value = ''
+  clearTimeout(searchTimer)
+  void runSearch()
+}
+
+function onSearchKey(ev: KeyboardEvent) {
+  if (ev.key === 'Escape') clearSearch()
+  else if (ev.key === 'Enter') {
+    clearTimeout(searchTimer)
+    void runSearch()
+  }
+}
+
+function openResult(r: DocSearchResult) {
+  showResults.value = false
+  router.push({ name: 'docs', params: { slug: r.slug }, query: r.anchor ? { h: r.anchor } : {} })
+}
+
+// Following a sidebar / in-page link leaves the results behind.
+watch(() => props.slug, () => { showResults.value = false })
+// Back to the list from a page: refocus the box or press Enter.
+function reopenResults() {
+  if (query.value.trim()) void runSearch()
+}
 </script>
 
 <template>
@@ -127,6 +199,21 @@ const tocItems = computed(() => rendered.value?.toc ?? [])
       <RouterLink to="/docs" class="docs-sidebar-home" :class="{ 'docs-link-active': !slug }">
         <i class="pi pi-home" aria-hidden="true" /> All documentation
       </RouterLink>
+
+      <div class="docs-search">
+        <i class="pi pi-search docs-search-icon" aria-hidden="true" />
+        <InputText
+          ref="searchInput"
+          v-model="query"
+          type="search"
+          class="docs-search-input"
+          placeholder="Search the docs"
+          aria-label="Search the documentation"
+          autocomplete="off"
+          @keydown="onSearchKey"
+          @focus="reopenResults"
+        />
+      </div>
 
       <h3 class="docs-sidebar-heading">API reference</h3>
       <ul class="docs-sidebar-list">
@@ -152,8 +239,34 @@ const tocItems = computed(() => rendered.value?.toc ?? [])
     <section class="docs-main">
       <Message v-if="catalogError" severity="error" :closable="false">Could not load the documentation index: {{ catalogError }}</Message>
 
+      <!-- Search results -->
+      <div v-if="showResults">
+        <h2 class="docs-title">Search results</h2>
+        <p class="docs-lead">
+          <template v-if="searching && !results.length">Searching…</template>
+          <template v-else-if="searchError">Search failed: {{ searchError }}</template>
+          <template v-else-if="!results.length">Nothing found for “{{ query.trim() }}”. Every word must appear in the same section.</template>
+          <template v-else>{{ results.length }} section{{ results.length === 1 ? '' : 's' }} for “{{ query.trim() }}”.</template>
+        </p>
+        <ol class="docs-results">
+          <li v-for="r in results" :key="`${r.slug}#${r.anchor}`">
+            <a
+              class="docs-result"
+              :href="`#/docs/${r.slug}${r.anchor ? `?h=${encodeURIComponent(r.anchor)}` : ''}`"
+              @click.prevent="openResult(r)"
+            >
+              <span class="docs-result-where">
+                {{ r.page_title }}<template v-if="r.section_title && r.section_title !== r.page_title"> <i class="pi pi-angle-right" aria-hidden="true" /> {{ r.section_title }}</template>
+              </span>
+              <span class="docs-result-snippet"><template v-for="(seg, i) in r.snippet" :key="i"><mark v-if="seg.hit">{{ seg.t }}</mark><template v-else>{{ seg.t }}</template></template></span>
+              <span class="docs-result-path">{{ r.path }}</span>
+            </a>
+          </li>
+        </ol>
+      </div>
+
       <!-- Landing -->
-      <div v-if="!slug">
+      <div v-else-if="!slug">
         <h2 class="docs-title">Documentation</h2>
         <p class="docs-lead">
           Everything about Dr. Strangeloop: how the pipeline fits together, every CLI, and the HTTP APIs. Start with the
@@ -224,6 +337,82 @@ const tocItems = computed(() => rendered.value?.toc ?? [])
   max-height: calc(100vh - 2rem);
   overflow-y: auto;
   font-size: 0.92rem;
+}
+
+.docs-search {
+  position: relative;
+  margin-bottom: 0.6rem;
+}
+
+.docs-search-icon {
+  position: absolute;
+  left: 0.6rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94a3b8;
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+.docs-search-input {
+  width: 100%;
+  padding-left: 1.9rem;
+}
+
+.docs-results {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-width: 52rem;
+}
+
+.docs-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.7rem 1rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.docs-result:hover {
+  border-color: var(--p-primary-color, #b91c1c);
+  box-shadow: 0 1px 6px rgb(15 23 42 / 0.1);
+}
+
+.docs-result-where {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.docs-result-where .pi {
+  font-size: 0.7em;
+  color: #94a3b8;
+}
+
+.docs-result-snippet {
+  font-size: 0.9rem;
+  color: #475569;
+  overflow-wrap: anywhere;
+}
+
+.docs-result-snippet mark {
+  background: #fde68a;
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.docs-result-path {
+  font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
+  font-size: 0.74rem;
+  color: #94a3b8;
 }
 
 .docs-sidebar-home {

@@ -101,3 +101,36 @@ def test_docs_images_are_served_and_guarded():
     assert client.get("/api/v1/docs/images/nope.png").status_code == 404
     assert client.get("/api/v1/docs/images/..%2F..%2Foverview.md").status_code == 404
     assert client.get("/api/v1/docs/images/..%2Foverview.md").status_code == 404
+
+
+# ── Search ───────────────────────────────────────────────────────────────────
+
+def test_search_finds_a_section_with_snippet_and_anchor():
+    resp = client.get("/api/v1/docs/search", params={"q": "timecode burn"})
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert results
+    top = results[0]
+    assert top["slug"] == "generator-assets"
+    assert top["anchor"] and top["path"] == "docs/generator-assets.md"
+    hits = [s["t"].lower() for s in top["snippet"] if s["hit"]]
+    assert hits and all(h in ("timecode", "burn") for h in hits)
+
+
+def test_search_requires_every_term_and_empty_query_is_empty():
+    assert client.get("/api/v1/docs/search", params={"q": ""}).json()["results"] == []
+    assert client.get("/api/v1/docs/search", params={"q": "timecode zzzznotaword"}).json()["results"] == []
+
+
+def test_search_anchors_follow_the_renderer_slug_rules():
+    secs = docs._sections("# Top\n\n## Same\nx\n\n## Same\ny\n\n```\n## not a heading\n```\n\n## `code` — dash & more\n")
+    assert [s.anchor for s in secs] == ["", "top", "same", "same-1", "code--dash--more"]
+    assert not any("not a heading" in s.heading for s in secs)
+
+
+def test_search_caps_results_per_page():
+    results = docs.search("the")
+    counts: dict[str, int] = {}
+    for r in results:
+        counts[r["slug"]] = counts.get(r["slug"], 0) + 1
+    assert counts and max(counts.values()) <= docs.MAX_PER_PAGE

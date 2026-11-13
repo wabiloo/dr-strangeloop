@@ -35,7 +35,7 @@ manifest, baked with the source's own segment durations).
 **Docs** (`/docs`, header menu): renders the repo's Markdown on demand and
 links the API docs. The catalog (which files, titles, grouping) is
 `src/igor/integrations/docs.py` -- **add a new `.md` there to make it appear**;
-`tests/test_docs.py` fails if a catalogued file is missing. Rendering
+`tests/test_docs.py` fails if a catalogued file is missing. **Search** (`GET /api/v1/docs/search?q=`, `docs.search()`): scans the catalogued pages, split into sections at ATX headings; a section matches when it contains every term; each result carries a highlighted snippet and the section's `anchor` (the heading id `markdown.ts` assigns -- same slug and `-1`/`-2` duplicate rules, kept in step by `test_search_anchors_follow_the_renderer_slug_rules`), which the UI opens as `?h=<anchor>`. The Docs sidebar's search box drives it. Rendering
 (`frontend/src/utils/markdown.ts`, markdown-it with raw HTML off) rewrites
 relative links between catalogued pages to in-app routes and shows links to
 anything else (source files, folders) as plain paths. The new overview, Igor tour
