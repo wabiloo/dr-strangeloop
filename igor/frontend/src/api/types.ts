@@ -624,6 +624,19 @@ export interface DocSection {
   entries: DocEntry[]
 }
 
+export interface DocSearchResult {
+  slug: string
+  page_title: string
+  path: string
+  /** Empty for text before a page's first heading. */
+  section_title: string
+  /** Heading id to open the page at ('' = top of page). */
+  anchor: string
+  /** Text around the match, split into segments so hits can be highlighted. */
+  snippet: { t: string; hit: boolean }[]
+  score: number
+}
+
 export interface DocPage {
   slug: string
   title: string

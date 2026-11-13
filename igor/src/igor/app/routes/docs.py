@@ -4,7 +4,7 @@ channel serves at its own `/docs`)."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 
 from igor.integrations import docs
@@ -15,6 +15,13 @@ router = APIRouter()
 @router.get("/")
 def list_docs() -> dict:
     return {"sections": docs.catalog()}
+
+
+@router.get("/search")
+def search_docs(q: str = Query("", max_length=200)) -> dict:
+    """Sections of the catalogued pages containing every term in `q`, each with
+    a highlighted snippet and the heading `anchor` to open it at."""
+    return {"query": q, "results": docs.search(q)}
 
 
 @router.get("/channel-api/docs", response_class=HTMLResponse)

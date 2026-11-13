@@ -38,7 +38,7 @@ uv run franken-ts [OPTIONS] CONFIG
 | `--debug`, `-v/-vv` | Keep temp files and raise log verbosity |
 
 Reference: [franken-ts README](../franken-ts/README.md),
-[franken-ts AGENTS](../franken-ts/AGENTS.md) (YAML schema, marker types).
+[Playlist format](./playlist-format.md) (guide to the YAML) and [franken-ts AGENTS](../franken-ts/AGENTS.md) (exhaustive schema, marker types).
 
 ## `its-a-live/channel.py`: deploy and run a channel
 

@@ -11,6 +11,7 @@ import type {
   ChannelOutputs,
   ChannelStatus,
   DocPage,
+  DocSearchResult,
   DocSection,
   ManifestImportStatus,
   ManifestInspection,
@@ -494,6 +495,10 @@ const DOCS_BASE = '/api/v1/docs'
 
 export async function listDocs(): Promise<DocSection[]> {
   return (await getJson<{ sections: DocSection[] }>(`${DOCS_BASE}/`)).sections
+}
+
+export async function searchDocs(q: string): Promise<DocSearchResult[]> {
+  return (await getJson<{ results: DocSearchResult[] }>(`${DOCS_BASE}/search?q=${encodeURIComponent(q)}`)).results
 }
 
 export async function getDocPage(slug: string): Promise<DocPage> {

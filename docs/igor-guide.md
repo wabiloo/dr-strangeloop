@@ -82,6 +82,12 @@ This section. Pages are the Markdown files of the repository, rendered on
 demand, so they are always in step with the code. The API entries open the
 interactive OpenAPI documentation for Igor itself and for the channel API.
 
+**Search**: the box at the top of the sidebar searches every page. A page section matches when it
+contains all the words you typed (any case); results list the page and section, with the matching text
+highlighted. Click one to open the page at that section. Your search stays in the box, so after
+opening a result, click the box again (or press Enter) to get back to the list; Esc clears it.
+The API references have their own search.
+
 ## Under the hood
 
 [Igor AGENTS](../igor/AGENTS.md) holds the backend API table, the config-section
