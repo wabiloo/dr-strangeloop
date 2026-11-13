@@ -40,6 +40,7 @@ CATALOG: tuple[DocSection, ...] = (
     )),
     DocSection("franken-ts", "Content authoring: franken-ts", (
         DocEntry("franken-ts-readme", "franken-ts", "Build a .ts with SCTE-35 from a YAML playlist.", "franken-ts/README.md"),
+        DocEntry("playlist-format", "Playlist format (YAML)", "Guide to the playlist file: output, assets, markers, optional on-screen display.", "docs/playlist-format.md"),
         DocEntry("generator-assets", "Generated assets (presets)", "Build a loop with no source media: ffmpeg test patterns and colours, with a picture of each preset.", "docs/generator-assets.md"),
         DocEntry("franken-ts-agents", "franken-ts reference", "YAML schema, marker types and CLI.", "franken-ts/AGENTS.md"),
         DocEntry("scte35-marker-rules", "SCTE-35 marker rules", "How Igor and franken-ts model and validate markers.", "SCTE35_MARKER_RULES.md"),

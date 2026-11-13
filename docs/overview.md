@@ -14,7 +14,7 @@ franken-ts            loop-dee-loop / its-a-live
 
 | Phase | Tool | What it does | Detailed docs |
 |---|---|---|---|
-| 1. Define content + ad breaks | `franken-ts` | A YAML **playlist** lists assets and **markers** (ad breaks, PPOs, splice inserts...). | [franken-ts README](../franken-ts/README.md), [franken-ts AGENTS](../franken-ts/AGENTS.md) |
+| 1. Define content + ad breaks | `franken-ts` | A YAML **playlist** lists assets and **markers** (ad breaks, PPOs, splice inserts...). | [Playlist format](./playlist-format.md), [franken-ts README](../franken-ts/README.md), [franken-ts AGENTS](../franken-ts/AGENTS.md) |
 | 2. Build | `franken-ts` | Concatenates and normalises the assets into one `.ts` (or a rendition ladder) and injects SCTE-35, writing `<name>.markers.json`. | same |
 | 3. Deploy and run | `its-a-live` | Creates the channel infrastructure and starts/stops/refreshes the stream, via one CLI (`channel.py`) whatever the backend. | [its-a-live README](../its-a-live/README.md), [its-a-live AGENTS](../its-a-live/AGENTS.md) |
 | 3a. Serve the loop | `loop-dee-loop` | Bakes a `.ts` into a *loop package* (GPAC remux, no transcode) and serves it as an endless live HLS/DASH channel. | [loop-dee-loop README](../loop-dee-loop/README.md) |
