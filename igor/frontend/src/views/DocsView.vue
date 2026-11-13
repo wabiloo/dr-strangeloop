@@ -401,6 +401,12 @@ const tocItems = computed(() => rendered.value?.toc ?? [])
   scroll-margin-top: 1rem;
 }
 
+.doc-content :deep(img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
 .doc-content :deep(a) {
   color: var(--p-primary-color, #b91c1c);
 }

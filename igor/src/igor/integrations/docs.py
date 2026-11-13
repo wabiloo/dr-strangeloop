@@ -40,6 +40,7 @@ CATALOG: tuple[DocSection, ...] = (
     )),
     DocSection("franken-ts", "Content authoring: franken-ts", (
         DocEntry("franken-ts-readme", "franken-ts", "Build a .ts with SCTE-35 from a YAML playlist.", "franken-ts/README.md"),
+        DocEntry("generator-assets", "Generated assets (presets)", "Build a loop with no source media: ffmpeg test patterns and colours, with a picture of each preset.", "docs/generator-assets.md"),
         DocEntry("franken-ts-agents", "franken-ts reference", "YAML schema, marker types and CLI.", "franken-ts/AGENTS.md"),
         DocEntry("scte35-marker-rules", "SCTE-35 marker rules", "How Igor and franken-ts model and validate markers.", "SCTE35_MARKER_RULES.md"),
         DocEntry("scte35-numbering", "SCTE-35 segment numbering", "Cross-standard reference for segment numbering.", "scte35-segment-numbering-spec-comparison.md"),
@@ -77,6 +78,8 @@ CATALOG: tuple[DocSection, ...] = (
 
 _BY_SLUG: dict[str, DocEntry] = {e.slug: e for s in CATALOG for e in s.entries}
 
+IMAGES_DIR = REPO_ROOT / "docs" / "images"
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 CHANNEL_API_SPEC = REPO_ROOT / "loop-dee-loop" / "openapi.yaml"
 
 

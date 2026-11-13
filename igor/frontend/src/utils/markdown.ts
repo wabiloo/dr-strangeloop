@@ -92,6 +92,26 @@ function rewriteLinks(md: InstanceType<typeof MarkdownIt>, ctx: DocLinkContext) 
   })
 }
 
+/** Images under `docs/images/` are served by the API; resolve a page's
+ * relative `![](images/x.png)` to that route (other images are left alone). */
+function rewriteImages(md: InstanceType<typeof MarkdownIt>, ctx: DocLinkContext) {
+  md.core.ruler.push('doc_images', (state: StateCore) => {
+    for (const block of state.tokens) {
+      if (block.type !== 'inline' || !block.children) continue
+      for (const t of block.children) {
+        if (t.type !== 'image') continue
+        const src = String(t.attrGet('src') ?? '')
+        if (/^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith('//')) continue
+        const resolved = resolveRepoPath(dirname(ctx.docPath), src)
+        if (resolved && resolved.startsWith('docs/images/')) {
+          t.attrSet('src', `/api/v1/docs/images/${resolved.slice('docs/images/'.length)}`)
+          t.attrSet('loading', 'lazy')
+        }
+      }
+    }
+  })
+}
+
 export function renderMarkdown(source: string, ctx: DocLinkContext): RenderedDoc {
   // html: false -- repo Markdown is rendered as text, never as live HTML.
   const md = new MarkdownIt({ html: false, linkify: true, typographer: false })
@@ -101,6 +121,7 @@ export function renderMarkdown(source: string, ctx: DocLinkContext): RenderedDoc
     `<span class="doc-unlinked" title="${md.utils.escapeHtml(String(tokens[idx].attrGet('title') ?? ''))}">`
   md.renderer.rules.doc_unlinked_close = () => '</span>'
   rewriteLinks(md, ctx)
+  rewriteImages(md, ctx)
 
   const toc: TocItem[] = []
   const seen = new Map<string, number>()
