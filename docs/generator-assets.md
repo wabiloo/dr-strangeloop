@@ -39,68 +39,24 @@ generator settings plus those output values); `--no-cache` re-renders.
 
 ## Presets
 
-All images below are frames taken 3 seconds into a 640x360 clip.
+Frames taken 3 seconds into a clip.
 
-### `testsrc2` (default)
+| Preview | Preset | What it is |
+|---|---|---|
+| ![testsrc2](images/generator-presets/testsrc2.png) | `testsrc2` (default) | Colour bars, a moving gradient sweep and a changing checkerboard, with a built-in timer and frame counter. Lots of motion, so the best default for spotting freezes, dropped frames and encoder problems. |
+| ![testsrc](images/generator-presets/testsrc.png) | `testsrc` | The classic ffmpeg test card: a colour gradient with a rotating marker and a running timestamp. Calmer than `testsrc2`. |
+| ![smptebars](images/generator-presets/smptebars.png) | `smptebars` | SMPTE colour bars. Static, so it compresses to almost nothing; good for checking colour handling and for a look that is clearly different from the content. |
+| ![smptehdbars](images/generator-presets/smptehdbars.png) | `smptehdbars` | The HD variant (SMPTE RP 219) of the colour bars, with extra patches and a different bottom row. Also static. |
+| ![rgbtestsrc](images/generator-presets/rgbtestsrc.png) | `rgbtestsrc` | Red, green and blue bands, for spotting swapped colour channels. |
+| ![color](images/generator-presets/color.png) | `color` | A solid fill (`color: red` here). The obvious choice for an ad: easy to see in a player, and cheap to encode. |
 
-![testsrc2](images/generator-presets/testsrc2.png)
+## Overlays and raw sources
 
-Colour bars, a moving gradient sweep and a changing checkerboard, with a built-in
-timer and frame counter at the top left. Lots of motion, so it is the best
-default for spotting freezes, dropped frames and encoder problems.
-
-### `testsrc`
-
-![testsrc](images/generator-presets/testsrc.png)
-
-The classic ffmpeg test card: a colour gradient with a rotating
-marker and a running timestamp. Smoother and calmer than `testsrc2`.
-
-### `smptebars`
-
-![smptebars](images/generator-presets/smptebars.png)
-
-SMPTE colour bars. Static, so it compresses to almost nothing; good for checking
-colour handling and for a "clearly different from the content" look.
-
-### `smptehdbars`
-
-![smptehdbars](images/generator-presets/smptehdbars.png)
-
-The HD variant (SMPTE RP 219) of the colour bars: extra patches and a different
-bottom row. Also static.
-
-### `rgbtestsrc`
-
-![rgbtestsrc](images/generator-presets/rgbtestsrc.png)
-
-Red, green and blue bands, for spotting swapped colour channels.
-
-### `color`
-
-![color](images/generator-presets/color.png)
-
-A solid fill (`color: red` above). The obvious choice for an ad: easy to see
-in a player, and cheap to encode.
-
-## Burned-in timecode and label
-
-![timecode and label](images/generator-presets/timecode-label.png)
-
-`smptebars` with `timecode: true` and `label: "CONTENT"`. The timecode is the
-time within the generated clip, so it makes joins and ad boundaries visible:
-a clip that restarts at `00:00:00.000` marks where one asset ends and the next
-begins.
-
-## Raw sources
-
-`video` and `audio` accept any ffmpeg lavfi source, so you are not limited to the
-presets. Size and rate are added for you unless you give them.
-
-| Example | Result |
-|---|---|
-| `video: "mandelbrot"` | ![mandelbrot](images/generator-presets/raw-mandelbrot.png) |
-| `video: "gradients=speed=0.02"` | ![gradients](images/generator-presets/raw-gradients.png) |
+| Preview | Setting | What it does |
+|---|---|---|
+| ![timecode and label](images/generator-presets/timecode-label.png) | `preset: smptebars`, `timecode: true`, `label: "CONTENT"` | The timecode is the time within the generated clip, so it makes joins and ad boundaries visible: a clip that restarts at `00:00:00.000` marks where one asset ends and the next begins. |
+| ![mandelbrot](images/generator-presets/raw-mandelbrot.png) | `video: "mandelbrot"` | Any ffmpeg video source can be used raw. Size and rate are added for you unless you give them. |
+| ![gradients](images/generator-presets/raw-gradients.png) | `video: "gradients=speed=0.02"` | Another raw source, with its own options. |
 
 Other video sources worth trying: `life`, `cellauto`, `sierpinski`, `mptestsrc`.
 For audio: `sine=frequency=1000`, `anoisesrc`, or `silence`.
