@@ -88,14 +88,24 @@ ARG REPO_ROOT=/repo
 ARG TSDUCK_VERSION=3.39-3956
 ARG TSDUCK_DEB_URL=
 
-# docker.io gives us the `docker` CLI to talk to the *host* daemon via the
-# mounted socket (docker-compose.yml) -- dockerd itself is never started,
-# so its presence here costs disk, not attack surface.
+# The `docker` CLI talks to the *host* daemon via the mounted socket
+# (docker-compose.yml) -- dockerd itself is never started. It is the static
+# binary from download.docker.com, not Debian's docker.io package: that one is
+# 20.10 (API 1.41), which current daemons (min API 1.44) refuse. The CLI
+# negotiates down to older daemons, so a recent pin is safe; bump it freely.
+ARG DOCKER_CLI_VERSION=29.10.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl unzip git \
         python3 ffmpeg \
-        docker.io \
         nodejs npm \
+    && case "$(dpkg --print-architecture)" in \
+         amd64) DOCKER_ARCH=x86_64 ;; \
+         arm64) DOCKER_ARCH=aarch64 ;; \
+         *) echo "unsupported architecture for the docker CLI" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_CLI_VERSION}.tgz" \
+       | tar -xz --strip-components=1 -C /usr/local/bin docker/docker \
+    && docker --version \
     && curl -fsSL -o /tmp/tsduck.deb "${TSDUCK_DEB_URL:-https://github.com/tsduck/tsduck/releases/download/v${TSDUCK_VERSION}/tsduck_${TSDUCK_VERSION}.debian12_$(dpkg --print-architecture).deb}" \
     && apt-get install -y --no-install-recommends /tmp/tsduck.deb \
     && rm -f /tmp/tsduck.deb \
