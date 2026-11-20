@@ -1,17 +1,18 @@
 """Translates an in-container path to the equivalent path on the Docker
-*host*, for any path about to be handed to a `docker build`/`docker run`
-invocation.
+*host*, for a path handed to a `docker run -v` bind mount.
 
-Why this exists: local-docker (_local_docker_ops.py) and ecs-express's CDK
-stack (loop_stack.py's DockerImageAsset) both shell out to the `docker`
-CLI. When channel.py itself is running inside a container that reaches
-Docker via a *mounted host socket* rather than its own daemon (igor's
-Docker-packaged shape -- see ../DOCKER_LOCAL.md), those commands are
-actually talking to the HOST's daemon. That daemon resolves every path it's
-given against its own (the host's) filesystem -- it has no notion of this
-container's mount namespace. A path this process computes from its own
-code's location (e.g. `os.path.dirname(__file__)`) is a *container* path,
-and needs translating before it's valid input to such a command.
+Why this exists: local-docker (_local_docker_ops.py) shells out to the
+`docker` CLI. When channel.py itself is running inside a container that
+reaches Docker via a *mounted host socket* rather than its own daemon
+(igor's Docker-packaged shape -- see ../DOCKER_LOCAL.md), a bind-mount source
+is resolved by the HOST daemon against the host filesystem, which has no
+notion of this container's mount namespace. A path this process computes from
+its own code's location (e.g. `os.path.dirname(__file__)`) is a *container*
+path, and needs translating before it is a valid `-v` source.
+
+Do NOT use it for a `docker build` context or Dockerfile (including CDK's
+DockerImageAsset): the CLI -- here, inside the container -- reads those
+itself and sends them to the daemon, so they must be container paths.
 
 Outside that shape (bare-metal/dev, or any command that never touches
 Docker, e.g. aws-media) HOST_REPO_ROOT is unset and this is a no-op --

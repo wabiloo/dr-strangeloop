@@ -232,7 +232,10 @@ def _build_image():
     stop/start cycles because the image was only built on its very first
     run). Returns the freshly built image's id, so callers can tell
     whether a currently-running container is already using it."""
-    build_context = to_host_path(_LOOP_DEE_LOOP_DIR)
+    # The docker CLI reads the build context and Dockerfile itself and sends
+    # them to the daemon, so these are this process's own paths -- not host
+    # paths (see _host_paths.py; only a bind-mount source needs translating).
+    build_context = _LOOP_DEE_LOOP_DIR
     print(f"==> Building {_IMAGE_TAG} from {build_context} ...")
     result = subprocess.run(["docker", "build", "-t", _IMAGE_TAG, build_context])
     if result.returncode != 0:
@@ -318,11 +321,11 @@ def _build_baked_image(cfg, channel_name, local_output_dir, epoch=None):
     serve_defaults = _serve_args(cfg, channel_name, 8080, epoch or config_epoch_utc(cfg))
     build_cmd = [
         "docker", "build",
-        "-f", to_host_path(_BAKED_DOCKERFILE),
+        "-f", _BAKED_DOCKERFILE,
         "--build-arg", f"BASE_IMAGE={_IMAGE_TAG}",
         "--build-arg", f"SERVE_ARGS_JSON={json.dumps(serve_defaults)}",
         "-t", tag,
-        to_host_path(local_output_dir),
+        local_output_dir,
     ]
     print(f"==> Building self-contained image {tag} from {local_output_dir} ...")
     result = subprocess.run(build_cmd)

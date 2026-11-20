@@ -13,14 +13,14 @@
 # below, default /repo) regardless of where a colleague's checkout lives on
 # their host -- this image is meant to be the same for everyone, buildable
 # once and shareable. See ../docker-compose.yml and ../DOCKER_LOCAL.md for
-# why that's safe: local-docker/ecs-express dispatch nested `docker build`/
-# `docker run` calls through the host's own Docker socket, which resolves
-# every path it's given against the HOST filesystem, not this container's --
-# `its-a-live/_host_paths.py` translates this container's REPO_ROOT-relative
-# paths to their real HOST_REPO_ROOT equivalent (an env var docker-
-# compose.yml sets) at exactly the call sites that need it
-# (_local_docker_ops.py, loop_stack.py's DockerImageAsset), so REPO_ROOT
-# itself never needs to match anything on the host.
+# why that's safe: local-docker dispatches nested `docker build`/`docker run`
+# calls through the host's own Docker socket. Build contexts are read by the
+# CLI in this container (so /repo paths); a `docker run -v` source is resolved
+# by the HOST daemon, so `its-a-live/_host_paths.py` translates this
+# container's REPO_ROOT-relative path to its real HOST_REPO_ROOT equivalent (an
+# env var docker-compose.yml sets) at that one call site
+# (_local_docker_ops.py), so REPO_ROOT itself never needs to match anything on
+# the host.
 
 # ---------------------------------------------------------------------------
 # Stage: gpac-build -- mirrors loop-dee-loop/Dockerfile's stage exactly

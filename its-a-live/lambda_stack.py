@@ -13,7 +13,6 @@ from aws_cdk import (
     aws_cloudfront_origins as origins,
 )
 from constructs import Construct
-from _host_paths import to_host_path
 from _epoch_cfg import config_epoch_utc
 from _infra_cfg import infra_table
 from _markers_cfg import announce_serve_args, split_on_serve_args
@@ -96,10 +95,9 @@ class LambdaLoopStack(Stack):
 
         # ── Image ──────────────────────────────────────────────────────────────
         # Serve-only (no GPAC/ffmpeg), same build context as the ECS image.
-        # `directory` must be a path the docker daemon doing the build can see
-        # (see loop_stack.py / _host_paths.py).
+        # `directory` is this process's own path (see loop_stack.py).
         image_code = lambda_.DockerImageCode.from_image_asset(
-            to_host_path(os.path.abspath(LOOP_DEE_LOOP_DIR)),
+            os.path.abspath(LOOP_DEE_LOOP_DIR),
             file="Dockerfile.lambda",
             platform=ecr_assets.Platform.LINUX_ARM64 if architecture == "arm64" else ecr_assets.Platform.LINUX_AMD64,
             cmd=[

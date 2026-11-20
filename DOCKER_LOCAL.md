@@ -60,15 +60,16 @@ issues actually run against your **host's** Docker install -- the
 containerized igor process is really just a remote control for it.
 
 That has one consequence that shaped everything else here: the host
-daemon resolves every path it's given (a bind-mount source, a build
-context directory) against **its own (the host's) filesystem** -- it has
-no idea igor is running inside a container, or what that container's
-mount namespace looks like. Paths that its-a-live computes internally
-(`its-a-live/.local-loop-package/<channel>`, `loop-dee-loop/` as a build
-context) are derived from `__file__`, i.e. from wherever the code
-physically lives *inside igor's own container*.
+daemon resolves a **bind-mount source** (`docker run -v`) against **its own
+(the host's) filesystem** -- it has no idea igor is running inside a
+container, or what that container's mount namespace looks like. Paths that
+its-a-live computes internally (`its-a-live/.local-loop-package/<channel>`)
+are derived from `__file__`, i.e. from wherever the code physically lives
+*inside igor's own container*. (A `docker build` context or Dockerfile is the
+opposite: the docker CLI, which runs in igor's container, reads those itself and
+sends them to the daemon, so they stay container paths -- `/repo/...`.)
 
-Two ways to make those also valid, correct **host** paths were considered:
+Two ways to make a bind-mount source also a correct **host** path were considered:
 
 1. Make the container see its code at *literally the same absolute path*
    it lives at on your host (an earlier version of this doc/image did
@@ -81,11 +82,10 @@ Two ways to make those also valid, correct **host** paths were considered:
 2. **What this repo actually does**: keep the container's own view of the
    code at a fixed path (`/repo`, see `igor/Dockerfile`) regardless of
    where a colleague's checkout lives, and translate paths at the exact
-   handful of call sites that hand one to a nested `docker build`/`docker
-   run` -- `its-a-live/_host_paths.py`'s `to_host_path()`, used by
-   `_local_docker_ops.py` (local-docker's own container) and
-   `loop_stack.py`'s `DockerImageAsset` (`cdk deploy`'s image build/push
-   for `ecs-express`). It reads `HOST_REPO_ROOT` (this checkout's real
+   call site that hands one to a nested `docker run -v` --
+   `its-a-live/_host_paths.py`'s `to_host_path()`, used by
+   `_local_docker_ops.py` (the loop package mounted into local-docker's
+   container). It reads `HOST_REPO_ROOT` (this checkout's real
    path, from `.env`) and `REPO_ROOT` (always `/repo`) and swaps one
    prefix for the other. Everywhere else -- franken-ts builds, boto3 calls,
    igor's own file browser -- never touches Docker, so never needs this;

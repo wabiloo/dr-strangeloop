@@ -104,6 +104,32 @@ def test_bundle_mode_builds_per_channel_image_and_does_not_mount(env):
     assert run[run.index("--channel-name") + 1] == "chan"
 
 
+def test_in_igor_container_builds_use_container_paths_and_mounts_use_host_paths(env, tmp_path, monkeypatch):
+    # igor in Docker: the docker CLI reads a build context / Dockerfile itself, so
+    # those stay in-container paths; only a `-v` source (resolved by the host
+    # daemon) is translated to its host path.
+    package, fake = env
+    code = tmp_path / "loop-dee-loop"
+    code.mkdir()
+    (code / "Dockerfile.baked").write_text("FROM scratch\n")
+    monkeypatch.setattr(ops, "_LOOP_DEE_LOOP_DIR", str(code))
+    monkeypatch.setattr(ops, "_BAKED_DOCKERFILE", str(code / "Dockerfile.baked"))
+    monkeypatch.setenv("REPO_ROOT", str(tmp_path))
+    monkeypatch.setenv("HOST_REPO_ROOT", "/host/repo")
+
+    ops.start(cfg(package, bundle=True), None, None)
+    base_build, baked_build = fake.builds()
+    assert base_build[-1] == str(code)
+    assert baked_build[baked_build.index("-f") + 1] == str(code / "Dockerfile.baked")
+    assert baked_build[-1] == str(package)
+    assert not any("/host/repo" in a for a in base_build + baked_build)
+
+    fake.calls.clear()
+    ops.start(cfg(package, bundle=False), None, None)
+    (run,) = fake.runs()
+    assert "/host/repo/pkg:/var/loop-package:ro" in run
+
+
 def test_refresh_respects_bundle_mode(env):
     package, fake = env
     ops.refresh(cfg(package, bundle=True), None, None)
