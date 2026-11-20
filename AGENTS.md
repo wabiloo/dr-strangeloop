@@ -111,6 +111,9 @@ All packages share one version number (every `pyproject.toml`, `igor/frontend/pa
 completing a change or fix, **always propose bumping it** (patch for fixes, minor for
 features) and ask before doing so. If the user agrees, bump them all together and
 regenerate the lockfiles (`uv lock` at the root and in `its-a-live/`).
+Every version bump is also tagged: after committing, create an annotated git
+tag `vX.Y.Z` on that commit (`git tag -a vX.Y.Z -m "vX.Y.Z"`, same number as
+the packages). Push it with the commit (`git push --tags`) when the user pushes.
 
 ## Validating changes
 

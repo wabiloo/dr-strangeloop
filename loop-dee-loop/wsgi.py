@@ -12,10 +12,9 @@ same flags serve.py's CLI accepts, since gunicorn imports this module
 import os
 from pathlib import Path
 
-from timeshift import parse_announce_on
+from timeshift import TimeshiftConfig, parse_announce_on
 
 from serve import (
-    TimeshiftConfig,
     create_app,
     parse_segmentation_type_ids,
     read_package_descriptor,
